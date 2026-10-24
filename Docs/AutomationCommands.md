@@ -216,6 +216,50 @@ How an Animator's named ClipLibraries map onto its model, resolved as playback r
 
 </details>
 
+## archive
+
+### `archive.inspect`
+
+Lists a .bpak archive (project.export's Assets.bpak): every entry's path, asset UUID, size, stored size and compression. With verify: true, also reads every entry and checks its hash, failing on the first damaged one. Returns {entries: [{path, uuid (null without one), size, storedSize, compression: store|zstd}], files, compressed, size, archiveSize, verified}.
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `path` | string, the archive file; a relative path is relative to the current working directory |
+| `verify` | bool (default false): read every entry and check its hash |
+
+<details><summary>Parameter JSON Schema</summary>
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "path": {
+      "description": "string, the archive file; a relative path is relative to the current working directory",
+      "minLength": 1,
+      "type": "string"
+    },
+    "verify": {
+      "anyOf": [
+        {
+          "description": "bool (default false): read every entry and check its hash",
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "bool (default false): read every entry and check its hash"
+    }
+  },
+  "required": [
+    "path"
+  ],
+  "type": "object"
+}
+```
+
+</details>
+
 ## assert
 
 ### `assert.component`
@@ -2672,11 +2716,12 @@ Creates a new project directory (Project.bproject + Assets/) and opens it.
 
 ### `project.export`
 
-Validates the project (unless validate is false), exports a standalone, distributable build of the game (runtime + assets; with package: true a platform package, see Docs/Shipping.md) and optionally smoke-tests it: runs the exported game headless for smokeTestFrames frames and fails unless it exits cleanly without script errors. Returns {executable (what the smoke test runs), package (what to distribute), files, validation, warnings?, smokeTest?}.
+Validates the project (unless validate is false), exports a standalone, distributable build of the game (runtime + assets; with package: true a platform package, see Docs/Shipping.md) and optionally smoke-tests it: runs the exported game headless for smokeTestFrames frames and fails unless it exits cleanly without script errors. Returns {executable (what the smoke test runs), package (what to distribute), files, validation, archive? ({files, compressed, size, archiveSize}), warnings?, smokeTest?}.
 
 | Parameter | Type / description |
 |-----------|--------------------|
 | `appImageTool` | string, path of appimagetool for Linux packages (default: $APPIMAGETOOL, then PATH); requires package: true |
+| `archive` | bool (default false): pack Assets into one Assets.bpak archive (zstd-compressed where that helps, asset UUIDs in its index instead of .meta files) instead of copying the folder; see archive.inspect |
 | `output` | string, output directory |
 | `package` | bool (default false): package for this platform with the project's icon, version and company: <Name>.app on macOS, an executable with icon and version resources on Windows, <Name>.AppDir plus <Name>-<version>-<arch>.AppImage on Linux (the AppImage needs appimagetool: appImageTool, $APPIMAGETOOL or PATH); <Name> is the executable's name: the project name with spaces as _ and other characters other than letters, digits, - and _ dropped |
 | `smokeTestFrames` | integer (default 0: no smoke test), frames the exported game runs headless |
@@ -2700,6 +2745,18 @@ Validates the project (unless validate is false), exports a standalone, distribu
         }
       ],
       "description": "string, path of appimagetool for Linux packages (default: $APPIMAGETOOL, then PATH); requires package: true"
+    },
+    "archive": {
+      "anyOf": [
+        {
+          "description": "bool (default false): pack Assets into one Assets.bpak archive (zstd-compressed where that helps, asset UUIDs in its index instead of .meta files) instead of copying the folder; see archive.inspect",
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "bool (default false): pack Assets into one Assets.bpak archive (zstd-compressed where that helps, asset UUIDs in its index instead of .meta files) instead of copying the folder; see archive.inspect"
     },
     "output": {
       "description": "string, output directory",

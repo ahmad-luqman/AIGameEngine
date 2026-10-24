@@ -135,6 +135,24 @@ namespace Basalt {
 			outError = "asset registry has no project directory";
 			return false;
 		}
+		// An exported game's archive replaces the sidecars: its index holds each asset's UUID (unique, which Open checks).
+		if (const Ref<PackArchive> archive = FileSystem::GetMountedArchive(m_Root))
+		{
+			m_Paths.clear();
+			m_IDs.clear();
+			m_Problems.clear();
+			m_Orphans.clear();
+			for (const PackArchive::Entry& entry : archive->GetEntries())
+			{
+				if (entry.AssetID != 0 && entry.Path.starts_with("Assets/"))
+				{
+					m_Paths.emplace(entry.AssetID, entry.Path);
+					m_IDs.emplace(entry.Path, entry.AssetID);
+				}
+			}
+			m_Indexed = true;
+			return true;
+		}
 		std::map<uint64_t, std::string> paths, owners;
 		std::map<std::string, std::string> problems;
 		std::vector<std::string> orphans;
@@ -291,6 +309,12 @@ namespace Basalt {
 	std::vector<std::string> AssetRegistry::TakeWrittenPaths()
 	{
 		return std::exchange(m_WrittenPaths, {});
+	}
+
+	std::optional<UUID> AssetRegistry::FindID(const std::string& path) const
+	{
+		const auto it = m_IDs.find(FileSystem::NormalizeGeneric(path));
+		return it != m_IDs.end() ? std::optional<UUID>(UUID(it->second)) : std::nullopt;
 	}
 
 	std::string AssetRegistry::Find(UUID id) const

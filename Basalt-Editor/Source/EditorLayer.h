@@ -292,6 +292,7 @@ namespace Basalt {
 		bool m_ExportSmokeTest = true;
 		int m_ExportSmokeFrames = 120;
 		bool m_ExportPackage = false;
+		bool m_ExportArchive = false;
 		std::string m_WindowTitle;
 		// prefab.overrides of the inspected instance, recomputed when the scene changes rather than every frame.
 		struct PrefabOverridesCache

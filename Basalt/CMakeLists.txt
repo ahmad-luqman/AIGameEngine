@@ -59,10 +59,12 @@ target_link_libraries(Basalt
 		BasaltCgltf
 		BasaltStb
 		meshoptimizer
-		BasaltTextureCodecs)
+		BasaltTextureCodecs
+		libzstd_static)
 
 if(WIN32)
-	target_link_libraries(Basalt PRIVATE ws2_32)
+	# dbghelp: crash report stack traces and minidumps (Core/CrashReporter).
+	target_link_libraries(Basalt PRIVATE ws2_32 dbghelp)
 endif()
 
 file(GLOB BASALT_SHADER_SOURCES CONFIGURE_DEPENDS

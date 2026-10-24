@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Basalt/Core/PackArchive.h"
+
 #include <cstdint>
 #include <filesystem>
 #include <map>
@@ -14,8 +16,31 @@ namespace Basalt {
 	class FileSystem
 	{
 	public:
+		// Reads go to the mounted archive first (Mount), then to disk.
 		static std::optional<std::string> ReadTextFile(const std::filesystem::path& path);
 		static std::optional<std::vector<uint8_t>> ReadBinaryFile(const std::filesystem::path& path);
+		// The size of a regular file (an archive entry's uncompressed size); nullopt for a missing path or anything else
+		// (outError set when the path could not be inspected).
+		static std::optional<uint64_t> GetRegularFileSize(const std::filesystem::path& path, std::error_code& outError);
+
+		// A read-only archive over a directory: the runtime mounts an exported game's Assets.bpak over its project folder.
+		// ReadTextFile, ReadBinaryFile, Exists and GetRegularFileSize then answer for paths under root from the archive
+		// first and from disk otherwise, and readers that bypass them (cgltf, miniaudio, Lua's require, AssetRegistry)
+		// ask FindMounted. One mount at a time: mounting again replaces it, and a null archive unmounts. Thread-safe.
+		static void Mount(const std::filesystem::path& root, Ref<PackArchive> archive);
+		struct MountedFile
+		{
+			// Holds the archive, so Entry stays valid even if it is unmounted meanwhile.
+			Ref<PackArchive> Archive;
+			const PackArchive::Entry* Entry = nullptr;
+			explicit operator bool() const { return Entry != nullptr; }
+		};
+		// The mounted archive's entry for path, when path lies under the mount root and the archive holds it.
+		static MountedFile FindMounted(const std::filesystem::path& path);
+		// The archive mounted exactly at root, or null.
+		static Ref<PackArchive> GetMountedArchive(const std::filesystem::path& root);
+		// Reads a mounted file, logging why it cannot be read.
+		static std::optional<std::vector<uint8_t>> ReadMounted(const MountedFile& file);
 
 		// Writes atomically: data goes to a temporary sibling file (<name>.<process>-<count>.tmp, so concurrent writers
 		// never share one) that then replaces the target, so a crash never leaves a half-written scene or project on
@@ -27,11 +52,19 @@ namespace Basalt {
 		static bool WriteTextFile(const std::filesystem::path& path, std::string_view text, std::string& outError);
 		static bool WriteBinaryFile(const std::filesystem::path& path, const void* data, size_t size, std::string& outError);
 
+		// A unique temporary sibling for an atomic write (<name>.<process>-<count>.tmp).
+		static std::filesystem::path MakeTemporaryPath(const std::filesystem::path& path);
+		// Renames source over target (retrying briefly on Windows, where a concurrent replace or a scanner holding the
+		// target fails a rename); on failure source is removed and outError says why.
+		static bool ReplaceFile(const std::filesystem::path& source, const std::filesystem::path& target, std::string& outError);
+
+		// Also true for a mounted archive's files and the folders that hold them.
 		static bool Exists(const std::filesystem::path& path);
 		// Inspects root/relative one component at a time, so a linked ancestor directory counts too. Returns true and
 		// sets outEntry at the first symlink, or at the first entry that cannot be inspected (outError set; a
 		// missing entry is not an error). False when the whole path is free of links.
 		static bool FindSymlink(const std::filesystem::path& root, const std::filesystem::path& relative, std::filesystem::path& outEntry, std::error_code& outError);
+		static std::filesystem::path GetExecutablePath();
 		static std::filesystem::path GetExecutableDirectory();
 		// The path as UTF-8 text, for messages (path::string() throws on Windows for names outside the ANSI code page).
 		static std::string PathToUtf8(const std::filesystem::path& path);

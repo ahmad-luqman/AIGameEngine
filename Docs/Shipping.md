@@ -1,7 +1,7 @@
 # Shipping a game
 
 How a Basalt project becomes something players download: the project's identity (name, version, company, icon), the
-export, platform packages, signing, and the release pipeline that builds Basalt itself.
+export, platform packages, the asset archive, signing, crash reports, and the release pipeline that builds Basalt itself.
 
 ## Project identity
 
@@ -41,11 +41,12 @@ Export with a `Dist` build of the tools for distribution.
 ```bash
 basalt --project MyGame project.export '{"output": "Dist/MyGame", "smokeTestFrames": 120}'                   # a folder
 basalt --project MyGame project.export '{"output": "Dist/MyGame", "package": true, "smokeTestFrames": 120}'  # a package
+basalt --project MyGame project.export '{"output": "Dist/MyGame", "package": true, "archive": true}'         # Assets in one file
 ```
 
 The result names the `executable` (what the smoke test ran), the `package` (what to distribute) and any `warnings`
 (a package without a project icon, an AppDir without appimagetool).
-The editor's File > Export Game... dialog offers the smoke test and the package option.
+The editor's File > Export Game... dialog offers the smoke test, the package and the archive options.
 
 ### Packages (`"package": true`)
 
@@ -90,6 +91,37 @@ with a warning, and the AppDir is the package. Exports run appimagetool with `AP
 needs no FUSE. Players need a Vulkan driver (their distribution's `libvulkan1` and Mesa or a GPU vendor driver) and a
 glibc at least as new as the build machine's (Ubuntu 24.04: 2.39).
 
+### Asset archive (`"archive": true`)
+
+With `archive`, the export packs `Assets/` into one `Assets.bpak` next to the project file instead of copying the
+folder. The project file and `Input.binput` stay loose, so every layout above (folder, `.app`, AppDir) is unchanged
+apart from that one file, and the runtime finds the project as before. Switching between the two forms removes the
+other one from the output, so a game never carries both. `archive.inspect` lists an archive (and with `verify: true`
+reads every entry and checks its hash); the result of `project.export` reports `archive: {files, compressed, size,
+archiveSize}`.
+
+```bash
+basalt archive.inspect '{"path": "Dist/MyGame/Assets.bpak", "verify": true}'
+```
+
+- **Contents.** Every file under `Assets/` except the `.meta` sidecars. Each entry carries its asset's UUID in the
+  index instead, so references stored as UUIDs (scenes, prefabs, materials, the start scene, the icon) resolve exactly
+  as they do in the project.
+- **Compression.** Each file is compressed with zstd (level 9) and kept compressed only when that makes it smaller, so
+  KTX2 textures, PNG/JPEG images and Ogg/MP3 audio, which are compressed already, are stored as they are.
+- **Loading.** The runtime mounts the archive over the project folder before it loads the project: every read under it
+  (scenes, prefabs, scripts and `require`d modules, models and their buffers, textures, materials, animation graphs,
+  fonts, audio clips) comes from the archive first and from disk otherwise. Paths match exactly, letter case included,
+  as on Linux (`project.validate` reports references whose case differs from the file). A damaged archive (the index
+  hash) stops the game at start with exit code 1 and the reason; a damaged file fails its own load (its hash). Audio
+  clips are decompressed whole when they open, streamed ones included.
+- **Format** (`Core/PackArchive`, little-endian): a 40-byte header (`BPAK`, format version 1, flags 0, the entry count,
+  the index's offset and size, and the index's hash), the files' bytes, then the index. Each index entry is the path's
+  length and UTF-8 bytes (normalized, `/`-separated, sorted byte-wise and unique), the asset UUID (0 without one), the
+  data's offset, stored size and size, the method (0 stored, 1 zstd) and a 64-bit hash of the file's bytes. The same
+  files always give the same archive (no timestamps), so rebuilds can be compared byte for byte. Archives are read as
+  untrusted input: every count, offset and size is checked before anything is allocated (`Tests/Fuzz/FuzzPackArchive`).
+
 ### Signing and notarizing on macOS
 
 `scripts/sign-macos.sh` signs a `.app` from the inside out (the bundled libraries, then the bundle) and verifies it:
@@ -109,6 +141,30 @@ bundle, and zip it with `ditto -c -k --keepParent`, which keeps the signature in
 Windows executables are not signed. SmartScreen warns about unsigned downloads until they earn a reputation; sign
 them with `signtool` and your own certificate when that matters.
 
+## Crash reports
+
+The runtime, the editor and the CLI write a report when they crash: a fatal signal on macOS and Linux (`SIGSEGV`,
+`SIGBUS`, `SIGILL`, `SIGFPE`, `SIGABRT`, `SIGTRAP`), an unhandled exception on Windows, plus `abort()`, invalid C runtime
+parameters and pure virtual calls there. A report holds:
+
+- the application (the executable's name: an exported game's is the game's), the project's name and version, the
+  platform, the process ID and the time;
+- the reason (`SIGSEGV (invalid memory access) at 0x…`, `EXCEPTION_ACCESS_VIOLATION …`), and the message of an
+  uncaught C++ exception that ended the process;
+- a stack trace (`backtrace_symbols_fd` on macOS and Linux, where Linux frames are module and offset, for
+  `addr2line`; dbghelp on Windows, which also writes a minidump next to the report);
+- the last 64 log lines.
+
+Reports go to `<user data>/<application>/Crashes/crash-<unix time>-<process>.txt` (the per-user data directory that
+save data uses, `BASALT_USER_DATA_DIR` included), so a signed `.app` or a read-only install is never modified; without
+a user data directory they go to `CrashReports/` next to the executable. The folder is created only when something
+crashes. The process then dies as it would have without the reporter (the same signal, the exception code, or exit
+code 3 after `abort()` on Windows), so `project.smoke_test` still reports `crashed` and the OS its own crash handling.
+The windowed runtime also shows a message box with the report's path (osascript on macOS; zenity, kdialog or xmessage
+on Linux); the CLI, the editor, headless and `--frames` runs never do. AddressSanitizer builds leave crashes to
+AddressSanitizer. The handler formats into fixed buffers and, on macOS and Linux, calls only async-signal-safe
+functions, on an alternate stack so the main thread's stack overflows are reported too.
+
 ## Releasing Basalt
 
 `.github/workflows/release.yml` runs on `v<version>` tags. The tag must match `project(Basalt VERSION ...)` in
@@ -118,7 +174,8 @@ runs `scripts/package_release.py`, which writes:
 - `Basalt-<version>-<platform>.zip` (`.tar.gz` on Linux): the editor, runtime and CLI in `bin/`, plus `Docs/`,
   `Samples/`, `README.md` and `LICENSE`. On macOS it also holds the Vulkan loader and MoltenVK next to the tools, so they
   run without the Vulkan SDK.
-- `Basalt-<version>-<Sample>-<platform>.*`: every sample exported as a package and smoke-tested headless. These are a
+- `Basalt-<version>-<Sample>-<platform>.*`: every sample exported as a package with its assets in `Assets.bpak`, and
+  smoke-tested headless. These are a
   zipped `.app` (macOS; smoke-tested again after signing), a zipped folder (Windows) or an `.AppImage` that is also
   started once (Linux; run locally without appimagetool, the script archives the AppDir instead, unless
   `--require-appimage`).
@@ -126,8 +183,8 @@ runs `scripts/package_release.py`, which writes:
 
 A final job publishes them as a GitHub release with generated notes. Each platform has one architecture: Apple
 Silicon on macOS (`macos-15`) and x86-64 on Windows and Linux. Pull requests that change the main inputs of the packages
-(the workflow, the packaging scripts, the Project module, the runtime, the Process, Window and VulkanLoader sources, the
-samples), and manual runs
+(the workflow, the packaging scripts, the Project module, the runtime, the Process, Window, VulkanLoader, PackArchive and
+CrashReporter sources, the samples), and manual runs
 (`workflow_dispatch`), run everything except publishing. Locally:
 
 ```bash

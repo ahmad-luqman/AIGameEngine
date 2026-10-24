@@ -367,7 +367,7 @@ namespace Basalt {
 						CheckSubAsset(reference, file, role, severity);
 						break;
 					case FileSystem::PathMatch::DifferentCase:
-						m_Report.Add(severity, file, fmt::format("{} '{}', but the file on disk is '{}' (letter case matters on Linux)", role, reference, actual));
+						m_Report.Add(severity, file, fmt::format("{} '{}', but the file on disk is '{}' (letter case matters on Linux and in archived exports)", role, reference, actual));
 						break;
 					case FileSystem::PathMatch::Missing:
 						m_Report.Add(severity, file, fmt::format("{} the missing file '{}'", role, reference));

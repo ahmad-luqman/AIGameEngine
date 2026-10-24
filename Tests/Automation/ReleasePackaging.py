@@ -80,16 +80,17 @@ def main():
         checksums = Path(output, checksums_name).read_text()
         require(checksums == expected, f"checksums: {checksums!r}, expected {expected!r}")
 
-        # The sample archive holds the platform package.
+        # The sample archive holds the platform package, whose Assets are packed into Assets.bpak.
         contents = members(output / sample)
         if sys.platform == "darwin":
-            require({"Tetris.app/Contents/Info.plist", "Tetris.app/Contents/MacOS/Tetris"} <= contents.keys(), f"sample archive: {sorted(contents)[:20]}")
+            require({"Tetris.app/Contents/Info.plist", "Tetris.app/Contents/MacOS/Tetris", "Tetris.app/Contents/Resources/Assets.bpak"} <= contents.keys(), f"sample archive: {sorted(contents)[:20]}")
         elif sys.platform == "win32":
-            require({"Tetris/Tetris.exe", "Tetris/Project.bproject"} <= contents.keys(), f"sample archive: {sorted(contents)[:20]}")
+            require({"Tetris/Tetris.exe", "Tetris/Project.bproject", "Tetris/Assets.bpak"} <= contents.keys(), f"sample archive: {sorted(contents)[:20]}")
         elif sample.endswith(".tar.gz"):
-            require(contents.get("Tetris.AppDir/AppRun") is True and "Tetris.AppDir/Tetris" in contents, f"sample archive: {sorted(contents)[:20]}")
+            require(contents.get("Tetris.AppDir/AppRun") is True and {"Tetris.AppDir/Tetris", "Tetris.AppDir/Assets.bpak"} <= contents.keys(), f"sample archive: {sorted(contents)[:20]}")
         else:
             require(sample.endswith(".AppImage"), f"sample: {sample}")
+        require(not any("/Assets/" in name for name in contents), f"the sample ships loose assets: {[name for name in contents if '/Assets/' in name][:5]}")
 
         if with_engine:
             folder = f"Basalt-{version}-{platform}"

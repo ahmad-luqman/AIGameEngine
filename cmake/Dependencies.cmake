@@ -131,8 +131,9 @@ FetchContent_Declare(cgltf
 
 # Basis bundles Zstd 1.4.9, which mishandles Tests/Data/Textures/ZstdRegression.ktx2 (a fuzz find), so the
 # transcoder links this pinned libzstd instead. It still compiles against Basis's bundled zstd.h, which is fine:
-# only the stable ZSTD_decompress/ZSTD_isError are called. KTX2 is untrusted input, so build the decoder alone,
-# without the legacy (v0.5-v0.7) frame decoders that Basis's copy also left out.
+# only the stable ZSTD_decompress/ZSTD_isError are called. The engine links it too for .bpak archives
+# (Core/PackArchive), whose exporter compresses: untrusted input (KTX2 files, archives) still only reaches the
+# decoder. Built without the legacy (v0.5-v0.7) frame decoders that Basis's copy also left out.
 FetchContent_Declare(zstd SYSTEM
 	GIT_REPOSITORY https://github.com/facebook/zstd.git
 	GIT_TAG v1.5.7
@@ -144,7 +145,7 @@ set(ZSTD_BUILD_SHARED OFF CACHE BOOL "" FORCE)
 set(ZSTD_BUILD_STATIC ON CACHE BOOL "" FORCE)
 set(ZSTD_MULTITHREAD_SUPPORT OFF CACHE BOOL "" FORCE)
 set(ZSTD_LEGACY_SUPPORT OFF CACHE BOOL "" FORCE)
-set(ZSTD_BUILD_COMPRESSION OFF CACHE BOOL "" FORCE)
+set(ZSTD_BUILD_COMPRESSION ON CACHE BOOL "" FORCE)
 set(ZSTD_BUILD_DICTBUILDER OFF CACHE BOOL "" FORCE)
 
 # Portable BC7 encoder/decoder and Basis Universal KTX2 transcoder (ETC1S/UASTC; Zstd from the pin above).

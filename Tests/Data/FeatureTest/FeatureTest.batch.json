@@ -142,6 +142,8 @@
 	{ "id": "project-validate", "command": "project.validate", "params": { "assertValid": true } },
 	{ "id": "export-smoke-frames-range", "command": "project.export", "params": { "output": "../FeatureTestExport", "smokeTestFrames": -1 }, "expectError": "smokeTestFrames" },
 	{ "id": "export-appimagetool-needs-package", "command": "project.export", "params": { "output": "../FeatureTestExport", "validate": false, "appImageTool": "appimagetool" }, "expectError": "appImageTool needs package: true" },
+	{ "id": "export-archive-type", "command": "project.export", "params": { "output": "../FeatureTestExport", "archive": "yes" }, "expectError": "archive" },
+	{ "id": "archive-inspect-missing", "command": "archive.inspect", "params": { "path": "NoSuchArchive.bpak", "verify": true }, "expectError": "cannot read the archive 'NoSuchArchive.bpak'" },
 	{ "id": "smoke-test-missing", "command": "project.smoke_test", "params": { "executable": "NoSuchGame" }, "expectError": "no executable at 'NoSuchGame'" },
 	{ "id": "render-stats-headless", "command": "render.stats", "expectError": "render statistics need a GPU host" },
 	{ "id": "render-compare-headless", "command": "render.compare", "params": { "reference": "Assets/Textures/Checker.png" }, "expectError": "render.compare needs a GPU host" },

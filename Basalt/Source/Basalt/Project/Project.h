@@ -80,6 +80,8 @@ namespace Basalt {
 		static constexpr const char* AssetDirectoryName = "Assets";
 		// The input actions file. Optional: a project without one has no actions.
 		static constexpr const char* InputFileName = "Input.binput";
+		// An exported game's Assets packed into one archive (ExportOptions::Archive), next to the project file.
+		static constexpr const char* ArchiveFileName = "Assets.bpak";
 
 		// Creates the directory layout and project file. Fails if a project already exists there.
 		static Ref<Project> Create(const std::filesystem::path& directory, const std::string& name, std::string& outError);

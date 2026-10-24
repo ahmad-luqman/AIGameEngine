@@ -1,4 +1,5 @@
 #include "Basalt/Core/CommandLine.h"
+#include "Basalt/Core/CrashReporter.h"
 #include "Basalt/Core/EntryPoint.h"
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Project/Exporter.h"
@@ -99,6 +100,14 @@ namespace Basalt {
 		// An exported game ships its project file next to the executable (in Contents/Resources of a macOS bundle).
 		std::filesystem::path projectPath = commandLine.GetValue("project").value_or(Exporter::GetExportedProjectDirectory(FileSystem::GetExecutableDirectory()).string());
 		std::string error;
+		// An archived export reads its Assets from Assets.bpak, mounted before anything (the project's asset UUIDs) loads.
+		std::error_code directoryError;
+		const std::filesystem::path projectDirectory = std::filesystem::is_directory(projectPath, directoryError) ? projectPath : projectPath.parent_path();
+		if (!Exporter::MountExportedArchive(projectDirectory, error))
+		{
+			BS_CORE_CRITICAL("Cannot open the game's assets: {}", error);
+			return nullptr;
+		}
 		Ref<Project> project = Project::Load(projectPath, error);
 		if (!project)
 		{
@@ -106,6 +115,7 @@ namespace Basalt {
 			return nullptr;
 		}
 		Project::SetActive(project);
+		CrashReporter::SetContext("Project: " + project->GetConfig().Name + " " + project->GetConfig().Version);
 
 		options.ScenePath = commandLine.GetValue("scene").value_or(project->GetConfig().StartScene);
 		// Fatal: a malformed count would otherwise mean "run forever".
@@ -223,6 +233,8 @@ namespace Basalt {
 				return nullptr;
 			}
 		}
+		// A player sees a message box after a crash; automated runs (no window, or a frame count) never block on one.
+		CrashReporter::SetDialogEnabled(!specification.Headless && !specification.Offscreen && options.MaxFrames == 0);
 		return new RuntimeApplication(specification, options);
 	}
 

@@ -16,6 +16,7 @@
 #include <cerrno>
 #include <chrono>
 #include <fstream>
+#include <shared_mutex>
 #include <system_error>
 #include <thread>
 
@@ -29,8 +30,114 @@
 
 namespace Basalt {
 
+	namespace {
+
+		struct Mounted
+		{
+			// The root as given and with links resolved (/var vs /private/var on macOS): callers hold either spelling (the
+			// asset registry resolves its root), and comparing both keeps lookups free of file system calls.
+			std::filesystem::path Root;
+			std::filesystem::path CanonicalRoot;
+			Ref<PackArchive> Archive;
+		};
+		std::shared_mutex s_MountMutex;
+		Mounted s_Mounted;
+
+		std::filesystem::path NormalizeAbsolute(const std::filesystem::path& path)
+		{
+			std::error_code error;
+			const std::filesystem::path absolute = std::filesystem::absolute(path, error);
+			std::filesystem::path normal = (error ? path : absolute).lexically_normal();
+			// "Game/." normalizes to "Game/": the same folder as "Game".
+			if (!normal.has_filename() && normal.has_relative_path())
+				normal = normal.parent_path();
+			return normal;
+		}
+
+		// The mounted archive and the '/'-separated key of path inside it; a null archive when path is not under the root.
+		std::pair<Ref<PackArchive>, std::string> FindMountKey(const std::filesystem::path& path)
+		{
+			Mounted mounted;
+			{
+				std::shared_lock lock(s_MountMutex);
+				if (!s_Mounted.Archive)
+					return {};
+				mounted = s_Mounted;
+			}
+			const std::filesystem::path normal = NormalizeAbsolute(path);
+			for (const std::filesystem::path* root : { &mounted.Root, &mounted.CanonicalRoot })
+			{
+				const std::filesystem::path relative = normal.lexically_relative(*root);
+				if (!relative.empty() && *relative.begin() != ".." && relative != ".")
+					return { std::move(mounted.Archive), FileSystem::PathToGenericUtf8(relative) };
+			}
+			return {};
+		}
+
+		std::filesystem::path Canonical(const std::filesystem::path& root)
+		{
+			std::error_code error;
+			const std::filesystem::path canonical = std::filesystem::weakly_canonical(root, error);
+			return error ? root : NormalizeAbsolute(canonical);
+		}
+
+	}
+
+	void FileSystem::Mount(const std::filesystem::path& root, Ref<PackArchive> archive)
+	{
+		Mounted mounted;
+		if (archive)
+			mounted = { NormalizeAbsolute(root), Canonical(NormalizeAbsolute(root)), std::move(archive) };
+		std::unique_lock lock(s_MountMutex);
+		s_Mounted = std::move(mounted);
+	}
+
+	FileSystem::MountedFile FileSystem::FindMounted(const std::filesystem::path& path)
+	{
+		auto [archive, key] = FindMountKey(path);
+		if (!archive)
+			return {};
+		const PackArchive::Entry* entry = archive->Find(key);
+		return entry ? MountedFile{ std::move(archive), entry } : MountedFile{};
+	}
+
+	Ref<PackArchive> FileSystem::GetMountedArchive(const std::filesystem::path& root)
+	{
+		const std::filesystem::path normal = NormalizeAbsolute(root);
+		std::shared_lock lock(s_MountMutex);
+		return s_Mounted.Archive && (s_Mounted.Root == normal || s_Mounted.CanonicalRoot == normal) ? s_Mounted.Archive : nullptr;
+	}
+
+	std::optional<std::vector<uint8_t>> FileSystem::ReadMounted(const MountedFile& file)
+	{
+		std::string error;
+		auto data = file.Archive->Read(*file.Entry, error);
+		if (!data)
+			BS_CORE_ERROR("Archive{}: {}", file.Archive->GetFile().empty() ? std::string() : " '" + PathToUtf8(file.Archive->GetFile()) + "'", error);
+		return data;
+	}
+
+	std::optional<uint64_t> FileSystem::GetRegularFileSize(const std::filesystem::path& path, std::error_code& outError)
+	{
+		outError.clear();
+		if (const MountedFile mounted = FindMounted(path))
+			return mounted.Entry->Size;
+		const bool regular = std::filesystem::is_regular_file(path, outError);
+		if (outError == std::errc::no_such_file_or_directory)
+			outError.clear();
+		if (!regular || outError)
+			return std::nullopt;
+		const uintmax_t size = std::filesystem::file_size(path, outError);
+		return outError ? std::nullopt : std::optional<uint64_t>(size);
+	}
+
 	std::optional<std::string> FileSystem::ReadTextFile(const std::filesystem::path& path)
 	{
+		if (const MountedFile mounted = FindMounted(path))
+		{
+			auto data = ReadMounted(mounted);
+			return data ? std::optional<std::string>(std::in_place, data->begin(), data->end()) : std::nullopt;
+		}
 		// A directory opens as a stream on Linux, with a meaningless size (reading it would allocate that much).
 		std::error_code error;
 		if (!std::filesystem::is_regular_file(path, error))
@@ -54,6 +161,8 @@ namespace Basalt {
 
 	std::optional<std::vector<uint8_t>> FileSystem::ReadBinaryFile(const std::filesystem::path& path)
 	{
+		if (const MountedFile mounted = FindMounted(path))
+			return ReadMounted(mounted);
 		std::error_code error;
 		if (!std::filesystem::is_regular_file(path, error))
 			return std::nullopt;
@@ -110,16 +219,7 @@ namespace Basalt {
 			}
 		}
 
-		// A name of its own per write (process, then a counter): several processes (parallel test runs) may replace the
-		// same file at once.
-		static std::atomic<uint64_t> s_TempCounter = 0;
-#if defined(_WIN32)
-		const int processId = _getpid();
-#else
-		const int processId = static_cast<int>(getpid());
-#endif
-		std::filesystem::path tempPath = path;
-		tempPath += fmt::format(".{}-{}.tmp", processId, s_TempCounter.fetch_add(1));
+		const std::filesystem::path tempPath = MakeTemporaryPath(path);
 		{
 			errno = 0;
 			std::ofstream stream(tempPath, std::ios::out | std::ios::binary | std::ios::trunc);
@@ -142,22 +242,43 @@ namespace Basalt {
 			}
 		}
 
-		std::filesystem::rename(tempPath, path, error);
+		return ReplaceFile(tempPath, path, outError);
+	}
+
+	std::filesystem::path FileSystem::MakeTemporaryPath(const std::filesystem::path& path)
+	{
+		// A name of its own per write (process, then a counter): several processes (parallel test runs) may replace the
+		// same file at once.
+		static std::atomic<uint64_t> s_TempCounter = 0;
+#if defined(_WIN32)
+		const int processId = _getpid();
+#else
+		const int processId = static_cast<int>(getpid());
+#endif
+		std::filesystem::path tempPath = path;
+		tempPath += fmt::format(".{}-{}.tmp", processId, s_TempCounter.fetch_add(1));
+		return tempPath;
+	}
+
+	bool FileSystem::ReplaceFile(const std::filesystem::path& source, const std::filesystem::path& target, std::string& outError)
+	{
+		std::error_code error;
+		std::filesystem::rename(source, target, error);
 #if defined(_WIN32)
 		// Windows refuses to replace a file that another writer is replacing (or a scanner has open) at that moment;
 		// such a conflict passes quickly. A directory in the way never does, so only retry while the target is a file.
 		std::error_code ignored;
-		for (int attempt = 0; error && attempt < 50 && !std::filesystem::is_directory(path, ignored); attempt++)
+		for (int attempt = 0; error && attempt < 50 && !std::filesystem::is_directory(target, ignored); attempt++)
 		{
 			std::this_thread::sleep_for(std::chrono::milliseconds(2));
 			error.clear();
-			std::filesystem::rename(tempPath, path, error);
+			std::filesystem::rename(source, target, error);
 		}
 #endif
 		if (error)
 		{
-			outError = "cannot replace '" + path.string() + "': " + error.message();
-			std::filesystem::remove(tempPath, error);
+			outError = "cannot replace '" + target.string() + "': " + error.message();
+			std::filesystem::remove(source, error);
 			return false;
 		}
 		return true;
@@ -256,6 +377,8 @@ namespace Basalt {
 
 	bool FileSystem::Exists(const std::filesystem::path& path)
 	{
+		if (const auto [archive, key] = FindMountKey(path); archive && (archive->Find(key) || archive->HasFolder(key)))
+			return true;
 		std::error_code error;
 		return std::filesystem::exists(path, error);
 	}
@@ -280,28 +403,33 @@ namespace Basalt {
 		return false;
 	}
 
-	std::filesystem::path FileSystem::GetExecutableDirectory()
+	std::filesystem::path FileSystem::GetExecutablePath()
 	{
 #if defined(BS_PLATFORM_WINDOWS)
 		wchar_t buffer[MAX_PATH] = {};
 		const DWORD length = GetModuleFileNameW(nullptr, buffer, MAX_PATH);
 		if (length == 0 || length == MAX_PATH)
-			return std::filesystem::current_path();
-		return std::filesystem::path(buffer).parent_path();
+			return std::filesystem::current_path() / "Unknown";
+		return std::filesystem::path(buffer);
 #elif defined(BS_PLATFORM_MACOS)
 		uint32_t size = 0;
 		_NSGetExecutablePath(nullptr, &size);
 		std::string buffer(size, '\0');
 		if (_NSGetExecutablePath(buffer.data(), &size) != 0)
-			return std::filesystem::current_path();
+			return std::filesystem::current_path() / "Unknown";
 		std::error_code error;
 		auto canonical = std::filesystem::canonical(buffer.c_str(), error);
-		return error ? std::filesystem::path(buffer.c_str()).parent_path() : canonical.parent_path();
+		return error ? std::filesystem::path(buffer.c_str()) : canonical;
 #else
 		std::error_code error;
 		auto path = std::filesystem::read_symlink("/proc/self/exe", error);
-		return error ? std::filesystem::current_path() : path.parent_path();
+		return error ? std::filesystem::current_path() / "Unknown" : path;
 #endif
+	}
+
+	std::filesystem::path FileSystem::GetExecutableDirectory()
+	{
+		return GetExecutablePath().parent_path();
 	}
 
 }

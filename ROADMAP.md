@@ -99,8 +99,6 @@ Native file dialogs and prefab editing with per-instance overrides have shipped.
 
 ## P3 — Shipping and distribution
 
-- **Packed asset archive — M.** Export into a single `.bpak` file (index + compressed blobs, for example
-  zstd) instead of loose files. Faster loading and simpler distribution.
 - **Windows code signing — S.** Sign the exported executable and the tools with `signtool` when a certificate is
   configured (the release pipeline has secrets for macOS notarization only), so SmartScreen does not warn.
 - **Signed and universal tools on macOS — S.** The release signs and notarizes only the sample bundles: sign the
@@ -108,9 +106,12 @@ Native file dialogs and prefab editing with per-instance overrides have shipped.
   (arm64 + x86-64) binaries for Intel Macs.
 - **Unicode command-line arguments on Windows — S.** The CLI and runtime read narrow `argv`, so non-ASCII paths in
   arguments (`--project`, `project.export` output) do not survive on Windows; read `GetCommandLineW` instead.
-- **Crash reporting — M.** Install crash handlers (minidumps on Windows, signal handlers with a stack
-  trace on macOS/Linux), write the last log lines and a crash file next to the executable, and show a
-  message box in the runtime.
+- **Archive follow-ups — S.** Stream stored (uncompressed) audio straight from `Assets.bpak` instead of decompressing
+  clips whole, compress large entries on the job system during export, and leave out originals that only a compressed
+  `.ktx2` replacement references.
+- **Crash report follow-ups — S.** Symbolize Linux frames (ship symbols or call `addr2line` at report time), report
+  stack overflows on threads other than the one that installed the handlers, and offer to send or open the report
+  from the runtime's dialog.
 
 ---
 

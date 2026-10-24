@@ -20,6 +20,7 @@
 #include "Basalt/Automation/CommandRegistry.h"
 #include "Basalt/Automation/McpServer.h"
 #include "Basalt/Core/CommandLine.h"
+#include "Basalt/Core/CrashReporter.h"
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/JsonUtils.h"
 #include "Basalt/Core/Log.h"
@@ -85,6 +86,7 @@ int main(int argc, char** argv)
 	Log::Init();
 	const CommandLine commandLine(argc, argv, { "project", "scene" });
 	Log::SetConsoleLevel(commandLine.HasFlag("verbose") ? LogLevel::Info : LogLevel::Warn);
+	CrashReporter::Install({ "basalt" });
 	for (const std::string& error : commandLine.GetErrors())
 		std::cerr << "basalt: " << error << "\n";
 

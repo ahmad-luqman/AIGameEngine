@@ -2,8 +2,8 @@ name: Release
 
 # A v<version> tag builds Dist on every platform, packages the tools and the samples (scripts/package_release.py) and
 # publishes them as a GitHub release. Pull requests that change the main inputs of the packages (the workflow, the
-# packaging scripts, the Project module, the runtime, the Process, Window and VulkanLoader sources, the samples), and
-# manual runs, do everything except publishing, so the pipeline is tested before a tag needs it.
+# packaging scripts, the Project module, the runtime, the Process, Window, VulkanLoader, PackArchive and CrashReporter
+# sources, the samples), and manual runs, do everything except publishing, so the pipeline is tested before a tag needs it.
 on:
   push:
     tags: [ 'v*' ]
@@ -15,6 +15,8 @@ on:
       - Basalt/Source/Basalt/Project/**
       - Basalt/Source/Basalt/Core/Process.*
       - Basalt/Source/Basalt/Core/Window.*
+      - Basalt/Source/Basalt/Core/PackArchive.*
+      - Basalt/Source/Basalt/Core/CrashReporter.*
       - Basalt/Source/Basalt/Renderer/VulkanLoader.*
       - Basalt-Runtime/**
       - Samples/**

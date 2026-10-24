@@ -174,4 +174,6 @@ Give the game its identity first: `$B --project P project.set '{"version": "1.0.
 `"icon": "Assets/Textures/Icon.png"` when the project has an icon PNG under Assets/ (square, 512 px or more).
 `"package": true` then makes a platform package carrying them: `<Name>.app` on macOS (sign it with
 `scripts/sign-macos.sh`), an executable with icon and version resources on Windows, an AppImage on Linux (without
-`appimagetool` the export still succeeds, with an AppDir and a warning). See `Docs/Shipping.md`.
+`appimagetool` the export still succeeds, with an AppDir and a warning). Add `"archive": true` to ship `Assets/` as one
+`Assets.bpak` (zstd where it helps, UUIDs in its index; `archive.inspect` lists it). A crashed game leaves a report in
+`<user data>/<game>/Crashes/` (reason, stack, last log lines). See `Docs/Shipping.md`.
