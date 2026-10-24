@@ -220,7 +220,7 @@ How an Animator's named ClipLibraries map onto its model, resolved as playback r
 
 ### `archive.inspect`
 
-Lists a .bpak archive (project.export's Assets.bpak): every entry's path, asset UUID, size, stored size and compression. With verify: true, also reads every entry and checks its hash, failing on the first damaged one. Returns {entries: [{path, uuid (null without one), size, storedSize, compression: store|zstd}], files, compressed, size, archiveSize, verified}.
+Lists a .bpak archive (project.export's Assets.bpak): every entry's path, asset UUID, size, stored size and compression. With verify: true, also reads every entry and checks its hash, failing on the first damaged one. Returns {entries: [{path, uuid (decimal string, null without one), size, storedSize, compression: store|zstd}], files, compressed, size (uncompressed bytes), archiveSize (bytes on disk, null if unknown), verified}.
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -2716,7 +2716,7 @@ Creates a new project directory (Project.bproject + Assets/) and opens it.
 
 ### `project.export`
 
-Validates the project (unless validate is false), exports a standalone, distributable build of the game (runtime + assets; with package: true a platform package, see Docs/Shipping.md) and optionally smoke-tests it: runs the exported game headless for smokeTestFrames frames and fails unless it exits cleanly without script errors. Returns {executable (what the smoke test runs), package (what to distribute), files, validation, archive? ({files, compressed, size, archiveSize}), warnings?, smokeTest?}.
+Validates the project (unless validate is false), exports a standalone, distributable build of the game (runtime + assets; with package: true a platform package, see Docs/Shipping.md) and optionally smoke-tests it: runs the exported game headless for smokeTestFrames frames and fails unless it exits cleanly without script errors. Returns {executable (what the smoke test runs), package (what to distribute), files, validation, archive? ({files, compressed (files kept zstd-compressed), size (uncompressed bytes), archiveSize (bytes on disk)}), warnings?, smokeTest?}.
 
 | Parameter | Type / description |
 |-----------|--------------------|

@@ -6,15 +6,17 @@
 #include "Basalt/Core/Platform.h"
 
 #include <algorithm>
-#include <array>
 #include <atomic>
 #include <cerrno>
 #include <csignal>
 #include <cstring>
 #include <ctime>
 #include <exception>
+#include <iterator>
+#include <mutex>
 #include <system_error>
 #include <thread>
+#include <vector>
 
 #if defined(BS_PLATFORM_WINDOWS)
 	#include <windows.h>
@@ -25,12 +27,15 @@
 	#include <process.h>
 #else
 	#include <fcntl.h>
+	#include <spawn.h>
 	#include <sys/stat.h>
 	#include <unistd.h>
 	#if __has_include(<execinfo.h>)
 		#include <execinfo.h>
 		#define BS_CRASH_BACKTRACE 1
 	#endif
+// The environment the dialog program inherits (posix_spawn needs it explicitly).
+extern char** environ;
 #endif
 
 // AddressSanitizer reports these crashes itself (with better traces) and needs the signals to do so.
@@ -53,13 +58,21 @@ namespace Basalt {
 		constexpr size_t MaxContextLength = 255;
 		constexpr size_t MaxApplicationLength = 127;
 		constexpr size_t MaxTerminateMessageLength = 511;
+		// The missing folders above a report folder the handler may create (a fresh account without ~/.local, a nested
+		// BASALT_USER_DATA_DIR that does not exist yet).
+		constexpr size_t MaxDirectoryLevels = 8;
+		constexpr std::string_view StackTraceHeading = "\nStack trace:\n";
+		constexpr std::string_view LogHeading = "\nLast log lines (oldest first):\n";
 
 		// Guards the log lines and the context. Writers wait for it; the crash handler gives up after a bounded number of
 		// attempts (the crashed thread may be the holder) and reads whatever is there.
 		std::atomic_flag s_Lock;
-		std::atomic<bool> s_Installed = false;
+		std::once_flag s_InstallOnce;
 		std::atomic<bool> s_InstallResult = false;
 		std::atomic<bool> s_Handling = false;
+		// Set on the thread writing the report: a crash inside the handler dies at once, while other threads that crash
+		// meanwhile wait for the report to be finished.
+		thread_local bool t_Handling = false;
 		std::atomic<bool> s_DialogEnabled = false;
 
 		char s_Application[MaxApplicationLength + 1] = "Basalt";
@@ -72,16 +85,8 @@ namespace Basalt {
 		};
 		LogLine s_Lines[CrashReporter::MaxLogLines];
 		uint64_t s_LineCount = 0;
+		// Written by Install, before other threads exist; read-only afterwards.
 		std::filesystem::path s_ReportDirectory;
-		// The report folder's grandparent, parent and itself, created at the first crash and never before: a process that
-		// does not crash leaves nothing behind (tests and tools never touch the real user data directory).
-		constexpr size_t DirectoryLevels = 3;
-
-		// The folders from the outermost to the report folder.
-		std::array<std::filesystem::path, DirectoryLevels> DirectoryChain(const std::filesystem::path& directory)
-		{
-			return { directory.parent_path().parent_path(), directory.parent_path(), directory };
-		}
 		// The handler's own text buffer (static storage: the handler may run on a small alternate stack).
 		CrashText s_Text;
 
@@ -117,9 +122,19 @@ namespace Basalt {
 		size_t CopyText(char* destination, size_t capacity, std::string_view text)
 		{
 			const size_t length = std::min(text.size(), capacity);
-			std::memcpy(destination, text.data(), length);
+			std::copy_n(text.begin(), length, destination);
 			destination[length] = '\0';
 			return length;
+		}
+
+		// The application name without characters that would leave the report folder.
+		std::string SanitizeApplicationName(std::string_view name)
+		{
+			std::string result;
+			for (const char c : name)
+				if (c != '/' && c != '\\' && c != ':' && c != '\0')
+					result += c;
+			return result.empty() || result == "." || result == ".." ? std::string("Basalt") : result;
 		}
 
 		const char* PlatformName()
@@ -133,10 +148,10 @@ namespace Basalt {
 #endif
 		}
 
-		void OnTerminate();
 		std::terminate_handler s_PreviousTerminate = nullptr;
 
-		// Keeps an uncaught exception's message for the report, then ends the process as before (abort: SIGABRT).
+		// Keeps an uncaught exception's message for the report, then ends the process as before (abort: SIGABRT). Per thread
+		// on MSVC, whose terminate handler is per thread: exceptions on other threads report without their message.
 		void OnTerminate()
 		{
 			if (const std::exception_ptr current = std::current_exception())
@@ -160,7 +175,8 @@ namespace Basalt {
 		}
 
 		// The report file name inside a folder: crash-<unix time>-<process>.<extension>.
-		void FormatReportName(CrashText& out, uint64_t unixTime, uint64_t processId, std::string_view extension)
+		template<size_t Capacity>
+		void FormatReportName(BasicCrashText<Capacity>& out, uint64_t unixTime, uint64_t processId, std::string_view extension)
 		{
 			out.Append("crash-");
 			out.AppendDecimal(unixTime);
@@ -169,35 +185,58 @@ namespace Basalt {
 			out.Append(extension);
 		}
 
+		// The report folder and its missing ancestors, outermost first, for the handler to create; at most
+		// MaxDirectoryLevels. Reads the disk at Install; writes nothing.
+		std::vector<std::filesystem::path> MissingDirectoryChain(const std::filesystem::path& directory)
+		{
+			std::vector<std::filesystem::path> chain;
+			std::error_code error;
+			for (std::filesystem::path current = directory; !current.empty() && chain.size() < MaxDirectoryLevels; current = current.parent_path())
+			{
+				chain.push_back(current);
+				if (std::filesystem::exists(current, error) || current == current.parent_path())
+					break;
+			}
+			std::reverse(chain.begin(), chain.end());
+			return chain;
+		}
+
 #if !defined(BS_PLATFORM_WINDOWS)
-		char s_Directories[DirectoryLevels][MaxPathLength + 1] = {};
+		char s_Directories[MaxDirectoryLevels][MaxPathLength + 1] = {};
 		char s_FallbackDirectory[MaxPathLength + 1] = {};
 		// Room for the handler on a stack overflow. Per thread: other threads' overflows are not reported.
 		alignas(16) char s_AlternateStack[256 * 1024];
 		constexpr int HandledSignals[] = { SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGABRT, SIGTRAP };
+		struct sigaction s_PreviousActions[std::size(HandledSignals)] = {};
 
-		// The dialog program found at Install, with its arguments filled in at the crash (fork + exec are
-		// async-signal-safe; a GUI toolkit is not).
-		enum class DialogProgram
+		// The dialog program found at Install. The crashed process starts it with posix_spawn, which (unlike fork) runs no
+		// atfork handlers, so it cannot deadlock on a malloc lock the crash left held; its stdio goes to /dev/null, so it
+		// never holds a parent's output pipes open.
+		const char* s_DialogProgram = nullptr;
+		enum class DialogKind
 		{
-			None,
 			Osascript,
 			Zenity,
 			KDialog,
 			XMessage
 		};
-		DialogProgram s_DialogProgram = DialogProgram::None;
+		DialogKind s_DialogKind = DialogKind::Osascript;
+		posix_spawn_file_actions_t s_DialogActions;
 		char s_DialogApplication[MaxApplicationLength * 2 + 1] = {};
 
-		void WriteAll(int fd, std::string_view text)
+		// False when the text could not be written whole (a full disk, an I/O error).
+		bool WriteAll(int fd, std::string_view text)
 		{
 			while (!text.empty())
 			{
 				const ssize_t written = write(fd, text.data(), text.size());
+				if (written < 0 && errno == EINTR)
+					continue;
 				if (written <= 0)
-					return;
+					return false;
 				text.remove_prefix(static_cast<size_t>(written));
 			}
+			return true;
 		}
 
 		// Opens a new report in directory; path receives its name. -1 when it cannot be created.
@@ -213,7 +252,8 @@ namespace Basalt {
 		}
 
 		// Escapes a string for an AppleScript string literal ('"' and '\').
-		void AppendEscaped(CrashText& out, std::string_view text)
+		template<size_t Capacity>
+		void AppendEscaped(BasicCrashText<Capacity>& out, std::string_view text)
 		{
 			for (const char c : text)
 			{
@@ -223,56 +263,55 @@ namespace Basalt {
 			}
 		}
 
-		// Starts the dialog program in a child process without waiting for it: the crashed process dies at once, as the
-		// OS expects, and the dialog stays until the player closes it.
-		void ShowDialog(std::string_view reportPath, bool written)
+		// Starts the dialog program without waiting for it: the crashed process dies at once, as the OS expects, and the
+		// dialog stays until the player closes it.
+		void ShowDialog(std::string_view message)
 		{
-			if (!s_DialogEnabled || s_DialogProgram == DialogProgram::None)
+			if (!s_DialogEnabled || !s_DialogProgram)
 				return;
 			static CrashText s_Message;
 			static CrashText s_Script;
 			s_Message.Clear();
-			s_Message.Append(s_Application);
-			s_Message.Append(" crashed.");
-			if (written)
+			s_Message.Append(message);
+			char* arguments[8] = {};
+			const auto argument = [](const char* text) { return const_cast<char*>(text); };
+			switch (s_DialogKind)
 			{
-				s_Message.Append(" A crash report was saved to ");
-				s_Message.Append(reportPath);
-			}
-			const char* message = s_Message.CStr();
-			char title[MaxApplicationLength + 1];
-			CopyText(title, MaxApplicationLength, s_Application);
-			if (s_DialogProgram == DialogProgram::Osascript)
-			{
-				s_Script.Clear();
-				s_Script.Append("display alert \"");
-				s_Script.Append(s_DialogApplication);
-				s_Script.Append(" crashed\" message \"");
-				AppendEscaped(s_Script, s_Message.View());
-				s_Script.Append("\" as critical buttons {\"OK\"}");
-			}
-			const pid_t child = fork();
-			if (child != 0)
-				return;
-			// The child: only async-signal-safe calls until exec.
-			switch (s_DialogProgram)
-			{
-				case DialogProgram::Osascript:
-					execl("/usr/bin/osascript", "osascript", "-e", s_Script.CStr(), static_cast<char*>(nullptr));
+				case DialogKind::Osascript:
+					s_Script.Clear();
+					s_Script.Append("display alert \"");
+					s_Script.Append(s_DialogApplication);
+					s_Script.Append(" crashed\" message \"");
+					AppendEscaped(s_Script, message);
+					s_Script.Append("\" as critical buttons {\"OK\"}");
+					arguments[0] = argument("osascript");
+					arguments[1] = argument("-e");
+					arguments[2] = argument(s_Script.CStr());
 					break;
-				case DialogProgram::Zenity:
-					execl("/usr/bin/zenity", "zenity", "--error", "--no-markup", "--title", title, "--text", message, static_cast<char*>(nullptr));
+				case DialogKind::Zenity:
+					arguments[0] = argument("zenity");
+					arguments[1] = argument("--error");
+					arguments[2] = argument("--no-markup");
+					arguments[3] = argument("--title");
+					arguments[4] = argument(s_Application);
+					arguments[5] = argument("--text");
+					arguments[6] = argument(s_Message.CStr());
 					break;
-				case DialogProgram::KDialog:
-					execl("/usr/bin/kdialog", "kdialog", "--title", title, "--error", message, static_cast<char*>(nullptr));
+				case DialogKind::KDialog:
+					arguments[0] = argument("kdialog");
+					arguments[1] = argument("--title");
+					arguments[2] = argument(s_Application);
+					arguments[3] = argument("--error");
+					arguments[4] = argument(s_Message.CStr());
 					break;
-				case DialogProgram::XMessage:
-					execl("/usr/bin/xmessage", "xmessage", "-center", message, static_cast<char*>(nullptr));
-					break;
-				case DialogProgram::None:
+				case DialogKind::XMessage:
+					arguments[0] = argument("xmessage");
+					arguments[1] = argument("-center");
+					arguments[2] = argument(s_Message.CStr());
 					break;
 			}
-			_exit(127);
+			pid_t child = 0;
+			posix_spawn(&child, s_DialogProgram, &s_DialogActions, nullptr, arguments, environ);
 		}
 
 		void ResetAndRaise(int signal)
@@ -286,12 +325,18 @@ namespace Basalt {
 
 		void HandleSignal(int signal, siginfo_t* info, void*)
 		{
-			// A crash inside the handler (or on a second thread at the same time) dies at once.
 			if (s_Handling.exchange(true))
 			{
-				ResetAndRaise(signal);
-				return;
+				// A crash inside the handler dies at once; another thread waits for the report, then dies with the process.
+				if (t_Handling)
+				{
+					ResetAndRaise(signal);
+					return;
+				}
+				for (;;)
+					pause();
 			}
+			t_Handling = true;
 			const auto unixTime = static_cast<uint64_t>(time(nullptr));
 			const auto processId = static_cast<uint64_t>(getpid());
 			const char* described = CrashReporter::DescribeSignal(signal);
@@ -304,81 +349,118 @@ namespace Basalt {
 			for (const char* directory : s_Directories)
 				if (directory[0] != '\0')
 					mkdir(directory, 0755);
-			int fd = OpenReport(s_Directories[DirectoryLevels - 1], unixTime, processId, s_Path);
+			// The report folder is the last level in use.
+			const char* reportDirectory = "";
+			for (const char* directory : s_Directories)
+				if (directory[0] != '\0')
+					reportDirectory = directory;
+			int fd = OpenReport(reportDirectory, unixTime, processId, s_Path);
+			int openError = fd < 0 ? errno : 0;
 			if (fd < 0 && s_FallbackDirectory[0] != '\0')
 			{
 				mkdir(s_FallbackDirectory, 0755);
 				fd = OpenReport(s_FallbackDirectory, unixTime, processId, s_Path);
+				if (fd < 0)
+					openError = errno;
 			}
-			const std::string_view path = s_Path.View();
+			bool complete = fd >= 0;
 			if (fd >= 0)
 			{
 				s_Text.Clear();
 				CrashReporter::FormatHeader(s_Text, reason, address, unixTime, processId);
-				s_Text.Append("\nStack trace:\n");
-				WriteAll(fd, s_Text.View());
+				s_Text.Append(StackTraceHeading);
+				complete = WriteAll(fd, s_Text.View()) && complete;
 	#if defined(BS_CRASH_BACKTRACE)
 				void* frames[128];
 				const int count = backtrace(frames, 128);
 				backtrace_symbols_fd(frames, count, fd);
 	#else
-				WriteAll(fd, "(not available on this platform)\n");
+				complete = WriteAll(fd, "(not available on this platform)\n") && complete;
 	#endif
 				s_Text.Clear();
-				s_Text.Append("\nLast log lines (oldest first):\n");
+				s_Text.Append(LogHeading);
 				CrashReporter::FormatLogLines(s_Text);
-				WriteAll(fd, s_Text.View());
+				complete = WriteAll(fd, s_Text.View()) && complete;
 				close(fd);
 			}
-			s_Text.Clear();
-			s_Text.Append(s_Application);
-			s_Text.Append(" crashed: ");
-			s_Text.Append(reason);
+			// What the player and stderr are told.
+			static CrashText s_Summary;
+			s_Summary.Clear();
+			s_Summary.Append(s_Application);
+			s_Summary.Append(" crashed: ");
+			s_Summary.Append(reason);
 			if (fd >= 0)
 			{
-				s_Text.Append(". Crash report: ");
-				s_Text.Append(path);
+				s_Summary.Append(complete ? ". Crash report: " : ". The crash report is incomplete (it could not be written whole): ");
+				s_Summary.Append(s_Path.View());
 			}
 			else
-				s_Text.Append(". The crash report could not be written.");
-			s_Text.Append("\n");
-			WriteAll(STDERR_FILENO, s_Text.View());
-			ShowDialog(path, fd >= 0);
+			{
+				s_Summary.Append(". No crash report could be written (errno ");
+				s_Summary.AppendDecimal(static_cast<uint64_t>(openError));
+				s_Summary.Append(").");
+			}
+			WriteAll(STDERR_FILENO, s_Summary.View());
+			WriteAll(STDERR_FILENO, "\n");
+			ShowDialog(s_Summary.View());
 			ResetAndRaise(signal);
+		}
+
+		void RestoreSignals(size_t count)
+		{
+			for (size_t i = 0; i < count; i++)
+				sigaction(HandledSignals[i], &s_PreviousActions[i], nullptr);
 		}
 
 		bool InstallPlatform()
 		{
-			const auto chain = DirectoryChain(s_ReportDirectory);
-			for (size_t i = 0; i < DirectoryLevels; i++)
+			const auto chain = MissingDirectoryChain(s_ReportDirectory);
+			for (size_t i = 0; i < chain.size(); i++)
 			{
 				const std::string directory = FileSystem::PathToUtf8(chain[i]);
-				CopyText(s_Directories[i], MaxPathLength, directory.size() <= MaxPathLength ? directory : std::string());
+				if (directory.size() <= MaxPathLength)
+					CopyText(s_Directories[i], MaxPathLength, directory);
+				else
+					BS_CORE_WARN("Crash reports: the folder '{}' is longer than {} bytes; reports go next to the executable", directory, MaxPathLength);
 			}
 			const std::string fallback = FileSystem::PathToUtf8(FileSystem::GetExecutableDirectory() / "CrashReports");
-			CopyText(s_FallbackDirectory, MaxPathLength, fallback.size() <= MaxPathLength ? fallback : std::string());
+			if (fallback.size() <= MaxPathLength)
+				CopyText(s_FallbackDirectory, MaxPathLength, fallback);
 	#if defined(BS_CRASH_BACKTRACE)
 			// The first call loads the unwinder (glibc dlopens libgcc_s), which must not happen inside the handler.
 			void* warmUp[4];
 			backtrace(warmUp, 4);
 	#endif
 	#if defined(BS_PLATFORM_MACOS)
-			s_DialogProgram = access("/usr/bin/osascript", X_OK) == 0 ? DialogProgram::Osascript : DialogProgram::None;
-			CrashText escaped;
+			if (access("/usr/bin/osascript", X_OK) == 0)
+			{
+				s_DialogProgram = "/usr/bin/osascript";
+				s_DialogKind = DialogKind::Osascript;
+			}
+			BasicCrashText<MaxApplicationLength * 2> escaped;
 			AppendEscaped(escaped, s_Application);
 			CopyText(s_DialogApplication, sizeof(s_DialogApplication) - 1, escaped.View());
 	#else
 			// Only with a display to show it on.
 			if (Platform::GetEnvVar("DISPLAY") || Platform::GetEnvVar("WAYLAND_DISPLAY"))
 			{
-				if (access("/usr/bin/zenity", X_OK) == 0)
-					s_DialogProgram = DialogProgram::Zenity;
-				else if (access("/usr/bin/kdialog", X_OK) == 0)
-					s_DialogProgram = DialogProgram::KDialog;
-				else if (access("/usr/bin/xmessage", X_OK) == 0)
-					s_DialogProgram = DialogProgram::XMessage;
+				for (const auto& [program, kind] : { std::pair{ "/usr/bin/zenity", DialogKind::Zenity }, std::pair{ "/usr/bin/kdialog", DialogKind::KDialog }, std::pair{ "/usr/bin/xmessage", DialogKind::XMessage } })
+				{
+					if (access(program, X_OK) == 0)
+					{
+						s_DialogProgram = program;
+						s_DialogKind = kind;
+						break;
+					}
+				}
 			}
 	#endif
+			// Prepared now: setting up file actions allocates.
+			if (s_DialogProgram && (posix_spawn_file_actions_init(&s_DialogActions) != 0 || posix_spawn_file_actions_addopen(&s_DialogActions, 0, "/dev/null", O_RDONLY, 0) != 0 || posix_spawn_file_actions_addopen(&s_DialogActions, 1, "/dev/null", O_WRONLY, 0) != 0 || posix_spawn_file_actions_adddup2(&s_DialogActions, 1, 2) != 0))
+			{
+				BS_CORE_WARN("Crash reports: no crash dialog (cannot prepare its process)");
+				s_DialogProgram = nullptr;
+			}
 			stack_t stack = {};
 			stack.ss_sp = s_AlternateStack;
 			stack.ss_size = sizeof(s_AlternateStack);
@@ -387,21 +469,26 @@ namespace Basalt {
 			struct sigaction action = {};
 			action.sa_sigaction = &HandleSignal;
 			sigemptyset(&action.sa_mask);
-			action.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_RESETHAND;
-			for (const int signal : HandledSignals)
+			// No SA_RESETHAND: a second thread's crash must reach the handler (and wait) rather than end the process mid-report.
+			action.sa_flags = SA_SIGINFO | SA_ONSTACK;
+			for (size_t i = 0; i < std::size(HandledSignals); i++)
 			{
-				if (sigaction(signal, &action, nullptr) != 0)
+				if (sigaction(HandledSignals[i], &action, &s_PreviousActions[i]) != 0)
 				{
-					BS_CORE_ERROR("Crash reports: cannot handle signal {}: {}", signal, std::generic_category().message(errno));
+					BS_CORE_ERROR("Crash reports: cannot handle signal {}: {}", HandledSignals[i], std::generic_category().message(errno));
+					RestoreSignals(i);
 					return false;
 				}
 			}
 			return true;
 		}
 #else
-		wchar_t s_Directories[DirectoryLevels][MaxPathLength + 1] = {};
+		wchar_t s_Directories[MaxDirectoryLevels][MaxPathLength + 1] = {};
 		wchar_t s_FallbackDirectory[MaxPathLength + 1] = {};
 		wchar_t s_WideApplication[MaxApplicationLength + 1] = {};
+		LPTOP_LEVEL_EXCEPTION_FILTER s_PreviousFilter = nullptr;
+		// MSVC's code for C++ exceptions.
+		constexpr DWORD CppExceptionCode = 0xE06D7363;
 
 		// Appends text to a NUL-terminated wide buffer of capacity + 1 characters.
 		void AppendWide(wchar_t* destination, size_t capacity, const wchar_t* text)
@@ -409,6 +496,14 @@ namespace Basalt {
 			size_t length = wcslen(destination);
 			for (; *text && length < capacity; text++)
 				destination[length++] = *text;
+			destination[length] = L'\0';
+		}
+
+		void AppendAscii(wchar_t* destination, size_t capacity, std::string_view text)
+		{
+			size_t length = wcslen(destination);
+			for (size_t i = 0; i < text.size() && length < capacity; i++)
+				destination[length++] = static_cast<wchar_t>(text[i]);
 			destination[length] = L'\0';
 		}
 
@@ -421,12 +516,10 @@ namespace Basalt {
 			out[0] = L'\0';
 			AppendWide(out, capacity, directory);
 			AppendWide(out, capacity, L"\\");
-			CrashText name;
+			// Small enough for the stack left after a stack overflow.
+			BasicCrashText<64> name;
 			FormatReportName(name, unixTime, processId, "");
-			wchar_t wide[64] = {};
-			for (size_t i = 0; i < name.View().size() && i < 63; i++)
-				wide[i] = static_cast<wchar_t>(name.View()[i]);
-			AppendWide(out, capacity, wide);
+			AppendAscii(out, capacity, name.View());
 			return true;
 		}
 
@@ -438,31 +531,34 @@ namespace Basalt {
 			return CreateFileW(path, GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
 		}
 
-		void WriteAll(HANDLE file, std::string_view text)
+		// False when the text could not be written whole.
+		bool WriteAll(HANDLE file, std::string_view text)
 		{
 			while (!text.empty())
 			{
 				DWORD written = 0;
 				if (!WriteFile(file, text.data(), static_cast<DWORD>(std::min<size_t>(text.size(), 1u << 20)), &written, nullptr) || written == 0)
-					return;
+					return false;
 				text.remove_prefix(written);
 			}
+			return true;
 		}
 
-		void AppendUtf8(CrashText& out, const wchar_t* text)
+		template<size_t Capacity>
+		void AppendUtf8(BasicCrashText<Capacity>& out, const wchar_t* text)
 		{
-			char buffer[MaxPathLength * 3 + 1] = {};
-			const int length = WideCharToMultiByte(CP_UTF8, 0, text, -1, buffer, static_cast<int>(sizeof(buffer)), nullptr, nullptr);
+			static char s_Buffer[MaxPathLength * 3 + 1];
+			const int length = WideCharToMultiByte(CP_UTF8, 0, text, -1, s_Buffer, static_cast<int>(sizeof(s_Buffer)), nullptr, nullptr);
 			if (length > 1)
-				out.Append(std::string_view(buffer, static_cast<size_t>(length - 1)));
+				out.Append(std::string_view(s_Buffer, static_cast<size_t>(length - 1)));
 		}
 
 		void AppendStackTrace(CrashText& out)
 		{
 			void* frames[62];
 			const USHORT count = CaptureStackBackTrace(0, 62, frames, nullptr);
-			alignas(SYMBOL_INFO) char symbolStorage[sizeof(SYMBOL_INFO) + 256] = {};
-			auto* symbol = reinterpret_cast<SYMBOL_INFO*>(symbolStorage);
+			static char s_SymbolStorage[sizeof(SYMBOL_INFO) + 256];
+			auto* symbol = reinterpret_cast<SYMBOL_INFO*>(s_SymbolStorage);
 			for (USHORT i = 0; i < count; i++)
 			{
 				const auto address = reinterpret_cast<DWORD64>(frames[i]);
@@ -471,6 +567,7 @@ namespace Basalt {
 				symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
 				symbol->MaxNameLen = 255;
 				DWORD64 displacement = 0;
+				// May load symbol files (SYMOPT_DEFERRED_LOADS): heavier than the POSIX handler, but only names frames.
 				if (SymFromAddr(GetCurrentProcess(), address, &displacement, symbol))
 				{
 					out.Append(" ");
@@ -490,27 +587,38 @@ namespace Basalt {
 			static wchar_t s_Base[MaxPathLength + 64];
 			static wchar_t s_TextPath[MaxPathLength + 80];
 			static wchar_t s_DumpPath[MaxPathLength + 80];
-			HANDLE file = INVALID_HANDLE_VALUE;
+			const wchar_t* reportDirectory = L"";
 			for (const wchar_t* directory : s_Directories)
+			{
 				if (directory[0] != L'\0')
+				{
 					CreateDirectoryW(directory, nullptr);
-			if (BuildReportBase(s_Directories[DirectoryLevels - 1], unixTime, processId, s_Base, MaxPathLength + 63))
-				file = CreateReportFile(s_Base, L".txt", s_TextPath, MaxPathLength + 79);
-			if (file == INVALID_HANDLE_VALUE && BuildReportBase(s_FallbackDirectory, unixTime, processId, s_Base, MaxPathLength + 63))
+					reportDirectory = directory;
+				}
+			}
+			HANDLE file = INVALID_HANDLE_VALUE;
+			if (BuildReportBase(reportDirectory, unixTime, processId, s_Base, std::size(s_Base) - 1))
+				file = CreateReportFile(s_Base, L".txt", s_TextPath, std::size(s_TextPath) - 1);
+			if (file == INVALID_HANDLE_VALUE && BuildReportBase(s_FallbackDirectory, unixTime, processId, s_Base, std::size(s_Base) - 1))
 			{
 				CreateDirectoryW(s_FallbackDirectory, nullptr);
-				file = CreateReportFile(s_Base, L".txt", s_TextPath, MaxPathLength + 79);
+				file = CreateReportFile(s_Base, L".txt", s_TextPath, std::size(s_TextPath) - 1);
 			}
+			const DWORD openError = file == INVALID_HANDLE_VALUE ? GetLastError() : 0;
 			const bool written = file != INVALID_HANDLE_VALUE;
+			bool complete = written;
 			if (written)
 			{
 				bool dumped = false;
-				const HANDLE dump = CreateReportFile(s_Base, L".dmp", s_DumpPath, MaxPathLength + 79);
+				const HANDLE dump = CreateReportFile(s_Base, L".dmp", s_DumpPath, std::size(s_DumpPath) - 1);
 				if (dump != INVALID_HANDLE_VALUE)
 				{
 					MINIDUMP_EXCEPTION_INFORMATION information = { GetCurrentThreadId(), exception, FALSE };
 					dumped = MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(), dump, static_cast<MINIDUMP_TYPE>(MiniDumpNormal | MiniDumpWithThreadInfo), exception ? &information : nullptr, nullptr, nullptr) != FALSE;
 					CloseHandle(dump);
+					// No empty or partial dump beside the report.
+					if (!dumped)
+						DeleteFileW(s_DumpPath);
 				}
 				s_Text.Clear();
 				CrashReporter::FormatHeader(s_Text, reason, address, unixTime, processId);
@@ -520,46 +628,75 @@ namespace Basalt {
 					AppendUtf8(s_Text, s_DumpPath);
 					s_Text.Append("\n");
 				}
-				s_Text.Append("\nStack trace:\n");
+				s_Text.Append(StackTraceHeading);
 				AppendStackTrace(s_Text);
-				s_Text.Append("\nLast log lines (oldest first):\n");
+				s_Text.Append(LogHeading);
 				CrashReporter::FormatLogLines(s_Text);
-				WriteAll(file, s_Text.View());
+				complete = WriteAll(file, s_Text.View());
 				CloseHandle(file);
 			}
-			s_Text.Clear();
-			s_Text.Append(s_Application);
-			s_Text.Append(" crashed: ");
-			s_Text.Append(reason);
+			static CrashText s_Summary;
+			s_Summary.Clear();
+			s_Summary.Append(s_Application);
+			s_Summary.Append(" crashed: ");
+			s_Summary.Append(reason);
 			if (written)
 			{
-				s_Text.Append(". Crash report: ");
-				AppendUtf8(s_Text, s_TextPath);
+				s_Summary.Append(complete ? ". Crash report: " : ". The crash report is incomplete (it could not be written whole): ");
+				AppendUtf8(s_Summary, s_TextPath);
 			}
 			else
-				s_Text.Append(". The crash report could not be written.");
-			s_Text.Append("\n");
-			WriteAll(GetStdHandle(STD_ERROR_HANDLE), s_Text.View());
+			{
+				s_Summary.Append(". No crash report could be written (error ");
+				s_Summary.AppendDecimal(openError);
+				s_Summary.Append(").");
+			}
+			s_Summary.Append("\n");
+			WriteAll(GetStdHandle(STD_ERROR_HANDLE), s_Summary.View());
 			if (s_DialogEnabled)
 			{
 				static wchar_t s_Message[MaxPathLength + 512];
 				s_Message[0] = L'\0';
-				AppendWide(s_Message, MaxPathLength + 511, s_WideApplication);
-				AppendWide(s_Message, MaxPathLength + 511, L" crashed.");
+				AppendWide(s_Message, std::size(s_Message) - 1, s_WideApplication);
+				AppendWide(s_Message, std::size(s_Message) - 1, L" crashed.");
 				if (written)
 				{
-					AppendWide(s_Message, MaxPathLength + 511, L"\n\nA crash report was saved to:\n");
-					AppendWide(s_Message, MaxPathLength + 511, s_TextPath);
+					AppendWide(s_Message, std::size(s_Message) - 1, complete ? L"\n\nA crash report was saved to:\n" : L"\n\nAn incomplete crash report was saved to:\n");
+					AppendWide(s_Message, std::size(s_Message) - 1, s_TextPath);
 				}
+				else
+					AppendWide(s_Message, std::size(s_Message) - 1, L"\n\nNo crash report could be written.");
 				MessageBoxW(nullptr, s_Message, s_WideApplication, MB_OK | MB_ICONERROR | MB_TASKMODAL);
 			}
 		}
 
+		// Whether this thread may write the report: false for a crash inside the handler; another thread that crashes
+		// meanwhile waits here for the report, then dies with the process.
+		bool BeginReport()
+		{
+			if (!s_Handling.exchange(true))
+			{
+				t_Handling = true;
+				return true;
+			}
+			if (!t_Handling)
+				Sleep(INFINITE);
+			return false;
+		}
+
 		LONG WINAPI HandleException(EXCEPTION_POINTERS* exception)
 		{
-			if (s_Handling.exchange(true))
-				return EXCEPTION_CONTINUE_SEARCH;
 			const EXCEPTION_RECORD& record = *exception->ExceptionRecord;
+			// The C runtime's own filter turns an uncaught C++ exception into std::terminate, where OnTerminate keeps its
+			// message and abort then reports (HandleAbort).
+			if (record.ExceptionCode == CppExceptionCode && s_PreviousFilter && !s_Handling)
+			{
+				const LONG previous = s_PreviousFilter(exception);
+				if (previous != EXCEPTION_CONTINUE_SEARCH)
+					return previous;
+			}
+			if (!BeginReport())
+				return EXCEPTION_CONTINUE_SEARCH;
 			std::optional<uint64_t> address = reinterpret_cast<uintptr_t>(record.ExceptionAddress);
 			// For access violations, the address that could not be read or written.
 			if ((record.ExceptionCode == EXCEPTION_ACCESS_VIOLATION || record.ExceptionCode == EXCEPTION_IN_PAGE_ERROR) && record.NumberParameters >= 2)
@@ -570,36 +707,40 @@ namespace Basalt {
 			return EXCEPTION_EXECUTE_HANDLER;
 		}
 
-		// abort() (failed checks, std::terminate) and C runtime failures bypass the unhandled exception filter.
+		// abort() (failed checks, std::terminate) and C runtime failures bypass the unhandled exception filter: report, then
+		// exit with abort's code.
+		[[noreturn]] void ReportAndExit(std::string_view reason)
+		{
+			if (BeginReport())
+				WriteReport(reason, std::nullopt, nullptr);
+			_exit(3);
+		}
+
 		void HandleAbort(int)
 		{
-			if (!s_Handling.exchange(true))
-				WriteReport(CrashReporter::DescribeSignal(SIGABRT), std::nullopt, nullptr);
-			_exit(3);
+			ReportAndExit(CrashReporter::DescribeSignal(SIGABRT));
 		}
 
 		void HandleInvalidParameter(const wchar_t*, const wchar_t*, const wchar_t*, unsigned int, uintptr_t)
 		{
-			if (!s_Handling.exchange(true))
-				WriteReport("an invalid parameter passed to a C runtime function", std::nullopt, nullptr);
-			_exit(3);
+			ReportAndExit("an invalid parameter passed to a C runtime function");
 		}
 
 		void HandlePureCall()
 		{
-			if (!s_Handling.exchange(true))
-				WriteReport("a pure virtual function call", std::nullopt, nullptr);
-			_exit(3);
+			ReportAndExit("a pure virtual function call");
 		}
 
 		bool InstallPlatform()
 		{
-			const auto chain = DirectoryChain(s_ReportDirectory);
-			for (size_t i = 0; i < DirectoryLevels; i++)
+			const auto chain = MissingDirectoryChain(s_ReportDirectory);
+			for (size_t i = 0; i < chain.size(); i++)
 			{
 				const std::wstring directory = chain[i].wstring();
 				if (directory.size() <= MaxPathLength)
 					wcsncpy_s(s_Directories[i], directory.c_str(), _TRUNCATE);
+				else
+					BS_CORE_WARN("Crash reports: the folder '{}' is longer than {} characters; reports go next to the executable", FileSystem::PathToUtf8(chain[i]), MaxPathLength);
 			}
 			const std::wstring fallback = (FileSystem::GetExecutableDirectory() / "CrashReports").wstring();
 			if (fallback.size() <= MaxPathLength)
@@ -614,46 +755,47 @@ namespace Basalt {
 			std::signal(SIGABRT, &HandleAbort);
 			_set_invalid_parameter_handler(&HandleInvalidParameter);
 			_set_purecall_handler(&HandlePureCall);
-			// Stack for the filter after a stack overflow on this thread.
-			ULONG guarantee = 64 * 1024;
+			// Stack for the filter after a stack overflow on this thread (the minidump writer and symbol lookup need room).
+			ULONG guarantee = 128 * 1024;
 			SetThreadStackGuarantee(&guarantee);
-			SetUnhandledExceptionFilter(&HandleException);
+			s_PreviousFilter = SetUnhandledExceptionFilter(&HandleException);
 			return true;
 		}
 #endif
 
-	}
-
-	void CrashText::Append(std::string_view text)
-	{
-		const size_t length = std::min(text.size(), Capacity - m_Size);
-		std::memcpy(m_Data + m_Size, text.data(), length);
-		m_Size += length;
-	}
-
-	void CrashText::AppendDecimal(uint64_t value)
-	{
-		char digits[20];
-		size_t count = 0;
-		do
+		bool InstallOnce(const CrashReporterOptions& options)
 		{
-			digits[count++] = static_cast<char>('0' + value % 10);
-			value /= 10;
-		} while (value != 0);
-		while (count > 0)
-		{
-			const char digit = digits[--count];
-			Append(std::string_view(&digit, 1));
+			// Not #if: sanitizer builds still compile the handlers (keeping them referenced for -Werror).
+			if constexpr (BS_CRASH_ASAN != 0)
+			{
+				BS_CORE_INFO("Crash reports: off under AddressSanitizer, which reports crashes itself");
+				return false;
+			}
+			const std::string application = SanitizeApplicationName(options.ApplicationName);
+			{
+				LockGuard lock;
+				CopyText(s_Application, MaxApplicationLength, application);
+			}
+			std::string error;
+			if (const auto userData = Platform::GetUserDataDirectory(error))
+				s_ReportDirectory = *userData / FileSystem::PathFromUtf8(s_Application) / "Crashes";
+			else
+			{
+				BS_CORE_WARN("Crash reports: {}; reports go next to the executable", error);
+				s_ReportDirectory = FileSystem::GetExecutableDirectory() / "CrashReports";
+			}
+			const uint64_t listener = Log::GetHistory().AddListener([](const LogMessage& message) { CrashReporter::RecordLogLine(LogLevelName(message.Level), message.LoggerName, message.Text); });
+			s_PreviousTerminate = std::set_terminate(&OnTerminate);
+			if (!InstallPlatform())
+			{
+				std::set_terminate(s_PreviousTerminate);
+				Log::GetHistory().RemoveListener(listener);
+				return false;
+			}
+			BS_CORE_INFO("Crash reports: '{}'", FileSystem::PathToUtf8(s_ReportDirectory));
+			return true;
 		}
-	}
 
-	void CrashText::AppendHex(uint64_t value)
-	{
-		static constexpr char Digits[] = "0123456789abcdef";
-		char text[18] = { '0', 'x' };
-		for (int i = 17; i >= 2; i--, value >>= 4)
-			text[i] = Digits[value & 0xF];
-		Append(std::string_view(text, sizeof(text)));
 	}
 
 	const char* CrashReporter::DescribeSignal(int signal)
@@ -681,6 +823,8 @@ namespace Basalt {
 
 	const char* CrashReporter::DescribeException(uint32_t code)
 	{
+		// Fail-fast codes (stack buffer overruns, heap corruption) end the process without reaching any filter, so they
+		// are not listed.
 		switch (code)
 		{
 			case 0xC0000005:
@@ -701,10 +845,8 @@ namespace Basalt {
 				return "EXCEPTION_ARRAY_BOUNDS_EXCEEDED (array bounds exceeded)";
 			case 0x80000003:
 				return "EXCEPTION_BREAKPOINT (a failed check or a breakpoint)";
-			case 0xC0000409:
-				return "STATUS_STACK_BUFFER_OVERRUN (fail fast: a security check failed)";
-			case 0xC0000374:
-				return "STATUS_HEAP_CORRUPTION (heap corruption)";
+			case 0xE06D7363:
+				return "an uncaught C++ exception";
 			default:
 				return "an unhandled exception";
 		}
@@ -802,33 +944,8 @@ namespace Basalt {
 
 	bool CrashReporter::Install(const CrashReporterOptions& options)
 	{
-		if (s_Installed.exchange(true))
-			return s_InstallResult;
-		// Not #if: sanitizer builds still compile (and warn about) the handlers.
-		if constexpr (BS_CRASH_ASAN != 0)
-		{
-			BS_CORE_INFO("Crash reports: off under AddressSanitizer, which reports crashes itself");
-			return false;
-		}
-		{
-			LockGuard lock;
-			CopyText(s_Application, MaxApplicationLength, options.ApplicationName.empty() ? std::string_view("Basalt") : std::string_view(options.ApplicationName));
-		}
-		std::string error;
-		if (const auto userData = Platform::GetUserDataDirectory(error))
-			s_ReportDirectory = *userData / FileSystem::PathFromUtf8(s_Application) / "Crashes";
-		else
-		{
-			BS_CORE_INFO("Crash reports: {}; reports go next to the executable", error);
-			s_ReportDirectory = FileSystem::GetExecutableDirectory() / "CrashReports";
-		}
-		Log::GetHistory().AddListener([](const LogMessage& message) { RecordLogLine(LogLevelName(message.Level), message.LoggerName, message.Text); });
-		s_PreviousTerminate = std::set_terminate(&OnTerminate);
-		if (!InstallPlatform())
-			return false;
-		s_InstallResult = true;
-		BS_CORE_INFO("Crash reports: '{}'", FileSystem::PathToUtf8(s_ReportDirectory));
-		return true;
+		std::call_once(s_InstallOnce, [&]() { s_InstallResult = InstallOnce(options); });
+		return s_InstallResult;
 	}
 
 }

@@ -33,15 +33,16 @@ namespace {
 		return static_cast<int>(std::strtol(text, nullptr, 10));
 	}
 
-	// `BasaltTests --basalt-child <actions...>` acts as a child process for the RunProcess tests, so they need no
-	// shell or other platform tool. With BASALT_TEST_CHILD_ACTIONS set (space-separated actions), it does the same
-	// whatever its arguments, standing in for an exported game (smoke tests). Actions run in order:
-	// print <text> (stdout), error <text> (stderr), env <name>, cwd, sleep <ms>, spam <bytes>, utf8 <count>
-	// (prints "é" count times), invalid (prints bytes that are not UTF-8), fd <descriptor> (POSIX: whether it is
-	// open), crash (a real access violation on Windows, SIGABRT elsewhere), trap (BS_DEBUGBREAK), args (prints
-	// every remaining argument on its own line), exit <code>, crash-report <kind> (installs the crash reporter as
-	// "CrashChild", logs "crash-test sentinel 42", then crashes: kind is segv, abort, terminate or trap; exits 77 when
-	// crash reports are unavailable, as under AddressSanitizer; Tests/Automation/CrashReport.py checks the report).
+	// Recursion the compiler cannot remove or prove infinite (limit comes from a parse), deep enough to overflow any stack.
+	int Recurse(int depth, int limit)
+	{
+		volatile char frame[4096];
+		frame[0] = static_cast<char>(depth);
+		if (depth >= limit)
+			return frame[0];
+		return Recurse(depth + 1, limit) + frame[0];
+	}
+
 	// A real crash of the requested kind (crash-report).
 	void CrashNow(std::string_view kind)
 	{
@@ -54,17 +55,31 @@ namespace {
 		else if (kind == "abort")
 			std::abort();
 		else if (kind == "terminate")
-		{
-			const auto throwing = []() noexcept(false) { throw std::runtime_error("crash-test exception"); };
-			// A noexcept caller turns the exception into std::terminate.
-			[&]() noexcept { throwing(); }();
-		}
+			// Escapes main: std::terminate with the exception current.
+			throw std::runtime_error("crash-test exception");
 		else if (kind == "trap")
 			BS_DEBUGBREAK();
+		else if (kind == "stackoverflow")
+			std::printf("%d\n", Recurse(0, static_cast<int>(std::strtol("1000000000", nullptr, 10))));
+		else if (kind == "thread-segv")
+		{
+			// A worker thread's crash: reported once, by that thread.
+			std::thread worker([] { CrashNow("segv"); });
+			worker.join();
+		}
 		std::fprintf(stderr, "crash kind '%.*s' is unknown or did not crash\n", static_cast<int>(kind.size()), kind.data());
 		std::exit(2);
 	}
 
+	// `BasaltTests --basalt-child <actions...>` acts as a child process for the RunProcess tests, so they need no
+	// shell or other platform tool. With BASALT_TEST_CHILD_ACTIONS set (space-separated actions), it does the same
+	// whatever its arguments, standing in for an exported game (smoke tests). Actions run in order:
+	// print <text> (stdout), error <text> (stderr), env <name>, cwd, sleep <ms>, spam <bytes>, utf8 <count>
+	// (prints "é" count times), invalid (prints bytes that are not UTF-8), fd <descriptor> (POSIX: whether it is
+	// open), crash (a real access violation on Windows, SIGABRT elsewhere), trap (BS_DEBUGBREAK), args (prints
+	// every remaining argument on its own line), exit <code>, crash-report <kind> (installs the crash reporter as
+	// "CrashChild", logs "crash-test sentinel 42", then crashes: kind is segv, abort, terminate, trap, stackoverflow or thread-segv; exits 77 when
+	// crash reports are unavailable, as under AddressSanitizer; Tests/Automation/CrashReport.py checks the report).
 	int RunChild(const std::vector<std::string>& actions)
 	{
 		for (size_t i = 0; i < actions.size(); i++)

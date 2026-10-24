@@ -263,6 +263,9 @@ def main():
         (project / "Assets" / "Scripts" / "Spin.lua").write_text(GOOD_SCRIPT)
         archived = ok("project.export", {"output": str(output), "archive": True, "smokeTestFrames": 10})
         require(archived["smokeTest"]["passed"] and "reading assets from" in archived["smokeTest"]["log"], f"archived smoke test: {archived['smokeTest']}")
+        # A reader that ignored the archive would log a failed load while the game still exits 0.
+        for problem in ("cannot load", "cannot read", "damaged in the archive", "unresolved asset UUID"):
+            require(problem not in archived["smokeTest"]["log"], f"the archived game reported {problem!r}: {archived['smokeTest']['log']}")
         require((output / "Assets.bpak").is_file() and not (output / "Assets").exists(), "an archived export kept an Assets folder")
         listing = ok("archive.inspect", {"path": str(output / "Assets.bpak"), "verify": True}, None)
         entries = {entry["path"]: entry for entry in listing["entries"]}
@@ -272,7 +275,15 @@ def main():
         require(entries["Assets/Scripts/Spin.lua"]["compression"] == "zstd", "a script should compress")
         packed = ok("project.export", {"output": str(package_output), "package": True, "archive": True, "smokeTestFrames": 5})
         require(packed["smokeTest"]["passed"], f"archived package smoke test: {packed['smokeTest']}")
-        require((project_file.parent / "Assets.bpak").is_file() and not (project_file.parent / "Assets").exists(), "the package holds no archive")
+        require((project_file.parent / "Assets.bpak").is_file() and not (project_file.parent / "Assets").exists(), "the package must hold Assets.bpak and no Assets folder")
+        # Damaged data in one entry: the archive still opens, and only verifying it finds the damage.
+        listing_before = (output / "Assets.bpak").read_bytes()
+        damaged_data = bytearray(listing_before)
+        damaged_data[48] ^= 0xFF
+        (output / "Assets.bpak").write_bytes(bytes(damaged_data))
+        require(ok("archive.inspect", {"path": str(output / "Assets.bpak")}, None)["files"] == len(entries), "damaged data must not stop listing")
+        fails("archive.inspect", {"path": str(output / "Assets.bpak"), "verify": True}, "damaged in the archive")
+        (output / "Assets.bpak").write_bytes(listing_before)
         # A damaged archive stops the game at start, saying why.
         damaged = bytearray((output / "Assets.bpak").read_bytes())
         damaged[-3] ^= 0xFF

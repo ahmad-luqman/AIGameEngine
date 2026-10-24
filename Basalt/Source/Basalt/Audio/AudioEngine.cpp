@@ -11,10 +11,12 @@
 #include <cmath>
 #include <cstddef>
 #include <cstring>
+#include <exception>
 #include <filesystem>
 #include <memory>
 #include <mutex>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 namespace Basalt {
@@ -62,6 +64,9 @@ namespace Basalt {
 			ma_default_vfs Disk;
 		};
 
+		// miniaudio casts the ma_vfs pointer to its callbacks, and GetDisk casts it back.
+		static_assert(std::is_standard_layout_v<ArchiveVfs> && offsetof(ArchiveVfs, Callbacks) == 0);
+
 		struct VfsFile
 		{
 			std::vector<uint8_t> Data;
@@ -75,32 +80,42 @@ namespace Basalt {
 			return &reinterpret_cast<ArchiveVfs*>(vfs)->Disk;
 		}
 
-		ma_result OpenVfsFile(ma_vfs* vfs, const std::filesystem::path& path, ma_uint32 openMode, ma_vfs_file* outFile, const auto& openDisk)
+		// Called from miniaudio (C, possibly on its job thread): no exception may leave it. pathText converts to the path the
+		// archive is asked about.
+		ma_result OpenVfsFile(ma_vfs* vfs, const auto* pathText, ma_uint32 openMode, ma_vfs_file* outFile, const auto& openDisk)
 		{
-			auto file = std::make_unique<VfsFile>();
-			const FileSystem::MountedFile mounted = (openMode & MA_OPEN_MODE_WRITE) == 0 ? FileSystem::FindMounted(path) : FileSystem::MountedFile{};
-			if (mounted)
+			try
 			{
-				auto data = FileSystem::ReadMounted(mounted);
-				if (!data)
-					return MA_IO_ERROR;
-				file->Data = std::move(*data);
+				auto file = std::make_unique<VfsFile>();
+				const FileSystem::MountedFile mounted = (openMode & MA_OPEN_MODE_WRITE) == 0 ? FileSystem::FindMounted(std::filesystem::path(pathText)) : FileSystem::MountedFile{};
+				if (mounted)
+				{
+					auto data = FileSystem::ReadMounted(mounted);
+					if (!data)
+						return MA_IO_ERROR;
+					file->Data = std::move(*data);
+				}
+				else if (const ma_result result = openDisk(GetDisk(vfs), &file->Disk); result != MA_SUCCESS)
+					return result;
+				*outFile = file.release();
+				return MA_SUCCESS;
 			}
-			else if (const ma_result result = openDisk(GetDisk(vfs), &file->Disk); result != MA_SUCCESS)
-				return result;
-			*outFile = file.release();
-			return MA_SUCCESS;
+			catch (const std::exception& exception)
+			{
+				BS_CORE_ERROR("AudioEngine: cannot open an audio file: {}", exception.what());
+				return MA_OUT_OF_MEMORY;
+			}
 		}
 
 		// Clip paths are native narrow text (AudioSystem passes path::string()), so they convert back the same way.
 		ma_result VfsOpen(ma_vfs* vfs, const char* path, ma_uint32 openMode, ma_vfs_file* outFile)
 		{
-			return OpenVfsFile(vfs, std::filesystem::path(path), openMode, outFile, [&](ma_vfs* disk, ma_vfs_file* diskFile) { return ma_vfs_open(disk, path, openMode, diskFile); });
+			return OpenVfsFile(vfs, path, openMode, outFile, [&](ma_vfs* disk, ma_vfs_file* diskFile) { return ma_vfs_open(disk, path, openMode, diskFile); });
 		}
 
 		ma_result VfsOpenW(ma_vfs* vfs, const wchar_t* path, ma_uint32 openMode, ma_vfs_file* outFile)
 		{
-			return OpenVfsFile(vfs, std::filesystem::path(path), openMode, outFile, [&](ma_vfs* disk, ma_vfs_file* diskFile) { return ma_vfs_open_w(disk, path, openMode, diskFile); });
+			return OpenVfsFile(vfs, path, openMode, outFile, [&](ma_vfs* disk, ma_vfs_file* diskFile) { return ma_vfs_open_w(disk, path, openMode, diskFile); });
 		}
 
 		ma_result VfsClose(ma_vfs* vfs, ma_vfs_file handle)
@@ -136,8 +151,11 @@ namespace Basalt {
 			if (file->Disk)
 				return ma_vfs_seek(GetDisk(vfs), file->Disk, offset, origin);
 			const auto size = static_cast<ma_int64>(file->Data.size());
-			const ma_int64 base = origin == ma_seek_origin_start ? 0 : origin == ma_seek_origin_current ? static_cast<ma_int64>(file->Cursor)
-																										: size;
+			ma_int64 base = size;
+			if (origin == ma_seek_origin_start)
+				base = 0;
+			else if (origin == ma_seek_origin_current)
+				base = static_cast<ma_int64>(file->Cursor);
 			// Both within [0, size]: no overflow.
 			if (offset < -base || offset > size - base)
 				return MA_BAD_SEEK;

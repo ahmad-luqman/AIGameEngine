@@ -54,6 +54,8 @@ namespace Basalt {
 	private:
 		std::string DescribeUnresolved(UUID id, const std::string& hint) const;
 		std::optional<UUID> EnsureIndexed(const std::string& path, std::string& outError);
+		// Replaces the index with a completed scan.
+		void SetIndex(std::map<uint64_t, std::string> paths, std::map<std::string, std::string> problems, std::vector<std::string> orphans);
 		bool CheckPath(const std::string& path, std::filesystem::path& absolute, std::string& outError, bool allowHash = false) const;
 		std::filesystem::path m_Root;
 		std::map<uint64_t, std::string> m_Paths;

@@ -20,6 +20,9 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
+#include <fstream>
+#include <map>
 #include <memory>
 #include <optional>
 #include <set>
@@ -63,23 +66,79 @@ namespace Basalt {
 
 		bool IsDataUri(const char* uri);
 
+		// The archive files one model load has read, kept so buffers that share a file decompress it once.
+		struct GltfFileCache
+		{
+			std::map<std::string, std::vector<uint8_t>> Files;
+		};
+
+		// Reads exactly size bytes from the start of a file on disk (all of it for size 0), as cgltf's own reader does, so
+		// CheckBufferSizes' bounds on the declared sizes are the bounds on what is read.
+		std::optional<std::vector<uint8_t>> ReadFilePrefix(const std::filesystem::path& file, cgltf_size size)
+		{
+			if (size == 0)
+				return FileSystem::ReadBinaryFile(file);
+			std::error_code error;
+			const std::optional<uint64_t> available = FileSystem::GetRegularFileSize(file, error);
+			if (!available || *available < size)
+				return std::nullopt;
+			std::ifstream stream(file, std::ios::in | std::ios::binary);
+			std::vector<uint8_t> bytes(size);
+			if (!stream.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(size)))
+				return std::nullopt;
+			return bytes;
+		}
+
 		// cgltf reads the glTF and its external buffers through FileSystem, so a model in a mounted archive loads like one
 		// on disk. Paths are UTF-8: LoadGltfData and Inspect pass PathToUtf8, and cgltf joins the URIs to them byte-wise.
-		cgltf_result ReadGltfFile(const cgltf_memory_options*, const cgltf_file_options*, const char* path, cgltf_size* size, void** data)
+		// size is the buffer's declared byteLength (0: the whole file), and only that much is kept. Called from cgltf (C):
+		// no exception may leave it.
+		cgltf_result ReadGltfFile(const cgltf_memory_options*, const cgltf_file_options* options, const char* path, cgltf_size* size, void** data)
 		{
-			const std::filesystem::path file = FileSystem::PathFromUtf8(path);
-			auto bytes = FileSystem::ReadBinaryFile(file);
-			if (!bytes)
-				return FileSystem::Exists(file) ? cgltf_result_io_error : cgltf_result_file_not_found;
-			// malloc(0) may return null, which cgltf would take for a failure.
-			void* copy = std::malloc(std::max<size_t>(bytes->size(), 1));
-			if (!copy)
+			try
+			{
+				const std::filesystem::path file = FileSystem::PathFromUtf8(path);
+				std::optional<std::vector<uint8_t>> diskBytes;
+				const std::vector<uint8_t>* bytes = nullptr;
+				if (const FileSystem::MountedFile mounted = FileSystem::FindMounted(file))
+				{
+					// Archive entries are read whole (a compressed one cannot be read in part), once per load.
+					auto& cache = static_cast<GltfFileCache*>(options->user_data)->Files;
+					auto it = cache.find(path);
+					if (it == cache.end())
+					{
+						auto read = FileSystem::ReadMounted(mounted);
+						if (!read)
+							return cgltf_result_io_error;
+						it = cache.emplace(path, std::move(*read)).first;
+					}
+					bytes = &it->second;
+				}
+				else
+				{
+					diskBytes = ReadFilePrefix(file, *size);
+					if (!diskBytes)
+						return FileSystem::Exists(file) ? cgltf_result_io_error : cgltf_result_file_not_found;
+					bytes = &*diskBytes;
+				}
+				const size_t length = *size != 0 ? static_cast<size_t>(*size) : bytes->size();
+				if (bytes->size() < length)
+					return cgltf_result_io_error;
+				// malloc(0) may return null, which cgltf would take for a failure.
+				void* copy = std::malloc(std::max<size_t>(length, 1));
+				if (!copy)
+					return cgltf_result_out_of_memory;
+				if (length > 0)
+					std::memcpy(copy, bytes->data(), length);
+				*size = length;
+				*data = copy;
+				return cgltf_result_success;
+			}
+			catch (const std::exception& exception)
+			{
+				BS_CORE_ERROR("glTF: cannot read '{}': {}", path, exception.what());
 				return cgltf_result_out_of_memory;
-			if (!bytes->empty())
-				std::memcpy(copy, bytes->data(), bytes->size());
-			*size = bytes->size();
-			*data = copy;
-			return cgltf_result_success;
+			}
 		}
 
 		void ReleaseGltfFile(const cgltf_memory_options*, const cgltf_file_options*, void* data)
@@ -87,11 +146,13 @@ namespace Basalt {
 			std::free(data);
 		}
 
-		cgltf_options MakeGltfOptions()
+		// cache must outlive the parse and buffer loads (not cgltf_free, which only releases).
+		cgltf_options MakeGltfOptions(GltfFileCache& cache)
 		{
 			cgltf_options options = {};
 			options.file.read = &ReadGltfFile;
 			options.file.release = &ReleaseGltfFile;
+			options.file.user_data = &cache;
 			return options;
 		}
 
@@ -299,7 +360,8 @@ namespace Basalt {
 		GltfData LoadGltfData(const std::filesystem::path& path, const std::string& key, const std::filesystem::path& projectRoot, std::vector<std::string>& outExternalFiles, std::string& outError)
 		{
 			const std::string pathString = FileSystem::PathToUtf8(path);
-			cgltf_options options = MakeGltfOptions();
+			GltfFileCache cache;
+			cgltf_options options = MakeGltfOptions(cache);
 			cgltf_data* raw = nullptr;
 			cgltf_result result = cgltf_parse_file(&options, pathString.c_str(), &raw);
 			GltfData data(raw);
@@ -623,7 +685,8 @@ namespace Basalt {
 
 	std::optional<MeshImporter::Contents> MeshImporter::Inspect(const std::filesystem::path& path, std::string& outError)
 	{
-		cgltf_options options = MakeGltfOptions();
+		GltfFileCache cache;
+		cgltf_options options = MakeGltfOptions(cache);
 		cgltf_data* data = nullptr;
 		const std::string file = FileSystem::PathToUtf8(path);
 		if (const cgltf_result result = cgltf_parse_file(&options, file.c_str(), &data); result != cgltf_result_success)

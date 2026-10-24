@@ -53,13 +53,18 @@ TEST_SUITE("CrashReporter")
 		CHECK(std::string(CrashReporter::DescribeException(0xC0000005)) == "EXCEPTION_ACCESS_VIOLATION (invalid memory access)");
 		CHECK(std::string(CrashReporter::DescribeException(0xC00000FD)).starts_with("EXCEPTION_STACK_OVERFLOW"));
 		CHECK(std::string(CrashReporter::DescribeException(0x80000003)).starts_with("EXCEPTION_BREAKPOINT"));
-		CHECK(std::string(CrashReporter::DescribeException(0xC0000409)).starts_with("STATUS_STACK_BUFFER_OVERRUN"));
+		CHECK(std::string(CrashReporter::DescribeException(0xE06D7363)) == "an uncaught C++ exception");
 		CHECK(std::string(CrashReporter::DescribeException(0x12345678)) == "an unhandled exception");
 	}
 
 	TEST_CASE("The header names the application, context, platform, process, time and reason")
 	{
 		auto text = std::make_unique<CrashText>();
+		// The context is process-wide: leave it empty, as it starts, whatever happens here.
+		struct ClearContext
+		{
+			~ClearContext() { CrashReporter::SetContext(""); }
+		} clearContext;
 		CrashReporter::SetContext("Project: Header Test 2.0.1");
 		CrashReporter::FormatHeader(*text, "SIGSEGV (invalid memory access)", 0x10, 1700000000, 4321);
 		const std::string header(text->View());
@@ -88,6 +93,15 @@ TEST_SUITE("CrashReporter")
 		CHECK(std::string(text->View()).find("\n\n") == std::string::npos);
 	}
 
+	TEST_CASE("Small crash texts hold what fits")
+	{
+		BasicCrashText<8> text;
+		text.Append("crash-");
+		text.AppendDecimal(12345);
+		CHECK(text.View() == "crash-12");
+		CHECK(std::string(text.CStr()) == "crash-12");
+	}
+
 	TEST_CASE("The last log lines are kept in order, cut and on one line each")
 	{
 		auto text = std::make_unique<CrashText>();
@@ -112,8 +126,8 @@ TEST_SUITE("CrashReporter")
 
 	TEST_CASE("Install is skipped by the unit tests")
 	{
-		// The test process must not install handlers (a failing check would turn into a crash report); only the
-		// crash-report child does (CrashReport.py).
+		// The test process must not install handlers (they would replace doctest's own handlers for crashing test cases);
+		// only the crash-report child does (CrashReport.py).
 		CHECK_FALSE(CrashReporter::IsInstalled());
 		CHECK(CrashReporter::GetReportDirectory().empty());
 	}

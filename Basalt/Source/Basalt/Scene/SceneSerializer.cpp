@@ -559,15 +559,15 @@ namespace Basalt {
 			BS_CORE_ERROR("Scene metadata refresh: {}", outError);
 			outError.clear();
 		}
-		const auto text = FileSystem::ReadTextFile(path);
+		std::string readError;
+		const auto text = FileSystem::ReadTextFile(path, &readError);
 		if (!text)
 		{
-			std::error_code error;
-			const bool exists = std::filesystem::exists(path, error);
 			outError = "cannot read '" + displayName + "'";
-			if (error)
-				outError += " (" + error.message() + ")";
-			else if (!exists)
+			// An archive's reason (a damaged entry) first: the file then exists, just not readably.
+			if (!readError.empty())
+				outError += " (" + readError + ")";
+			else if (!FileSystem::Exists(path))
 				outError += " (no such file: '" + FileSystem::PathToUtf8(path) + "')";
 			return std::nullopt;
 		}

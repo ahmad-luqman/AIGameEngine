@@ -138,19 +138,11 @@ namespace Basalt {
 		// An exported game's archive replaces the sidecars: its index holds each asset's UUID (unique, which Open checks).
 		if (const Ref<PackArchive> archive = FileSystem::GetMountedArchive(m_Root))
 		{
-			m_Paths.clear();
-			m_IDs.clear();
-			m_Problems.clear();
-			m_Orphans.clear();
+			std::map<uint64_t, std::string> paths;
 			for (const PackArchive::Entry& entry : archive->GetEntries())
-			{
 				if (entry.AssetID != 0 && entry.Path.starts_with("Assets/"))
-				{
-					m_Paths.emplace(entry.AssetID, entry.Path);
-					m_IDs.emplace(entry.Path, entry.AssetID);
-				}
-			}
-			m_Indexed = true;
+					paths.emplace(entry.AssetID, entry.Path);
+			SetIndex(std::move(paths), {}, {});
 			return true;
 		}
 		std::map<uint64_t, std::string> paths, owners;
@@ -160,11 +152,7 @@ namespace Basalt {
 		const auto assets = m_Root / "Assets";
 		if (!std::filesystem::exists(assets, error) && !error)
 		{
-			m_Paths.clear();
-			m_IDs.clear();
-			m_Problems.clear();
-			m_Orphans.clear();
-			m_Indexed = true;
+			SetIndex({}, {}, {});
 			return true;
 		}
 		auto scanPath = assets;
@@ -226,6 +214,12 @@ namespace Basalt {
 			outError = "cannot scan asset metadata at '" + FileSystem::PathToUtf8(scanPath) + "': " + error.message();
 			return false;
 		}
+		SetIndex(std::move(paths), std::move(problems), std::move(orphans));
+		return true;
+	}
+
+	void AssetRegistry::SetIndex(std::map<uint64_t, std::string> paths, std::map<std::string, std::string> problems, std::vector<std::string> orphans)
+	{
 		m_Paths = std::move(paths);
 		m_IDs.clear();
 		for (const auto& [id, path] : m_Paths)
@@ -233,7 +227,6 @@ namespace Basalt {
 		m_Problems = std::move(problems);
 		m_Orphans = std::move(orphans);
 		m_Indexed = true;
-		return true;
 	}
 
 	std::optional<UUID> AssetRegistry::Ensure(const std::string& path, std::string& outError)

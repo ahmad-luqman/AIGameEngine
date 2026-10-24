@@ -106,12 +106,13 @@ Native file dialogs and prefab editing with per-instance overrides have shipped.
   (arm64 + x86-64) binaries for Intel Macs.
 - **Unicode command-line arguments on Windows — S.** The CLI and runtime read narrow `argv`, so non-ASCII paths in
   arguments (`--project`, `project.export` output) do not survive on Windows; read `GetCommandLineW` instead.
-- **Archive follow-ups — S.** Stream stored (uncompressed) audio straight from `Assets.bpak` instead of decompressing
-  clips whole, compress large entries on the job system during export, and leave out originals that only a compressed
-  `.ktx2` replacement references.
+- **Archive follow-ups — S.** Stream stored (uncompressed) audio straight from `Assets.bpak` instead of reading clips
+  into memory whole, compress large entries on the job system during export, and leave out originals that only a
+  compressed `.ktx2` replacement references.
 - **Crash report follow-ups — S.** Symbolize Linux frames (ship symbols or call `addr2line` at report time), report
-  stack overflows on threads other than the one that installed the handlers, and offer to send or open the report
-  from the runtime's dialog.
+  stack overflows on threads other than the one that installed the handlers (alternate stacks for job threads), write
+  Windows minidumps from a watchdog thread, show fatal startup errors (a broken archive) in a message box in the
+  windowed runtime, and offer to send or open the report from the crash dialog.
 
 ---
 

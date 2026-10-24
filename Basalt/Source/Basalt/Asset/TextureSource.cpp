@@ -170,10 +170,11 @@ namespace Basalt {
 
 	Ref<TextureSource> TextureSource::LoadFromFile(const std::filesystem::path& path, std::string& outError)
 	{
-		const auto bytes = FileSystem::ReadBinaryFile(path);
+		std::string readError;
+		const auto bytes = FileSystem::ReadBinaryFile(path, &readError);
 		if (!bytes)
 		{
-			outError = "cannot read '" + path.string() + "'";
+			outError = "cannot read '" + FileSystem::PathToUtf8(path) + "'" + (readError.empty() ? std::string() : " (" + readError + ")");
 			return nullptr;
 		}
 		Ref<TextureSource> texture = LoadFromMemory(bytes->data(), bytes->size(), outError);
