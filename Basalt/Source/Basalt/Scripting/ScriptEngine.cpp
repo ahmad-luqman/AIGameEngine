@@ -157,7 +157,7 @@ namespace Basalt {
 			}
 		}
 
-		// Pushes the std::string its light userdata argument points to (called protected, see SearchMountedModules).
+		// Pushes the std::string its light userdata argument points to (called protected, see PushMountedModule).
 		int PushText(lua_State* state)
 		{
 			const auto* text = static_cast<const std::string*>(lua_touserdata(state, 1));
@@ -165,10 +165,26 @@ namespace Basalt {
 			return 1;
 		}
 
+		// Runs FindMountedModule and pushes its text: the file name or message, after the chunk when loaded. Never inlined:
+		// MSVC's longjmp runs C++ destructors as it unwinds, and with this inlined into SearchMountedModules, a Release
+		// build's unwind tables still counted text as alive at its lua_error, so text was destroyed a second time.
+		BS_NOINLINE ModuleOutcome PushMountedModule(lua_State* state, const char* name, const char* path)
+		{
+			std::string text;
+			ModuleOutcome outcome = FindMountedModule(state, name, path, text);
+			// Copied onto the Lua stack inside a protected call, so a memory error there cannot skip text's destructor.
+			lua_pushcfunction(state, &PushText);
+			lua_pushlightuserdata(state, &text);
+			// A failed pcall leaves its own error message, which the searcher raises instead.
+			if (lua_pcall(state, 1, 1, 0) != LUA_OK)
+				outcome = ModuleOutcome::LoadFailed;
+			return outcome;
+		}
+
 		// A package.searchers entry ahead of Lua's file searcher, which only sees the disk: modules inside a mounted
 		// archive (an exported game's Assets.bpak), found through the same package.path templates. Upvalue 1 is the
 		// package table. OpenSafeLibraries installs it only when the archive is mounted before the scripts start, as the
-		// runtime does.
+		// runtime does. It raises errors, so it must hold no C++ object (see PushMountedModule).
 		int SearchMountedModules(lua_State* state)
 		{
 			const char* name = luaL_checkstring(state, 1);
@@ -176,20 +192,7 @@ namespace Basalt {
 			const char* path = lua_tostring(state, -1);
 			if (!path)
 				return luaL_error(state, "'package.path' must be a string");
-			ModuleOutcome outcome = ModuleOutcome::NotFound;
-			{
-				std::string text;
-				outcome = FindMountedModule(state, name, path, text);
-				// Copied onto the Lua stack inside a protected call, so a memory error there cannot skip text's destructor.
-				lua_pushcfunction(state, &PushText);
-				lua_pushlightuserdata(state, &text);
-				if (lua_pcall(state, 1, 1, 0) != LUA_OK)
-				{
-					// The pcall left its error message; with text gone, report that instead.
-					outcome = ModuleOutcome::LoadFailed;
-				}
-			}
-			// The stack ends with the chunk (when loaded) and then the file name or message.
+			const ModuleOutcome outcome = PushMountedModule(state, name, path);
 			if (outcome == ModuleOutcome::LoadFailed)
 				return lua_error(state);
 			return outcome == ModuleOutcome::Loaded ? 2 : 1;
