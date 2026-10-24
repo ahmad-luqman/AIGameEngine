@@ -206,6 +206,41 @@ namespace Basalt {
 		return ReadDiskFile<std::vector<uint8_t>>(path, outError);
 	}
 
+	std::optional<std::vector<uint8_t>> FileSystem::ReadBinaryFilePrefix(const std::filesystem::path& path, uint64_t size, std::string* outError)
+	{
+		if (size == 0)
+			return ReadBinaryFile(path, outError);
+		const auto fail = [&](std::string reason) -> std::optional<std::vector<uint8_t>> {
+			if (outError)
+				*outError = std::move(reason);
+			return std::nullopt;
+		};
+		const auto shorter = [&]() { return fail("shorter than the " + std::to_string(size) + " bytes to read"); };
+		if (const MountedFile mounted = FindMounted(path))
+		{
+			auto data = ReadMounted(mounted, outError);
+			if (!data)
+				return std::nullopt;
+			if (data->size() < size)
+				return shorter();
+			data->resize(static_cast<size_t>(size));
+			return data;
+		}
+		std::error_code error;
+		const std::optional<uint64_t> available = GetRegularFileSize(path, error);
+		if (error)
+			return fail(error.message());
+		if (!available)
+			return fail("no such file");
+		if (*available < size)
+			return shorter();
+		std::ifstream stream(path, std::ios::in | std::ios::binary);
+		std::vector<uint8_t> bytes(static_cast<size_t>(size));
+		if (!stream.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(size)))
+			return fail("reading it failed");
+		return bytes;
+	}
+
 	bool FileSystem::WriteTextFile(const std::filesystem::path& path, std::string_view text)
 	{
 		return WriteBinaryFile(path, text.data(), text.size());

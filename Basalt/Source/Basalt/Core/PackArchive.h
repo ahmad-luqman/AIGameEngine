@@ -14,6 +14,19 @@
 
 namespace Basalt {
 
+	// An archive's totals: what PackArchiveWriter::Write reports for the file it wrote and PackArchive::GetStatistics for
+	// an opened one.
+	struct PackArchiveStatistics
+	{
+		uint32_t Entries = 0;
+		// Entries kept zstd-compressed.
+		uint32_t CompressedEntries = 0;
+		// Total uncompressed bytes of all entries.
+		uint64_t UncompressedSize = 0;
+		// The archive file's size.
+		uint64_t ArchiveSize = 0;
+	};
+
 	// A read-only .bpak archive: an exported game's Assets in one file (Docs/Shipping.md describes the format). Each
 	// entry is a file under a '/'-separated relative path, stored as is or zstd-compressed, with the asset UUID of its
 	// .meta sidecar, so an archive replaces both the files and their sidecars. Opening reads and checks the whole index;
@@ -77,6 +90,7 @@ namespace Basalt {
 		std::optional<std::vector<uint8_t>> Read(const Entry& entry, std::string& outError) const;
 		// The file Open read; empty for OpenMemory.
 		const std::filesystem::path& GetFile() const { return m_File; }
+		PackArchiveStatistics GetStatistics() const;
 
 		// Whether a path may name an entry: relative, components separated by single '/', none empty, "." or "..", no NUL,
 		// backslash or colon (which would name another file or a drive on some platform), at most MaxPathLength bytes.
@@ -94,6 +108,8 @@ namespace Basalt {
 		mutable std::ifstream m_Stream;
 		std::vector<uint8_t> m_Memory;
 		std::vector<Entry> m_Entries;
+		// The archive's size in bytes, as Parse checked it.
+		uint64_t m_ArchiveSize = 0;
 		// Indices into m_Entries sorted by AssetID (nonzero IDs only).
 		std::vector<uint32_t> m_ByAsset;
 	};
@@ -105,16 +121,7 @@ namespace Basalt {
 	class PackArchiveWriter
 	{
 	public:
-		struct Statistics
-		{
-			uint32_t Entries = 0;
-			// Entries kept zstd-compressed.
-			uint32_t CompressedEntries = 0;
-			// Total uncompressed bytes of all entries.
-			uint64_t UncompressedSize = 0;
-			// The archive file's size.
-			uint64_t ArchiveSize = 0;
-		};
+		using Statistics = PackArchiveStatistics;
 
 		// AddFile reads source when Write runs; AddData takes the bytes now. Both return false (outError set) for an
 		// invalid or duplicate path, a duplicate nonzero asset UUID, more than MaxEntries files, (AddData) more than

@@ -6,6 +6,8 @@
 #include <csignal>
 #include <memory>
 #include <string>
+#include <thread>
+#include <vector>
 
 using namespace Basalt;
 
@@ -37,6 +39,29 @@ TEST_SUITE("CrashReporter")
 		text->AppendHex(1);
 		CHECK(text->View().size() == CrashText::Capacity);
 		CHECK(std::string(text->CStr()).size() == CrashText::Capacity);
+		CHECK(text->Truncated());
+		text->Clear();
+		CHECK_FALSE(text->Truncated());
+	}
+
+	TEST_CASE("Crash texts cut on UTF-8 character boundaries")
+	{
+		// "é" is two bytes, "€" three: a cut never keeps part of either.
+		BasicCrashText<8> text;
+		text.Append("abcdef\xC3\xA9");
+		CHECK(text.View() == "abcdef\xC3\xA9");
+		CHECK_FALSE(text.Truncated());
+		text.Clear();
+		text.Append("abcdefg\xC3\xA9");
+		CHECK(text.View() == "abcdefg");
+		CHECK(text.Truncated());
+		text.Clear();
+		text.Append("abcdef\xE2\x82\xAC");
+		CHECK(text.View() == "abcdef");
+		text.Clear();
+		text.Append("abcde\xE2\x82\xAC");
+		CHECK(text.View() == "abcde\xE2\x82\xAC");
+		CHECK_FALSE(text.Truncated());
 	}
 
 	TEST_CASE("Signals and Windows exception codes have readable names")
@@ -86,6 +111,11 @@ TEST_SUITE("CrashReporter")
 		CrashReporter::FormatHeader(*text, "SIGABRT", std::nullopt, 1, 2);
 		CHECK(std::string(text->View()).find(std::string(255, 'c') + "\n") != std::string::npos);
 		CHECK(std::string(text->View()).find(std::string(256, 'c')) == std::string::npos);
+		// A context cut inside a character loses the whole character.
+		text->Clear();
+		CrashReporter::SetContext(std::string(254, 'c') + "\xC3\xA9");
+		CrashReporter::FormatHeader(*text, "SIGABRT", std::nullopt, 1, 2);
+		CHECK(std::string(text->View()).find("\n" + std::string(254, 'c') + "\n") != std::string::npos);
 		CHECK(std::string(text->View()).ends_with("\nReason: SIGABRT\n"));
 		text->Clear();
 		CrashReporter::SetContext("");
@@ -141,6 +171,41 @@ TEST_SUITE("CrashReporter")
 		const std::string last = lines.substr(lines.rfind('\n', lines.size() - 2) + 1);
 		CHECK(last.starts_with("[error] BASALT: two lines zzz"));
 		CHECK(last.size() == CrashReporter::MaxLogLineLength + 1);
+
+		// A line cut inside a character loses the whole character: "[info] A: " is 10 bytes.
+		CrashReporter::RecordLogLine("info", "A", std::string(CrashReporter::MaxLogLineLength - 11, 'y') + "\xE2\x82\xAC");
+		text->Clear();
+		CrashReporter::FormatLogLines(*text);
+		lines = std::string(text->View());
+		CHECK(lines.ends_with("\n[info] A: " + std::string(CrashReporter::MaxLogLineLength - 11, 'y') + "\n"));
+	}
+
+	TEST_CASE("Log lines recorded from several threads at once stay whole")
+	{
+		constexpr int Threads = 4;
+		constexpr int LinesPerThread = 500;
+		std::vector<std::thread> threads;
+		threads.reserve(Threads);
+		for (int t = 0; t < Threads; t++)
+			threads.emplace_back([t]() {
+				for (int i = 0; i < LinesPerThread; i++)
+					CrashReporter::RecordLogLine("info", "T" + std::to_string(t), std::string(100, static_cast<char>('a' + t)));
+			});
+		for (std::thread& thread : threads)
+			thread.join();
+		auto text = std::make_unique<CrashText>();
+		CrashReporter::FormatLogLines(*text);
+		const std::string lines(text->View());
+		CHECK(std::count(lines.begin(), lines.end(), '\n') == static_cast<std::ptrdiff_t>(CrashReporter::MaxLogLines));
+		// Every kept line is one thread's whole line, never two lines mixed.
+		size_t start = 0;
+		for (size_t end = lines.find('\n'); end != std::string::npos; start = end + 1, end = lines.find('\n', start))
+		{
+			const std::string line = lines.substr(start, end - start);
+			REQUIRE_MESSAGE(line.size() == 111, line);
+			const int t = line[8] - '0';
+			CHECK_MESSAGE((t >= 0 && t < Threads && line == "[info] T" + std::to_string(t) + ": " + std::string(100, static_cast<char>('a' + t))), line);
+		}
 	}
 
 	TEST_CASE("Install is skipped by the unit tests")

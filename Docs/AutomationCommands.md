@@ -220,7 +220,7 @@ How an Animator's named ClipLibraries map onto its model, resolved as playback r
 
 ### `archive.inspect`
 
-Lists a .bpak archive (project.export's Assets.bpak): every entry's path, asset UUID, size, stored size and compression. With verify: true, also reads every entry and checks its hash, failing on the first damaged one. Returns {entries: [{path, uuid (decimal string, null without one), size, storedSize, compression: store|zstd}], files, compressed, size (uncompressed bytes), archiveSize (bytes on disk, null if unknown), verified}.
+Lists a .bpak archive (project.export's Assets.bpak): every entry's path, asset UUID, size, stored size and compression. With verify: true, also reads every entry and checks its hash, failing on the first damaged one. Returns {entries: [{path, uuid (decimal string, null without one), size, storedSize, compression: store|zstd}], files, compressed, size (uncompressed bytes), archiveSize (bytes on disk), verified}.
 
 | Parameter | Type / description |
 |-----------|--------------------|

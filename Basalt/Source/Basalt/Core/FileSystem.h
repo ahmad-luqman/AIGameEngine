@@ -18,10 +18,15 @@ namespace Basalt {
 	class FileSystem
 	{
 	public:
-		// A path the mounted archive holds (Mount) is read only from it: a damaged entry fails, with no fallback to disk (the
-		// reason is also logged). Other paths are read from disk. outError (optional) says why a read failed.
+		// A path the mounted archive holds (Mount) is read only from it: a damaged entry fails, with no fallback to disk.
+		// Other paths are read from disk. outError (optional) receives why a read failed and is written only on failure, so
+		// check the result, not the text; without it, an archive entry's failure is logged.
 		static std::optional<std::string> ReadTextFile(const std::filesystem::path& path, std::string* outError = nullptr);
 		static std::optional<std::vector<uint8_t>> ReadBinaryFile(const std::filesystem::path& path, std::string* outError = nullptr);
+		// The first size bytes of a file (all of it for size 0), from the mounted archive or disk; fails when the file is
+		// shorter. Reads at most size bytes from disk, so a caller's bound on size bounds the read (an archive entry is read
+		// whole: a compressed one cannot be read in part).
+		static std::optional<std::vector<uint8_t>> ReadBinaryFilePrefix(const std::filesystem::path& path, uint64_t size, std::string* outError = nullptr);
 		// The size of a regular file (an archive entry's uncompressed size); nullopt for a missing path or anything else
 		// (outError set when the path could not be inspected).
 		static std::optional<uint64_t> GetRegularFileSize(const std::filesystem::path& path, std::error_code& outError);

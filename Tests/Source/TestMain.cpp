@@ -46,6 +46,22 @@ namespace {
 		return result + frame[0];
 	}
 
+	// Calls a pure virtual function from the base constructor, through a pointer the compiler cannot see through.
+	struct PureBase
+	{
+		PureBase()
+		{
+			PureBase* volatile self = this;
+			self->Pure();
+		}
+		virtual ~PureBase() = default;
+		virtual void Pure() = 0;
+	};
+	struct PureDerived : PureBase
+	{
+		void Pure() override {}
+	};
+
 	// A real crash of the requested kind (crash-report).
 	void CrashNow(std::string_view kind)
 	{
@@ -60,6 +76,21 @@ namespace {
 		else if (kind == "terminate")
 			// Escapes main: std::terminate with the exception current.
 			throw std::runtime_error("crash-test exception");
+		else if (kind == "throw-int")
+			// An uncaught exception that is not a std::exception.
+			throw Number("42"); // NOLINT(bugprone-std-exception-baseclass)
+		else if (kind == "purecall")
+		{
+			const PureDerived derived;
+		}
+#if defined(_WIN32)
+		else if (kind == "invalid-parameter")
+		{
+			// The C runtime validates its arguments and calls the invalid parameter handler.
+			const char* volatile format = nullptr;
+			std::printf(format);
+		}
+#endif
 		else if (kind == "trap")
 			BS_DEBUGBREAK();
 		else if (kind == "stackoverflow")
@@ -99,9 +130,10 @@ namespace {
 	// (prints "é" count times), invalid (prints bytes that are not UTF-8), fd <descriptor> (POSIX: whether it is
 	// open), crash (a real access violation on Windows, SIGABRT elsewhere), trap (BS_DEBUGBREAK), args (prints
 	// every remaining argument on its own line), exit <code>, crash-report <kind> (installs the crash reporter as
-	// "CrashChild", logs "crash-test sentinel 42", then crashes: kind is segv, abort, terminate, trap, stackoverflow or
-	// thread-segv or two-thread-segv; exits 77 when crash reports are unavailable, as under AddressSanitizer; Tests/Automation/CrashReport.py
-	// checks the report).
+	// "CrashChild" twice, from two threads at once, logs "crash-test sentinel 42", then crashes: kind is segv, abort,
+	// terminate, throw-int, purecall, invalid-parameter (Windows), trap, stackoverflow, thread-segv or two-thread-segv;
+	// exits 77 when crash reports are unavailable, as under AddressSanitizer; Tests/Automation/CrashReport.py checks the
+	// report).
 	int RunChild(const std::vector<std::string>& actions)
 	{
 		for (size_t i = 0; i < actions.size(); i++)
@@ -184,10 +216,20 @@ namespace {
 			else if (action == "crash-report")
 			{
 				Basalt::Log::Init();
-				if (!Basalt::CrashReporter::Install({ "CrashChild" }))
+				// Concurrent and repeated calls install once and agree on the result.
+				bool again = false;
+				std::thread other([&again] { again = Basalt::CrashReporter::Install({ "CrashChild" }); });
+				const bool installed = Basalt::CrashReporter::Install({ "CrashChild" });
+				other.join();
+				if (!installed)
 				{
 					std::printf("crash reports unavailable\n");
 					return 77;
+				}
+				if (!again || !Basalt::CrashReporter::Install({ "Other" }) || Basalt::CrashReporter::GetReportDirectory().parent_path().filename() != "CrashChild")
+				{
+					std::fprintf(stderr, "a repeated Install disagreed with the first\n");
+					return 2;
 				}
 				Basalt::CrashReporter::SetContext("Project: Crash Test 1.2.3");
 				BS_CORE_ERROR("crash-test sentinel {}", 42);

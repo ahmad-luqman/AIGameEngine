@@ -61,6 +61,12 @@ namespace Basalt {
 		using json = nlohmann::json;
 		namespace Schema = CommandSchema;
 
+		// The totals project.export and archive.inspect report for an archive.
+		json ArchiveStatisticsToJson(const PackArchiveStatistics& statistics)
+		{
+			return { { "files", statistics.Entries }, { "compressed", statistics.CompressedEntries }, { "size", statistics.UncompressedSize }, { "archiveSize", statistics.ArchiveSize } };
+		}
+
 		// --- Parameter helpers ----------------------------------------------------------------------
 
 		const json& Require(const json& params, const char* name)
@@ -975,7 +981,7 @@ namespace Basalt {
 				}
 				json response{ { "executable", FileSystem::PathToUtf8(result.ExecutablePath) }, { "package", FileSystem::PathToUtf8(result.PackagePath) }, { "files", result.FileCount }, { "validation", validation } };
 				if (const auto& archive = result.ArchiveStatistics)
-					response["archive"] = { { "files", archive->Entries }, { "compressed", archive->CompressedEntries }, { "size", archive->UncompressedSize }, { "archiveSize", archive->ArchiveSize } };
+					response["archive"] = ArchiveStatisticsToJson(*archive);
 				if (!result.Warnings.empty())
 					response["warnings"] = result.Warnings;
 				if (smokeFrames > 0)
@@ -993,7 +999,7 @@ namespace Basalt {
 				return response;
 			});
 
-			Add(registry, "archive.inspect", "Lists a .bpak archive (project.export's Assets.bpak): every entry's path, asset UUID, size, stored size and compression. With verify: true, also reads every entry and checks its hash, failing on the first damaged one. Returns {entries: [{path, uuid (decimal string, null without one), size, storedSize, compression: store|zstd}], files, compressed, size (uncompressed bytes), archiveSize (bytes on disk, null if unknown), verified}.", Schema::Object({ { "path", Schema::String("string, the archive file; a relative path is relative to the current working directory", true) }, { "verify", Schema::Nullable(Schema::Boolean("bool (default false): read every entry and check its hash")) } }, { "path" }), [](AutomationSession&, const json& params) {
+			Add(registry, "archive.inspect", "Lists a .bpak archive (project.export's Assets.bpak): every entry's path, asset UUID, size, stored size and compression. With verify: true, also reads every entry and checks its hash, failing on the first damaged one. Returns {entries: [{path, uuid (decimal string, null without one), size, storedSize, compression: store|zstd}], files, compressed, size (uncompressed bytes), archiveSize (bytes on disk), verified}.", Schema::Object({ { "path", Schema::String("string, the archive file; a relative path is relative to the current working directory", true) }, { "verify", Schema::Nullable(Schema::Boolean("bool (default false): read every entry and check its hash")) } }, { "path" }), [](AutomationSession&, const json& params) {
 				const std::filesystem::path file = FileSystem::PathFromUtf8(RequireString(params, "path"));
 				std::string error;
 				const Ref<PackArchive> archive = PackArchive::Open(file, error);
@@ -1001,20 +1007,17 @@ namespace Basalt {
 					throw CommandError(error);
 				const bool verify = OptionalBool(params, "verify", false);
 				json entries = json::array();
-				uint64_t size = 0;
-				uint32_t compressed = 0;
 				for (const PackArchive::Entry& entry : archive->GetEntries())
 				{
 					if (verify && !archive->Read(entry, error))
 						throw CommandError("'" + FileSystem::PathToUtf8(file) + "': " + error);
 					const bool zstd = entry.Compression == PackArchive::Method::Zstd;
 					entries.push_back({ { "path", entry.Path }, { "uuid", entry.AssetID != 0 ? json(std::to_string(entry.AssetID)) : json(nullptr) }, { "size", entry.Size }, { "storedSize", entry.StoredSize }, { "compression", zstd ? "zstd" : "store" } });
-					size += entry.Size;
-					compressed += zstd ? 1 : 0;
 				}
-				std::error_code sizeError;
-				const uintmax_t archiveSize = std::filesystem::file_size(file, sizeError);
-				return json{ { "entries", std::move(entries) }, { "files", archive->GetEntries().size() }, { "compressed", compressed }, { "size", size }, { "archiveSize", sizeError ? json(nullptr) : json(archiveSize) }, { "verified", verify } };
+				json response = ArchiveStatisticsToJson(archive->GetStatistics());
+				response["entries"] = std::move(entries);
+				response["verified"] = verify;
+				return response;
 			});
 
 			Add(registry, "project.smoke_test", "Runs an exported game headless (no GPU needed) for up to N frames at the runtime's fixed 1/60 s step and reports whether it exited cleanly: exit code 0 and no script errors within the timeout. Returns {passed, outcome: exited|crashed|timedOut|outputLimit (stopped after 256 MiB of output)|failed, exitCode (null unless it exited or crashed), summary, log}.", Schema::Object({ { "executable", Schema::String("string, the exported game's executable (project.export's executable); a relative path is relative to the current working directory", true) }, { "frames", Schema::Nullable(Schema::Integer("integer (default 120)", 1, MaxSmokeTestFrames)) }, { "timeout", Schema::Nullable(Schema::Number("number of seconds (default 60)", 1, MaxSmokeTestSeconds)) }, { "assertPassed", Schema::Nullable(Schema::Boolean("bool: fail the command when the smoke test fails")) } }, { "executable" }), [](AutomationSession&, const json& params) {

@@ -64,6 +64,7 @@ namespace Basalt {
 		constexpr size_t MaxDirectoryLevels = 8;
 		constexpr std::string_view StackTraceHeading = "\nStack trace:\n";
 		constexpr std::string_view LogHeading = "\nLast log lines (oldest first):\n";
+		constexpr std::string_view TruncationNote = "\n(cut: the rest did not fit the crash handler's buffer)\n";
 
 		// Guards the log lines and the context. Writers wait for it; the crash handler gives up after a bounded number of
 		// attempts (the crashed thread may be the holder) and reads whatever is there.
@@ -124,10 +125,13 @@ namespace Basalt {
 			bool m_Held = false;
 		};
 
-		// Copies text into a fixed buffer of capacity + 1 bytes, NUL-terminated, returning the copied length.
+		// Copies text into a fixed buffer of capacity + 1 bytes, NUL-terminated, returning the copied length. Text that does
+		// not fit is cut on a UTF-8 character boundary.
 		size_t CopyText(char* destination, size_t capacity, std::string_view text)
 		{
-			const size_t length = std::min(text.size(), capacity);
+			size_t length = std::min(text.size(), capacity);
+			if (length < text.size())
+				length = CrashTextDetail::TrimPartialUtf8(text.substr(0, length), text[length]);
 			std::copy_n(text.begin(), length, destination);
 			destination[length] = '\0';
 			return length;
@@ -324,6 +328,12 @@ namespace Basalt {
 			return true;
 		}
 
+		// Notes that text lost its end to its buffer's capacity; false when the note cannot be written.
+		bool WriteTruncationNote(int fd, const CrashText& text)
+		{
+			return !text.Truncated() || WriteAll(fd, TruncationNote);
+		}
+
 		// Opens a new report in directory; path receives its name. -1 when it cannot be created.
 		int OpenReport(const char* directory, uint64_t unixTime, uint64_t processId, CrashText& path)
 		{
@@ -472,6 +482,7 @@ namespace Basalt {
 				CrashReporter::FormatHeader(s_Text, reason, address, unixTime, processId);
 				s_Text.Append(StackTraceHeading);
 				complete = WriteAll(fd, s_Text.View());
+				complete = WriteTruncationNote(fd, s_Text) && complete;
 	#if defined(BS_CRASH_BACKTRACE)
 				void* frames[128];
 				const int count = backtrace(frames, 128);
@@ -483,7 +494,8 @@ namespace Basalt {
 				s_Text.Append(LogHeading);
 				CrashReporter::FormatLogLines(s_Text);
 				complete = WriteAll(fd, s_Text.View()) && complete;
-				close(fd);
+				complete = WriteTruncationNote(fd, s_Text) && complete;
+				complete = close(fd) == 0 && complete;
 			}
 			// What the player and stderr are told.
 			static CrashText s_Summary;
@@ -522,6 +534,8 @@ namespace Basalt {
 			const std::string fallback = FileSystem::PathToUtf8(FileSystem::GetExecutableDirectory() / "CrashReports");
 			if (fallback.size() <= MaxPathLength)
 				CopyText(s_FallbackDirectory, MaxPathLength, fallback);
+			else
+				BS_CORE_WARN("Crash reports: the fallback folder '{}' is longer than {} bytes; it will not be used", fallback, MaxPathLength);
 	#if defined(BS_CRASH_BACKTRACE)
 			// The first call loads the unwinder (glibc dlopens libgcc_s), which must not happen inside the handler.
 			void* warmUp[4];
@@ -636,6 +650,12 @@ namespace Basalt {
 			return true;
 		}
 
+		// Notes that text lost its end to its buffer's capacity; false when the note cannot be written.
+		bool WriteTruncationNote(HANDLE file, const CrashText& text)
+		{
+			return !text.Truncated() || WriteAll(file, TruncationNote);
+		}
+
 		template<size_t Capacity>
 		void AppendUtf8(BasicCrashText<Capacity>& out, const wchar_t* text)
 		{
@@ -643,6 +663,8 @@ namespace Basalt {
 			const int length = WideCharToMultiByte(CP_UTF8, 0, text, -1, s_Buffer, static_cast<int>(sizeof(s_Buffer)), nullptr, nullptr);
 			if (length > 1)
 				out.Append(std::string_view(s_Buffer, static_cast<size_t>(length - 1)));
+			else if (text[0] != L'\0')
+				out.Append("(a path that cannot be shown as UTF-8)");
 		}
 
 		void AppendStackTrace(CrashText& out)
@@ -710,6 +732,7 @@ namespace Basalt {
 				s_Text.Append(LogHeading);
 				CrashReporter::FormatLogLines(s_Text);
 				complete = WriteAll(file, s_Text.View());
+				complete = WriteTruncationNote(file, s_Text) && complete;
 				bool dumped = false;
 				const HANDLE dump = CreateReportFile(s_Base, L".dmp", s_DumpPath, std::size(s_DumpPath) - 1);
 				DWORD dumpError = dump == INVALID_HANDLE_VALUE ? GetLastError() : 0;
@@ -738,7 +761,7 @@ namespace Basalt {
 				}
 				s_Text.Append("\n");
 				complete = WriteAll(file, s_Text.View()) && complete;
-				CloseHandle(file);
+				complete = CloseHandle(file) != FALSE && complete;
 			}
 			static CrashText s_Summary;
 			s_Summary.Clear();
@@ -777,8 +800,10 @@ namespace Basalt {
 			// message and abort then reports (HandleAbort).
 			if (record.ExceptionCode == CppExceptionCode && s_PreviousFilter && !s_Handling)
 			{
+				// A filter that handles the exception itself (EXECUTE_HANDLER) still ends the process, so that is reported
+				// below; only resumed execution is no crash.
 				const LONG previous = s_PreviousFilter(exception);
-				if (previous != EXCEPTION_CONTINUE_SEARCH)
+				if (previous == EXCEPTION_CONTINUE_EXECUTION)
 					return previous;
 			}
 			if (!BeginReport())
@@ -829,6 +854,8 @@ namespace Basalt {
 			const std::wstring fallback = (FileSystem::GetExecutableDirectory() / "CrashReports").wstring();
 			if (fallback.size() <= MaxPathLength)
 				wcsncpy_s(s_FallbackDirectory, fallback.c_str(), _TRUNCATE);
+			else
+				BS_CORE_WARN("Crash reports: the fallback folder '{}' is longer than {} characters; it will not be used", FileSystem::PathToUtf8(fallback), MaxPathLength);
 			const std::wstring application = FileSystem::PathFromUtf8(s_Application).wstring();
 			wcsncpy_s(s_WideApplication, application.c_str(), _TRUNCATE);
 			SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS);
@@ -995,15 +1022,22 @@ namespace Basalt {
 		LockGuard lock;
 		LogLine& line = s_Lines[s_LineCount % MaxLogLines];
 		size_t length = 0;
+		bool full = false;
 		const std::string_view parts[] = { "[", level, "] ", logger, ": ", text };
 		for (const std::string_view part : parts)
 		{
 			for (const char c : part)
 			{
 				if (length == MaxLogLineLength)
+				{
+					length = CrashTextDetail::TrimPartialUtf8(std::string_view(line.Text, length), c);
+					full = true;
 					break;
+				}
 				line.Text[length++] = c == '\n' || c == '\r' ? ' ' : c;
 			}
+			if (full)
+				break;
 		}
 		line.Text[length] = '\0';
 		line.Length = length;
