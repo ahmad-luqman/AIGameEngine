@@ -25,6 +25,12 @@ option(BASALT_BUILD_EDITOR "Build the Basalt editor" ON)
 option(BASALT_BUILD_RUNTIME "Build the Basalt runtime (exported game player)" ON)
 option(BASALT_BUILD_TESTS "Build Basalt unit tests" ON)
 
+# TEMPORARY (PR #53): symbols for a Windows Release heap diagnosis.
+if(MSVC)
+	add_compile_options(/Z7)
+	add_link_options(/DEBUG)
+endif()
+
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
