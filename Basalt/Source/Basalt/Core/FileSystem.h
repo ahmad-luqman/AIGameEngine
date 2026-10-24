@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <optional>
 #include <string>
@@ -87,6 +88,10 @@ namespace Basalt {
 		// Renames source over target (retrying briefly on Windows, where a concurrent replace or a scanner holding the
 		// target fails a rename); on failure source is removed and outError says why.
 		static bool RenameReplacing(const std::filesystem::path& source, const std::filesystem::path& target, std::string& outError);
+		// Copies source over target. On Windows an executable that just exited stays locked for a moment (antivirus
+		// scanners open what they saw run), so a sharing violation is retried: waitBeforeRetry runs between attempts
+		// (default: sleep 50 ms) and at most maxAttempts copies are made. Other errors fail at once.
+		static bool CopyFileReplacing(const std::filesystem::path& source, const std::filesystem::path& target, std::error_code& outError, const std::function<void()>& waitBeforeRetry = {}, uint32_t maxAttempts = 100);
 
 		// Also true for a mounted archive's files and the folders that hold them.
 		static bool Exists(const std::filesystem::path& path);

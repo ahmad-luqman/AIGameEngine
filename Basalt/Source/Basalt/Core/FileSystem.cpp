@@ -343,6 +343,29 @@ namespace Basalt {
 		return true;
 	}
 
+	bool FileSystem::CopyFileReplacing(const std::filesystem::path& source, const std::filesystem::path& target, std::error_code& outError, const std::function<void()>& waitBeforeRetry, uint32_t maxAttempts)
+	{
+		for (uint32_t attempt = 1;; attempt++)
+		{
+			outError.clear();
+			std::filesystem::copy_file(source, target, std::filesystem::copy_options::overwrite_existing, outError);
+			if (!outError)
+				return true;
+#if defined(_WIN32)
+			constexpr int SharingViolation = 32; // ERROR_SHARING_VIOLATION
+			const bool locked = outError.category() == std::system_category() && outError.value() == SharingViolation;
+#else
+			const bool locked = false;
+#endif
+			if (!locked || attempt >= maxAttempts)
+				return false;
+			if (waitBeforeRetry)
+				waitBeforeRetry();
+			else
+				std::this_thread::sleep_for(std::chrono::milliseconds(50));
+		}
+	}
+
 	std::string FileSystem::PathToUtf8(const std::filesystem::path& path)
 	{
 		const std::u8string text = path.u8string();
