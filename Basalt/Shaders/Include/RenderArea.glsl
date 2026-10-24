@@ -10,6 +10,15 @@ vec2 ClampToRenderArea(vec2 targetUV, vec2 uvScale, ivec2 targetSize)
 	return clamp(targetUV, halfTexel, uvScale - halfTexel);
 }
 
+// The render-area texel under uv (0..1 across the area), clamped to the area. Point-sampling
+// ClampToRenderArea(uv * uvScale, ...) picks the same texel, except at or near a texel boundary, where the GPU's
+// rounding of normalized coordinates decides; that differs between drivers and between target sizes, so dynamic
+// resolution would not reproduce a fixed render scale.
+ivec2 RenderAreaTexel(vec2 uv, ivec2 renderSize)
+{
+	return clamp(ivec2(floor(uv * vec2(renderSize))), ivec2(0), renderSize - 1);
+}
+
 // Clamp integer taps as well as coordinates: filtering at an edge centre can still touch undefined
 // padding (including NaNs), especially when an active dimension is one pixel. The sampler is only
 // required to form a combined sampler; texelFetch ignores its filtering and addressing state.

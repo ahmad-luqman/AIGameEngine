@@ -21,6 +21,7 @@
 #include "Basalt/Renderer/RenderMath.h"
 #include "Basalt/Renderer/SceneLights.h"
 #include "Basalt/Renderer/ShaderUtils.h"
+#include "Basalt/Renderer/SsaoBlur.h"
 #include "Basalt/Renderer/TemporalAA.h"
 #include "Basalt/Renderer/TemporalHistory.h"
 #include "Basalt/Scene/Entity.h"
@@ -255,9 +256,11 @@ namespace Basalt {
 			glm::mat4 InverseProjection;
 			glm::vec4 Kernel[32];
 			glm::vec4 Params;
-			glm::vec4 ScreenSize;
-			glm::vec4 UVScale;
+			glm::vec4 ScreenSize; // xy: render size, which SSAO.frag also uses to address the render area's texels
 		};
+		// Matches SSAOConstants in SSAO.frag (std140).
+		static_assert(sizeof(GpuSSAOConstants) == 672);
+		static_assert(offsetof(GpuSSAOConstants, Params) == 640 && offsetof(GpuSSAOConstants, ScreenSize) == 656);
 
 		struct DrawPush
 		{
@@ -275,18 +278,6 @@ namespace Basalt {
 			glm::vec2 UVScale;
 		};
 		static_assert(sizeof(TonemapPush) == 24);
-
-		// Matches BlurPush in SSAOBlur.frag.
-		struct BlurPush
-		{
-			glm::vec2 Direction;
-			float Near;
-			float Far;
-			float Orthographic;
-			float Padding;
-			glm::vec2 UVScale;
-		};
-		static_assert(sizeof(BlurPush) == 32);
 
 		// The texture + sampler layout's push constants: DepthUpsample.frag's UVScale (Blit.frag ignores them).
 		constexpr uint32_t TextureSamplerPushSize = sizeof(glm::vec2);
@@ -746,7 +737,7 @@ namespace Basalt {
 
 		nvrhi::BindingLayoutDesc blurDesc = MakeLayout(0, nvrhi::ShaderType::Pixel);
 		blurDesc.bindings = {
-			nvrhi::BindingLayoutItem::PushConstants(0, sizeof(BlurPush)),
+			nvrhi::BindingLayoutItem::PushConstants(0, sizeof(SsaoBlurPush)),
 			nvrhi::BindingLayoutItem::Texture_SRV(0),
 			nvrhi::BindingLayoutItem::Texture_SRV(1),
 			nvrhi::BindingLayoutItem::Sampler(2),
@@ -1270,13 +1261,13 @@ namespace Basalt {
 
 		impl.SsaoSet = m_Device->createBindingSet(nvrhi::BindingSetDesc().setTrackLiveness(true).addItem(nvrhi::BindingSetItem::ConstantBuffer(0, impl.SsaoConstantsBuffer)).addItem(nvrhi::BindingSetItem::Texture_SRV(1, m_DepthTexture)).addItem(nvrhi::BindingSetItem::Texture_SRV(2, impl.NormalTexture)).addItem(nvrhi::BindingSetItem::Texture_SRV(3, impl.SsaoNoise)).addItem(nvrhi::BindingSetItem::Sampler(4, impl.PointClamp)).addItem(nvrhi::BindingSetItem::Sampler(5, impl.PointWrap)), impl.SsaoLayout);
 		impl.BlurHorizontalSet = m_Device->createBindingSet(nvrhi::BindingSetDesc()
-																.addItem(nvrhi::BindingSetItem::PushConstants(0, sizeof(BlurPush)))
+																.addItem(nvrhi::BindingSetItem::PushConstants(0, sizeof(SsaoBlurPush)))
 																.addItem(nvrhi::BindingSetItem::Texture_SRV(0, impl.SsaoTexture))
 																.addItem(nvrhi::BindingSetItem::Texture_SRV(1, m_DepthTexture))
 																.addItem(nvrhi::BindingSetItem::Sampler(2, impl.PointClamp)),
 															impl.BlurLayout);
 		impl.BlurVerticalSet = m_Device->createBindingSet(nvrhi::BindingSetDesc()
-															  .addItem(nvrhi::BindingSetItem::PushConstants(0, sizeof(BlurPush)))
+															  .addItem(nvrhi::BindingSetItem::PushConstants(0, sizeof(SsaoBlurPush)))
 															  .addItem(nvrhi::BindingSetItem::Texture_SRV(0, impl.SsaoBlurTexture))
 															  .addItem(nvrhi::BindingSetItem::Texture_SRV(1, m_DepthTexture))
 															  .addItem(nvrhi::BindingSetItem::Sampler(2, impl.PointClamp)),
@@ -2423,15 +2414,14 @@ namespace Basalt {
 			impl.SsaoConstants.InverseProjection = view.InverseProjection;
 			impl.SsaoConstants.Params = glm::vec4(settings.SSAORadius, settings.SSAOBias, settings.SSAOIntensity, graphics.SSAOQuality == GraphicsQuality::Low ? 8.0f : static_cast<float>(SSAOKernelSize));
 			impl.SsaoConstants.ScreenSize = glm::vec4(static_cast<float>(m_RenderWidth), static_cast<float>(m_RenderHeight), static_cast<float>(m_RenderWidth) / 4.0f, static_cast<float>(m_RenderHeight) / 4.0f);
-			impl.SsaoConstants.UVScale = glm::vec4(uvScale, 0.0f, 0.0f);
 			commandList->writeBuffer(impl.SsaoConstantsBuffer, &impl.SsaoConstants, sizeof(GpuSSAOConstants));
 
 			fullscreen(impl.SsaoPipeline, impl.SsaoFramebuffer, impl.SsaoSet, renderViewport, nullptr, 0);
 			const float orthographicFlag = orthographic ? 1.0f : 0.0f;
-			// Blur steps are one target texel: the targets, not the render area, set the texel size.
-			BlurPush blur{ { 1.0f / static_cast<float>(m_TargetWidth), 0.0f }, camera.Near, camera.Far, orthographicFlag, 0.0f, uvScale };
+			// The same render size as ScreenSize above: both passes address the render area by texel.
+			SsaoBlurPush blur{ { 1, 0 }, camera.Near, camera.Far, orthographicFlag, 0.0f, { static_cast<int>(m_RenderWidth), static_cast<int>(m_RenderHeight) } };
 			fullscreen(impl.SsaoBlurPipeline, impl.SsaoBlurFramebuffer, impl.BlurHorizontalSet, renderViewport, &blur, sizeof(blur));
-			blur.Direction = { 0.0f, 1.0f / static_cast<float>(m_TargetHeight) };
+			blur.Axis = { 0, 1 };
 			fullscreen(impl.SsaoBlurPipeline, impl.SsaoFramebuffer, impl.BlurVerticalSet, renderViewport, &blur, sizeof(blur));
 		}
 		else
