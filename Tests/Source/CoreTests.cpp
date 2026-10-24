@@ -1099,36 +1099,61 @@ TEST_SUITE("Core")
 		BasaltTest::TempDirectory directory("FileSystemCopyReplacing");
 		const auto source = directory.GetPath() / "new.bin";
 		const auto target = directory.GetPath() / "old.bin";
+		// The old target is longer, so a copy that overwrote in place instead of replacing would leave its tail.
+		const std::string previous = "the previous, longer contents";
 		REQUIRE(FileSystem::WriteTextFile(source, "new"));
-		REQUIRE(FileSystem::WriteTextFile(target, "old"));
+		REQUIRE(FileSystem::WriteTextFile(target, previous));
 		uint32_t waits = 0;
 		std::error_code error;
 		CHECK(FileSystem::CopyFileReplacing(source, target, error, [&] { waits++; }));
+		CHECK_FALSE(error);
 		CHECK(waits == 0);
 		CHECK(FileSystem::ReadTextFile(target).value() == "new");
 		CHECK_FALSE(FileSystem::CopyFileReplacing(directory.GetPath() / "missing.bin", target, error, [&] { waits++; }));
+		CHECK(error);
 		CHECK(waits == 0); // only a lock is retried
 
 #if defined(_WIN32)
-		// An exported game that just exited stays locked for a moment. The lock is released from the wait, so the first
-		// attempt is certain to meet it and the second to succeed, without depending on timing.
-		REQUIRE(FileSystem::WriteTextFile(target, "old"));
-		int locked = -1;
-		REQUIRE(_wsopen_s(&locked, target.wstring().c_str(), _O_RDONLY | _O_BINARY, _SH_DENYRW, 0) == 0);
-		CHECK(FileSystem::CopyFileReplacing(source, target, error, [&] {
-			if (waits++ == 0)
-				_close(locked);
-		}));
-		CHECK(waits == 1);
+		// Holds target open without sharing, as a scanner of a game that just exited does, until Release.
+		struct Lock
+		{
+			int Descriptor = -1;
+			explicit Lock(const std::filesystem::path& path) { _wsopen_s(&Descriptor, path.wstring().c_str(), _O_RDONLY | _O_BINARY, _SH_DENYRW, 0); }
+			~Lock() { Release(); }
+			void Release()
+			{
+				if (Descriptor >= 0)
+					_close(Descriptor);
+				Descriptor = -1;
+			}
+		};
+		constexpr int SharingViolation = 32; // ERROR_SHARING_VIOLATION (windows.h stays out of the tests)
+
+		// The lock is released from the wait, so the first attempt is certain to meet it, without depending on timing.
+		// (A real scanner could reopen the file after that, hence at least one wait rather than exactly one.)
+		REQUIRE(FileSystem::WriteTextFile(target, previous));
+		{
+			Lock lock(target);
+			REQUIRE(lock.Descriptor >= 0);
+			waits = 0;
+			CHECK(FileSystem::CopyFileReplacing(source, target, error, [&] {
+				waits++;
+				lock.Release();
+			}));
+			CHECK_FALSE(error);
+			CHECK(waits >= 1);
+		}
 		CHECK(FileSystem::ReadTextFile(target).value() == "new");
 
-		// A lock that outlasts every attempt fails with the sharing violation.
-		waits = 0;
-		REQUIRE(_wsopen_s(&locked, target.wstring().c_str(), _O_RDONLY | _O_BINARY, _SH_DENYRW, 0) == 0);
-		CHECK_FALSE(FileSystem::CopyFileReplacing(source, target, error, [&] { waits++; }, 3));
-		CHECK(waits == 2);
-		CHECK(error.value() == 32); // ERROR_SHARING_VIOLATION
-		_close(locked);
+		// A lock that outlasts every attempt fails with the sharing violation after the last attempt.
+		{
+			Lock lock(target);
+			REQUIRE(lock.Descriptor >= 0);
+			waits = 0;
+			CHECK_FALSE(FileSystem::CopyFileReplacing(source, target, error, [&] { waits++; }));
+			CHECK(waits == FileSystem::CopyRetryAttempts - 1);
+			CHECK(error == std::error_code(SharingViolation, std::system_category()));
+		}
 #endif
 	}
 

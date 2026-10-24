@@ -11,27 +11,34 @@ file(GLOB_RECURSE files RELATIVE "${SOURCE_DIR}"
 	"${SOURCE_DIR}/Tests/Benchmarks/*.cpp" "${SOURCE_DIR}/Tests/Benchmarks/*.h"
 	"${SOURCE_DIR}/Tests/Fuzz/*.cpp" "${SOURCE_DIR}/Tests/Fuzz/*.h")
 
+# An empty glob (a wrong SOURCE_DIR, or sources moved away from the patterns) would otherwise check nothing and pass.
+list(LENGTH files count)
+if(count EQUAL 0)
+	message(FATAL_ERROR "No sources found under '${SOURCE_DIR}'")
+endif()
+
 # Batches keep each command line well under Windows' 32767-character limit; one call with every file exceeds it
 # and fails to start ("name too long") without ever reporting formatting.
-set(failed FALSE)
-list(LENGTH files count)
+set(unformatted FALSE)
 set(batchSize 100)
-foreach(begin RANGE 0 ${count} ${batchSize})
+set(begin 0)
+while(begin LESS count)
 	list(SUBLIST files ${begin} ${batchSize} batch)
-	if(NOT batch)
-		continue()
-	endif()
 	execute_process(
 		COMMAND "${CLANG_FORMAT}" --dry-run --Werror ${batch}
 		WORKING_DIRECTORY "${SOURCE_DIR}"
 		RESULT_VARIABLE result
 		ERROR_VARIABLE output)
-	if(NOT result EQUAL 0)
-		message("${result}\n${output}")
-		set(failed TRUE)
+	# A launch failure leaves a message, not an exit code, in result: report it as such, not as unformatted code.
+	if(NOT result MATCHES "^[0-9]+$")
+		message(FATAL_ERROR "clang-format ('${CLANG_FORMAT}') failed to run: ${result}")
+	elseif(NOT result EQUAL 0)
+		message("${output}")
+		set(unformatted TRUE)
 	endif()
-endforeach()
+	math(EXPR begin "${begin} + ${batchSize}")
+endwhile()
 
-if(failed)
+if(unformatted)
 	message(FATAL_ERROR "Code is not formatted. Run scripts/format.sh (or clang-format -i) and commit the result.")
 endif()

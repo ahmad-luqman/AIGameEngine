@@ -20,6 +20,8 @@ find_program(BASALT_CLANG_FORMAT clang-format)
 option(BASALT_CHECK_FORMAT "Register the clang-format check as a test" ON)
 if(BASALT_CHECK_FORMAT AND BASALT_CLANG_FORMAT)
 	add_test(NAME CodeFormat COMMAND "${CMAKE_COMMAND}" -DCLANG_FORMAT=${BASALT_CLANG_FORMAT} -DSOURCE_DIR=${PROJECT_SOURCE_DIR} -P "${PROJECT_SOURCE_DIR}/cmake/CheckFormat.cmake")
+	# The check itself: batch boundaries, an empty tree and a clang-format that cannot start.
+	add_test(NAME CheckFormatBatches COMMAND "${CMAKE_COMMAND}" -DCLANG_FORMAT=${BASALT_CLANG_FORMAT} -DREPO_DIR=${PROJECT_SOURCE_DIR} "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/CheckFormatBatches" -P "${CMAKE_CURRENT_SOURCE_DIR}/Format/CheckFormatBatches.cmake")
 endif()
 
 # scripts/fuzz.sh's argument handling (the nightly fuzz workflow's target list and input checks). Bash is not part of
@@ -343,7 +345,7 @@ set_tests_properties(BasaltTests PROPERTIES LABELS unit)
 set(basaltIntegrationTests FeatureTest SampleTetris SampleTetrisReplay SampleJoints SampleMarbleRun SampleBreakout SampleFirstPerson SampleMovementDemo SamplePlatformer PhysicsDeterminism)
 set_tests_properties(${basaltIntegrationTests} PROPERTIES LABELS integration)
 if(TEST CodeFormat)
-	set_tests_properties(CodeFormat PROPERTIES LABELS format)
+	set_tests_properties(CodeFormat CheckFormatBatches PROPERTIES LABELS format)
 endif()
 if(BASALT_SANITIZE)
 	set_property(TEST BasaltTests ${basaltIntegrationTests} APPEND PROPERTY ENVIRONMENT ${BASALT_SANITIZER_ENVIRONMENT})

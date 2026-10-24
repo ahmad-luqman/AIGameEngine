@@ -577,7 +577,8 @@ namespace Basalt {
 
 		std::filesystem::path executable = executableDirectory / ExecutableFileName(executableName);
 		std::filesystem::create_directories(executableDirectory, error);
-		// The previous export's executable may still be locked by a smoke test that just ran it.
+		// A run of the previous export that just exited can keep its executable locked briefly (antivirus);
+		// CopyFileReplacing retries that.
 		if (!error)
 			FileSystem::CopyFileReplacing(runtime, executable, error);
 		if (!error)
