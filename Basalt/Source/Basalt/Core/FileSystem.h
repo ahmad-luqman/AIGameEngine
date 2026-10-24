@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Basalt/Core/Assert.h"
 #include "Basalt/Core/PackArchive.h"
 
 #include <cstdint>
@@ -17,8 +18,8 @@ namespace Basalt {
 	class FileSystem
 	{
 	public:
-		// A path the mounted archive holds (Mount) is read only from it: a damaged entry fails, with no fallback to disk, and
-		// outError (optional) receives the archive's reason, which is also logged. Other paths are read from disk.
+		// A path the mounted archive holds (Mount) is read only from it: a damaged entry fails, with no fallback to disk (the
+		// reason is also logged). Other paths are read from disk. outError (optional) says why a read failed.
 		static std::optional<std::string> ReadTextFile(const std::filesystem::path& path, std::string* outError = nullptr);
 		static std::optional<std::vector<uint8_t>> ReadBinaryFile(const std::filesystem::path& path, std::string* outError = nullptr);
 		// The size of a regular file (an archive entry's uncompressed size); nullopt for a missing path or anything else
@@ -27,9 +28,9 @@ namespace Basalt {
 
 		// A read-only archive over a directory: the runtime mounts an exported game's Assets.bpak over its project folder.
 		// ReadTextFile, ReadBinaryFile, Exists and GetRegularFileSize then answer for the files under root that the archive
-		// holds, and disk answers for the rest; cgltf reaches them through its file callbacks. Readers that bypass them look
-		// the mount up directly: miniaudio's VFS, Lua's require searcher and font stamps through FindMounted, and
-		// AssetRegistry::Refresh through GetMountedArchive (the whole index). Writes are never redirected: a file written
+		// holds, and disk answers for the rest. Readers that bypass them look the mount up directly: cgltf's file callbacks,
+		// miniaudio's VFS, Lua's require searcher and font stamps through FindMounted, and AssetRegistry::Refresh through
+		// GetMountedArchive (the whole index). Writes are never redirected: a file written
 		// under root that the archive also holds is still read from the archive. One mount at a time (mounting again
 		// replaces it). Thread-safe.
 		static void Mount(const std::filesystem::path& root, Ref<PackArchive> archive);
@@ -41,7 +42,11 @@ namespace Basalt {
 			MountedFile() = default;
 			explicit operator bool() const { return m_Entry != nullptr; }
 			// Only for a found file (operator bool).
-			const PackArchive::Entry& GetEntry() const { return *m_Entry; }
+			const PackArchive::Entry& GetEntry() const
+			{
+				BS_CORE_ASSERT(m_Entry, "GetEntry needs a found file");
+				return *m_Entry;
+			}
 			const Ref<PackArchive>& GetArchive() const { return m_Archive; }
 
 		private:
@@ -59,7 +64,7 @@ namespace Basalt {
 		static MountedFile FindMounted(const std::filesystem::path& path);
 		// The archive mounted exactly at root (in either its given or its link-resolved spelling), or null.
 		static Ref<PackArchive> GetMountedArchive(const std::filesystem::path& root);
-		// Reads a found mounted file, logging why it cannot be read (and setting outError when given).
+		// Reads a found mounted file. Why it cannot be read goes to outError when given, else to the log.
 		static std::optional<std::vector<uint8_t>> ReadMounted(const MountedFile& file, std::string* outError = nullptr);
 
 		// Writes atomically: data goes to a temporary sibling file (<name>.<process>-<count>.tmp, so concurrent writers

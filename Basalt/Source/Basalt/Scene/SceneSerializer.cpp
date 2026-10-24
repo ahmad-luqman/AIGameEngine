@@ -563,12 +563,8 @@ namespace Basalt {
 		const auto text = FileSystem::ReadTextFile(path, &readError);
 		if (!text)
 		{
-			outError = "cannot read '" + displayName + "'";
-			// An archive's reason (a damaged entry) first: the file then exists, just not readably.
-			if (!readError.empty())
-				outError += " (" + readError + ")";
-			else if (!FileSystem::Exists(path))
-				outError += " (no such file: '" + FileSystem::PathToUtf8(path) + "')";
+			// A missing file names where it was looked for; otherwise the reason (an archive's damaged entry, a permission).
+			outError = "cannot read '" + displayName + "' (" + readError + (FileSystem::Exists(path) ? std::string() : ": '" + FileSystem::PathToUtf8(path) + "'") + ")";
 			return std::nullopt;
 		}
 		json data = ParseJson(*text);

@@ -277,15 +277,15 @@ def main():
         require(packed["smokeTest"]["passed"], f"archived package smoke test: {packed['smokeTest']}")
         require((project_file.parent / "Assets.bpak").is_file() and not (project_file.parent / "Assets").exists(), "the package must hold Assets.bpak and no Assets folder")
         # Damaged data in one entry: the archive still opens, and only verifying it finds the damage.
-        listing_before = (output / "Assets.bpak").read_bytes()
-        damaged_data = bytearray(listing_before)
+        intact = (output / "Assets.bpak").read_bytes()
+        damaged_data = bytearray(intact)
         damaged_data[48] ^= 0xFF
         (output / "Assets.bpak").write_bytes(bytes(damaged_data))
         require(ok("archive.inspect", {"path": str(output / "Assets.bpak")}, None)["files"] == len(entries), "damaged data must not stop listing")
         fails("archive.inspect", {"path": str(output / "Assets.bpak"), "verify": True}, "damaged in the archive")
-        (output / "Assets.bpak").write_bytes(listing_before)
+        (output / "Assets.bpak").write_bytes(intact)
         # A damaged archive stops the game at start, saying why.
-        damaged = bytearray((output / "Assets.bpak").read_bytes())
+        damaged = bytearray(intact)
         damaged[-3] ^= 0xFF
         (output / "Assets.bpak").write_bytes(bytes(damaged))
         broken = ok("project.smoke_test", {"executable": str(executable), "frames": 5})

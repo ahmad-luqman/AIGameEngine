@@ -107,18 +107,21 @@ basalt archive.inspect '{"path": "Dist/MyGame/Assets.bpak", "verify": true}'
 - **Contents.** Every file under `Assets/` except the `.meta` sidecars. Each entry carries its asset's UUID in the
   index instead, so references stored as UUIDs (scenes, prefabs, materials, the start scene, the icon) resolve exactly
   as they do in the project. An asset whose sidecar is broken goes in without its UUID, and the export warns
-  (`project.validate`, which runs first unless `validate: false`, reports it as an error). A linked folder inside
-  `Assets/`, or a file name an archive path cannot hold (a `:` or `\`), stops the export.
+  (`project.validate`, which runs first unless `validate: false`, reports it as an error). A linked folder or a broken
+  link inside `Assets/`, or a path an archive cannot hold (a `:` or `\` in a name, or over 1024 bytes), stops the
+  export. An archive holds at most 2^20 files of at most 4 GiB each.
 - **Compression.** Each file is compressed with zstd (level 9) and kept compressed only when that makes it smaller.
-  PNG/JPEG images and Ogg/MP3 audio usually end up stored as they are; BC7 and UASTC `.ktx2` textures (block data without
-  supercompression) usually shrink further.
+  PNG/JPEG images and Ogg/MP3 audio usually end up stored as they are; `.ktx2` textures without supercompression (BC7
+  from `asset.compress_texture`, plain UASTC) usually shrink further, while ETC1S and Zstandard-supercompressed UASTC do
+  not.
 - **Loading.** The runtime mounts the archive over the project folder before it loads the project. A file the archive
   holds (scenes, prefabs, scripts and `require`d modules, models and their buffers, textures, materials, animation
   graphs, fonts, audio clips) is read only from it; anything else, such as loose files placed beside the archive, comes
   from disk (their sidecars are ignored: UUIDs come from the index). Paths match exactly, letter case included, as on
   Linux (`project.validate` reports references whose case differs from the file). An archive that fails its checks when
   it opens (header, layout, index hash) stops the game at start with exit code 1 and the reason; a damaged file fails
-  only its own load, with the reason in the loader's error and the log, never falling back to a disk copy. An audio
+  only its own load, never falling back to a disk copy. Scene, prefab, script, material, texture, animation graph, font
+  and model loads and `require` put the reason in their error; audio clips log it. An audio
   clip's file is read from the archive into memory whole when the clip opens, streamed clips included (streaming still
   decodes page by page from that copy).
 - **Format** (`Core/PackArchive`, little-endian): a 40-byte header (`BPAK`, format version u32 = 1, flags u32 = 0, entry
@@ -156,7 +159,8 @@ The runtime, the editor and the CLI write a report when they crash: a fatal sign
 `SIGBUS`, `SIGILL`, `SIGFPE`, `SIGABRT`, `SIGTRAP`), an unhandled exception on Windows, plus `abort()`, invalid C runtime
 parameters and pure virtual calls there. A report holds:
 
-- the application (the executable's name: an exported game's is the game's, with spaces as `_`; the CLI is `basalt`),
+- the application (the executable's name: an exported game's is the project name with spaces as `_` and characters
+  other than letters, digits, `-` and `_` dropped; the CLI is `basalt`),
   the project's name and version (runtime reports), the platform, the process ID and the time;
 - the reason (`SIGSEGV (invalid memory access) at 0x…`, `EXCEPTION_ACCESS_VIOLATION …`), and the message of an
   uncaught C++ exception that ended the process;
@@ -167,21 +171,26 @@ parameters and pure virtual calls there. A report holds:
 Reports go to `<user data>/<application>/Crashes/crash-<unix time>-<process>.txt` (the per-user data directory that
 save data uses, `BASALT_USER_DATA_DIR` included), so a signed `.app` or a read-only install is normally left alone. Only
 when there is no user data directory, or the report cannot be created there, does the reporter try `CrashReports/` next
-to the executable. The folders are created only when something crashes, however many are missing.
+to the executable. The folders are created only when something crashes (up to eight missing levels; a deeper chain, or
+a report folder path over 1024 bytes, falls back to `CrashReports/`).
 
-The process then ends as it would have without the reporter: the same signal on macOS and Linux, the exception code on
-Windows, or exit code 3 after `abort()`, a pure virtual call or an invalid C runtime parameter on Windows.
-`project.smoke_test` reports the first two as `crashed`; Windows exit code 3 shows up as `exited` with exit code 3
-("the game aborted"). If another thread crashes while a report is being written, it waits, so the report is finished.
+The process then ends: by the same signal on macOS and Linux, with the exception code on Windows, or with exit code 3
+(the C runtime's abort code) after `abort()`, a pure virtual call or an invalid C runtime parameter on Windows, where
+the runtime would otherwise fail fast with 0xC0000409. `project.smoke_test` reports the first two as `crashed`; Windows
+exit code 3 shows up as `exited` with exit code 3 ("the game aborted"). If another thread crashes while a report is
+being written, it waits for the report; a report that is not finished within 30 seconds (a lock the crash left held)
+ends the process anyway, by SIGALRM on macOS and Linux.
 
-The windowed runtime also shows a message box with the report's path: a Windows message box; osascript on macOS;
-zenity, kdialog or xmessage from `/usr/bin` on Linux when a display is set. The CLI, the editor, and headless,
-offscreen and `--frames` runs never show one. AddressSanitizer builds leave crashes to AddressSanitizer.
+The windowed runtime also shows a message box with the report's path: a task-modal Windows message box (the process
+ends when it is closed); osascript on macOS, or zenity, kdialog or xmessage from `/usr/bin` on Linux when a display is
+set, started as a separate process (the crashed process ends at once). The CLI, the editor, and headless, offscreen and
+`--frames` runs never show one. AddressSanitizer builds leave crashes to AddressSanitizer.
 
-On macOS and Linux the handler formats into fixed buffers, allocates nothing, never forks (the dialog starts through
-`posix_spawn`, prepared when the reporter installs) and loads backtrace's unwinder at install, on an alternate stack, so
-stack overflows on the thread that installed the reporter (the main thread) are reported too. On Windows it uses static
-buffers and a 128 KiB stack guarantee for that thread; dbghelp may load symbol files while it names the frames.
+On macOS and Linux the handler formats into fixed buffers, allocates nothing and never forks: the dialog starts
+through `posix_spawn` (which runs no atfork handlers), prepared when the reporter installs, and backtrace's unwinder is
+loaded at install. It runs on an alternate stack, so stack overflows on the thread that installed the reporter (the main
+thread) are reported too. On Windows it uses static buffers, writes the text before the minidump, and keeps a 128 KiB
+stack guarantee for that thread (taken from its 1 MiB stack); dbghelp may load symbol files while it names frames.
 
 ## Releasing Basalt
 

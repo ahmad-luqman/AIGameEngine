@@ -692,11 +692,7 @@ TEST_SUITE("Project")
 		CHECK(error.find("parse error at line 1") != std::string::npos);
 
 		// A broken file is not exported (the game would not start).
-#if defined(__APPLE__)
-		temp.WriteFile("FakeVulkanSDK/lib/libvulkan.1.dylib", "stand-in");
-		temp.WriteFile("FakeVulkanSDK/lib/libMoltenVK.dylib", "stand-in");
-		const BasaltTest::ScopedEnvVar sdk("VULKAN_SDK", (temp.GetDirectory() / "FakeVulkanSDK").string());
-#endif
+		const BasaltTest::ScopedFakeVulkanSdk sdk(temp);
 		BasaltTest::TempDirectory exportDirectory("ProjectInputActionsExport");
 		const auto output = exportDirectory.GetPath() / "Build";
 		CHECK(RunCommandError(registry, session, "project.export", { { "output", output.string() }, { "validate", false } }).find("invalid input actions file") != std::string::npos);
@@ -749,11 +745,7 @@ TEST_SUITE("Project")
 		CHECK(RunCommandError(registry, session, "project.export", { { "output", output.string() }, { "smokeTestTimeout", 0 } }).find("smokeTestTimeout") != std::string::npos);
 		// validate: false exports anyway (BasaltRuntime is built next to the tests). On macOS the exporter bundles
 		// the Vulkan loader and MoltenVK: point it at stand-ins so the test does not need the Vulkan SDK.
-#if defined(__APPLE__)
-		temp.WriteFile("FakeVulkanSDK/lib/libvulkan.1.dylib", "stand-in");
-		temp.WriteFile("FakeVulkanSDK/lib/libMoltenVK.dylib", "stand-in");
-		const BasaltTest::ScopedEnvVar sdk("VULKAN_SDK", (temp.GetDirectory() / "FakeVulkanSDK").string());
-#endif
+		const BasaltTest::ScopedFakeVulkanSdk sdk(temp);
 		const nlohmann::json exported = RunCommand(registry, session, "project.export", { { "output", output.string() }, { "validate", false } });
 		CHECK(exported["validation"].is_null());
 		CHECK(std::filesystem::exists(exported["executable"].get<std::string>()));

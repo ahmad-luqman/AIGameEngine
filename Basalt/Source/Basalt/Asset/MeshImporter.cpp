@@ -24,6 +24,7 @@
 #include <fstream>
 #include <map>
 #include <memory>
+#include <new>
 #include <optional>
 #include <set>
 
@@ -66,30 +67,40 @@ namespace Basalt {
 
 		bool IsDataUri(const char* uri);
 
-		// The archive files one model load has read, kept so buffers that share a file decompress it once.
+		// What one model load's file reads share: the archive files its buffers read (so buffers that share a file decompress
+		// it once), and why the last read failed (cgltf can only return a result code).
 		struct GltfFileCache
 		{
 			std::map<std::string, std::vector<uint8_t>> Files;
+			std::string Error;
 		};
 
 		// Reads exactly size bytes from the start of a file on disk (all of it for size 0), as cgltf's own reader does, so
 		// CheckBufferSizes' bounds on the declared sizes are the bounds on what is read.
-		std::optional<std::vector<uint8_t>> ReadFilePrefix(const std::filesystem::path& file, cgltf_size size)
+		std::optional<std::vector<uint8_t>> ReadFilePrefix(const std::filesystem::path& file, cgltf_size size, std::string& outError)
 		{
 			if (size == 0)
-				return FileSystem::ReadBinaryFile(file);
+				return FileSystem::ReadBinaryFile(file, &outError);
 			std::error_code error;
 			const std::optional<uint64_t> available = FileSystem::GetRegularFileSize(file, error);
 			if (!available || *available < size)
+			{
+				outError = error ? error.message() : !available ? std::string("no such file")
+																: "shorter than the " + std::to_string(size) + " bytes its buffer declares";
 				return std::nullopt;
+			}
 			std::ifstream stream(file, std::ios::in | std::ios::binary);
 			std::vector<uint8_t> bytes(size);
 			if (!stream.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(size)))
+			{
+				outError = "reading it failed";
 				return std::nullopt;
+			}
 			return bytes;
 		}
 
-		// cgltf reads the glTF and its external buffers through FileSystem, so a model in a mounted archive loads like one
+		// cgltf reads the glTF and its external buffers through this callback: a file in a mounted archive comes from
+		// FileSystem::ReadMounted (buffers' files once per load), any other from disk, so a model in an archive loads like one
 		// on disk. Paths are UTF-8: LoadGltfData and Inspect pass PathToUtf8, and cgltf joins the URIs to them byte-wise.
 		// size is the buffer's declared byteLength (0: the whole file), and only that much is kept. Called from cgltf (C):
 		// no exception may leave it.
@@ -97,33 +108,39 @@ namespace Basalt {
 		{
 			try
 			{
+				auto& cache = *static_cast<GltfFileCache*>(options->user_data);
 				const std::filesystem::path file = FileSystem::PathFromUtf8(path);
-				std::optional<std::vector<uint8_t>> diskBytes;
+				std::optional<std::vector<uint8_t>> readBytes;
 				const std::vector<uint8_t>* bytes = nullptr;
-				if (const FileSystem::MountedFile mounted = FileSystem::FindMounted(file))
+				const FileSystem::MountedFile mounted = FileSystem::FindMounted(file);
+				// Buffers (a declared size) from the archive are kept for the other buffers of the load; the glTF itself (size
+				// 0) is read once, and cgltf keeps its own copy.
+				if (mounted && *size != 0)
 				{
-					// Archive entries are read whole (a compressed one cannot be read in part), once per load.
-					auto& cache = static_cast<GltfFileCache*>(options->user_data)->Files;
-					auto it = cache.find(path);
-					if (it == cache.end())
+					// Archive entries are read whole (a compressed one cannot be read in part).
+					auto it = cache.Files.find(path);
+					if (it == cache.Files.end())
 					{
-						auto read = FileSystem::ReadMounted(mounted);
+						auto read = FileSystem::ReadMounted(mounted, &cache.Error);
 						if (!read)
 							return cgltf_result_io_error;
-						it = cache.emplace(path, std::move(*read)).first;
+						it = cache.Files.emplace(path, std::move(*read)).first;
 					}
 					bytes = &it->second;
 				}
 				else
 				{
-					diskBytes = ReadFilePrefix(file, *size);
-					if (!diskBytes)
-						return FileSystem::Exists(file) ? cgltf_result_io_error : cgltf_result_file_not_found;
-					bytes = &*diskBytes;
+					readBytes = mounted ? FileSystem::ReadMounted(mounted, &cache.Error) : ReadFilePrefix(file, *size, cache.Error);
+					if (!readBytes)
+						return mounted || FileSystem::Exists(file) ? cgltf_result_io_error : cgltf_result_file_not_found;
+					bytes = &*readBytes;
 				}
 				const size_t length = *size != 0 ? static_cast<size_t>(*size) : bytes->size();
 				if (bytes->size() < length)
+				{
+					cache.Error = "'" + std::string(path) + "' is shorter than the " + std::to_string(length) + " bytes its buffer declares";
 					return cgltf_result_io_error;
+				}
 				// malloc(0) may return null, which cgltf would take for a failure.
 				void* copy = std::malloc(std::max<size_t>(length, 1));
 				if (!copy)
@@ -134,10 +151,18 @@ namespace Basalt {
 				*data = copy;
 				return cgltf_result_success;
 			}
+			catch (const std::bad_alloc&)
+			{
+				return cgltf_result_out_of_memory;
+			}
 			catch (const std::exception& exception)
 			{
-				BS_CORE_ERROR("glTF: cannot read '{}': {}", path, exception.what());
-				return cgltf_result_out_of_memory;
+				static_cast<GltfFileCache*>(options->user_data)->Error = exception.what();
+				return cgltf_result_io_error;
+			}
+			catch (...)
+			{
+				return cgltf_result_io_error;
 			}
 		}
 
@@ -250,7 +275,8 @@ namespace Basalt {
 					if (declared == 0)
 						declared = available;
 					// cgltf reads every buffer from the start of its file (byte ranges belong to buffer views), so each
-					// buffer after the first to name a file reads it again in full.
+					// buffer after the first to name a file reads its declared bytes again (an archive file is decompressed
+					// once per load, but each buffer still gets its own copy).
 					if (!files.insert(target.lexically_normal()).second)
 						rereadTotal += declared;
 				}
@@ -367,7 +393,7 @@ namespace Basalt {
 			GltfData data(raw);
 			if (result != cgltf_result_success)
 			{
-				outError = path.filename().string() + ": " + ResultToString(result);
+				outError = path.filename().string() + ": " + ResultToString(result) + (cache.Error.empty() ? std::string() : " (" + cache.Error + ")");
 				return nullptr;
 			}
 
@@ -403,7 +429,7 @@ namespace Basalt {
 			result = cgltf_load_buffers(&options, data.get(), pathString.c_str());
 			if (result != cgltf_result_success)
 			{
-				outError = path.filename().string() + ": cannot load buffers (" + ResultToString(result) + ")";
+				outError = path.filename().string() + ": cannot load buffers (" + ResultToString(result) + (cache.Error.empty() ? std::string() : ": " + cache.Error) + ")";
 				return nullptr;
 			}
 			if (!CheckAccessorAlignment(data.get(), path, outError) || !CheckBufferViewBounds(data.get(), path, outError) || !CheckAccessorBounds(data.get(), path, outError))
@@ -691,7 +717,7 @@ namespace Basalt {
 		const std::string file = FileSystem::PathToUtf8(path);
 		if (const cgltf_result result = cgltf_parse_file(&options, file.c_str(), &data); result != cgltf_result_success)
 		{
-			outError = fmt::format("not a readable glTF ({})", ResultToString(result));
+			outError = fmt::format("not a readable glTF ({}{})", ResultToString(result), cache.Error.empty() ? std::string() : ": " + cache.Error);
 			return std::nullopt;
 		}
 		Contents contents;

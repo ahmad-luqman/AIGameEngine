@@ -179,6 +179,26 @@ namespace BasaltTest {
 		Basalt::Ref<Basalt::Project> m_Project;
 	};
 
+	// macOS exports bundle the Vulkan loader and MoltenVK, which tests never load: stand-ins in <project>/FakeVulkanSDK,
+	// found through VULKAN_SDK for the scope. Nothing on other platforms.
+	class ScopedFakeVulkanSdk
+	{
+	public:
+		explicit ScopedFakeVulkanSdk(const TempProject& project)
+		{
+#if defined(__APPLE__)
+			project.WriteFile("FakeVulkanSDK/lib/libvulkan.1.dylib", "stand-in");
+			project.WriteFile("FakeVulkanSDK/lib/libMoltenVK.dylib", "stand-in");
+			m_Variable.emplace("VULKAN_SDK", (project.GetDirectory() / "FakeVulkanSDK").string());
+#else
+			(void)project;
+#endif
+		}
+
+	private:
+		std::optional<ScopedEnvVar> m_Variable;
+	};
+
 	// Log messages containing `text` since the history's total count was `since`.
 	inline int CountLogMessages(uint64_t since, const std::string& text)
 	{

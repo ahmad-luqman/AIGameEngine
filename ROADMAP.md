@@ -104,8 +104,10 @@ Native file dialogs and prefab editing with per-instance overrides have shipped.
 - **Signed and universal tools on macOS — S.** The release signs and notarizes only the sample bundles: sign the
   editor, runtime and CLI (and their bundled Vulkan libraries) and notarize the tools archive too, and build universal
   (arm64 + x86-64) binaries for Intel Macs.
-- **Unicode command-line arguments on Windows — S.** The CLI and runtime read narrow `argv`, so non-ASCII paths in
-  arguments (`--project`, `project.export` output) do not survive on Windows; read `GetCommandLineW` instead.
+- **Unicode command-line arguments and asset keys on Windows — S.** The CLI and runtime read narrow `argv`, so
+  non-ASCII paths in arguments (`--project`, `project.export` output) do not survive on Windows; read `GetCommandLineW`
+  instead. Likewise `Project::ResolvePath` receives asset keys as `std::string` converted through the ANSI code page, so
+  non-ASCII asset names do not load on Windows; take the UTF-8 keys through `FileSystem::PathFromUtf8`.
 - **Archive follow-ups — S.** Stream stored (uncompressed) audio straight from `Assets.bpak` instead of reading clips
   into memory whole, compress large entries on the job system during export, and leave out originals that only a
   compressed `.ktx2` replacement references.

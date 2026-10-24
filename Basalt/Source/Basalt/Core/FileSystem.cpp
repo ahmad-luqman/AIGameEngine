@@ -17,6 +17,7 @@
 #include <cerrno>
 #include <chrono>
 #include <fstream>
+#include <mutex>
 #include <shared_mutex>
 #include <system_error>
 #include <thread>
@@ -58,7 +59,8 @@ namespace Basalt {
 		// The mounted archive and the '/'-separated key of path inside it; a null archive when path is not under the root.
 		std::pair<Ref<PackArchive>, std::string> FindMountKey(const std::filesystem::path& path)
 		{
-			// Readers share the lock and Mount runs once at startup, so holding it here costs nothing and copies nothing.
+			// Readers share the lock, and Mount/Unmount run only at startup (and in tests), so holding it while computing the
+			// key never makes a reader wait in practice.
 			std::shared_lock lock(s_MountMutex);
 			if (!s_Mounted.Archive)
 				return {};
@@ -84,6 +86,11 @@ namespace Basalt {
 	void FileSystem::Mount(const std::filesystem::path& root, Ref<PackArchive> archive)
 	{
 		BS_CORE_ASSERT(archive, "Unmount removes the mount");
+		if (!archive)
+		{
+			Unmount();
+			return;
+		}
 		const std::filesystem::path normal = NormalizeAbsolute(root);
 		Mounted mounted{ normal, Canonical(normal), std::move(archive) };
 		std::unique_lock lock(s_MountMutex);
@@ -119,12 +126,14 @@ namespace Basalt {
 		if (!file)
 			error = "no such file in the mounted archive";
 		else
-			data = file.m_Archive->Read(*file.m_Entry, error);
+			data = file.GetArchive()->Read(file.GetEntry(), error);
 		if (!data)
 		{
-			BS_CORE_ERROR("Archive{}: {}", file && !file.m_Archive->GetFile().empty() ? " '" + PathToUtf8(file.m_Archive->GetFile()) + "'" : std::string(), error);
+			// A caller that takes the reason reports it in its own error; otherwise the log is the only place it shows.
 			if (outError)
 				*outError = std::move(error);
+			else
+				BS_CORE_ERROR("Archive{}: {}", file && !file.GetArchive()->GetFile().empty() ? " '" + PathToUtf8(file.GetArchive()->GetFile()) + "'" : std::string(), error);
 		}
 		return data;
 	}
@@ -133,7 +142,7 @@ namespace Basalt {
 	{
 		outError.clear();
 		if (const MountedFile mounted = FindMounted(path))
-			return mounted.m_Entry->Size;
+			return mounted.GetEntry().Size;
 		const bool regular = std::filesystem::is_regular_file(path, outError);
 		if (outError == std::errc::no_such_file_or_directory)
 			outError.clear();
@@ -143,6 +152,43 @@ namespace Basalt {
 		return outError ? std::nullopt : std::optional<uint64_t>(size);
 	}
 
+	namespace {
+
+		// A whole file from disk; outError (optional) says why it cannot be read.
+		template<typename Container>
+		std::optional<Container> ReadDiskFile(const std::filesystem::path& path, std::string* outError)
+		{
+			const auto fail = [&](std::string reason) -> std::optional<Container> {
+				if (outError)
+					*outError = std::move(reason);
+				return std::nullopt;
+			};
+			// A directory opens as a stream on Linux, with a meaningless size (reading it would allocate that much).
+			std::error_code error;
+			const bool regular = std::filesystem::is_regular_file(path, error);
+			if (error)
+				return fail(error == std::errc::no_such_file_or_directory ? "no such file" : error.message());
+			if (!regular)
+				return fail(std::filesystem::exists(path, error) ? "not a file" : "no such file");
+			errno = 0;
+			std::ifstream stream(path, std::ios::in | std::ios::binary);
+			if (!stream)
+				return fail(errno != 0 ? std::generic_category().message(errno) : "cannot open it");
+
+			stream.seekg(0, std::ios::end);
+			const std::streamoff size = stream.tellg();
+			if (size < 0)
+				return fail("cannot determine its size");
+			Container result(static_cast<size_t>(size), {});
+			stream.seekg(0, std::ios::beg);
+			stream.read(reinterpret_cast<char*>(result.data()), size);
+			if (!stream && !stream.eof())
+				return fail("reading it failed");
+			return result;
+		}
+
+	}
+
 	std::optional<std::string> FileSystem::ReadTextFile(const std::filesystem::path& path, std::string* outError)
 	{
 		if (const MountedFile mounted = FindMounted(path))
@@ -150,48 +196,14 @@ namespace Basalt {
 			auto data = ReadMounted(mounted, outError);
 			return data ? std::optional<std::string>(std::in_place, data->begin(), data->end()) : std::nullopt;
 		}
-		// A directory opens as a stream on Linux, with a meaningless size (reading it would allocate that much).
-		std::error_code error;
-		if (!std::filesystem::is_regular_file(path, error))
-			return std::nullopt;
-		std::ifstream stream(path, std::ios::in | std::ios::binary);
-		if (!stream)
-			return std::nullopt;
-
-		std::string result;
-		stream.seekg(0, std::ios::end);
-		const std::streamoff size = stream.tellg();
-		if (size < 0)
-			return std::nullopt;
-		result.resize(static_cast<size_t>(size));
-		stream.seekg(0, std::ios::beg);
-		stream.read(result.data(), size);
-		if (!stream && !stream.eof())
-			return std::nullopt;
-		return result;
+		return ReadDiskFile<std::string>(path, outError);
 	}
 
 	std::optional<std::vector<uint8_t>> FileSystem::ReadBinaryFile(const std::filesystem::path& path, std::string* outError)
 	{
 		if (const MountedFile mounted = FindMounted(path))
 			return ReadMounted(mounted, outError);
-		std::error_code error;
-		if (!std::filesystem::is_regular_file(path, error))
-			return std::nullopt;
-		std::ifstream stream(path, std::ios::in | std::ios::binary);
-		if (!stream)
-			return std::nullopt;
-
-		stream.seekg(0, std::ios::end);
-		const std::streamoff size = stream.tellg();
-		if (size < 0)
-			return std::nullopt;
-		std::vector<uint8_t> result(static_cast<size_t>(size));
-		stream.seekg(0, std::ios::beg);
-		stream.read(reinterpret_cast<char*>(result.data()), size);
-		if (!stream && !stream.eof())
-			return std::nullopt;
-		return result;
+		return ReadDiskFile<std::vector<uint8_t>>(path, outError);
 	}
 
 	bool FileSystem::WriteTextFile(const std::filesystem::path& path, std::string_view text)
@@ -419,7 +431,9 @@ namespace Basalt {
 	{
 		// Callers name things after it (crash report folders); say so rather than silently naming them "Unknown".
 		const auto unknown = []() {
-			BS_CORE_WARN("FileSystem: cannot find the running executable's path");
+			// Once: several callers ask (crash reports, exports, the runtime's project lookup).
+			static std::once_flag s_Warned;
+			std::call_once(s_Warned, [] { BS_CORE_WARN("FileSystem: cannot find the running executable's path"); });
 			std::error_code error;
 			return std::filesystem::current_path(error) / "Unknown";
 		};

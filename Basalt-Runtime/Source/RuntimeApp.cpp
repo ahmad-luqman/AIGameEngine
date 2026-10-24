@@ -98,7 +98,9 @@ namespace Basalt {
 
 		RuntimeOptions options;
 		// An exported game ships its project file next to the executable (in Contents/Resources of a macOS bundle).
-		std::filesystem::path projectPath = commandLine.GetValue("project").value_or(Exporter::GetExportedProjectDirectory(FileSystem::GetExecutableDirectory()).string());
+		// A path, not path::string(), which throws on Windows for an install folder outside the ANSI code page.
+		const std::optional<std::string> projectArgument = commandLine.GetValue("project");
+		const std::filesystem::path projectPath = projectArgument ? std::filesystem::path(*projectArgument) : Exporter::GetExportedProjectDirectory(FileSystem::GetExecutableDirectory());
 		std::string error;
 		// An archived export reads its Assets from Assets.bpak, mounted before anything (the project's asset UUIDs) loads.
 		std::error_code directoryError;

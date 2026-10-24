@@ -21,6 +21,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstring>
 #include <random>
 #include <string>
@@ -35,6 +36,10 @@ namespace {
 	{
 		return { text.begin(), text.end() };
 	}
+
+	// A texture name outside ASCII ("Ünïcode.png"; split so \xAF does not swallow the "c").
+	const std::string UnicodeTexture = "Assets/Textures/\xC3\x9Cn\xC3\xAF"
+									   "code.png";
 
 	// Bytes that zstd cannot shrink.
 	std::vector<uint8_t> Noise(size_t size, uint32_t seed = 7)
@@ -177,6 +182,8 @@ TEST_SUITE("Archive")
 			{ "Assets/Scripts/Main.lua", text, 22 },
 			{ "Assets/Empty.txt", {}, 0 },
 			{ "Assets/Scenes/Main.bscene", Bytes(R"({"Entities":[]})"), 33 },
+			// Compresses about 10000:1, inside the size bound Parse sets for compressed entries.
+			{ "Assets/Audio/Silence.raw", std::vector<uint8_t>(size_t{ 8 } << 20, 0), 0 },
 		};
 		const std::filesystem::path file = directory.GetPath() / "Out" / "Assets.bpak";
 		const std::vector<uint8_t> bytes = BuildArchive(entries, file);
@@ -191,10 +198,11 @@ TEST_SUITE("Archive")
 		REQUIRE_MESSAGE(archive, error);
 		CHECK(archive->GetFile() == file);
 		const auto& listed = archive->GetEntries();
-		REQUIRE(listed.size() == 4);
+		REQUIRE(listed.size() == 5);
 		// Sorted by path.
-		CHECK(listed[0].Path == "Assets/Empty.txt");
-		CHECK(listed[3].Path == "Assets/Textures/Noise.ktx2");
+		CHECK(listed[0].Path == "Assets/Audio/Silence.raw");
+		CHECK(RequireEntry(*archive, "Assets/Audio/Silence.raw").StoredSize < 4096);
+		CHECK(listed.back().Path == "Assets/Textures/Noise.ktx2");
 		for (const auto& [path, data, id] : entries)
 		{
 			const PackArchive::Entry* entry = archive->Find(path);
@@ -464,6 +472,9 @@ TEST_SUITE("Archive")
 			CHECK(relative == "from the archive");
 		}
 		CHECK_FALSE(FileSystem::GetMountedArchive(root));
+		std::string notFound;
+		CHECK_FALSE(FileSystem::ReadMounted({}, &notFound));
+		CHECK(notFound == "no such file in the mounted archive");
 		CHECK_FALSE(FileSystem::ReadTextFile(root / "Assets" / "Packed.txt"));
 		CHECK(FileSystem::ReadTextFile(root / "Assets" / "Shadowed.txt") == "disk copy");
 
@@ -474,11 +485,20 @@ TEST_SUITE("Archive")
 		const Ref<PackArchive> damaged = PackArchive::OpenMemory(bytes, error);
 		REQUIRE(damaged);
 		ScopedMount mount(root, damaged);
-		const uint64_t since = Log::GetHistory().GetTotalCount();
+		// Without a place for the reason, the log gets it; with one, the caller does (and logs it with its own context).
+		uint64_t since = Log::GetHistory().GetTotalCount();
+		CHECK_FALSE(FileSystem::ReadTextFile(root / "Assets" / "Shadowed.txt"));
+		CHECK(BasaltTest::CountLogMessages(since, "'Assets/Shadowed.txt' is damaged in the archive") == 1);
+		since = Log::GetHistory().GetTotalCount();
 		std::string readError;
 		CHECK_FALSE(FileSystem::ReadTextFile(root / "Assets" / "Shadowed.txt", &readError));
-		CHECK(BasaltTest::CountLogMessages(since, "'Assets/Shadowed.txt' is damaged in the archive") == 1);
+		CHECK(BasaltTest::CountLogMessages(since, "'Assets/Shadowed.txt' is damaged in the archive") == 0);
 		CHECK(readError == "'Assets/Shadowed.txt' is damaged in the archive (hash mismatch)");
+		// Disk failures say why too.
+		CHECK_FALSE(FileSystem::ReadTextFile(root / "Missing.txt", &readError));
+		CHECK(readError == "no such file");
+		CHECK_FALSE(FileSystem::ReadBinaryFile(root, &readError));
+		CHECK(readError == "not a file");
 		// Loaders pass the archive's reason on rather than calling the file missing.
 		CHECK_FALSE(SceneSerializer::ReadSceneFile(root / "Assets" / "Shadowed.txt", "Shadowed.txt", error));
 		CHECK_MESSAGE(error.find("damaged in the archive") != std::string::npos, error);
@@ -510,10 +530,12 @@ TEST_SUITE("Archive")
 			CHECK_MESSAGE(AssetManager::GetMesh("Assets/Models/Shared.gltf"), AssetManager::GetError("Assets/Models/Shared.gltf"));
 			AssetManager::Clear();
 		}
+#if !defined(_WIN32)
+		// Not on Windows, where Project::ResolvePath reads string keys in the ANSI code page (ROADMAP: Unicode asset keys).
 		const std::vector<uint8_t> unicodePng = EncodeIconPng(MakeDefaultIcon(8));
-		REQUIRE(FileSystem::WriteBinaryFile(assets / "Textures" / FileSystem::PathFromUtf8("\xC3\x9Cn\xC3\xAF"
-																						   "code.png"),
+		REQUIRE(FileSystem::WriteBinaryFile(temp.GetDirectory() / FileSystem::PathFromUtf8(UnicodeTexture),
 											unicodePng.data(), unicodePng.size()));
+#endif
 		const std::vector<uint8_t> png = EncodeIconPng(MakeDefaultIcon(64));
 		REQUIRE(FileSystem::WriteBinaryFile(assets / "Textures" / "Icon.png", png.data(), png.size()));
 		std::error_code copyError;
@@ -530,12 +552,7 @@ TEST_SUITE("Archive")
 		temp.WriteFile("Assets/Scripts/Lib/Shebang.lua", "\xEF\xBB\xBF#!/usr/bin/env lua\nlocal value = 7\nreturn { Value = value, Fail = function() error('boom') end }");
 		temp.WriteFile("Assets/Notes.txt", std::string(20000, 'n'));
 		temp.WriteFile("FakeRuntime", "binary");
-#if defined(__APPLE__)
-		// macOS exports bundle the Vulkan loader and MoltenVK, which the runtime here never loads: stand-ins do.
-		temp.WriteFile("FakeVulkanSDK/lib/libvulkan.1.dylib", "stand-in");
-		temp.WriteFile("FakeVulkanSDK/lib/libMoltenVK.dylib", "stand-in");
-		const BasaltTest::ScopedEnvVar sdk("VULKAN_SDK", (temp.GetDirectory() / "FakeVulkanSDK").string());
-#endif
+		const BasaltTest::ScopedFakeVulkanSdk sdk(temp);
 
 		std::string error;
 		{
@@ -646,10 +663,9 @@ TEST_SUITE("Archive")
 		CHECK_MESSAGE(AssetManager::GetTexture("Assets/Textures/UASTC.ktx2"), AssetManager::GetError("Assets/Textures/UASTC.ktx2"));
 		CHECK(UIFonts::CheckFile("Assets/Fonts/Karla.ttf").empty());
 		CHECK_MESSAGE(AssetManager::GetMesh("Assets/Models/Shared.gltf"), AssetManager::GetError("Assets/Models/Shared.gltf"));
-		CHECK_MESSAGE(AssetManager::GetTexture("Assets/Textures/\xC3\x9Cn\xC3\xAF"
-											   "code.png"),
-					  AssetManager::GetError("Assets/Textures/\xC3\x9Cn\xC3\xAF"
-											 "code.png"));
+#if !defined(_WIN32)
+		CHECK_MESSAGE(AssetManager::GetTexture(UnicodeTexture), AssetManager::GetError(UnicodeTexture));
+#endif
 		// Archive paths match letter case exactly on every platform, as on Linux.
 		CHECK_FALSE(FileSystem::ReadBinaryFile(output / "Assets" / "textures" / "Icon.png"));
 
@@ -666,9 +682,15 @@ TEST_SUITE("Archive")
 			REQUIRE(music);
 			CHECK(scene->GetAudioSystem()->IsPlaying(music));
 			std::vector<float> mix;
-			// Twice the clip's length: the stream wraps around.
+			// Twice the clip's length: the speaker's clip ends half way, so sound in the last quarter comes from the stream
+			// wrapping around to the start of the archive copy.
 			REQUIRE(AudioEngine::ReadDeviceless(1.0f, mix));
 			CHECK(scene->GetAudioSystem()->IsPlaying(music));
+			REQUIRE_FALSE(mix.empty());
+			float lateLevel = 0.0f;
+			for (size_t i = mix.size() * 3 / 4; i < mix.size(); i++)
+				lateLevel = std::max(lateLevel, std::abs(mix[i]));
+			CHECK(lateLevel > 0.01f);
 			// Modules come from the archive too, found through both package.path templates.
 			CHECK(BasaltTest::Eval(*scene, "return require('Assets.Scripts.Lib.Util').Triple(3)") == "9");
 			CHECK(BasaltTest::Eval(*scene, "return require('Assets.Scripts.Pkg').Name") == "package");
@@ -688,6 +710,29 @@ TEST_SUITE("Archive")
 		}
 	}
 
+	TEST_CASE("Texture and material loads report a damaged archive entry")
+	{
+		BasaltTest::TempProject temp("ArchiveDamagedLoads");
+		REQUIRE(temp.IsValid());
+		const std::vector<uint8_t> png = EncodeIconPng(MakeDefaultIcon(8));
+		const std::filesystem::path file = temp.GetDirectory() / "Damaged.bpak";
+		std::vector<uint8_t> bytes = BuildArchive({ { "Assets/Textures/T.png", png, 0 }, { "Assets/Materials/M.bmaterial", Bytes(R"({"Format":"BasaltMaterial","Version":1})"), 0 } }, file);
+		std::string error;
+		Ref<PackArchive> archive = PackArchive::OpenMemory(bytes, error);
+		REQUIRE_MESSAGE(archive, error);
+		for (const char* path : { "Assets/Textures/T.png", "Assets/Materials/M.bmaterial" })
+			bytes[static_cast<size_t>(RequireEntry(*archive, path).Offset)] ^= 0x5A;
+		archive = PackArchive::OpenMemory(bytes, error);
+		REQUIRE_MESSAGE(archive, error);
+		ScopedMount mount(temp.GetDirectory(), archive);
+		AssetManager::Clear();
+		CHECK_FALSE(AssetManager::GetTexture("Assets/Textures/T.png"));
+		CHECK_MESSAGE(AssetManager::GetError("Assets/Textures/T.png").find("damaged in the archive") != std::string::npos, AssetManager::GetError("Assets/Textures/T.png"));
+		CHECK_FALSE(AssetManager::GetMaterial("Assets/Materials/M.bmaterial"));
+		CHECK_MESSAGE(AssetManager::GetError("Assets/Materials/M.bmaterial").find("damaged in the archive") != std::string::npos, AssetManager::GetError("Assets/Materials/M.bmaterial"));
+		AssetManager::Clear();
+	}
+
 	TEST_CASE("Archived exports refuse what an archive cannot hold and report assets without UUIDs")
 	{
 		BasaltTest::TempProject temp("ArchiveExportProblems");
@@ -695,11 +740,7 @@ TEST_SUITE("Archive")
 		const Ref<Project>& project = Project::GetActive();
 		temp.WriteFile("Assets/Scenes/Main.bscene", R"({"Entities":[]})");
 		temp.WriteFile("FakeRuntime", "binary");
-#if defined(__APPLE__)
-		temp.WriteFile("FakeVulkanSDK/lib/libvulkan.1.dylib", "stand-in");
-		temp.WriteFile("FakeVulkanSDK/lib/libMoltenVK.dylib", "stand-in");
-		const BasaltTest::ScopedEnvVar sdk("VULKAN_SDK", (temp.GetDirectory() / "FakeVulkanSDK").string());
-#endif
+		const BasaltTest::ScopedFakeVulkanSdk sdk(temp);
 		project->GetConfig().StartScene = "Assets/Scenes/Main.bscene";
 		const std::filesystem::path output = temp.GetDirectory().parent_path() / "ArchiveExportProblemsOut";
 		std::error_code error;
@@ -720,6 +761,24 @@ TEST_SUITE("Archive")
 		CHECK_MESSAGE(warning != result.Warnings.end(), "warnings: ", result.Warnings.size());
 		std::filesystem::remove(temp.GetDirectory() / "Assets/Scenes/Copy.bscene.meta", error);
 
+		// A failure after the archive is written (the runtime cannot be copied over a folder in the way) reports no
+		// archive statistics: they describe a finished export only.
+#if defined(_WIN32)
+		const std::filesystem::path executable = output / "ArchiveExportProblems.exe";
+#else
+		const std::filesystem::path executable = output / "ArchiveExportProblems";
+#endif
+		std::filesystem::remove(executable, error);
+		std::filesystem::create_directories(executable / "InTheWay", error);
+		result = Exporter::Export(*project, output, options);
+		CHECK_FALSE(result.Success);
+		CHECK_MESSAGE(result.Error.find("cannot copy the runtime") != std::string::npos, result.Error);
+		CHECK(FileSystem::Exists(output / Project::ArchiveFileName));
+		CHECK_FALSE(result.ArchiveStatistics);
+		// Back to a previous export of this game (its executable in place), which the next exports may replace.
+		std::filesystem::remove_all(executable, error);
+		REQUIRE(FileSystem::WriteTextFile(executable, "binary"));
+
 #if !defined(_WIN32)
 		// A linked folder: the folder export copies it, so the archive must not silently leave it out.
 		BasaltTest::TempDirectory linked("ArchiveExportLinkedFolder");
@@ -729,6 +788,24 @@ TEST_SUITE("Archive")
 		CHECK_FALSE(result.Success);
 		CHECK_MESSAGE(result.Error.find("'Assets/Linked' is a linked folder") != std::string::npos, result.Error);
 		std::filesystem::remove(temp.GetDirectory() / "Assets" / "Linked", error);
+
+		// A link to nothing is refused rather than left out; a link to a file is read through, as a folder export copies it.
+		std::filesystem::create_symlink(temp.GetDirectory() / "Nowhere.txt", temp.GetDirectory() / "Assets" / "Dangling.txt");
+		result = Exporter::Export(*project, output, options);
+		CHECK_FALSE(result.Success);
+		CHECK_MESSAGE(result.Error.find("'Assets/Dangling.txt' is a broken link") != std::string::npos, result.Error);
+		std::filesystem::remove(temp.GetDirectory() / "Assets" / "Dangling.txt", error);
+		temp.WriteFile("Target.txt", "linked file");
+		std::filesystem::create_symlink(temp.GetDirectory() / "Target.txt", temp.GetDirectory() / "Assets" / "LinkedFile.txt");
+		result = Exporter::Export(*project, output, options);
+		REQUIRE_MESSAGE(result.Success, result.Error);
+		{
+			std::string archiveError;
+			const Ref<PackArchive> archive = PackArchive::Open(output / Project::ArchiveFileName, archiveError);
+			REQUIRE_MESSAGE(archive, archiveError);
+			CHECK(archive->Read(RequireEntry(*archive, "Assets/LinkedFile.txt"), archiveError) == Bytes("linked file"));
+		}
+		std::filesystem::remove(temp.GetDirectory() / "Assets" / "LinkedFile.txt", error);
 
 		// A name with a colon is a valid file name here but not an archive path.
 		temp.WriteFile("Assets/Bad:Name.txt", "colon");
