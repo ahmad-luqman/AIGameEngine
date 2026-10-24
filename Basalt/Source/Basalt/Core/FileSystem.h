@@ -56,7 +56,7 @@ namespace Basalt {
 		static std::filesystem::path MakeTemporaryPath(const std::filesystem::path& path);
 		// Renames source over target (retrying briefly on Windows, where a concurrent replace or a scanner holding the
 		// target fails a rename); on failure source is removed and outError says why.
-		static bool ReplaceFile(const std::filesystem::path& source, const std::filesystem::path& target, std::string& outError);
+		static bool RenameReplacing(const std::filesystem::path& source, const std::filesystem::path& target, std::string& outError);
 
 		// Also true for a mounted archive's files and the folders that hold them.
 		static bool Exists(const std::filesystem::path& path);

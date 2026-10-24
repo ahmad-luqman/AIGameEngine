@@ -242,7 +242,7 @@ namespace Basalt {
 			}
 		}
 
-		return ReplaceFile(tempPath, path, outError);
+		return RenameReplacing(tempPath, path, outError);
 	}
 
 	std::filesystem::path FileSystem::MakeTemporaryPath(const std::filesystem::path& path)
@@ -260,7 +260,7 @@ namespace Basalt {
 		return tempPath;
 	}
 
-	bool FileSystem::ReplaceFile(const std::filesystem::path& source, const std::filesystem::path& target, std::string& outError)
+	bool FileSystem::RenameReplacing(const std::filesystem::path& source, const std::filesystem::path& target, std::string& outError)
 	{
 		std::error_code error;
 		std::filesystem::rename(source, target, error);

@@ -467,6 +467,12 @@ TEST_SUITE("Archive")
 		temp.WriteFile("Assets/Scripts/Lib/Util.lua", "return { Triple = function(x) return 3 * x end }");
 		temp.WriteFile("Assets/Notes.txt", std::string(20000, 'n'));
 		temp.WriteFile("FakeRuntime", "binary");
+#if defined(__APPLE__)
+		// macOS exports bundle the Vulkan loader and MoltenVK, which the runtime here never loads: stand-ins do.
+		temp.WriteFile("FakeVulkanSDK/lib/libvulkan.1.dylib", "stand-in");
+		temp.WriteFile("FakeVulkanSDK/lib/libMoltenVK.dylib", "stand-in");
+		const BasaltTest::ScopedEnvVar sdk("VULKAN_SDK", (temp.GetDirectory() / "FakeVulkanSDK").string());
+#endif
 
 		std::string error;
 		{

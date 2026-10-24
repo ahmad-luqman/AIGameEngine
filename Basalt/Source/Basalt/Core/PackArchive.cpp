@@ -432,7 +432,7 @@ namespace Basalt {
 		stream.close();
 		if (stream.fail())
 			return fail("failed writing '" + FileSystem::PathToUtf8(temporary) + "' (disk full?)");
-		if (!FileSystem::ReplaceFile(temporary, file, outError))
+		if (!FileSystem::RenameReplacing(temporary, file, outError))
 			return false;
 		m_Statistics.ArchiveSize = offset + index.size();
 		return true;
