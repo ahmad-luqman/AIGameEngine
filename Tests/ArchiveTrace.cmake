@@ -1,0 +1,11 @@
+# TEMPORARY (PR #53): runs the archive tests under Windows full page heap so a heap overrun faults at the write.
+set(key "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\BasaltTraceCopy.exe")
+get_filename_component(dir "${TESTS}" DIRECTORY)
+file(COPY_FILE "${TESTS}" "${dir}/BasaltTraceCopy.exe")
+execute_process(COMMAND reg add "${key}" /v GlobalFlag /t REG_SZ /d 0x02000000 /f)
+execute_process(COMMAND reg add "${key}" /v PageHeapFlags /t REG_SZ /d 0x3 /f)
+execute_process(COMMAND "${dir}/BasaltTraceCopy.exe" -ts=Archive -s --reporters=console --no-intro=true RESULT_VARIABLE result)
+message("result: ${result}")
+if(NOT result EQUAL 0)
+	message(FATAL_ERROR "archive tests failed under page heap: ${result}")
+endif()
