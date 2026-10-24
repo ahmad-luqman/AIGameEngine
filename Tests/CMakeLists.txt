@@ -103,6 +103,7 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 	target_compile_definitions(BasaltPreviewRendererGPU PRIVATE BASALT_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Data" BASALT_PREVIEW_OUTPUT_DIR="${CMAKE_CURRENT_BINARY_DIR}/Previews")
 	target_compile_definitions(BasaltViewportGPU PRIVATE BASALT_ANIMATION_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Data/Animation")
 	basalt_add_gpu_test(FSR1GPU Rendering/FSR1GPU.cpp 60)
+	basalt_add_gpu_test(SSAOBlurGPU Rendering/SSAOBlurGPU.cpp 60)
 	basalt_add_gpu_test(PostProcessGPU Rendering/PostProcessGPU.cpp 120)
 	target_compile_definitions(BasaltPostProcessGPU PRIVATE BASALT_POSTPROCESS_OUTPUT_DIR="${CMAKE_CURRENT_BINARY_DIR}/PostProcess")
 	basalt_add_gpu_test(TemporalAAGPU Rendering/TemporalAAGPU.cpp 120)
@@ -124,20 +125,21 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 	set(basaltGoldenOutput "${CMAKE_CURRENT_BINARY_DIR}/Golden")
 	file(MAKE_DIRECTORY "${basaltGoldenOutput}")
 
-	set(basaltGpuTests TemporalAAGPU PostProcessGPU ViewportGPU FSR1GPU LightClustersGPU AnimationGPU PreviewRendererGPU)
+	set(basaltGpuTests TemporalAAGPU PostProcessGPU ViewportGPU FSR1GPU SSAOBlurGPU LightClustersGPU AnimationGPU PreviewRendererGPU)
 	# "Scaled" is the lit image rendered at half resolution and upsampled by the tonemap pass (render scale).
 	# "Dynamic" reaches the same image through dynamic resolution: an unreachable frame-rate target drops the
 	# scale to its 0.5 minimum (once GPU timer results arrive), and the scene renders into the top-left of
 	# full-size targets. "ScaledSSAO"/"DynamicSSAO" are the same pair for the SSAO view, which isolates the
-	# blur's edge handling. Each Dynamic image must equal its Scaled image exactly (compared below; exact
-	# because 0.5 of 1280x720 makes every UV scale a power of two, so the taps land on the same texels).
-	# Dynamic is also compared with the current driver's Scaled golden within image.compare's default
-	# tolerance; the SSAO pair has no golden.
+	# blur's edge handling, and "ScaledSSAO60"/"DynamicSSAO60" repeat it at a non-dyadic 0.6. Each Dynamic image must
+	# equal its Scaled image exactly (compared below). The SSAO passes address the render area by texel, so their pairs
+	# are exact at any scale; the lit pair stays at 0.5, where every UV scale is a power of two, because the lit image's
+	# filtered taps are exact only there. Dynamic is also compared with the current driver's Scaled golden within
+	# image.compare's default tolerance; the SSAO pairs have no golden.
 	set(dynamicArgs --dynamic-resolution 1000000 --min-render-scale 0.5)
 	# Every driver these tests run on (lavapipe in CI, MoltenVK and desktop GPUs locally) has timer queries,
 	# so missing GPU timings are a profiler bug. The prefixes are logged by RuntimeLayer::CheckRendererResults.
 	set(noGpuTimingsRegex "(scene|blit|ImGui) GPU time (unavailable|not available yet|stalled)")
-	foreach(view Lit SSAO Normals Depth Scaled Dynamic ScaledSSAO DynamicSSAO)
+	foreach(view Lit SSAO Normals Depth Scaled Dynamic ScaledSSAO DynamicSSAO ScaledSSAO60 DynamicSSAO60)
 		set(debugView ${view})
 		set(renderTest FeatureTestRender_${view})
 		set(referenceView ${view})
@@ -160,6 +162,14 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 			set(debugView SSAO)
 			set(referenceView "")
 			set(extraArgs ${dynamicArgs})
+		elseif(view STREQUAL "ScaledSSAO60")
+			set(debugView SSAO)
+			set(referenceView "")
+			set(extraArgs --render-scale 0.6)
+		elseif(view STREQUAL "DynamicSSAO60")
+			set(debugView SSAO)
+			set(referenceView "")
+			set(extraArgs --dynamic-resolution 1000000 --min-render-scale 0.6)
 		endif()
 		add_test(NAME ${renderTest}
 			COMMAND BasaltRuntime ${basaltRenderArgs} --offscreen --debug-view ${debugView} ${extraArgs} --screenshot "${basaltGoldenOutput}/FeatureTest_${view}.png")
@@ -177,7 +187,7 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 	# Rendering into the top-left of larger targets must give exactly the image of rendering at that size;
 	# a tap beyond the render area (stale texels) would change a few edge pixels. Driver-independent: both
 	# images come from the same machine.
-	foreach(pair "Dynamic;Scaled" "DynamicSSAO;ScaledSSAO")
+	foreach(pair "Dynamic;Scaled" "DynamicSSAO;ScaledSSAO" "DynamicSSAO60;ScaledSSAO60")
 		list(GET pair 0 dynamicView)
 		list(GET pair 1 scaledView)
 		add_test(NAME FeatureTest${dynamicView}MatchesScaled
@@ -187,7 +197,7 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 	endforeach()
 	# A dynamic run must actually have lowered the scale (the runtime also exits 6 when it could not run).
 	# "1280x720" is the full size from basaltRenderArgs.
-	set_tests_properties(FeatureTestRender_Dynamic FeatureTestRender_DynamicSSAO PROPERTIES FAIL_REGULAR_EXPRESSION "${noGpuTimingsRegex};rendered at 1280x720")
+	set_tests_properties(FeatureTestRender_Dynamic FeatureTestRender_DynamicSSAO FeatureTestRender_DynamicSSAO60 PROPERTIES FAIL_REGULAR_EXPRESSION "${noGpuTimingsRegex};rendered at 1280x720")
 	# And when it cannot run (here: a minimum equal to the render scale leaves nothing to adjust), the run says
 	# why and fails (exit code 6), so a test cannot pass without dynamic resolution having worked.
 	add_test(NAME FeatureTestRender_DynamicInactive

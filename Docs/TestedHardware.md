@@ -56,6 +56,9 @@ Run all steps on each GPU. Steps 1–3 are automated; step 4 needs a person at t
   to Vulkan, so their results do not count; boot Linux natively (USB stick or dual boot).
 - **Laptops with two GPUs (Intel + NVIDIA/AMD):** run the test once per GPU with `--gpu intel` and
   `--gpu nvidia`. Windows' "high performance / power saving" setting does not choose the Vulkan device.
+  `ctest -L gpu` always picks the discrete GPU (its unit-test executables take no `--gpu`), so to run the suite
+  on the other one, hide the rest from the Vulkan loader: `VK_LOADER_DRIVERS_SELECT=*igvk*` keeps only Intel's
+  Windows driver (its manifest is `igvk64.json`; NVIDIA's is `nv-vk64.json`).
 - **Cloud GPUs (AWS):** `g4ad` instances have an AMD Radeon Pro V520 (Linux or Windows), `g5`/`g6` newer
   NVIDIA GPUs. `--offscreen` needs no display, so steps 1–3 run over SSH; step 4 needs a remote desktop
   with GPU access (Amazon DCV, not plain RDP). Use AWS's GRID driver on NVIDIA instances (the default
@@ -72,6 +75,6 @@ Run all steps on each GPU. Steps 1–3 are automated; step 4 needs a person at t
 | 2026-10-07 | lavapipe (CPU) | Mesa (Ubuntu 24.04) | Ubuntu 24.04, CI | 0 | match (max 0.04% px) | n/a | Every push, `gpu-lavapipe` job |
 | | NVIDIA GeForce RTX 2080 Ti | | Windows | | | | |
 | | NVIDIA GeForce RTX 2080 Ti | | Linux (native) | | | | |
-| 2026-10-24 | NVIDIA GeForce RTX 4060 Laptop GPU | 617.42 (32.0.16.1742), Vulkan 1.4.351 | Windows 11 Pro (26300) | 0 | match (max 0.108% px) | not recorded | Optimus: `--gpu nvidia`; Lit/SSAO/Scaled differ only on checker-texture texel edges. `FeatureTestDynamic*MatchesScaled` fails: SSAO blur taps land on texel boundaries (see ROADMAP) |
-| 2026-10-24 | Intel UHD Graphics 770 | 32.0.101.6790, Vulkan 1.4.311 | Windows 11 Pro (26300) | 0 | match (max 0.07% px) | not recorded | `--gpu intel`, same laptop; dynamic vs. scaled differ in 2.2% (lit) / 4.9% (SSAO) of pixels, same cause |
+| 2026-10-24 | NVIDIA GeForce RTX 4060 Laptop GPU | 617.42 (32.0.16.1742), Vulkan 1.4.351 | Windows 11 Pro (26300) | 0 | match (max 0.108% px, Scaled) | not recorded | Optimus: `--gpu nvidia`; differences only on checker-texture texel edges. All GPU tests pass (dynamic-vs-scaled mismatch found here, fixed in #55) |
+| 2026-10-24 | Intel UHD Graphics 770 | 32.0.101.6790, Vulkan 1.4.311 | Windows 11 Pro (26300) | 0 | match (max 0.04% px, Lit) | not recorded | `--gpu intel`, same laptop; all GPU tests pass with `VK_LOADER_DRIVERS_SELECT=*igvk*` |
 | | AMD Radeon Pro V520 (AWS g4ad) | | Linux | | | | |
