@@ -14,7 +14,6 @@
 #include <chrono>
 #include <optional>
 #include <system_error>
-#include <thread>
 
 namespace Basalt {
 
@@ -64,24 +63,6 @@ namespace Basalt {
 			return executableName + ".exe";
 #else
 			return executableName;
-#endif
-		}
-
-		// Copies source over destination. On Windows an executable that just exited can stay locked for a moment
-		// (antivirus scanners open what they saw run), which makes exporting right after a smoke test fail with a
-		// sharing violation; those are retried for a few seconds.
-		void CopyReplacing(const std::filesystem::path& source, const std::filesystem::path& destination, std::error_code& error)
-		{
-			std::filesystem::copy_file(source, destination, std::filesystem::copy_options::overwrite_existing, error);
-#if defined(BS_PLATFORM_WINDOWS)
-			constexpr int SharingViolation = 32; // ERROR_SHARING_VIOLATION
-			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-			while (error && error.category() == std::system_category() && error.value() == SharingViolation && std::chrono::steady_clock::now() < deadline)
-			{
-				std::this_thread::sleep_for(std::chrono::milliseconds(50));
-				error.clear();
-				std::filesystem::copy_file(source, destination, std::filesystem::copy_options::overwrite_existing, error);
-			}
 #endif
 		}
 
@@ -596,8 +577,9 @@ namespace Basalt {
 
 		std::filesystem::path executable = executableDirectory / ExecutableFileName(executableName);
 		std::filesystem::create_directories(executableDirectory, error);
+		// The previous export's executable may still be locked by a smoke test that just ran it.
 		if (!error)
-			CopyReplacing(runtime, executable, error);
+			FileSystem::CopyFileReplacing(runtime, executable, error);
 		if (!error)
 			std::filesystem::permissions(executable, std::filesystem::perms::owner_exec | std::filesystem::perms::group_exec | std::filesystem::perms::others_exec, std::filesystem::perm_options::add, error);
 		if (error)

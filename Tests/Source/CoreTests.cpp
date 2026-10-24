@@ -32,7 +32,11 @@
 #include <unordered_set>
 #include <vector>
 
-#if !defined(_WIN32)
+#if defined(_WIN32)
+	#include <fcntl.h>
+	#include <io.h>
+	#include <share.h>
+#else
 	#include <unistd.h>
 #endif
 
@@ -1088,6 +1092,44 @@ TEST_SUITE("Core")
 
 		CHECK(std::filesystem::exists(FileSystem::GetExecutableDirectory()));
 		std::filesystem::remove_all(directory);
+	}
+
+	TEST_CASE("FileSystem copies over a target, retrying while Windows reports it locked")
+	{
+		BasaltTest::TempDirectory directory("FileSystemCopyReplacing");
+		const auto source = directory.GetPath() / "new.bin";
+		const auto target = directory.GetPath() / "old.bin";
+		REQUIRE(FileSystem::WriteTextFile(source, "new"));
+		REQUIRE(FileSystem::WriteTextFile(target, "old"));
+		uint32_t waits = 0;
+		std::error_code error;
+		CHECK(FileSystem::CopyFileReplacing(source, target, error, [&] { waits++; }));
+		CHECK(waits == 0);
+		CHECK(FileSystem::ReadTextFile(target).value() == "new");
+		CHECK_FALSE(FileSystem::CopyFileReplacing(directory.GetPath() / "missing.bin", target, error, [&] { waits++; }));
+		CHECK(waits == 0); // only a lock is retried
+
+#if defined(_WIN32)
+		// An exported game that just exited stays locked for a moment. The lock is released from the wait, so the first
+		// attempt is certain to meet it and the second to succeed, without depending on timing.
+		REQUIRE(FileSystem::WriteTextFile(target, "old"));
+		int locked = -1;
+		REQUIRE(_wsopen_s(&locked, target.wstring().c_str(), _O_RDONLY | _O_BINARY, _SH_DENYRW, 0) == 0);
+		CHECK(FileSystem::CopyFileReplacing(source, target, error, [&] {
+			if (waits++ == 0)
+				_close(locked);
+		}));
+		CHECK(waits == 1);
+		CHECK(FileSystem::ReadTextFile(target).value() == "new");
+
+		// A lock that outlasts every attempt fails with the sharing violation.
+		waits = 0;
+		REQUIRE(_wsopen_s(&locked, target.wstring().c_str(), _O_RDONLY | _O_BINARY, _SH_DENYRW, 0) == 0);
+		CHECK_FALSE(FileSystem::CopyFileReplacing(source, target, error, [&] { waits++; }, 3));
+		CHECK(waits == 2);
+		CHECK(error.value() == 32); // ERROR_SHARING_VIOLATION
+		_close(locked);
+#endif
 	}
 
 	TEST_CASE("FileSystem reads only regular files")
