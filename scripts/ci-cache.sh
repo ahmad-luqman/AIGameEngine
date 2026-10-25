@@ -51,8 +51,10 @@ check:2)
 	fi
 	echo "$2 downloaded no dependency sources"
 	if [[ -n "${CMAKE_CXX_COMPILER_LAUNCHER:-}" ]]; then
-		# CMakeCache.txt has CRLF line endings on Windows.
-		if ! tr -d '\r' < "$2/CMakeCache.txt" | grep -q -x -F "CMAKE_CXX_COMPILER_LAUNCHER:STRING=$CMAKE_CXX_COMPILER_LAUNCHER"; then
+		# CMakeCache.txt has CRLF line endings on Windows. No pipe into grep -q: it stops reading at the match, and
+		# under pipefail the writer's SIGPIPE would fail the check.
+		line="CMAKE_CXX_COMPILER_LAUNCHER:STRING=$CMAKE_CXX_COMPILER_LAUNCHER"
+		if ! grep -x -F -e "$line" -e "$line"$'\r' "$2/CMakeCache.txt" > /dev/null; then
 			echo "::error::$2 does not compile through $CMAKE_CXX_COMPILER_LAUNCHER" >&2
 			exit 1
 		fi
