@@ -24,8 +24,10 @@ if(BASALT_CHECK_FORMAT AND BASALT_CLANG_FORMAT)
 	add_test(NAME CheckFormatBatches COMMAND "${CMAKE_COMMAND}" -DCLANG_FORMAT=${BASALT_CLANG_FORMAT} -DREPO_DIR=${PROJECT_SOURCE_DIR} "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/CheckFormatBatches" -P "${CMAKE_CURRENT_SOURCE_DIR}/Format/CheckFormatBatches.cmake")
 endif()
 
-# cmake/DependencySources.cmake (CI's dependency-source cache) and scripts/ci-cache.sh check.
-add_test(NAME DependencySources COMMAND "${CMAKE_COMMAND}" -DREPO_DIR=${PROJECT_SOURCE_DIR} "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/DependencySources" -P "${CMAKE_CURRENT_SOURCE_DIR}/Dependencies/CheckDependencySources.cmake")
+# CI's dependency-source cache (cmake/DependencySources.cmake, scripts/ci-fetch-deps.sh) and scripts/ci-check-caches.sh.
+# Its small test projects use this build's generator.
+add_test(NAME DependencySources COMMAND "${CMAKE_COMMAND}" -DREPO_DIR=${PROJECT_SOURCE_DIR} "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/DependencySources"
+	"-DGENERATOR=${CMAKE_GENERATOR}" "-DMAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}" -P "${CMAKE_CURRENT_SOURCE_DIR}/Dependencies/CheckDependencySources.cmake")
 set_tests_properties(DependencySources PROPERTIES LABELS unit TIMEOUT 60)
 
 # scripts/fuzz.sh's argument handling (the nightly fuzz workflow's target list and input checks). Bash is not part of

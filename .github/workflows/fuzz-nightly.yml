@@ -13,11 +13,13 @@ on:
         default: "1200"
 
 # The fuzz build compiles through ccache, restoring (never saving) the CI fuzz job's cache, and takes the dependency
-# sources from the cache that every workflow shares (scripts/ci-cache.sh, cmake/DependencySources.cmake). Without
-# libdbus-1-dev it cannot fetch every dependency, so it only restores that cache; on a miss it downloads as usual.
+# sources from main's entry of CI's dependency-source cache (scripts/ci-fetch-deps.sh, cmake/DependencySources.cmake).
+# Without libdbus-1-dev a fetch would leave out nativefiledialog, so the jobs only restore that cache; on a miss their
+# configure downloads as usual.
 env:
   CMAKE_C_COMPILER_LAUNCHER: ccache
   CMAKE_CXX_COMPILER_LAUNCHER: ccache
+  CCACHE_COMPILERCHECK: content
   BASALT_DEPS_SOURCE_DIR: ${{ github.workspace }}/_deps
 
 jobs:
@@ -55,7 +57,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: _deps
-          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'scripts/ci-cache.sh') }}
+          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'scripts/ci-fetch-deps.sh') }}
 
       # One target per job: saving from every job would store a near-identical copy of the CI fuzz cache per target.
       - name: Compiler cache
@@ -63,6 +65,7 @@ jobs:
         with:
           key: fuzz
           max-size: 800M
+          evict-old-files: 7d
           save: false
 
       # Restored and saved separately so the corpus grown before a crash or a Fuzz step timeout is kept too
