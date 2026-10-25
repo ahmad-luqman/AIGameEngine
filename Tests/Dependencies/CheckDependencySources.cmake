@@ -8,6 +8,10 @@
 # Usage: cmake -DREPO_DIR=<repo root> -DWORK_DIR=<scratch dir> -DGENERATOR=<generator> [-DMAKE_PROGRAM=<path>]
 #        -P CheckDependencySources.cmake
 
+# Script mode starts with old policies on CMake 3.x; without this, if(stamp STREQUAL "pins") would read "pins" as the
+# variable of that name (CMP0054).
+cmake_minimum_required(VERSION 3.25)
+
 set(problems "")
 file(REMOVE_RECURSE "${WORK_DIR}")
 set(project "${WORK_DIR}/Project")
@@ -140,7 +144,7 @@ configure(BackslashTree "${backslashed}")
 expect_overrides(Backslashes "${WORK_DIR}/Stamped" GLM VULKANHEADERS)
 
 # A hand-set override wins, and survives the next configure.
-configure(HandSetTree "${WORK_DIR}/Stamped" "-DFETCHCONTENT_SOURCE_DIR_GLM=${WORK_DIR}/Mine")
+configure(HandSetTree "${WORK_DIR}/Stamped" "-DFETCHCONTENT_SOURCE_DIR_GLM:PATH=${WORK_DIR}/Mine")
 expect_overrides(HandSet "${WORK_DIR}/Stamped" "GLM=${WORK_DIR}/Mine" VULKANHEADERS)
 configure(HandSetTree unset)
 expect_overrides(HandSetReconfigured "" "GLM=${WORK_DIR}/Mine")
