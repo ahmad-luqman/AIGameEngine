@@ -92,9 +92,11 @@ function(expect_overrides label sourceDir)
 	set(problems "${problems}" PARENT_SCOPE)
 endfunction()
 
-# Records a problem unless the last configure's output matches regex.
+# Records a problem unless the last configure's output matches regex. CMake wraps warnings to fit its line width (long
+# Windows paths push words onto the next line), so whitespace runs are compared as single spaces.
 function(expect_output label regex)
-	if(NOT lastOutput MATCHES "${regex}")
+	string(REGEX REPLACE "[ \t\r\n]+" " " flatOutput "${lastOutput}")
+	if(NOT flatOutput MATCHES "${regex}")
 		set(problems "${problems}\n${label}: output does not match '${regex}':\n${lastOutput}" PARENT_SCOPE)
 	endif()
 endfunction()
