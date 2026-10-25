@@ -367,18 +367,18 @@ TEST_CASE("TAA resolve blends history, clips color, rejects depth and clamps to 
 	REQUIRE(taa.Prepare(device, color, depth, motion, shader, linear, point));
 	const auto commands = device->createCommandList();
 	REQUIRE(commands);
-	std::vector<uint16_t> colors(static_cast<size_t>(8) * 8 * 4);
-	std::vector<float> depths(static_cast<size_t>(8) * 8, .5f);
-	std::vector<glm::vec4> motions(static_cast<size_t>(8) * 8);
-	// Index of channel c of texel (x, y) in the 8x8 half-float RGBA color target.
-	auto channel = [](size_t x, size_t y, size_t c) { return (y * 8 + x) * 4 + c; };
-	for (uint32_t y = 0; y < 8; y++)
-		for (uint32_t x = 0; x < 8; x++)
+	constexpr size_t Size = 8;
+	std::vector<uint16_t> colors(Size * Size * 4);
+	std::vector<float> depths(Size * Size, .5f);
+	std::vector<glm::vec4> motions(Size * Size);
+	// Index of channel c of texel (x, y) in the half-float RGBA color target.
+	auto channel = [](size_t x, size_t y, size_t c) { return (y * Size + x) * 4 + c; };
+	for (uint32_t y = 0; y < Size; y++)
+		for (uint32_t x = 0; x < Size; x++)
 		{
-			const size_t pixel = y * 8 + x;
 			for (size_t c = 0; c < 4; c++)
-				colors[pixel * 4 + c] = glm::packHalf1x16(x < 4 && y < 4 ? .8f : 100.0f);
-			motions[pixel] = glm::vec4((static_cast<float>(x) + .5f) / 4, (static_cast<float>(y) + .5f) / 4, .5f, 1);
+				colors[channel(x, y, c)] = glm::packHalf1x16(x < 4 && y < 4 ? .8f : 100.0f);
+			motions[y * Size + x] = glm::vec4((static_cast<float>(x) + .5f) / 4, (static_cast<float>(y) + .5f) / 4, .5f, 1);
 		}
 	glm::vec2 jitterDelta(0);
 	glm::mat4 skyReprojection(1);
@@ -408,7 +408,7 @@ TEST_CASE("TAA resolve blends history, clips color, rejects depth and clamps to 
 		std::fill(depths.begin(), depths.end(), skyDisocclusion ? .99999f : 1.0f);
 	auto resolve = [&](bool valid) {
 		commands->open();
-		commands->writeTexture(color, 0, 0, colors.data(), static_cast<size_t>(8) * 8);
+		commands->writeTexture(color, 0, 0, colors.data(), Size * 4 * sizeof(uint16_t));
 		commands->writeTexture(depth, 0, 0, depths.data(), 8 * sizeof(float));
 		commands->writeTexture(motion, 0, 0, motions.data(), 8 * sizeof(glm::vec4));
 		taa.Render(commands, area, valid, skyReprojection, jitterDelta);

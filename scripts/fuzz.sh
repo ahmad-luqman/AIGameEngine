@@ -67,16 +67,18 @@ cmake -S . -B "$buildDir" -G Ninja -DCMAKE_BUILD_TYPE=Debug "${compiler[@]}" \
 	-DBASALT_BUILD_EDITOR=OFF -DBASALT_BUILD_RUNTIME=OFF -DBASALT_BUILD_TESTS=OFF > /dev/null
 cmake --build "$buildDir" --target "${selected[@]}"
 
-# Several targets share the machine's memory (16 GB on CI's 4-core runners), so each gets a smaller limit. An input that
-# makes a target exceed it is reported as a finding (out-of-memory), and malloc_limit_mb follows it.
+# Several targets share the machine's memory, so each gets a smaller limit, sized for one target per core on CI's
+# 4-core, 16 GB runners (peak RSS there is about 250-650 MB). An input that makes a target exceed it is an out-of-memory
+# finding; libFuzzer's -malloc_limit_mb defaults to the same limit, so one oversized allocation is a finding too.
 rssLimit=4096
 [[ $jobs -gt 1 ]] && rssLimit=3072
 
-# Runs one target and prints its summary in one write, so targets running side by side never interleave their lines.
-# Returns non-zero for a finding.
+# Runs one target (arguments: target, build dir, seconds, RSS limit), writes its summary to logs/<target>.summary and
+# prints one status line. Returns 1 for a finding: never more, since xargs stops starting targets after an exit of 255.
 run_target()
 {
-	local target="$1"
+	set -uo pipefail
+	local target="$1" buildDir="$2" seconds="$3" rssLimit="$4"
 	local corpus="$buildDir/corpus/$target"
 	local crashes="$buildDir/crashes/$target"
 	local log="$buildDir/logs/$target.log"
@@ -88,27 +90,53 @@ run_target()
 	local result=0
 	"$buildDir/bin/$target" "$corpus" ${seeds[@]+"${seeds[@]}"} -max_total_time="$seconds" -timeout=10 \
 		-rss_limit_mb="$rssLimit" -artifact_prefix="$crashes/" -print_final_stats=1 > "$log" 2>&1 || result=$?
-	local summary
-	summary="=== $target (${seconds}s)"$'\n'"$(grep -E "^(#[0-9]+ +DONE|stat::number_of_executed_units|stat::peak_rss_mb|==[0-9]+== ?ERROR|SUMMARY|artifact_prefix|Test unit written)|runtime error|^ +#[0-9] " "$log")"
+	local summary="=== $target (${seconds}s)"
+	summary+=$'\n'"$(grep -E "^(#[0-9]+[[:space:]]+DONE|stat::number_of_executed_units|stat::peak_rss_mb|==[0-9]+== ?ERROR|SUMMARY|artifact_prefix|Test unit written)|runtime error|^ +#[0-9] " "$log")"
 	# libFuzzer exits non-zero for every finding and for failures that write no input (a target that cannot start, a
 	# missing corpus directory). The crash directory also counts, so inputs left by an earlier run keep failing until
-	# they are turned into tests and removed.
-	if [[ $result -ne 0 ]] || compgen -G "$crashes/*" > /dev/null; then
-		summary+=$'\n'"$target: exited with $result; crash inputs (if any) in $crashes, full log in $log"
+	# they are turned into tests and removed. A clean exit without libFuzzer's final DONE line did not fuzz.
+	local problem=""
+	if [[ $result -gt 128 ]]; then
+		problem="killed by signal $((result - 128))"
+		[[ $result -eq 137 ]] && problem+=" (SIGKILL, likely the kernel's out-of-memory killer)"
+	elif [[ $result -ne 0 ]]; then
+		problem="exited with $result"
+	elif compgen -G "$crashes/*" > /dev/null; then
+		problem="left crash inputs"
+	elif ! grep -q -E "^#[0-9]+[[:space:]]+DONE" "$log"; then
+		problem="finished without libFuzzer's DONE line"
+	fi
+	if [[ -n "$problem" ]]; then
+		summary+=$'\n'"$target: $problem; crash inputs (if any) in $crashes, full log in $log"
 		[[ $result -ne 0 ]] && summary+=$'\n'"$(tail -n 20 "$log")"
-		printf '%s\n' "$summary" >&2
+	fi
+	printf '%s\n' "$summary" > "$buildDir/logs/$target.summary"
+	if [[ -n "$problem" ]]; then
+		echo "$target: FAILED ($problem)"
 		return 1
 	fi
-	printf '%s\n' "$summary"
+	echo "$target: passed"
 }
 
 export ASAN_OPTIONS="detect_leaks=0:allocator_may_return_null=1"
 export UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=1"
-export buildDir seconds rssLimit
 export -f run_target
+for target in "${selected[@]}"; do
+	rm -f "$buildDir/logs/$target.summary"
+done
 echo "Fuzzing ${#selected[@]} targets for ${seconds}s each, $jobs at a time"
-# xargs (unlike bash 4.3's wait -n) also works with macOS's bash 3.2; it exits non-zero when any target failed. The
-# targets run in this same bash ($BASH), which reads the exported function back.
+# xargs -P because bash 3.2 (macOS's) has no wait -n. It exits non-zero when any target failed. Targets run in this same
+# bash ($BASH), which reads the exported function back. Concurrent output would interleave, so each target prints one
+# line as it finishes and the summaries follow in target order.
 status=0
-printf '%s\n' "${selected[@]}" | xargs -P "$jobs" -I {} "$BASH" -c 'run_target "$1"' run_target {} || status=1
+printf '%s\n' "${selected[@]}" | xargs -P "$jobs" -I {} "$BASH" -c 'run_target "$@"' run_target {} "$buildDir" "$seconds" \
+	"$rssLimit" || status=1
+for target in "${selected[@]}"; do
+	if [[ -f "$buildDir/logs/$target.summary" ]]; then
+		cat "$buildDir/logs/$target.summary"
+	else
+		echo "=== $target did not run" >&2
+		status=1
+	fi
+done
 exit $status

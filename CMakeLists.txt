@@ -57,8 +57,3 @@ endif()
 if(BASALT_FUZZ)
 	add_subdirectory(Tests/Fuzz)
 endif()
-
-# The targets with Basalt's warnings (cmake/CompilerWarnings.cmake), whose sources scripts/clang_tidy.py checks.
-get_property(basaltWarningTargets GLOBAL PROPERTY BASALT_WARNING_TARGETS)
-list(JOIN basaltWarningTargets "\n" basaltWarningTargets)
-file(WRITE "${CMAKE_BINARY_DIR}/ClangTidyTargets.txt" "${basaltWarningTargets}\n")

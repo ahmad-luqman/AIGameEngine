@@ -14,7 +14,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 		return 0;
 	// Parse bounds a compressed entry's size by its stored bytes (128 KiB per 3 bytes), so a fuzz input of a few KiB can
 	// still claim hundreds of megabytes, all legitimately allocated; reading those tests nothing more and only slows the
-	// run, so the fuzzer skips entries past 256 MiB (well within the 4 GiB RSS limit scripts/fuzz.sh sets).
+	// run, so the fuzzer skips entries past 256 MiB (well within the 3-4 GiB RSS limit scripts/fuzz.sh sets).
 	constexpr uint64_t MaxFuzzEntrySize = uint64_t{ 256 } << 20;
 	for (const Basalt::PackArchive::Entry& entry : archive->GetEntries())
 	{

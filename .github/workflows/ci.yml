@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: true
 
 # Every build, including those in scripts/coverage.sh and scripts/fuzz.sh, compiles through ccache (build-and-test uses
-# sccache on Windows) and takes the dependency sources from a cache shared by every job on an OS, and by the other
+# sccache on Windows; the clang-tidy jobs compile only shaders and use none) and takes the dependency sources from a cache shared by every job on an OS, and by the other
 # workflows through main's entries (scripts/ci-fetch-deps.sh, cmake/DependencySources.cmake). A cache miss fetches them
 # into the same directory first, so cache hits and misses compile the same paths. The action sets ccache's
 # compiler_check to content only on macOS and Windows.
@@ -212,11 +212,10 @@ jobs:
       - name: Test
         run: ctest --test-dir build --output-on-failure -LE "gpu|format"
 
-  # clang-tidy over the sources of every Basalt target (tests and GPU tests included; third-party code never), split over
-  # three jobs by scripts/clang_tidy.py. Nothing is compiled except the shaders the generated EmbeddedShaders.cpp
-  # includes, so these jobs need no compiler cache. Any finding fails the job (.clang-tidy).
+  # clang-tidy over the sources of every Basalt target (engine, apps, tests, GPU tests, benchmark and fuzz targets;
+  # third-party code never), split over the matrix's jobs by scripts/clang_tidy.py. Any finding fails the job (.clang-tidy).
   clang-tidy:
-    name: ubuntu-24.04 / clang-tidy (${{ matrix.shard }}/3)
+    name: ubuntu-24.04 / clang-tidy (${{ matrix.shard }}/${{ strategy.job-total }})
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     strategy:
@@ -255,21 +254,24 @@ jobs:
           path: _deps
           key: ${{ steps.deps.outputs.cache-primary-key }}
 
-      # Clang's compile commands, so clang-tidy parses each file exactly as the Clang builds compile it.
+      # Clang's compile commands (clang-tidy does not know GCC-only flags). The GPU tests and fuzz targets add their sources.
       - name: Configure
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
-            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DBASALT_GPU_TESTS=ON -DBASALT_CHECK_FORMAT=OFF
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DBASALT_GPU_TESTS=ON -DBASALT_FUZZ=ON \
+            -DBASALT_CHECK_FORMAT=OFF
 
       - name: Check that the build uses the caches
         shell: bash
         run: scripts/ci-check-caches.sh build
 
+      # The only generated files Basalt's sources include: the SPIR-V blobs of the generated EmbeddedShaders.cpp. A source
+      # that includes another build-time header fails with a missing include until its target is built here too.
       - name: Compile shaders
         run: cmake --build build --target BasaltShaders
 
       - name: clang-tidy
-        run: scripts/clang_tidy.py -p build --shard ${{ matrix.shard }}/3 -j "$(nproc)"
+        run: scripts/clang_tidy.py -p build --shard ${{ matrix.shard }}/${{ strategy.job-total }} -j "$(nproc)"
 
   # Source-based coverage of the headless tests. Informational only: the summary is shown on the run
   # page and the HTML report is uploaded as an artifact.

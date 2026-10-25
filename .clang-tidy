@@ -29,4 +29,4 @@ Checks: >
   -performance-no-int-to-ptr,
   -performance-avoid-endl
 WarningsAsErrors: '*'
-HeaderFilterRegex: '.*/(Basalt|Basalt-Editor|Basalt-Runtime|Basalt-CLI|Tests)/Source/.*'
+HeaderFilterRegex: '.*/((Basalt|Basalt-Editor|Basalt-Runtime|Basalt-CLI)/Source|Tests/(Source|Rendering|Benchmarks|Fuzz))/.*'

@@ -203,22 +203,29 @@ Record per session: PR number, measured job times after merge, anything that dev
     compiler detection, about 30 per configure), which compile in freshly named `CMakeScratch/TryCompile-*` directories
     and so never hit. On the last runs of #56 every build translation unit hit (e.g. clang-tidy: 526 calls = 496 build
     units + 30 probes, 28 misses; ubuntu/Debug: 527 = 497 + 30, 30 misses). Nothing to fix.
-  - Shards are not split by module regex. `basalt_set_warnings` records each target it touches and the configure writes
-    them to `<build>/ClangTidyTargets.txt`; `scripts/clang_tidy.py` takes those targets' entries from
-    `compile_commands.json` (by object path, `CMakeFiles/<target>.dir/`) and deals the sorted files round-robin over the
-    shards. That is exactly the set `BASALT_CLANG_TIDY=ON` checks, and every file is in exactly one shard by
-    construction, so the checker step became the `ClangTidyScript` ctest (selection, shard coverage, argument checks, and
-    a stand-in clang-tidy for failures). No `run-clang-tidy`: the script prints each failing file's output in one block.
+  - Shards are not split by module regex. `basalt_set_warnings` records each target it touches and a deferred call at
+    the end of the configure writes them to `<build>/ClangTidyTargets.txt`; `scripts/clang_tidy.py` takes those
+    targets' entries from `compile_commands.json` (by object path, `CMakeFiles/<target>.dir/`) and deals the sorted
+    files round-robin over the shards. That is exactly the set `BASALT_CLANG_TIDY=ON` checks, and every file is in
+    exactly one shard by construction, so the checker step became the `ClangTidyScript` ctest (selection against every
+    compiled Basalt source, shard coverage, argument checks, and a stand-in clang-tidy for findings, crashes and files
+    that were never run). The script also fails a listed target without compile commands, and a finding that exits 0
+    (a lost `WarningsAsErrors`). No `run-clang-tidy`: the script prints each failing file's output in one block. The
+    shard count is the matrix size (`strategy.job-total`).
   - Test sources stay checked (the user's open question; CI has caught real findings in `Tests/Source`). The tidy
-    configure also enables `BASALT_GPU_TESTS`, so the GPU test sources are checked for the first time: their implicit
-    widening and integer division findings are fixed, and `Tests/Rendering/.clang-tidy` turns off
-    `bugprone-unchecked-optional-access` as `Tests/Source/.clang-tidy` does (doctest's `REQUIRE` ends a test, which the
-    check cannot see; clang-tidy 18 with libstdc++ flagged more of these than Homebrew's 23 locally).
+    configure also enables `BASALT_GPU_TESTS` and `BASALT_FUZZ`, so the GPU test and fuzz target sources are checked
+    for the first time, and the header filter now covers `Tests/Rendering`, `Tests/Benchmarks` and `Tests/Fuzz`.
+    Their findings (implicit widening, integer division, an intended empty `catch`) are fixed, and
+    `Tests/Rendering/.clang-tidy` turns off `bugprone-unchecked-optional-access` as `Tests/Source/.clang-tidy` does
+    (doctest's `REQUIRE` ends a test, which the check cannot see; clang-tidy 18 with libstdc++ flagged more of these
+    than Homebrew's 23 locally).
   - Shard check (run 40212392455): a planted `modernize-use-nullptr` in `Tests/Source/SceneTests.cpp` and
     `Core/Log.cpp` failed exactly shards 1 and 3; the commit was dropped.
   - The tidy jobs compile nothing but the shaders, so they have no compiler cache (launcher variables cleared for the job).
-  - Fuzzing: `FUZZ_JOBS` (CI: `nproc`, 4) runs targets through `xargs -P`, which macOS's bash 3.2 supports (`wait -n`
-    is bash 4.3). Each target's summary is printed in one write when it finishes, and now includes `stat::peak_rss_mb`.
-    Concurrent targets get `-rss_limit_mb=3072` instead of 4096 (16 GB runners); one at a time (the nightly) keeps 4096.
-    Pushes keep 60 s per target.
-
+  - Fuzzing: `FUZZ_JOBS` (CI: `nproc`, 4) runs targets through `xargs -P`, since `wait -n` needs bash 4.3 and macOS
+    ships 3.2. Concurrent output interleaves, so each target prints one status line as it finishes and the summaries
+    follow in target order. Summaries now include `stat::peak_rss_mb` (250-650 MB on CI) and the `DONE` line, which the
+    old pattern never matched (libFuzzer writes a tab there); a clean exit without it, a kill by a signal (named, with
+    SIGKILL pointing at the OOM killer) and a target that never ran fail the run. Concurrent targets get
+    `-rss_limit_mb=3072` instead of 4096 (16 GB runners); one at a time (the nightly) keeps 4096. Pushes keep 60 s per
+    target.

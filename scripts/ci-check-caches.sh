@@ -3,7 +3,7 @@
 # - it downloaded a dependency instead of taking it from BASALT_DEPS_SOURCE_DIR (a stale stamp, a dependency the fetch
 #   left out, a configure that does not see the variable; see scripts/ci-fetch-deps.sh);
 # - CMAKE_C_COMPILER_LAUNCHER or CMAKE_CXX_COMPILER_LAUNCHER is set in the environment but the tree does not compile
-#   through it. Jobs without a compiler cache (release.yml) set neither, and only the first check applies to them.
+#   through it. Jobs without a compiler cache (release.yml, ci.yml's clang-tidy jobs) set neither, and only the first check applies to them.
 # Usage: scripts/ci-check-caches.sh <build dir>
 set -euo pipefail
 shopt -s nullglob
