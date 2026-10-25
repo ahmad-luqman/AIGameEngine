@@ -189,3 +189,12 @@ Record per session: PR number, measured job times after merge, anything that dev
     1.2 GB entry each job restored before.
   - The first push showed Git Bash's `cp -R` cannot copy zstd's test symlinks on Windows (sources are now trimmed in
     place), and the second that `tr | grep -q` under `pipefail` failed the launcher check on macOS (SIGPIPE).
+  - Measured on run 40200108108 (warm caches, 7c5c7ce): 22 min wall, down from 25-36. Compiler-cache hits 90-96% (ccache)
+    and 98% (sccache, no uncacheable calls); dependency sources restore in 2-8 s. Build steps, baseline -> now: lavapipe
+    788 s -> 11 s, Linux Debug 573 -> 70, ASan 391 -> 44, macOS Debug 392 -> 21, macOS Release 309 -> 9, Windows Debug
+    671 -> 116, Windows Release 886 -> 95. Whole jobs: lavapipe (now also the Linux Release tests) 14 min, fuzz 16 min
+    (15 of them running the targets), coverage 6 min. clang-tidy is now the critical path at 22 min (Build 1295 s,
+    nearly all tidy, which is never cached): session 2.
+  - The 20-30 misses per job are to be explained in session 2 (generated sources are the likely ones). Several caches
+    filled their cap on this run (Linux Debug, ASan, coverage) because they still hold the objects of the earlier
+    cold-path runs; ccache drops the oldest first.
