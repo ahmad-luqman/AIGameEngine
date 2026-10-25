@@ -52,8 +52,8 @@ Target after sessions 1–3: about 15 minutes per run.
 
 | # | PR | Cuts wall time? | Status |
 |---|----|-----------------|--------|
-| 1 | Compiler cache, one dependency-source cache, merge ubuntu/Release into lavapipe | Yes (every build) | In review (#56) |
-| 2 | Shard clang-tidy; run fuzz targets concurrently | Yes (two longest jobs) | Todo |
+| 1 | Compiler cache, one dependency-source cache, merge ubuntu/Release into lavapipe | Yes (every build) | Merged (#56) |
+| 2 | Shard clang-tidy; run fuzz targets concurrently | Yes (two longest jobs) | In review (#57) |
 | 3 | Parallel ctest, fast `ReleasePackaging`, shard `BasaltTests` | Yes (test steps) | Todo |
 | 4 | Remove redundant jobs; early format job; coverage on `main` only | Runner minutes, faster feedback | Todo |
 | 5 | Shared setup action; nightly fuzz builds once | Maintenance | Todo |
@@ -198,3 +198,27 @@ Record per session: PR number, measured job times after merge, anything that dev
   - The 20-30 misses per job are to be explained in session 2 (generated sources are the likely ones). Several caches
     filled their cap on this run (Linux Debug, ASan, coverage) because they still hold the objects of the earlier
     cold-path runs; ccache drops the oldest first.
+- 2026-10-25, session 2, deviations from the plan:
+  - The 20-30 compiler-cache misses per job left from session 1 are CMake's configure probes (`try_compile` checks and
+    compiler detection, about 30 per configure), which compile in freshly named `CMakeScratch/TryCompile-*` directories
+    and so never hit. On the last runs of #56 every build translation unit hit (e.g. clang-tidy: 526 calls = 496 build
+    units + 30 probes, 28 misses; ubuntu/Debug: 527 = 497 + 30, 30 misses). Nothing to fix.
+  - Shards are not split by module regex. `basalt_set_warnings` records each target it touches and the configure writes
+    them to `<build>/ClangTidyTargets.txt`; `scripts/clang_tidy.py` takes those targets' entries from
+    `compile_commands.json` (by object path, `CMakeFiles/<target>.dir/`) and deals the sorted files round-robin over the
+    shards. That is exactly the set `BASALT_CLANG_TIDY=ON` checks, and every file is in exactly one shard by
+    construction, so the checker step became the `ClangTidyScript` ctest (selection, shard coverage, argument checks, and
+    a stand-in clang-tidy for failures). No `run-clang-tidy`: the script prints each failing file's output in one block.
+  - Test sources stay checked (the user's open question; CI has caught real findings in `Tests/Source`). The tidy
+    configure also enables `BASALT_GPU_TESTS`, so the GPU test sources are checked for the first time: their implicit
+    widening and integer division findings are fixed, and `Tests/Rendering/.clang-tidy` turns off
+    `bugprone-unchecked-optional-access` as `Tests/Source/.clang-tidy` does (doctest's `REQUIRE` ends a test, which the
+    check cannot see; clang-tidy 18 with libstdc++ flagged more of these than Homebrew's 23 locally).
+  - Shard check (run 40212392455): a planted `modernize-use-nullptr` in `Tests/Source/SceneTests.cpp` and
+    `Core/Log.cpp` failed exactly shards 1 and 3; the commit was dropped.
+  - The tidy jobs compile nothing but the shaders, so they have no compiler cache (launcher variables cleared for the job).
+  - Fuzzing: `FUZZ_JOBS` (CI: `nproc`, 4) runs targets through `xargs -P`, which macOS's bash 3.2 supports (`wait -n`
+    is bash 4.3). Each target's summary is printed in one write when it finishes, and now includes `stat::peak_rss_mb`.
+    Concurrent targets get `-rss_limit_mb=3072` instead of 4096 (16 GB runners); one at a time (the nightly) keeps 4096.
+    Pushes keep 60 s per target.
+

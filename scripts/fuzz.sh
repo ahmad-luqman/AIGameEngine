@@ -2,6 +2,7 @@
 # Builds the selected libFuzzer targets (all by default; Clang + ASan + UBSan) into build-fuzz/ and runs each one.
 # Usage: scripts/fuzz.sh [seconds per target, default 60] [target name filter]
 #        scripts/fuzz.sh --list   (prints the target names as a JSON array, for the nightly CI matrix)
+# FUZZ_JOBS=N runs N targets at a time (default 1; CI uses one per core); each prints its summary when it finishes.
 # Seeds come from Tests/Fuzz/Corpus/<Target>/; new interesting inputs collect in build-fuzz/corpus/ and
 # crashes in build-fuzz/crashes/ (add a regression test before fixing one). On macOS this needs Homebrew
 # LLVM (Apple's clang ships no libFuzzer).
@@ -28,6 +29,11 @@ filter="${2:-}"
 # libFuzzer keeps only a value's leading digits (so 'abc' reads as 0) and runs without a time limit for 0.
 if ! [[ "$seconds" =~ ^[1-9][0-9]*$ ]]; then
 	echo "Seconds per target must be a positive integer, not '$seconds'" >&2
+	exit 1
+fi
+jobs="${FUZZ_JOBS:-1}"
+if ! [[ "$jobs" =~ ^[1-9][0-9]*$ ]]; then
+	echo "FUZZ_JOBS must be a positive integer, not '$jobs'" >&2
 	exit 1
 fi
 buildDir="build-fuzz"
@@ -61,30 +67,48 @@ cmake -S . -B "$buildDir" -G Ninja -DCMAKE_BUILD_TYPE=Debug "${compiler[@]}" \
 	-DBASALT_BUILD_EDITOR=OFF -DBASALT_BUILD_RUNTIME=OFF -DBASALT_BUILD_TESTS=OFF > /dev/null
 cmake --build "$buildDir" --target "${selected[@]}"
 
-export ASAN_OPTIONS="detect_leaks=0:allocator_may_return_null=1"
-export UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=1"
-status=0
-for target in "${selected[@]}"; do
-	corpus="$buildDir/corpus/$target"
-	crashes="$buildDir/crashes/$target"
-	log="$buildDir/logs/$target.log"
+# Several targets share the machine's memory (16 GB on CI's 4-core runners), so each gets a smaller limit. An input that
+# makes a target exceed it is reported as a finding (out-of-memory), and malloc_limit_mb follows it.
+rssLimit=4096
+[[ $jobs -gt 1 ]] && rssLimit=3072
+
+# Runs one target and prints its summary in one write, so targets running side by side never interleave their lines.
+# Returns non-zero for a finding.
+run_target()
+{
+	local target="$1"
+	local corpus="$buildDir/corpus/$target"
+	local crashes="$buildDir/crashes/$target"
+	local log="$buildDir/logs/$target.log"
 	mkdir -p "$corpus" "$crashes" "$buildDir/logs"
 	# The seed directory is read-only input; new findings go into the build-local corpus. A new target may have no
 	# seeds yet, and libFuzzer exits on a missing directory.
-	seeds=()
+	local seeds=()
 	[[ -d "Tests/Fuzz/Corpus/$target" ]] && seeds=("Tests/Fuzz/Corpus/$target")
-	echo "=== $target (${seconds}s)"
-	result=0
-	"$buildDir/bin/$target" "$corpus" ${seeds[@]+"${seeds[@]}"} -max_total_time="$seconds" -timeout=10 -rss_limit_mb=4096 \
-		-artifact_prefix="$crashes/" -print_final_stats=1 > "$log" 2>&1 || result=$?
-	grep -E "^(#[0-9]+ +DONE|stat::number_of_executed_units|==[0-9]+== ?ERROR|SUMMARY|artifact_prefix|Test unit written)|runtime error|^ +#[0-9] " "$log" || true
+	local result=0
+	"$buildDir/bin/$target" "$corpus" ${seeds[@]+"${seeds[@]}"} -max_total_time="$seconds" -timeout=10 \
+		-rss_limit_mb="$rssLimit" -artifact_prefix="$crashes/" -print_final_stats=1 > "$log" 2>&1 || result=$?
+	local summary
+	summary="=== $target (${seconds}s)"$'\n'"$(grep -E "^(#[0-9]+ +DONE|stat::number_of_executed_units|stat::peak_rss_mb|==[0-9]+== ?ERROR|SUMMARY|artifact_prefix|Test unit written)|runtime error|^ +#[0-9] " "$log")"
 	# libFuzzer exits non-zero for every finding and for failures that write no input (a target that cannot start, a
 	# missing corpus directory). The crash directory also counts, so inputs left by an earlier run keep failing until
 	# they are turned into tests and removed.
 	if [[ $result -ne 0 ]] || compgen -G "$crashes/*" > /dev/null; then
-		echo "$target: exited with $result; crash inputs (if any) in $crashes, full log in $log" >&2
-		[[ $result -ne 0 ]] && tail -n 20 "$log" >&2
-		status=1
+		summary+=$'\n'"$target: exited with $result; crash inputs (if any) in $crashes, full log in $log"
+		[[ $result -ne 0 ]] && summary+=$'\n'"$(tail -n 20 "$log")"
+		printf '%s\n' "$summary" >&2
+		return 1
 	fi
-done
+	printf '%s\n' "$summary"
+}
+
+export ASAN_OPTIONS="detect_leaks=0:allocator_may_return_null=1"
+export UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=1"
+export buildDir seconds rssLimit
+export -f run_target
+echo "Fuzzing ${#selected[@]} targets for ${seconds}s each, $jobs at a time"
+# xargs (unlike bash 4.3's wait -n) also works with macOS's bash 3.2; it exits non-zero when any target failed. The
+# targets run in this same bash ($BASH), which reads the exported function back.
+status=0
+printf '%s\n' "${selected[@]}" | xargs -P "$jobs" -I {} "$BASH" -c 'run_target "$1"' run_target {} || status=1
 exit $status

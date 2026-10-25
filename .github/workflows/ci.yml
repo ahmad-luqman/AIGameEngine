@@ -212,11 +212,20 @@ jobs:
       - name: Test
         run: ctest --test-dir build --output-on-failure -LE "gpu|format"
 
-  # clang-tidy runs as part of the compile of Basalt's own targets; any finding fails the build (.clang-tidy).
+  # clang-tidy over the sources of every Basalt target (tests and GPU tests included; third-party code never), split over
+  # three jobs by scripts/clang_tidy.py. Nothing is compiled except the shaders the generated EmbeddedShaders.cpp
+  # includes, so these jobs need no compiler cache. Any finding fails the job (.clang-tidy).
   clang-tidy:
-    name: ubuntu-24.04 / clang-tidy
+    name: ubuntu-24.04 / clang-tidy (${{ matrix.shard }}/3)
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [ 1, 2, 3 ]
+    env:
+      CMAKE_C_COMPILER_LAUNCHER: ""
+      CMAKE_CXX_COMPILER_LAUNCHER: ""
     steps:
       - uses: actions/checkout@v4
 
@@ -232,13 +241,6 @@ jobs:
           path: _deps
           key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'scripts/ci-fetch-deps.sh') }}
 
-      - name: Compiler cache
-        uses: hendrikmuhs/ccache-action@v1.2.24
-        with:
-          key: clang-tidy
-          max-size: 600M
-          evict-old-files: 7d
-
       - name: Fetch dependency sources
         if: steps.deps.outputs.cache-hit != 'true'
         shell: bash
@@ -253,18 +255,21 @@ jobs:
           path: _deps
           key: ${{ steps.deps.outputs.cache-primary-key }}
 
-      # clang-tidy itself is never cached; only the compile that follows it is.
+      # Clang's compile commands, so clang-tidy parses each file exactly as the Clang builds compile it.
       - name: Configure
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
-            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DBASALT_CLANG_TIDY=ON
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DBASALT_GPU_TESTS=ON -DBASALT_CHECK_FORMAT=OFF
 
       - name: Check that the build uses the caches
         shell: bash
         run: scripts/ci-check-caches.sh build
 
-      - name: Build
-        run: cmake --build build -- -k 0
+      - name: Compile shaders
+        run: cmake --build build --target BasaltShaders
+
+      - name: clang-tidy
+        run: scripts/clang_tidy.py -p build --shard ${{ matrix.shard }}/3 -j "$(nproc)"
 
   # Source-based coverage of the headless tests. Informational only: the summary is shown on the run
   # page and the HTML report is uploaded as an artifact.
@@ -437,8 +442,8 @@ jobs:
             build/Tests/Previews/*.png
           if-no-files-found: warn
 
-  # Short libFuzzer run of every target on each push (scripts/fuzz.sh); longer runs happen nightly
-  # (fuzz-nightly.yml). Crash inputs are uploaded so they can be reproduced locally.
+  # Short libFuzzer run of every target on each push (scripts/fuzz.sh), one target per core at a time; longer runs happen
+  # nightly (fuzz-nightly.yml). Crash inputs are uploaded so they can be reproduced locally.
   fuzz:
     name: ubuntu-24.04 / fuzz
     runs-on: ubuntu-24.04
@@ -480,7 +485,7 @@ jobs:
           key: ${{ steps.deps.outputs.cache-primary-key }}
 
       - name: Fuzz (60 s per target)
-        run: scripts/fuzz.sh 60
+        run: FUZZ_JOBS="$(nproc)" scripts/fuzz.sh 60
 
       - name: Check that the build uses the caches
         shell: bash

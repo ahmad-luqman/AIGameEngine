@@ -387,7 +387,8 @@ TEST_CASE("Opaque instance batches retain material constants, IDs and filtering 
 	{
 		auto cube = scene.CreateEntity("Instance");
 		cube.AddComponent<MeshComponent>().Mesh = "builtin://Cube";
-		cube.GetTransform().Translation = { static_cast<float>(i % 20) - 9.5f, static_cast<float>(i / 20) - 7.5f, 0 };
+		const uint32_t row = i / 20;
+		cube.GetTransform().Translation = { static_cast<float>(i % 20) - 9.5f, static_cast<float>(row) - 7.5f, 0 };
 		cube.GetTransform().Scale = { i % 7 == 0 ? -.6f : .6f, .6f, .6f };
 		cube.AddComponent<MaterialComponent>().AlbedoColor = { static_cast<float>(i % 6 + 1) / 8.0f, .2f, .8f, 1 };
 		cubes.push_back(cube);
@@ -640,7 +641,7 @@ TEST_CASE("Lit particle diffuse uses bounded light attenuation and receives skyl
 	REQUIRE(renderer.Initialize());
 	renderer.SetViewportSize(64, 64);
 	const auto lit = Capture(renderer, scene, camera);
-	const size_t center = (32 * 64 + 32) * 4;
+	const size_t center = static_cast<size_t>(32 * 64 + 32) * 4;
 	// 0.1 radiance / PI with the shared near-unity attenuation is about 48 in display sRGB.
 	CHECK(lit[center] > 25);
 	CHECK(lit[center] < 75);

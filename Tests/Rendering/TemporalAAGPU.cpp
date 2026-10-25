@@ -367,9 +367,11 @@ TEST_CASE("TAA resolve blends history, clips color, rejects depth and clamps to 
 	REQUIRE(taa.Prepare(device, color, depth, motion, shader, linear, point));
 	const auto commands = device->createCommandList();
 	REQUIRE(commands);
-	std::vector<uint16_t> colors(8 * 8 * 4);
-	std::vector<float> depths(8 * 8, .5f);
-	std::vector<glm::vec4> motions(8 * 8);
+	std::vector<uint16_t> colors(static_cast<size_t>(8) * 8 * 4);
+	std::vector<float> depths(static_cast<size_t>(8) * 8, .5f);
+	std::vector<glm::vec4> motions(static_cast<size_t>(8) * 8);
+	// Index of channel c of texel (x, y) in the 8x8 half-float RGBA color target.
+	auto channel = [](size_t x, size_t y, size_t c) { return (y * 8 + x) * 4 + c; };
 	for (uint32_t y = 0; y < 8; y++)
 		for (uint32_t x = 0; x < 8; x++)
 		{
@@ -401,12 +403,12 @@ TEST_CASE("TAA resolve blends history, clips color, rejects depth and clamps to 
 		for (uint32_t y = 0; y < 4; y++)
 			for (uint32_t x = 0; x < 4; x++)
 				for (size_t c = 0; c < 3; c++)
-					colors[(y * 8 + x) * 4 + c] = glm::packHalf1x16(.1f * x + .05f * y);
+					colors[channel(x, y, c)] = glm::packHalf1x16(.1f * x + .05f * y);
 	if (sky)
 		std::fill(depths.begin(), depths.end(), skyDisocclusion ? .99999f : 1.0f);
 	auto resolve = [&](bool valid) {
 		commands->open();
-		commands->writeTexture(color, 0, 0, colors.data(), 8 * 8);
+		commands->writeTexture(color, 0, 0, colors.data(), static_cast<size_t>(8) * 8);
 		commands->writeTexture(depth, 0, 0, depths.data(), 8 * sizeof(float));
 		commands->writeTexture(motion, 0, 0, motions.data(), 8 * sizeof(glm::vec4));
 		taa.Render(commands, area, valid, skyReprojection, jitterDelta);
@@ -418,12 +420,12 @@ TEST_CASE("TAA resolve blends history, clips color, rejects depth and clamps to 
 	for (uint32_t y = 0; y < 4; y++)
 		for (uint32_t x = 0; x < 4; x++)
 			for (size_t c = 0; c < 4; c++)
-				colors[(y * 8 + x) * 4 + c] = glm::packHalf1x16(.2f);
+				colors[channel(x, y, c)] = glm::packHalf1x16(.2f);
 	// A real color range admits the previous center, while every active edge must clamp away poisoned padding.
 	for (size_t c = 0; c < 3; c++)
 	{
-		colors[(1 * 8 + 1) * 4 + c] = glm::packHalf1x16(0);
-		colors[(1 * 8 + 2) * 4 + c] = glm::packHalf1x16(1);
+		colors[channel(1, 1, c)] = glm::packHalf1x16(0);
+		colors[channel(2, 1, c)] = glm::packHalf1x16(1);
 	}
 	float expected = .74f;
 	if (gradient)
@@ -475,7 +477,7 @@ TEST_CASE("TAA resolve blends history, clips color, rejects depth and clamps to 
 	REQUIRE(data);
 	auto sample = [&](uint32_t x, uint32_t y) {
 		uint16_t value = 0;
-		std::memcpy(&value, data + y * pitch + x * 8, sizeof(value));
+		std::memcpy(&value, data + y * pitch + static_cast<size_t>(x) * 8, sizeof(value));
 		return glm::unpackHalf1x16(value);
 	};
 	CHECK(sample(2, 2) == doctest::Approx(expected).epsilon(.005));

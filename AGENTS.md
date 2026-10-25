@@ -226,9 +226,9 @@ scripts/test.sh             # build + ctest (unit tests, format check, ...)
 - Build configurations: `Debug` (asserts, validation), `Release` (optimized, asserts on),
   `Dist` (shipping: no asserts — defines `BS_DIST`).
 - Warnings are errors (`BASALT_WARNINGS_AS_ERRORS=ON`). Do not disable warnings to make code compile.
-- CI also runs ASan+UBSan (`-DBASALT_SANITIZE="address;undefined"`), clang-tidy (`-DBASALT_CLANG_TIDY=ON`,
-  checks in `.clang-tidy`), a coverage report (`scripts/coverage.sh`) and libFuzzer targets for every
-  untrusted input (`scripts/fuzz.sh`, `Tests/Fuzz/`; nightly long runs). Parse untrusted JSON with
+- CI also runs ASan+UBSan (`-DBASALT_SANITIZE="address;undefined"`), clang-tidy (`scripts/clang_tidy.py`, three shards;
+  checks in `.clang-tidy`), a coverage report (`scripts/coverage.sh`) and libFuzzer targets for every untrusted input
+  (`scripts/fuzz.sh`, `Tests/Fuzz/`, `FUZZ_JOBS` targets at a time; nightly long runs). Parse untrusted JSON with
   `ParseJson` and read floats with `JsonToFloat` (`Basalt/Core/JsonUtils.h`). Tests carry ctest labels
   (`unit`, `integration`, `gpu`, `format`, `benchmark`) for `ctest -L/-LE`. Details: the basalt-build-test skill.
 - CI compiles through ccache (sccache on Windows; Debug objects then embed debug information, `/Z7`) set by the
