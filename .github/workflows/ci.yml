@@ -10,6 +10,13 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Every configure, including those in scripts/coverage.sh and scripts/fuzz.sh, compiles through ccache (sccache on
+# Windows), and finds the dependency sources restored from the shared cache (cmake/Dependencies.cmake).
+env:
+  CMAKE_C_COMPILER_LAUNCHER: ccache
+  CMAKE_CXX_COMPILER_LAUNCHER: ccache
+  BASALT_DEPS_SOURCE_DIR: ${{ github.workspace }}/_deps
+
 jobs:
   build-and-test:
     name: ${{ matrix.os }} / ${{ matrix.config }}
@@ -20,6 +27,13 @@ jobs:
       matrix:
         os: [ ubuntu-24.04, windows-latest, macos-15 ]
         config: [ Debug, Release ]
+        exclude:
+          # The lavapipe job builds the same Release configuration and runs these tests too.
+          - os: ubuntu-24.04
+            config: Release
+    env:
+      CMAKE_C_COMPILER_LAUNCHER: ${{ matrix.os == 'windows-latest' && 'sccache' || 'ccache' }}
+      CMAKE_CXX_COMPILER_LAUNCHER: ${{ matrix.os == 'windows-latest' && 'sccache' || 'ccache' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -52,20 +66,51 @@ jobs:
         if: runner.os == 'Windows'
         run: choco install ninja -y
 
-      - name: Cache dependencies
+      - name: Cache dependency sources
+        id: deps
         uses: actions/cache@v4
         with:
-          path: build/_deps
-          key: deps-plain-${{ runner.os }}-${{ matrix.config }}-${{ hashFiles('cmake/Dependencies.cmake') }}
+          path: _deps
+          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake') }}
 
+      - name: Compiler cache
+        uses: hendrikmuhs/ccache-action@v1.2.24
+        with:
+          key: ${{ matrix.os }}-${{ matrix.config }}
+          variant: ${{ runner.os == 'Windows' && 'sccache' || 'ccache' }}
+          max-size: ${{ matrix.config == 'Debug' && '1G' || '500M' }}
+          evict-old-files: job
+
+      # MSVC writes /Zi debug information into a shared PDB, which sccache cannot cache; /Z7 embeds it in each object.
       - name: Configure
         shell: bash
         run: |
           formatCheck=OFF
           profile=OFF
+          extra=()
           if [[ "${{ runner.os }}" == "Linux" && "${{ matrix.config }}" == "Debug" ]]; then profile=ON; fi
           if [[ "${{ runner.os }}" == "macOS" && "${{ matrix.config }}" == "Debug" ]]; then formatCheck=ON; fi
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DBASALT_CHECK_FORMAT=$formatCheck -DBASALT_PROFILE=$profile -DBASALT_BENCHMARK_TESTS=${{ matrix.config == 'Release' && 'ON' || 'OFF' }}
+          if [[ "${{ runner.os }}" == "Windows" ]]; then extra+=(-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded); fi
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DBASALT_CHECK_FORMAT=$formatCheck -DBASALT_PROFILE=$profile -DBASALT_BENCHMARK_TESTS=${{ matrix.config == 'Release' && 'ON' || 'OFF' }} "${extra[@]}"
+
+      # A dependency that adds /Zi itself would silently make its objects uncacheable again.
+      - name: Check that every object is cacheable (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          python - <<'EOF'
+          import json, re
+          files = [e["file"] for e in json.load(open("build/compile_commands.json")) if re.search(r'[-/]Zi(\s|$)', e["command"])]
+          if files:
+              print("::error::%d sources compile with /Zi, which sccache cannot cache, e.g.:" % len(files))
+              print("\n".join(files[:20]))
+              exit(1)
+          EOF
+
+      - name: Collect dependency sources
+        if: steps.deps.outputs.cache-hit != 'true'
+        shell: bash
+        run: scripts/ci-collect-deps.sh build _deps
 
       - name: Build
         run: cmake --build build -- -k 0
@@ -95,17 +140,30 @@ jobs:
         run: |
           scripts/ci-apt-install.sh ninja-build glslc libvulkan1 clang libdbus-1-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols
 
-      - name: Cache dependencies
+      - name: Cache dependency sources
+        id: deps
         uses: actions/cache@v4
         with:
-          path: build/_deps
-          key: deps-asan-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake') }}
+          path: _deps
+          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake') }}
+
+      - name: Compiler cache
+        uses: hendrikmuhs/ccache-action@v1.2.24
+        with:
+          key: asan
+          max-size: 1G
+          evict-old-files: job
 
       - name: Configure
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
             -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
             "-DBASALT_SANITIZE=address;undefined" -DBASALT_CHECK_FORMAT=OFF
+
+      - name: Collect dependency sources
+        if: steps.deps.outputs.cache-hit != 'true'
+        shell: bash
+        run: scripts/ci-collect-deps.sh build _deps
 
       - name: Build
         run: cmake --build build -- -k 0
@@ -126,16 +184,30 @@ jobs:
         run: |
           scripts/ci-apt-install.sh ninja-build glslc libvulkan1 clang clang-tidy libdbus-1-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols
 
-      - name: Cache dependencies
+      - name: Cache dependency sources
+        id: deps
         uses: actions/cache@v4
         with:
-          path: build/_deps
-          key: deps-tidy-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake') }}
+          path: _deps
+          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake') }}
 
+      - name: Compiler cache
+        uses: hendrikmuhs/ccache-action@v1.2.24
+        with:
+          key: clang-tidy
+          max-size: 1G
+          evict-old-files: job
+
+      # clang-tidy itself is never cached; only the compile that follows it is.
       - name: Configure
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
             -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DBASALT_CLANG_TIDY=ON
+
+      - name: Collect dependency sources
+        if: steps.deps.outputs.cache-hit != 'true'
+        shell: bash
+        run: scripts/ci-collect-deps.sh build _deps
 
       - name: Build
         run: cmake --build build -- -k 0
@@ -154,14 +226,27 @@ jobs:
         run: |
           scripts/ci-apt-install.sh ninja-build glslc libvulkan1 clang llvm libdbus-1-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols
 
-      - name: Cache dependencies
+      - name: Cache dependency sources
+        id: deps
         uses: actions/cache@v4
         with:
-          path: build-coverage/_deps
-          key: deps-coverage-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake') }}
+          path: _deps
+          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake') }}
+
+      - name: Compiler cache
+        uses: hendrikmuhs/ccache-action@v1.2.24
+        with:
+          key: coverage
+          max-size: 500M
+          evict-old-files: job
 
       - name: Coverage
         run: scripts/coverage.sh
+
+      - name: Collect dependency sources
+        if: steps.deps.outputs.cache-hit != 'true'
+        shell: bash
+        run: scripts/ci-collect-deps.sh build-coverage _deps
 
       - name: Summary
         if: always()
@@ -180,10 +265,10 @@ jobs:
           name: coverage-html
           path: build-coverage/coverage/html
 
-  # Renders the feature scene on Mesa's lavapipe (a conformant CPU Vulkan 1.3 driver) with the Khronos
-  # validation layer. Render tests run offscreen; the editor integration uses Xvfb.
+  # The Linux Release build: every headless test, then the feature scene rendered on Mesa's lavapipe (a conformant CPU
+  # Vulkan 1.3 driver) with the Khronos validation layer. Render tests run offscreen; the editor integration uses Xvfb.
   gpu-lavapipe:
-    name: ubuntu-24.04 / GPU tests (lavapipe)
+    name: ubuntu-24.04 / Release + GPU (lavapipe)
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -208,14 +293,27 @@ jobs:
       - name: Vulkan device
         run: vulkaninfo --summary || true
 
-      - name: Cache dependencies
+      - name: Cache dependency sources
+        id: deps
         uses: actions/cache@v4
         with:
-          path: build/_deps
-          key: deps-plain-${{ runner.os }}-Release-${{ hashFiles('cmake/Dependencies.cmake') }}
+          path: _deps
+          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake') }}
+
+      - name: Compiler cache
+        uses: hendrikmuhs/ccache-action@v1.2.24
+        with:
+          key: lavapipe
+          max-size: 500M
+          evict-old-files: job
 
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBASALT_GPU_TESTS=ON -DBASALT_GOLDEN_DRIVER=lavapipe -DBASALT_CHECK_FORMAT=OFF -DBASALT_BENCHMARK_TESTS=ON
+
+      - name: Collect dependency sources
+        if: steps.deps.outputs.cache-hit != 'true'
+        shell: bash
+        run: scripts/ci-collect-deps.sh build _deps
 
       - name: Build
         run: cmake --build build -- -k 0
@@ -225,8 +323,20 @@ jobs:
           ctest --test-dir build -N --show-only=json-v1 > /tmp/basalt-tests.json
           python3 -c 'import json; tests = json.load(open("/tmp/basalt-tests.json"))["tests"]; names = {t["name"] for t in tests}; missing = {"EditorViewport", "ViewportGPU", "PostProcessGPU", "TemporalAAGPU", "PreviewRendererGPU", "Benchmark_gpu"} - names; missing and exit(f"Missing GPU regressions: {missing}")'
 
+      - name: Test
+        run: ctest --test-dir build --output-on-failure -LE "gpu|format"
+
       - name: GPU tests
+        if: ${{ !cancelled() }}
         run: ctest --test-dir build --output-on-failure -L gpu
+
+      - name: Upload benchmark report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-Linux-Release
+          path: build/Tests/Benchmark-*.json
+          if-no-files-found: warn
 
       - name: Upload screenshots
         if: always()
@@ -256,14 +366,27 @@ jobs:
         run: |
           scripts/ci-apt-install.sh ninja-build glslc libvulkan1 clang libdbus-1-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols
 
-      - name: Cache dependencies
+      - name: Cache dependency sources
+        id: deps
         uses: actions/cache@v4
         with:
-          path: build-fuzz/_deps
-          key: deps-fuzz-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake') }}
+          path: _deps
+          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake') }}
+
+      - name: Compiler cache
+        uses: hendrikmuhs/ccache-action@v1.2.24
+        with:
+          key: fuzz
+          max-size: 1G
+          evict-old-files: job
 
       - name: Fuzz (60 s per target)
         run: scripts/fuzz.sh 60
+
+      - name: Collect dependency sources
+        if: steps.deps.outputs.cache-hit != 'true'
+        shell: bash
+        run: scripts/ci-collect-deps.sh build-fuzz _deps
 
       - name: Upload crash inputs
         if: failure() || cancelled()

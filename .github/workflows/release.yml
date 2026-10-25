@@ -29,6 +29,10 @@ concurrency:
 permissions:
   contents: read
 
+# Dependency sources come from the cache that CI shares (cmake/Dependencies.cmake, scripts/ci-collect-deps.sh).
+env:
+  BASALT_DEPS_SOURCE_DIR: ${{ github.workspace }}/_deps
+
 jobs:
   package:
     name: ${{ matrix.os }} / package
@@ -96,15 +100,21 @@ jobs:
         if: runner.os == 'Windows'
         run: choco install ninja -y
 
-      - name: Cache dependencies
+      - name: Cache dependency sources
+        id: deps
         uses: actions/cache@v4
         with:
-          path: build/_deps
-          key: deps-dist-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake') }}
+          path: _deps
+          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake') }}
 
       # Dist: optimized, no asserts. The tests run in CI on every push; here the samples' smoke tests check the build.
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Dist -DBASALT_BUILD_TESTS=OFF -DBASALT_CHECK_FORMAT=OFF
+
+      - name: Collect dependency sources
+        if: steps.deps.outputs.cache-hit != 'true'
+        shell: bash
+        run: scripts/ci-collect-deps.sh build _deps
 
       - name: Build
         run: cmake --build build -- -k 0
