@@ -149,6 +149,11 @@ expect_overrides(HandSet "${WORK_DIR}/Stamped" "GLM=${WORK_DIR}/Mine" VULKANHEAD
 configure(HandSetTree unset)
 expect_overrides(HandSetReconfigured "" "GLM=${WORK_DIR}/Mine")
 
+# So does one set by hand after an earlier configure took that dependency from the directory.
+configure(LaterHandSetTree "${WORK_DIR}/Stamped")
+configure(LaterHandSetTree "${WORK_DIR}/Stamped" "-DFETCHCONTENT_SOURCE_DIR_GLM:PATH=${WORK_DIR}/Mine")
+expect_overrides(LaterHandSet "${WORK_DIR}/Stamped" "GLM=${WORK_DIR}/Mine" VULKANHEADERS)
+
 find_program(bash bash)
 if(bash AND NOT WIN32)
 	# scripts/ci-check-caches.sh: a tree that downloaded a source fails and names it; one that downloaded none passes; a
