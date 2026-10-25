@@ -17,8 +17,17 @@
 
 #include <nlohmann/json.hpp>
 
+#if !defined(BS_PLATFORM_WINDOWS)
+	#include <pthread.h>
+	#include <signal.h>
+#endif
+
 #include <algorithm>
+#include <atomic>
 #include <cfloat>
+#include <chrono>
+#include <condition_variable>
+#include <cstdio>
 #include <cstdlib>
 #include <exception>
 #include <latch>
@@ -26,8 +35,10 @@
 #include <cmath>
 #include <functional>
 #include <limits>
+#include <mutex>
 #include <ranges>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace Basalt;
@@ -184,7 +195,7 @@ TEST_SUITE("Physics")
 				release.wait();
 			});
 		started.wait();
-		// Jolt's barrier executes physics functions on this thread while queue references stay
+		// The physics barrier executes physics functions on this thread while queue references stay
 		// pending. ASan checks late reference releases after both worlds die. Destroy the old world and its factory, then start another before releasing them.
 		for (uint32_t i = 0; i < 2; ++i)
 		{
@@ -235,8 +246,201 @@ TEST_SUITE("Physics")
 			jobs.WaitForJobs(barrier);
 		else
 			pool.WaitIdle();
-		std::_Exit(87); // Returning or completing a generic engine fence must not hide Jolt's broken barrier.
+		std::_Exit(87); // Returning or completing a generic engine fence must not hide a broken physics barrier.
 	}
+
+	// Ends the process with the test's name if a barrier test hangs: a broken barrier would otherwise block until the
+	// ctest timeout, without saying which test.
+	class BarrierWatchdog
+	{
+	public:
+		explicit BarrierWatchdog(const char* test)
+			: m_Thread([this, test] {
+				std::unique_lock lock(m_Mutex);
+				if (!m_Done.wait_for(lock, std::chrono::seconds(30), [this] { return m_Finished; }))
+				{
+					std::fprintf(stderr, "'%s' did not finish within 30 s: a physics barrier wait hangs\n", test);
+					std::_Exit(1);
+				}
+			})
+		{}
+		~BarrierWatchdog()
+		{
+			{
+				std::scoped_lock lock(m_Mutex);
+				m_Finished = true;
+			}
+			m_Done.notify_all();
+			m_Thread.join();
+		}
+
+	private:
+		std::mutex m_Mutex;
+		std::condition_variable m_Done;
+		bool m_Finished = false;
+		std::thread m_Thread;
+	};
+
+	TEST_CASE("Physics job barriers skip jobs that already ran")
+	{
+		BarrierWatchdog watchdog("Physics job barriers skip jobs that already ran");
+		PhysicsInternal::AcquireJolt();
+		auto& jobs = PhysicsJobs::Get();
+		// A job that already ran never reports to a barrier, so it must not be waited for (Jolt adds jobs it created,
+		// and a worker may finish one first).
+		auto finished = jobs.CreateJob("Finished", JPH::Color::sGreen, [] {});
+		while (!finished.IsDone())
+			std::this_thread::yield();
+		auto* barrier = jobs.CreateBarrier();
+		barrier->AddJob(finished);
+		jobs.WaitForJobs(barrier);
+		jobs.DestroyBarrier(barrier);
+		PhysicsInternal::ReleaseJolt();
+	}
+
+	TEST_CASE("Physics job barriers wait for jobs added while waiting")
+	{
+		BarrierWatchdog watchdog("Physics job barriers wait for jobs added while waiting");
+		auto& pool = JobSystem::Get();
+		REQUIRE(pool.GetWorkerCount() > 0);
+		pool.WaitIdle();
+		PhysicsInternal::AcquireJolt();
+		auto& jobs = PhysicsJobs::Get();
+		auto* barrier = jobs.CreateBarrier();
+		// With every worker blocked only the waiting thread runs jobs.
+		std::latch blocked(pool.GetWorkerCount());
+		std::latch releaseWorkers(1);
+		for (uint32_t i = 0; i < pool.GetWorkerCount(); ++i)
+			(void)pool.Submit([&] {
+				blocked.count_down();
+				releaseWorkers.wait();
+			});
+		blocked.wait();
+
+		// Jobs added together; the first adds a follow-up job while the wait is under way (as physics jobs do).
+		std::thread::id followUpThread;
+		auto followUp = jobs.CreateJob("Follow-up", JPH::Color::sGreen, [&] { followUpThread = std::this_thread::get_id(); }, 1);
+		auto addFollowUp = [&] {
+			barrier->AddJob(followUp);
+			followUp.RemoveDependency();
+		};
+		auto first = jobs.CreateJob("First", JPH::Color::sGreen, addFollowUp, 1);
+		auto second = jobs.CreateJob("Second", JPH::Color::sGreen, [] {}, 1);
+		const JPH::JobHandle together[] = { first, second };
+		barrier->AddJobs(together, 2);
+		first.RemoveDependency();
+		second.RemoveDependency();
+		jobs.WaitForJobs(barrier);
+		CHECK(second.IsDone());
+		CHECK(followUp.IsDone());
+		CHECK(followUpThread == std::this_thread::get_id());
+
+		// A ready job added from another thread wakes a sleeping waiter: only the waiter can run it, and the job it
+		// waits for depends on it. When the adder is late the waiter is asleep; when early, the first scan finds it.
+		std::thread::id unblockerThread;
+		auto blockedJob = jobs.CreateJob("Waits for the unblocker", JPH::Color::sGreen, [] {}, 1);
+		auto unblock = [&] {
+			unblockerThread = std::this_thread::get_id();
+			blockedJob.RemoveDependency();
+		};
+		auto unblocker = jobs.CreateJob("Unblocker", JPH::Color::sGreen, unblock, 1);
+		barrier->AddJob(blockedJob);
+		std::thread adder([&] {
+			std::this_thread::sleep_for(std::chrono::milliseconds(20));
+			// Ready before it joins, so the addition's wake-up finds it (a later dependency removal wakes nothing).
+			unblocker.RemoveDependency();
+			barrier->AddJob(unblocker);
+		});
+		jobs.WaitForJobs(barrier);
+		adder.join();
+		CHECK(blockedJob.IsDone());
+		CHECK(unblockerThread == std::this_thread::get_id());
+		releaseWorkers.count_down();
+		pool.WaitIdle();
+		jobs.DestroyBarrier(barrier);
+		PhysicsInternal::ReleaseJolt();
+	}
+
+#if !defined(BS_PLATFORM_WINDOWS)
+	namespace {
+
+		std::atomic<int> s_SignalsHandled = 0;
+
+	}
+
+	TEST_CASE("Physics job barriers keep waiting when a signal interrupts the wait")
+	{
+		// A signal handler installed without SA_RESTART (as libFuzzer's timer is) makes a blocked sem_wait return early
+		// with EINTR, which Jolt's own barrier counted as a finished job. That failed on Linux only (macOS semaphores
+		// do not return early); this barrier passes everywhere. Signals start once the waiter is about to block, which
+		// a heavily loaded machine can delay past them: then the test passes without exercising the wait.
+		BarrierWatchdog watchdog("Physics job barriers keep waiting when a signal interrupts the wait");
+		auto& pool = JobSystem::Get();
+		REQUIRE(pool.GetWorkerCount() > 0);
+		pool.WaitIdle();
+		struct sigaction action = {};
+		action.sa_handler = [](int) { s_SignalsHandled.fetch_add(1); };
+		sigemptyset(&action.sa_mask);
+		struct sigaction previous = {};
+		REQUIRE(sigaction(SIGUSR1, &action, &previous) == 0);
+		s_SignalsHandled = 0;
+		PhysicsInternal::AcquireJolt();
+		auto& jobs = PhysicsJobs::Get();
+		std::atomic<bool> started = false;
+		std::atomic<bool> release = false;
+		std::atomic<bool> finished = false;
+		std::atomic<bool> waiting = false;
+		auto* barrier = jobs.CreateBarrier();
+		barrier->AddJob(jobs.CreateJob("Blocked", JPH::Color::sGreen, [&] {
+			started = true;
+			while (!release)
+				std::this_thread::yield();
+			finished = true;
+		}));
+		// A worker runs the job, so this thread blocks in the wait instead of running it itself.
+		while (!started)
+			std::this_thread::yield();
+		const pthread_t waiter = pthread_self();
+		std::thread interrupter([&] {
+			// Signals start once the waiter is about to block, so they land during the wait.
+			while (!waiting)
+				std::this_thread::yield();
+			std::this_thread::sleep_for(std::chrono::milliseconds(5));
+			for (int i = 0; i < 50; ++i)
+			{
+				pthread_kill(waiter, SIGUSR1);
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
+			release = true;
+		});
+		waiting = true;
+		jobs.WaitForJobs(barrier);
+		const bool finishedBeforeReturn = finished;
+		interrupter.join();
+		// After an early return the job still has to report: let it, so a regression fails this test and not the run.
+		pool.WaitIdle();
+		CHECK(finishedBeforeReturn);
+		CHECK(s_SignalsHandled > 0);
+		jobs.DestroyBarrier(barrier);
+		PhysicsInternal::ReleaseJolt();
+		sigaction(SIGUSR1, &previous, nullptr);
+	}
+#endif
+
+#ifdef JPH_ENABLE_ASSERTS
+	TEST_CASE("Failed Jolt asserts are logged before Jolt breaks")
+	{
+		PhysicsInternal::AcquireJolt();
+		const uint64_t since = Log::GetHistory().GetTotalCount();
+		// Called directly: the breakpoint is in JPH_ASSERT, which acts on the returned true.
+		CHECK(JPH::AssertFailed("count > 0", "no bodies", "Jolt/Physics/Body.cpp", 7));
+		CHECK(JPH::AssertFailed("index < size", nullptr, "Jolt/Core/Array.h", 9));
+		CHECK(BasaltTest::CountLogMessages(since, "[Jolt] Assertion 'count > 0' failed at Jolt/Physics/Body.cpp:7: no bodies") == 1);
+		CHECK(BasaltTest::CountLogMessages(since, "[Jolt] Assertion 'index < size' failed at Jolt/Core/Array.h:9") == 1);
+		CHECK(BasaltTest::CountLogMessages(since, "Jolt/Core/Array.h:9:") == 0);
+		PhysicsInternal::ReleaseJolt();
+	}
+#endif
 
 	TEST_CASE("Physics warnings are logged once per distinct set and again after they clear")
 	{
