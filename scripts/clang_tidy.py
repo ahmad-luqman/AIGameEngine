@@ -103,6 +103,21 @@ def run_clang_tidy(clang_tidy, build_dir, source):
     return result.returncode, result.stdout
 
 
+def config_problems(output):
+    """Returns the lines of --verify-config's output that are problems: all but unknown checks that .clang-tidy disables
+    (they exist only in newer clang-tidy releases than CI's) and the all-clear."""
+    with open(os.path.join(SOURCE_DIR, ".clang-tidy"), encoding="utf-8") as file:
+        config = file.read()
+    problems = []
+    for line in filter(None, (line.strip() for line in output.splitlines())):
+        unknown = re.search(r"unknown check '([^']+)'", line)
+        if unknown and re.search(r"^\s*-" + re.escape(unknown.group(1)) + r"\s*,?\s*$", config, re.MULTILINE):
+            continue
+        if line != "No config errors detected.":
+            problems.append(line)
+    return problems
+
+
 def failure_reason(code, output):
     """Returns why a file's run failed, or None when it is clean."""
     if code is None:
@@ -155,7 +170,8 @@ def main():
     # clang-tidy ignores a misspelled check or option in .clang-tidy, which would quietly stop checking it.
     config = subprocess.run([clang_tidy, "--verify-config"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
         check=False, cwd=SOURCE_DIR)
-    if config.returncode != 0:
+    # An exit code of 1 with only tolerated lines is fine; anything else in the output is not.
+    if config_problems(config.stdout) or (config.returncode != 0 and "unknown check" not in config.stdout):
         sys.exit(f"{clang_tidy} --verify-config rejected .clang-tidy:\n{config.stdout}")
     print(f"{version_line}: {len(selected)} of {len(sources)} files (shard {index}/{count}), {args.jobs} at a time",
         flush=True)

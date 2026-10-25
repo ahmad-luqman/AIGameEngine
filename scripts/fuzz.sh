@@ -122,7 +122,9 @@ run_target()
 	echo "$target: passed"
 }
 
-export ASAN_OPTIONS="detect_leaks=0:allocator_may_return_null=1"
+# handle_sigtrap: a breakpoint trap (e.g. a dependency's debug assert) is reported with a stack trace and its input saved,
+# instead of killing the target silently.
+export ASAN_OPTIONS="detect_leaks=0:allocator_may_return_null=1:handle_sigtrap=1"
 export UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=1"
 export -f run_target
 for target in "${selected[@]}"; do
