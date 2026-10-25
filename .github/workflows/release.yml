@@ -29,7 +29,7 @@ concurrency:
 permissions:
   contents: read
 
-# Dependency sources come from the cache that CI shares (cmake/Dependencies.cmake, scripts/ci-collect-deps.sh).
+# Dependency sources come from the cache that every workflow shares (scripts/ci-cache.sh, cmake/DependencySources.cmake).
 env:
   BASALT_DEPS_SOURCE_DIR: ${{ github.workspace }}/_deps
 
@@ -100,21 +100,33 @@ jobs:
         if: runner.os == 'Windows'
         run: choco install ninja -y
 
-      - name: Cache dependency sources
+      - name: Restore dependency sources
         id: deps
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: _deps
-          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake') }}
+          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'scripts/ci-cache.sh') }}
+
+      - name: Fetch dependency sources
+        if: steps.deps.outputs.cache-hit != 'true'
+        shell: bash
+        run: scripts/ci-cache.sh fetch-deps _deps
+
+      # Saved right away, so a later failure (a red test, a fuzz finding) does not keep the next runs downloading.
+      - name: Save dependency sources
+        if: steps.deps.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: _deps
+          key: ${{ steps.deps.outputs.cache-primary-key }}
 
       # Dist: optimized, no asserts. The tests run in CI on every push; here the samples' smoke tests check the build.
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Dist -DBASALT_BUILD_TESTS=OFF -DBASALT_CHECK_FORMAT=OFF
 
-      - name: Collect dependency sources
-        if: steps.deps.outputs.cache-hit != 'true'
+      - name: Check that the build uses the caches
         shell: bash
-        run: scripts/ci-collect-deps.sh build _deps
+        run: scripts/ci-cache.sh check build
 
       - name: Build
         run: cmake --build build -- -k 0

@@ -12,8 +12,9 @@ on:
         description: Seconds per fuzz target (at most 2400; the Fuzz step's 80-minute timeout also covers the build)
         default: "1200"
 
-# The fuzz build compiles through ccache, restoring (never saving) the CI fuzz job's cache, and finds the dependency
-# sources restored from the cache that CI shares (cmake/Dependencies.cmake).
+# The fuzz build compiles through ccache, restoring (never saving) the CI fuzz job's cache, and takes the dependency
+# sources from the cache that every workflow shares (scripts/ci-cache.sh, cmake/DependencySources.cmake). Without
+# libdbus-1-dev it cannot fetch every dependency, so it only restores that cache; on a miss it downloads as usual.
 env:
   CMAKE_C_COMPILER_LAUNCHER: ccache
   CMAKE_CXX_COMPILER_LAUNCHER: ccache
@@ -50,18 +51,18 @@ jobs:
         run: |
           scripts/ci-apt-install.sh ninja-build glslc libvulkan1 clang libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols
 
-      - name: Cache dependency sources
-        id: deps
-        uses: actions/cache@v4
+      - name: Restore dependency sources
+        uses: actions/cache/restore@v4
         with:
           path: _deps
-          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake') }}
+          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'scripts/ci-cache.sh') }}
 
-      # One target per job: saving each job's cache would add a dozen copies of the same build.
+      # One target per job: saving from every job would store a near-identical copy of the CI fuzz cache per target.
       - name: Compiler cache
         uses: hendrikmuhs/ccache-action@v1.2.24
         with:
           key: fuzz
+          max-size: 800M
           save: false
 
       # Restored and saved separately so the corpus grown before a crash or a Fuzz step timeout is kept too
@@ -85,10 +86,6 @@ jobs:
             exit 1
           fi
           scripts/fuzz.sh "$SECONDS_PER_TARGET" "$TARGET"
-
-      - name: Collect dependency sources
-        if: steps.deps.outputs.cache-hit != 'true'
-        run: scripts/ci-collect-deps.sh build-fuzz _deps
 
       - name: Save corpus
         if: always()

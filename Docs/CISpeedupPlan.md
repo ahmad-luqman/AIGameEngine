@@ -52,7 +52,7 @@ Target after sessions 1–3: about 15 minutes per run.
 
 | # | PR | Cuts wall time? | Status |
 |---|----|-----------------|--------|
-| 1 | Compiler cache, one dependency-source cache, merge ubuntu/Release into lavapipe | Yes (every build) | Todo |
+| 1 | Compiler cache, one dependency-source cache, merge ubuntu/Release into lavapipe | Yes (every build) | In review (#56) |
 | 2 | Shard clang-tidy; run fuzz targets concurrently | Yes (two longest jobs) | Todo |
 | 3 | Parallel ctest, fast `ReleasePackaging`, shard `BasaltTests` | Yes (test steps) | Todo |
 | 4 | Remove redundant jobs; early format job; coverage on `main` only | Runner minutes, faster feedback | Todo |
@@ -169,3 +169,18 @@ From nightly run 40077058550 (2026-10-24):
 Record per session: PR number, measured job times after merge, anything that deviated from the plan.
 
 - 2026-10-25: plan written from the baseline above.
+- 2026-10-25, session 1 (#56), deviations from the plan:
+  - No `cmake/CompilerCache.cmake`: CMake reads `CMAKE_<LANG>_COMPILER_LAUNCHER` from the environment, so the configures
+    in `scripts/coverage.sh` and `scripts/fuzz.sh` get the launcher too. `cmake/Dependencies.cmake` adds what a launcher
+    needs: MSVC `/Z7` for Debug, Jolt's own `/Zi` off, and Jolt's precompiled header off (its 130 sources were
+    uncacheable). No `CCACHE_BASEDIR` (the workspace path never changes) and no `CCACHE_COMPILERCHECK` (the action sets
+    `compiler_check=content`). No `evict-old-files`: with it, a failed or cancelled job saved a smaller cache that the
+    next run restored; caches now grow to a `max-size` of about twice one build instead.
+  - Dependency sources: not `FETCHCONTENT_BASE_DIR` (whose stamps live in the `-subbuild` directories) but
+    `FETCHCONTENT_SOURCE_DIR_<NAME>` for each `<name>-src` in `BASALT_DEPS_SOURCE_DIR` (`cmake/DependencySources.cmake`).
+    On a miss, `scripts/ci-cache.sh fetch-deps` downloads every dependency, Tracy and nativefiledialog included, into
+    `_deps` before the build's configure, so hits and misses compile the same paths and every job saves the same set.
+    The directory is stamped with the hash of `Dependencies.cmake` and ignored when it differs; `ci-cache.sh check` fails
+    a job whose configure still downloaded something or lacks the launcher. Without `.git` the sources are ~180 MB per
+    OS instead of 1.2 GB per job.
+  - The first push showed git-bash `cp -R` cannot copy zstd's test symlinks on Windows; sources are now trimmed in place.
