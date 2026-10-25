@@ -112,8 +112,8 @@ if sys.argv[1:] == ["--version"]:
     print("fake clang-tidy version 1")
     sys.exit(1 if "VERSION_FAIL" in os.environ else 0)
 if sys.argv[1:] == ["--verify-config"]:
-    if "CONFIG_FAIL" in os.environ:
-        print("warning: unknown check 'modernize-use-overide'")
+    if "CONFIG_OUTPUT" in os.environ:
+        print(os.environ["CONFIG_OUTPUT"])
         sys.exit(1)
     print("No config errors detected.")
     sys.exit(0)
@@ -199,9 +199,22 @@ checked_files()
 # A clang-tidy that cannot report its version, or rejects .clang-tidy (a misspelled check would silently go unchecked).
 rejected("--version exited with 1", "-p", fake_build, "--clang-tidy", fake_tidy, sources["Good.cpp"],
     env=dict(os.environ, VERSION_FAIL="1"))
-rejected("unknown check", "-p", fake_build, "--clang-tidy", fake_tidy, sources["Good.cpp"], env=dict(os.environ, CONFIG_FAIL="1"))
+misspelled = ".clang-tidy: warning: unknown check 'modernize-use-overide' [-verify-config]"
+rejected("unknown check", "-p", fake_build, "--clang-tidy", fake_tidy, sources["Good.cpp"],
+    env=dict(os.environ, CONFIG_OUTPUT=misspelled))
+rejected("Error parsing", "-p", fake_build, "--clang-tidy", fake_tidy, sources["Good.cpp"],
+    env=dict(os.environ, CONFIG_OUTPUT="Error parsing .clang-tidy: unknown key 'Chceks'"))
+# A tolerated line does not excuse another problem next to it.
+rejected("Error parsing", "-p", fake_build, "--clang-tidy", fake_tidy, sources["Good.cpp"], env=dict(os.environ,
+    CONFIG_OUTPUT=".clang-tidy: warning: unknown check 'bugprone-random-generator-seed'\nError parsing .clang-tidy"))
 if os.path.exists(calls):
     fail("files were checked although clang-tidy was unusable")
+# Checks .clang-tidy disables for newer clang-tidy releases are unknown to older ones (CI's), which is fine.
+disabled = ".clang-tidy: warning: unknown check 'bugprone-random-generator-seed' [-verify-config]"
+result = run("-p", fake_build, "--clang-tidy", fake_tidy, sources["Good.cpp"], env=dict(os.environ, CONFIG_OUTPUT=disabled))
+if result.returncode != 0:
+    fail(f"an unknown check that .clang-tidy disables failed the run:\n{result.stdout}")
+checked_files()
 
 # Stale or foreign build trees: no target list, an empty one, a listed target without compile commands, and a compile
 # database without object paths.

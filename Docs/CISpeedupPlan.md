@@ -211,7 +211,8 @@ Record per session: PR number, measured job times after merge, anything that dev
     compiled Basalt source, shard coverage, argument checks, and a stand-in clang-tidy that logs every file it checks,
     for findings and crashes); the tidy jobs run it too, as theirs is the only tree with fuzz and GPU targets. The script
     also fails a listed target without compile commands, a finding that exits 0 (a lost `WarningsAsErrors`) and a
-    `.clang-tidy` that `--verify-config` rejects (a misspelled check is otherwise ignored). No `run-clang-tidy`: the
+    `.clang-tidy` that `--verify-config` rejects (a misspelled check is otherwise ignored), except for unknown checks it
+    disables: those exist only in newer releases than CI's clang-tidy 18. No `run-clang-tidy`: the
     script prints each failing file's output in one block. Shards come from `strategy.job-index`/`job-total`.
   - Test sources stay checked (the user's open question; CI has caught real findings in `Tests/Source`). The tidy
     configure also enables `BASALT_GPU_TESTS` and `BASALT_FUZZ`, so the GPU test and fuzz target sources are checked
@@ -231,3 +232,7 @@ Record per session: PR number, measured job times after merge, anything that dev
     flagged as the likely out-of-memory killer) and a target that never finished fail the run. Concurrent targets get
     `-rss_limit_mb=3072` instead of 4096 (16 GB runners); one at a time (the nightly) keeps 4096. Pushes keep 60 s per
     target.
+  - Run 40215677307 hit the nightly FuzzCommand finding on a push (killed by SIGTRAP after about 10 s, no input saved):
+    libFuzzer does not handle SIGTRAP, which a breakpoint-style assert raises (`BS_DEBUGBREAK` is `__builtin_trap`, a
+    SIGILL on x86, so likely a dependency's). `fuzz.sh` now sets ASan's `handle_sigtrap=1`, so such a trap is reported
+    with a stack trace and its input saved; the fix itself stays in the planned FuzzCommand PR.
