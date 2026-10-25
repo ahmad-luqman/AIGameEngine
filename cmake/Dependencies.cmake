@@ -6,8 +6,30 @@ include(FetchContent)
 set(FETCHCONTENT_QUIET ON)
 set(FETCHCONTENT_UPDATES_DISCONNECTED ON)
 
+# BASALT_DEPS_SOURCE_DIR names a directory of <name>-src copies of the sources below (CI restores one from its cache;
+# locally, another tree's _deps): each dependency found there is used in place instead of being downloaded, and the
+# rest download as usual. The copies must match the pins in this file, which CI's cache key hashes. FetchContent keeps
+# the chosen directories in the build tree's cache, so later configures use them even without the variable.
+if(DEFINED ENV{BASALT_DEPS_SOURCE_DIR})
+	file(TO_CMAKE_PATH "$ENV{BASALT_DEPS_SOURCE_DIR}" basaltDepsSourceDir)
+	file(GLOB basaltDepsSources LIST_DIRECTORIES true "${basaltDepsSourceDir}/*-src")
+	foreach(source IN LISTS basaltDepsSources)
+		if(IS_DIRECTORY "${source}")
+			get_filename_component(name "${source}" NAME)
+			string(REGEX REPLACE "-src$" "" name "${name}")
+			string(TOUPPER "${name}" name)
+			set(FETCHCONTENT_SOURCE_DIR_${name} "${source}")
+		endif()
+	endforeach()
+	list(LENGTH basaltDepsSources count)
+	message(STATUS "Basalt: ${count} dependency sources from ${basaltDepsSourceDir}")
+endif()
+
 # Some dependencies still declare cmake_minimum_required < 3.5, which CMake 4.x rejects.
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+# Dependencies that predate CMake 3.25 would ignore CMAKE_MSVC_DEBUG_INFORMATION_FORMAT; CI sets it to Embedded (/Z7)
+# so a compiler launcher can cache Debug objects.
+set(CMAKE_POLICY_DEFAULT_CMP0141 NEW)
 
 # Third-party code is built without our warning flags and never as shared libraries.
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
@@ -221,6 +243,11 @@ set(JPH_USE_CPU_COMPUTE OFF CACHE BOOL "" FORCE)
 set(CROSS_PLATFORM_DETERMINISTIC ON CACHE BOOL "" FORCE)
 # 32-bit object layers: Basalt packs motion type, collision layer and collision mask into them.
 set(OBJECT_LAYER_BITS 32 CACHE STRING "" FORCE)
+# Jolt adds /Zi to every MSVC configuration, and objects that write their debug information into a shared PDB cannot be
+# cached by a compiler launcher (CI). Debug builds still get debug information from CMake's own flags (CMP0141 above).
+if(MSVC)
+	set(GENERATE_DEBUG_SYMBOLS OFF CACHE BOOL "" FORCE)
+endif()
 
 FetchContent_MakeAvailable(VulkanHeaders)
 FetchContent_MakeAvailable(glfw glm nvrhi spdlog entt json jolt sol2 doctest
@@ -228,6 +255,11 @@ FetchContent_MakeAvailable(glfw glm nvrhi spdlog entt json jolt sol2 doctest
 # Jolt's deterministic mode turns contraction off for GCC, clang and MSVC, but not for clang-cl.
 if(MSVC AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 	target_compile_options(Jolt PRIVATE /clang:-ffp-contract=off)
+endif()
+# A compiler launcher (ccache, sccache) cannot cache sources built with a precompiled header. Every Jolt source includes
+# Jolt.h itself, so without it only a cold build gets slower.
+if(CMAKE_CXX_COMPILER_LAUNCHER)
+	set_target_properties(Jolt PROPERTIES DISABLE_PRECOMPILE_HEADERS ON)
 endif()
 
 # ---------------------------------------------------------------------------------------------
