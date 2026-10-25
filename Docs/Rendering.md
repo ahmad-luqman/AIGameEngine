@@ -375,13 +375,14 @@ that MASK coverage applies on spheres, and that scenes fall back to the inline v
 `Core/JobSystem` supplies one shared work-stealing CPU pool. Each worker takes its own queued work
 last-in-first-out and steals other queues first-in-first-out. `Submit` returns a completion fence;
 `Wait` helps execute work so nested jobs also complete with one worker. Exceptions fail the fence
-and log a diagnostic. Jolt job exceptions are fatal because Jolt cannot complete a barrier after a
-job unwinds. `ParallelFor` divides disjoint output ranges and joins every range before returning,
+and log a diagnostic. Jolt job exceptions are fatal because an unwound job never reports to its
+barrier. `ParallelFor` divides disjoint output ranges and joins every range before returning,
 including after a task fails. Callers retain captured data until completion and avoid cyclic waits.
 `WaitIdle` must run outside the pool's jobs; stop producers first for a stable idle fence. Destroy
 pools on the constructing thread after producers stop. Shutdown drains accepted jobs and their children.
-Physics uses Jolt barriers/dependencies on this pool. The Jolt adapter lives until engine shutdown,
-so stopping a world does not join unrelated asset jobs; queued references to completed physics jobs
+Physics uses Jolt job dependencies on this pool and Basalt's own barriers (`PhysicsJobs`: a mutex and
+condition variable, since Jolt's Linux barrier let a signal end a wait early). The adapter lives until
+engine shutdown, so stopping a world does not join unrelated asset jobs; queued references to completed physics jobs
 remain valid until the pool releases them. Process exit waits for all submitted pool work, including
 imports. Animation samples due poses through `ParallelFor` for crowds (32 or more due playbacks,
 ranges of 16). Control, asset resolution, clocks, events and root motion run on the main thread;

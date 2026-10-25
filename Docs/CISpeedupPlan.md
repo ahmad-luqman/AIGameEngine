@@ -53,11 +53,11 @@ Target after sessions 1–3: about 15 minutes per run.
 | # | PR | Cuts wall time? | Status |
 |---|----|-----------------|--------|
 | 1 | Compiler cache, one dependency-source cache, merge ubuntu/Release into lavapipe | Yes (every build) | Merged (#56) |
-| 2 | Shard clang-tidy; run fuzz targets concurrently | Yes (two longest jobs) | In review (#57) |
+| 2 | Shard clang-tidy; run fuzz targets concurrently | Yes (two longest jobs) | Merged (#57) |
 | 3 | Parallel ctest, fast `ReleasePackaging`, shard `BasaltTests` | Yes (test steps) | Todo |
 | 4 | Remove redundant jobs; early format job; coverage on `main` only | Runner minutes, faster feedback | Todo |
 | 5 | Shared setup action; nightly fuzz builds once | Maintenance | Todo |
-| — | Nightly fuzz findings (FuzzGltf, FuzzCommand) | Separate bug-fix PRs | Todo |
+| — | Nightly fuzz findings (FuzzGltf, FuzzCommand) | Separate bug-fix PRs | FuzzCommand in review (#58); FuzzGltf Todo |
 
 ### Session 1 — compiler cache and dependency cache
 
@@ -161,8 +161,11 @@ From nightly run 40077058550 (2026-10-24):
 - **FuzzGltf**: UBSan misaligned load in `cgltf.h:1566` (`unsigned short` from an odd address). Third-party: decide
   between a cgltf fix upstream/pin bump, a narrow `ubsan.supp` entry (currently empty), or copying unaligned buffers
   before cgltf reads them. Crash input is in the run's `fuzz-crashes-FuzzGltf` artifact; add it as a regression test.
-- **FuzzCommand**: died with SIGTRAP outside libFuzzer's reporting (`Trace/breakpoint trap`) — likely an assert or
-  `__builtin_trap` reached by a command input. Reproduce from `fuzz-crashes-FuzzCommand`.
+- **FuzzCommand** (#58): died with SIGTRAP outside libFuzzer's reporting. A run with `handle_sigtrap=1` and a Jolt assert
+  hook (40223333979) showed Jolt's `JobSystemWithBarrier` assert `job_ptr != nullptr && job_ptr->IsDone()` after
+  `play.step`: on Linux its barrier waits in `sem_wait`, which libFuzzer's timer signal (handler installed without
+  `SA_RESTART`) interrupts with EINTR, which Jolt ignores, so a physics step continued past running jobs. Input-independent; not a command bug. `PhysicsJobs` now has its
+  own mutex/condition-variable barrier, and failed Jolt asserts are logged like Basalt's.
 
 ## Progress log
 
@@ -235,7 +238,7 @@ Record per session: PR number, measured job times after merge, anything that dev
   - Run 40215677307 hit the nightly FuzzCommand finding on a push (killed by SIGTRAP after about 10 s, no input saved):
     libFuzzer does not handle SIGTRAP, which a breakpoint-style assert raises (`BS_DEBUGBREAK` is `__builtin_trap`, a
     SIGILL on x86, so likely a dependency's). `fuzz.sh` now sets ASan's `handle_sigtrap=1`, so such a trap is reported
-    with a stack trace and its input saved; the fix itself stays in the planned FuzzCommand PR.
+    with a stack trace and its input saved; the fix itself stays in the planned FuzzCommand PR (it was Jolt's barrier, #58).
   - Measured on run 40217059412 (e10c9cc, 239 files tidied): 13 min wall, down from 22. clang-tidy shards 355/472/477 s
     (tidy itself 320-449 s; round-robin balances file counts, not cost), fuzz 366 s (fuzzing 336 s for 13 targets, 4 at
     a time). lavapipe (772 s, of which GPU tests 656 s run serially) is now the critical path: session 3.

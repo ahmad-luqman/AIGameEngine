@@ -27,6 +27,22 @@ namespace Basalt::PhysicsInternal {
 			BS_CORE_TRACE("[Jolt] {}", buffer);
 		}
 
+#ifdef JPH_ENABLE_ASSERTS
+		// Jolt's default handler reports nothing before its breakpoint, which left a bare SIGTRAP. A failed Jolt assert
+		// means Basalt misused Jolt (invalid data or a broken job/barrier contract), so it is reported like a failed
+		// BS_CORE_ASSERT. Jolt has asserts only in builds without NDEBUG (Debug), so the hook exists only there;
+		// Basalt's Release keeps BS_CORE_ASSERT but has no Jolt asserts.
+		bool JoltAssertFailed(const char* expression, const char* message, const char* file, JPH::uint line)
+		{
+			if (message)
+				BS_CORE_CRITICAL("[Jolt] Assertion '{}' failed at {}:{}: {}", expression, file, line, message);
+			else
+				BS_CORE_CRITICAL("[Jolt] Assertion '{}' failed at {}:{}", expression, file, line);
+			// Jolt then breaks (JPH_BREAKPOINT), as BS_CORE_ASSERT does.
+			return true;
+		}
+#endif
+
 	}
 
 	void AcquireJolt()
@@ -39,6 +55,9 @@ namespace Basalt::PhysicsInternal {
 		std::call_once(s_AllocatorInitialized, [] {
 			JPH::RegisterDefaultAllocator();
 			JPH::Trace = JoltTrace;
+#ifdef JPH_ENABLE_ASSERTS
+			JPH::AssertFailed = JoltAssertFailed;
+#endif
 		});
 		JPH::Factory::sInstance = new JPH::Factory();
 		JPH::RegisterTypes();
