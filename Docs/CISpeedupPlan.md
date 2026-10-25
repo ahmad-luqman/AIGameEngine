@@ -236,3 +236,6 @@ Record per session: PR number, measured job times after merge, anything that dev
     libFuzzer does not handle SIGTRAP, which a breakpoint-style assert raises (`BS_DEBUGBREAK` is `__builtin_trap`, a
     SIGILL on x86, so likely a dependency's). `fuzz.sh` now sets ASan's `handle_sigtrap=1`, so such a trap is reported
     with a stack trace and its input saved; the fix itself stays in the planned FuzzCommand PR.
+  - Measured on run 40217059412 (e10c9cc, 239 files tidied): 13 min wall, down from 22. clang-tidy shards 355/472/477 s
+    (tidy itself 320-449 s; round-robin balances file counts, not cost), fuzz 366 s (fuzzing 336 s for 13 targets, 4 at
+    a time). lavapipe (772 s, of which GPU tests 656 s run serially) is now the critical path: session 3.
