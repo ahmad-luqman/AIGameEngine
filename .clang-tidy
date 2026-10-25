@@ -1,4 +1,5 @@
-# Static analysis for Basalt's own code (enabled with -DBASALT_CLANG_TIDY=ON; third-party code is not checked).
+# Static analysis for Basalt's own code (scripts/clang_tidy.py, or -DBASALT_CLANG_TIDY=ON while compiling; third-party
+# code is not checked).
 # Disabled checks and why:
 #   bugprone-easily-swappable-parameters    flags most math and rendering signatures (x, y, width, height).
 #   bugprone-narrowing-conversions          float/int conversions in math code are deliberate and pervasive.

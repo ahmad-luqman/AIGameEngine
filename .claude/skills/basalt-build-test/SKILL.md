@@ -25,10 +25,11 @@ Extra checks (each one is also a CI job; run locally when touching memory handli
 - Sanitizers: `cmake -S . -B build-asan -G Ninja -DBASALT_SANITIZE="address;undefined" -DBASALT_CHECK_FORMAT=OFF`,
   build, then `ctest --test-dir build-asan -LE "gpu|format"`. Fix reports in Basalt code; only third-party
   reports go into `cmake/sanitizers/*.supp`.
-- clang-tidy: configure with `-DBASALT_CLANG_TIDY=ON` (checks in `.clang-tidy`); findings fail the build.
-  Fix them, or `NOLINT(check-name)` with a reason when the check is wrong.
+- clang-tidy: `scripts/clang_tidy.py -p build [files...]` checks the sources of every Basalt target in a configured
+  build (CI: `--shard I/3`), or configure with `-DBASALT_CLANG_TIDY=ON` to check while compiling (checks in
+  `.clang-tidy`). Include changed test files. Fix findings, or `NOLINT(check-name)` with a reason when the check is wrong.
 - Fuzzing: `scripts/fuzz.sh [seconds] [target]` builds and runs the libFuzzer targets in `Tests/Fuzz/` matching
-  `[target]` (all by default; Clang, on macOS Homebrew LLVM). Run it after touching a parser or loader. A crash input lands
+  `[target]` (all by default; Clang, on macOS Homebrew LLVM), `FUZZ_JOBS=N` of them at a time. Run it after touching a parser or loader. A crash input lands
   in `build-fuzz/crashes/<Target>/`: reproduce with `build-fuzz/bin/<Target> <file>`, turn it into a
   regression test, then fix. New file formats or entry points get a target (`Tests/Fuzz/Fuzz<Name>.cpp`; CMake and
   the nightly workflow pick it up) and seed files in `Tests/Fuzz/Corpus/`. The nightly workflow runs one job per

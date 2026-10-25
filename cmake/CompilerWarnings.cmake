@@ -27,7 +27,9 @@ function(basalt_set_warnings target)
 		endif()
 	endif()
 
-	# Static analysis runs on the same targets as the warnings, so third-party code is never checked.
+	# Static analysis runs on the same targets as the warnings, so third-party code is never checked: while compiling
+	# (BASALT_CLANG_TIDY) or through scripts/clang_tidy.py, which reads the list the top-level CMakeLists.txt writes.
+	set_property(GLOBAL APPEND PROPERTY BASALT_WARNING_TARGETS ${target})
 	if(BASALT_CLANG_TIDY)
 		set_target_properties(${target} PROPERTIES CXX_CLANG_TIDY "${BASALT_CLANG_TIDY_COMMAND}")
 	endif()

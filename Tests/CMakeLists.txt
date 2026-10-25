@@ -58,6 +58,13 @@ if(Python3_Interpreter_FOUND)
 
 	add_test(NAME BenchmarkHarness COMMAND "${Python3_EXECUTABLE}" -B -O "${CMAKE_CURRENT_SOURCE_DIR}/Benchmarks/RunTests.py")
 	set_tests_properties(BenchmarkHarness PROPERTIES LABELS unit TIMEOUT 30)
+	# scripts/clang_tidy.py (CI's sharded clang-tidy) against this build tree; its stand-in clang-tidy is a script with a
+	# shebang, which Windows cannot start.
+	if(NOT WIN32)
+		add_test(NAME ClangTidyScript COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/ClangTidy/CheckClangTidyScript.py"
+			"${PROJECT_SOURCE_DIR}" "${PROJECT_BINARY_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/ClangTidyScript")
+		set_tests_properties(ClangTidyScript PROPERTIES LABELS unit TIMEOUT 60)
+	endif()
 	# Crashes child processes on purpose and checks their crash reports (Core/CrashReporter).
 	add_test(NAME CrashReport COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/Automation/CrashReport.py" $<TARGET_FILE:BasaltTests>)
 	set_tests_properties(CrashReport PROPERTIES LABELS integration TIMEOUT 300 SKIP_RETURN_CODE 77)
