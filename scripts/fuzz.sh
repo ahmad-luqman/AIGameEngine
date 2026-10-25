@@ -2,7 +2,8 @@
 # Builds the selected libFuzzer targets (all by default; Clang + ASan + UBSan) into build-fuzz/ and runs each one.
 # Usage: scripts/fuzz.sh [seconds per target, default 60] [target name filter]
 #        scripts/fuzz.sh --list   (prints the target names as a JSON array, for the nightly CI matrix)
-# FUZZ_JOBS=N runs N targets at a time (default 1; CI uses one per core); each prints its summary when it finishes.
+# FUZZ_JOBS=N runs N targets at a time (default 1; CI uses one per core); each prints a status line as it finishes, and
+# the summaries follow in target order.
 # Seeds come from Tests/Fuzz/Corpus/<Target>/; new interesting inputs collect in build-fuzz/corpus/ and
 # crashes in build-fuzz/crashes/ (add a regression test before fixing one). On macOS this needs Homebrew
 # LLVM (Apple's clang ships no libFuzzer).
@@ -68,16 +69,18 @@ cmake -S . -B "$buildDir" -G Ninja -DCMAKE_BUILD_TYPE=Debug "${compiler[@]}" \
 cmake --build "$buildDir" --target "${selected[@]}"
 
 # Several targets share the machine's memory, so each gets a smaller limit, sized for one target per core on CI's
-# 4-core, 16 GB runners (peak RSS there is about 250-650 MB). An input that makes a target exceed it is an out-of-memory
-# finding; libFuzzer's -malloc_limit_mb defaults to the same limit, so one oversized allocation is a finding too.
+# 4-core, 16 GB runners (each summary shows the target's peak RSS). An input that makes a target exceed it is an
+# out-of-memory finding; libFuzzer's -malloc_limit_mb defaults to the same limit, so one oversized allocation is too.
 rssLimit=4096
 [[ $jobs -gt 1 ]] && rssLimit=3072
 
-# Runs one target (arguments: target, build dir, seconds, RSS limit), writes its summary to logs/<target>.summary and
-# prints one status line. Returns 1 for a finding: never more, since xargs stops starting targets after an exit of 255.
+# Runs one target (arguments: target, build dir, seconds, RSS limit; from the repository root, with the sanitizer options
+# exported), writes its summary to logs/<target>.summary and prints one status line. Returns 1 for any failure (a
+# finding, a kill, a run that did not fuzz), never more: xargs stops starting targets after an exit of 255.
 run_target()
 {
-	set -uo pipefail
+	# A bash -c child does not inherit the caller's options; -e stays off because exit codes are collected explicitly.
+	set -u
 	local target="$1" buildDir="$2" seconds="$3" rssLimit="$4"
 	local corpus="$buildDir/corpus/$target"
 	local crashes="$buildDir/crashes/$target"
@@ -93,12 +96,13 @@ run_target()
 	local summary="=== $target (${seconds}s)"
 	summary+=$'\n'"$(grep -E "^(#[0-9]+[[:space:]]+DONE|stat::number_of_executed_units|stat::peak_rss_mb|==[0-9]+== ?ERROR|SUMMARY|artifact_prefix|Test unit written)|runtime error|^ +#[0-9] " "$log")"
 	# libFuzzer exits non-zero for every finding and for failures that write no input (a target that cannot start, a
-	# missing corpus directory). The crash directory also counts, so inputs left by an earlier run keep failing until
-	# they are turned into tests and removed. A clean exit without libFuzzer's final DONE line did not fuzz.
+	# missing corpus directory). The crash directory also counts (crash, timeout, out-of-memory and slow-unit inputs),
+	# so inputs left by an earlier run keep failing until they are turned into tests and removed. A clean exit without
+	# libFuzzer's final DONE line did not fuzz.
 	local problem=""
 	if [[ $result -gt 128 ]]; then
-		problem="killed by signal $((result - 128))"
-		[[ $result -eq 137 ]] && problem+=" (SIGKILL, likely the kernel's out-of-memory killer)"
+		problem="exited with $result, probably killed by signal $((result - 128))"
+		[[ $result -eq 137 ]] && problem="killed by SIGKILL, likely the kernel's out-of-memory killer"
 	elif [[ $result -ne 0 ]]; then
 		problem="exited with $result"
 	elif compgen -G "$crashes/*" > /dev/null; then
@@ -108,7 +112,7 @@ run_target()
 	fi
 	if [[ -n "$problem" ]]; then
 		summary+=$'\n'"$target: $problem; crash inputs (if any) in $crashes, full log in $log"
-		[[ $result -ne 0 ]] && summary+=$'\n'"$(tail -n 20 "$log")"
+		summary+=$'\n'"$(tail -n 20 "$log")"
 	fi
 	printf '%s\n' "$summary" > "$buildDir/logs/$target.summary"
 	if [[ -n "$problem" ]]; then
@@ -135,7 +139,8 @@ for target in "${selected[@]}"; do
 	if [[ -f "$buildDir/logs/$target.summary" ]]; then
 		cat "$buildDir/logs/$target.summary"
 	else
-		echo "=== $target did not run" >&2
+		# Its bash died before writing one, or xargs stopped before starting it.
+		echo "=== $target did not finish; log (if any): $buildDir/logs/$target.log" >&2
 		status=1
 	fi
 done

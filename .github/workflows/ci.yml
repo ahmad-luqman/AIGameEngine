@@ -10,9 +10,9 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# Every build, including those in scripts/coverage.sh and scripts/fuzz.sh, compiles through ccache (build-and-test uses
-# sccache on Windows; the clang-tidy jobs compile only shaders and use none) and takes the dependency sources from a cache shared by every job on an OS, and by the other
-# workflows through main's entries (scripts/ci-fetch-deps.sh, cmake/DependencySources.cmake). A cache miss fetches them
+# Every build that compiles C++, including those in scripts/coverage.sh and scripts/fuzz.sh, compiles through ccache
+# (build-and-test uses sccache on Windows; the clang-tidy jobs compile only shaders and clear the launchers) and takes the
+# dependency sources from a cache shared by every job on an OS, and by the other workflows through main's entries (scripts/ci-fetch-deps.sh, cmake/DependencySources.cmake). A cache miss fetches them
 # into the same directory first, so cache hits and misses compile the same paths. The action sets ccache's
 # compiler_check to content only on macOS and Windows.
 env:
@@ -213,7 +213,9 @@ jobs:
         run: ctest --test-dir build --output-on-failure -LE "gpu|format"
 
   # clang-tidy over the sources of every Basalt target (engine, apps, tests, GPU tests, benchmark and fuzz targets;
-  # third-party code never), split over the matrix's jobs by scripts/clang_tidy.py. Any finding fails the job (.clang-tidy).
+  # third-party code never), split over the matrix's jobs by scripts/clang_tidy.py. Any finding fails the job
+  # (WarningsAsErrors in .clang-tidy; the script also fails findings that are not errors). The shard comes from the job's
+  # index, so every file is checked by exactly one job whatever the matrix holds; matrix.shard only sets the job count.
   clang-tidy:
     name: ubuntu-24.04 / clang-tidy (${{ matrix.shard }}/${{ strategy.job-total }})
     runs-on: ubuntu-24.04
@@ -254,7 +256,8 @@ jobs:
           path: _deps
           key: ${{ steps.deps.outputs.cache-primary-key }}
 
-      # Clang's compile commands (clang-tidy does not know GCC-only flags). The GPU tests and fuzz targets add their sources.
+      # Clang's compile commands (clang-tidy does not know GCC-only flags). The GPU tests and fuzz targets add their
+      # sources.
       - name: Configure
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
@@ -265,13 +268,18 @@ jobs:
         shell: bash
         run: scripts/ci-check-caches.sh build
 
-      # The only generated files Basalt's sources include: the SPIR-V blobs of the generated EmbeddedShaders.cpp. A source
-      # that includes another build-time header fails with a missing include until its target is built here too.
+      # The only generated files Basalt's sources include: the SPIR-V blobs of the generated EmbeddedShaders.cpp. A
+      # source that includes another build-time header fails with a missing include until its target is built here too.
       - name: Compile shaders
         run: cmake --build build --target BasaltShaders
 
+      # Only this tree has every kind of target (fuzz targets included), so its selection is checked against every
+      # compiled Basalt source here (no build needed).
+      - name: Check the clang-tidy selection
+        run: ctest --test-dir build --output-on-failure --no-tests=error -R "^ClangTidyScript$"
+
       - name: clang-tidy
-        run: scripts/clang_tidy.py -p build --shard ${{ matrix.shard }}/${{ strategy.job-total }} -j "$(nproc)"
+        run: scripts/clang_tidy.py -p build --shard $(( ${{ strategy.job-index }} + 1 ))/${{ strategy.job-total }} -j "$(nproc)"
 
   # Source-based coverage of the headless tests. Informational only: the summary is shown on the run
   # page and the HTML report is uploaded as an artifact.
