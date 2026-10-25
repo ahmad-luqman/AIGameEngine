@@ -1,44 +1,54 @@
-# Lets a configure use dependency sources fetched earlier instead of downloading them (CI restores them from its cache).
-# BASALT_DEPS_SOURCE_DIR names a directory that scripts/ci-cache.sh filled with <name>-src copies of the pinned sources.
-# It is an environment variable rather than a cache option so that the configures inside scripts/coverage.sh and
-# scripts/fuzz.sh see it too.
+# Lets a configure take dependency sources fetched earlier instead of downloading them (CI restores them from its
+# cache). BASALT_DEPS_SOURCE_DIR names a directory that scripts/ci-fetch-deps.sh filled with the pinned sources as
+# <name>-src directories. It is an environment variable rather than a cache option so that the configures inside
+# scripts/coverage.sh and scripts/fuzz.sh see it too.
 
-# Points FetchContent at each <name>-src in BASALT_DEPS_SOURCE_DIR. The directory is used only while its stamp
-# (pins.sha256) matches the hash of pinsFile, so it never supplies sources for other pins, and only for this configure:
-# FetchContent caches the chosen paths, so the ones an earlier configure chose are cleared first.
+# Points FetchContent at each <name>-src in BASALT_DEPS_SOURCE_DIR, but only while the directory's stamp (pins.sha256)
+# equals the hash of pinsFile: any edit to that file, comments included, invalidates it. FetchContent caches the chosen
+# paths, so those an earlier call chose (BASALT_DEPS_SOURCE_NAMES) are cleared first, and a configure without a valid
+# directory downloads as usual. FETCHCONTENT_SOURCE_DIR_<NAME> entries set by hand are left alone.
 function(basalt_use_dependency_sources pinsFile)
 	foreach(name IN LISTS BASALT_DEPS_SOURCE_NAMES)
 		unset(FETCHCONTENT_SOURCE_DIR_${name} CACHE)
 	endforeach()
+	set(BASALT_DEPS_SOURCE_NAMES "" CACHE INTERNAL "Dependencies whose sources came from BASALT_DEPS_SOURCE_DIR")
+	if(NOT DEFINED ENV{BASALT_DEPS_SOURCE_DIR})
+		return()
+	endif()
+
+	file(TO_CMAKE_PATH "$ENV{BASALT_DEPS_SOURCE_DIR}" sourceDir)
+	file(SHA256 "${pinsFile}" pins)
+	set(stamp "")
+	if(EXISTS "${sourceDir}/pins.sha256")
+		file(READ "${sourceDir}/pins.sha256" stamp)
+		string(STRIP "${stamp}" stamp)
+	endif()
+	if(NOT stamp STREQUAL pins)
+		# A missing directory is a cache miss in a workflow that does not fetch (the nightly fuzz run) or a local tree
+		# without one; a directory with another stamp, or none, holds sources for other pins.
+		if(EXISTS "${sourceDir}")
+			message(WARNING "Basalt: ignoring BASALT_DEPS_SOURCE_DIR (${sourceDir}): its sources were not fetched for "
+				"these pins (scripts/ci-fetch-deps.sh)")
+		endif()
+		return()
+	endif()
 
 	set(names "")
-	if(DEFINED ENV{BASALT_DEPS_SOURCE_DIR})
-		file(TO_CMAKE_PATH "$ENV{BASALT_DEPS_SOURCE_DIR}" sourceDir)
-		file(SHA256 "${pinsFile}" pins)
-		set(stamp "")
-		if(EXISTS "${sourceDir}/pins.sha256")
-			file(READ "${sourceDir}/pins.sha256" stamp)
-			string(STRIP "${stamp}" stamp)
+	file(GLOB sources LIST_DIRECTORIES true "${sourceDir}/*-src")
+	foreach(source IN LISTS sources)
+		get_filename_component(name "${source}" NAME)
+		string(REGEX REPLACE "-src$" "" name "${name}")
+		string(TOUPPER "${name}" name)
+		if(IS_DIRECTORY "${source}" AND NOT FETCHCONTENT_SOURCE_DIR_${name})
+			set(FETCHCONTENT_SOURCE_DIR_${name} "${source}" PARENT_SCOPE)
+			list(APPEND names ${name})
 		endif()
-
-		if(stamp STREQUAL pins)
-			file(GLOB sources LIST_DIRECTORIES true "${sourceDir}/*-src")
-			foreach(source IN LISTS sources)
-				if(IS_DIRECTORY "${source}")
-					get_filename_component(name "${source}" NAME)
-					string(REGEX REPLACE "-src$" "" name "${name}")
-					string(TOUPPER "${name}" name)
-					set(FETCHCONTENT_SOURCE_DIR_${name} "${source}" PARENT_SCOPE)
-					list(APPEND names ${name})
-				endif()
-			endforeach()
-			list(LENGTH names count)
-			message(STATUS "Basalt: ${count} dependency sources from ${sourceDir}")
-		elseif(EXISTS "${sourceDir}")
-			# A missing directory is a CI cache miss; one with the wrong stamp holds sources for other pins.
-			message(WARNING "Basalt: ignoring BASALT_DEPS_SOURCE_DIR (${sourceDir}): its sources were not fetched for "
-				"these pins (scripts/ci-cache.sh fetch-deps)")
-		endif()
+	endforeach()
+	list(LENGTH names count)
+	if(count EQUAL 0)
+		message(WARNING "Basalt: BASALT_DEPS_SOURCE_DIR (${sourceDir}) holds no dependency sources")
+	else()
+		message(STATUS "Basalt: ${count} dependency sources from ${sourceDir}")
 	endif()
 	set(BASALT_DEPS_SOURCE_NAMES "${names}" CACHE INTERNAL "Dependencies whose sources came from BASALT_DEPS_SOURCE_DIR")
 endfunction()

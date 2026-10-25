@@ -172,15 +172,20 @@ Record per session: PR number, measured job times after merge, anything that dev
 - 2026-10-25, session 1 (#56), deviations from the plan:
   - No `cmake/CompilerCache.cmake`: CMake reads `CMAKE_<LANG>_COMPILER_LAUNCHER` from the environment, so the configures
     in `scripts/coverage.sh` and `scripts/fuzz.sh` get the launcher too. `cmake/Dependencies.cmake` adds what a launcher
-    needs: MSVC `/Z7` for Debug, Jolt's own `/Zi` off, and Jolt's precompiled header off (its 130 sources were
-    uncacheable). No `CCACHE_BASEDIR` (the workspace path never changes) and no `CCACHE_COMPILERCHECK` (the action sets
-    `compiler_check=content`). No `evict-old-files`: with it, a failed or cancelled job saved a smaller cache that the
-    next run restored; caches now grow to a `max-size` of about twice one build instead.
+    needs: MSVC `/Z7` for Debug and RelWithDebInfo when a launcher is set, Jolt's own `/Zi` off, and Jolt's precompiled
+    header off (its 130 sources were uncacheable). No `CCACHE_BASEDIR` (the workspace path never changes).
+    `CCACHE_COMPILERCHECK=content` is set in the workflows: the action sets it only on macOS and Windows.
+  - Compiler caches are pruned of files unused for 7 days (`evict-old-files: 7d`), not per job: with `job`, a failed or
+    cancelled job saved a smaller cache that the next run restored. Each is capped at about twice one build (first
+    saves: Linux Debug 277 MB, macOS Debug 228 MB, macOS Release 58 MB).
   - Dependency sources: not `FETCHCONTENT_BASE_DIR` (whose stamps live in the `-subbuild` directories) but
-    `FETCHCONTENT_SOURCE_DIR_<NAME>` for each `<name>-src` in `BASALT_DEPS_SOURCE_DIR` (`cmake/DependencySources.cmake`).
-    On a miss, `scripts/ci-cache.sh fetch-deps` downloads every dependency, Tracy and nativefiledialog included, into
-    `_deps` before the build's configure, so hits and misses compile the same paths and every job saves the same set.
-    The directory is stamped with the hash of `Dependencies.cmake` and ignored when it differs; `ci-cache.sh check` fails
-    a job whose configure still downloaded something or lacks the launcher. Without `.git` the sources are ~180 MB per
-    OS instead of 1.2 GB per job.
-  - The first push showed git-bash `cp -R` cannot copy zstd's test symlinks on Windows; sources are now trimmed in place.
+    `FETCHCONTENT_SOURCE_DIR_<NAME>` for each `<name>-src` in `BASALT_DEPS_SOURCE_DIR` (`cmake/DependencySources.cmake`),
+    and not `.deps` but `_deps` (so `coverage.sh`'s ignore pattern still applies). On a miss,
+    `scripts/ci-fetch-deps.sh` downloads every dependency, Tracy and nativefiledialog included, into `_deps` before the
+    build's configure, so hits and misses compile the same paths and every job that fetches saves the same set; the cache
+    is saved right after the fetch. The directory is stamped with the hash of `Dependencies.cmake` and ignored when it
+    differs; `scripts/ci-check-caches.sh` fails a job whose configure still downloaded something or lacks the launcher.
+    Without `.git` the sources are about 414 MB on disk and about 180-230 MB as a cache entry per OS, instead of the
+    1.2 GB entry each job restored before.
+  - The first push showed Git Bash's `cp -R` cannot copy zstd's test symlinks on Windows (sources are now trimmed in
+    place), and the second that `tr | grep -q` under `pipefail` failed the launcher check on macOS (SIGPIPE).

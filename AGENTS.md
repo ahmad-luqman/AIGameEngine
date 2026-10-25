@@ -231,9 +231,12 @@ scripts/test.sh             # build + ctest (unit tests, format check, ...)
   untrusted input (`scripts/fuzz.sh`, `Tests/Fuzz/`; nightly long runs). Parse untrusted JSON with
   `ParseJson` and read floats with `JsonToFloat` (`Basalt/Core/JsonUtils.h`). Tests carry ctest labels
   (`unit`, `integration`, `gpu`, `format`, `benchmark`) for `ctest -L/-LE`. Details: the basalt-build-test skill.
-- CI compiles through ccache (sccache on Windows, with `/Z7`) set by the `CMAKE_<LANG>_COMPILER_LAUNCHER` environment
-  variables, and takes dependency sources from `BASALT_DEPS_SOURCE_DIR` (`cmake/DependencySources.cmake`), a directory
-  `scripts/ci-cache.sh fetch-deps` fills and stamps with the pins it matches; a directory with another stamp is ignored.
+- CI compiles through ccache (sccache on Windows; Debug objects then embed debug information, `/Z7`) set by the
+  `CMAKE_<LANG>_COMPILER_LAUNCHER` environment variables, and takes dependency sources from `BASALT_DEPS_SOURCE_DIR`
+  (`cmake/DependencySources.cmake`): a directory that `scripts/ci-fetch-deps.sh` fills and stamps with the hash of
+  `cmake/Dependencies.cmake`. A directory without that stamp (another tree's `build/_deps` included) is ignored; locally,
+  one fetch into a shared directory lets worktrees reuse the sources. `scripts/ci-check-caches.sh` fails a CI job whose
+  build tree does not use either cache.
 - **macOS + Homebrew:** Homebrew's validation layer manifest names its library without a path, so non-Dist
   builds point `VK_ADD_LAYER_PATH` at a copy with the absolute path (`Renderer/ValidationLayerManifest`; prefixes
   `$HOMEBREW_PREFIX`, `/opt/homebrew`, `/usr/local`); no

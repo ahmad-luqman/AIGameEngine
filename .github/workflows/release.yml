@@ -29,7 +29,8 @@ concurrency:
 permissions:
   contents: read
 
-# Dependency sources come from the cache that every workflow shares (scripts/ci-cache.sh, cmake/DependencySources.cmake).
+# Dependency sources come from CI's dependency-source cache (main's entry, or this ref's own; scripts/ci-fetch-deps.sh,
+# cmake/DependencySources.cmake).
 env:
   BASALT_DEPS_SOURCE_DIR: ${{ github.workspace }}/_deps
 
@@ -105,14 +106,15 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: _deps
-          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'scripts/ci-cache.sh') }}
+          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'scripts/ci-fetch-deps.sh') }}
 
       - name: Fetch dependency sources
         if: steps.deps.outputs.cache-hit != 'true'
         shell: bash
-        run: scripts/ci-cache.sh fetch-deps _deps
+        run: scripts/ci-fetch-deps.sh _deps
 
-      # Saved right away, so a later failure (a red test, a fuzz finding) does not keep the next runs downloading.
+      # Saved right away (actions/cache saves only after a successful job), so a later failing step does not leave the
+      # next runs fetching again.
       - name: Save dependency sources
         if: steps.deps.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
@@ -126,7 +128,7 @@ jobs:
 
       - name: Check that the build uses the caches
         shell: bash
-        run: scripts/ci-cache.sh check build
+        run: scripts/ci-check-caches.sh build
 
       - name: Build
         run: cmake --build build -- -k 0

@@ -11,11 +11,14 @@ concurrency:
   cancel-in-progress: true
 
 # Every build, including those in scripts/coverage.sh and scripts/fuzz.sh, compiles through ccache (build-and-test uses
-# sccache on Windows) and takes the dependency sources from the cache that every workflow shares (scripts/ci-cache.sh,
-# cmake/DependencySources.cmake). A cache miss fetches them into the same directory first, so both compile the same paths.
+# sccache on Windows) and takes the dependency sources from a cache shared by every job on an OS, and by the other
+# workflows through main's entries (scripts/ci-fetch-deps.sh, cmake/DependencySources.cmake). A cache miss fetches them
+# into the same directory first, so cache hits and misses compile the same paths. The action sets ccache's
+# compiler_check to content only on macOS and Windows.
 env:
   CMAKE_C_COMPILER_LAUNCHER: ccache
   CMAKE_CXX_COMPILER_LAUNCHER: ccache
+  CCACHE_COMPILERCHECK: content
   BASALT_DEPS_SOURCE_DIR: ${{ github.workspace }}/_deps
 
 jobs:
@@ -33,7 +36,6 @@ jobs:
           - os: ubuntu-24.04
             config: Release
         include:
-          # Windows builds use sccache; everything else ccache.
           - os: windows-latest
             launcher: sccache
     env:
@@ -76,23 +78,26 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: _deps
-          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'scripts/ci-cache.sh') }}
+          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'scripts/ci-fetch-deps.sh') }}
 
-      # Each cache keeps growing to its max-size (about twice one build; the Actions cache holds 10 GB in all), and a
-      # failed or cancelled job saves only more than it restored.
+      # Each compiler cache is capped at about twice one build (300M for Release, 1G for Windows Debug, 600M otherwise;
+      # about 5.7 GB over all jobs, of the repository's 10 GB Actions cache). Saving prunes only files unused for a week
+      # (ccache), so a failed or cancelled job never saves a smaller cache than the one it restored.
       - name: Compiler cache
         uses: hendrikmuhs/ccache-action@v1.2.24
         with:
           key: ${{ matrix.os }}-${{ matrix.config }}
           variant: ${{ matrix.launcher || 'ccache' }}
           max-size: ${{ matrix.config == 'Release' && '300M' || matrix.launcher && '1G' || '600M' }}
+          evict-old-files: 7d
 
       - name: Fetch dependency sources
         if: steps.deps.outputs.cache-hit != 'true'
         shell: bash
-        run: scripts/ci-cache.sh fetch-deps _deps
+        run: scripts/ci-fetch-deps.sh _deps
 
-      # Saved right away, so a later failure (a red test, a fuzz finding) does not keep the next runs downloading.
+      # Saved right away (actions/cache saves only after a successful job), so a later failing step does not leave the
+      # next runs fetching again.
       - name: Save dependency sources
         if: steps.deps.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
@@ -109,23 +114,31 @@ jobs:
           if [[ "${{ runner.os }}" == "macOS" && "${{ matrix.config }}" == "Debug" ]]; then formatCheck=ON; fi
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DBASALT_CHECK_FORMAT=$formatCheck -DBASALT_PROFILE=$profile -DBASALT_BENCHMARK_TESTS=${{ matrix.config == 'Release' && 'ON' || 'OFF' }}
 
-      # cmake/Dependencies.cmake embeds MSVC debug information (/Z7) when a launcher is set; a dependency that adds /Zi
-      # itself would silently make its objects uncacheable again.
+      # cmake/Dependencies.cmake embeds MSVC debug information (/Z7) in Debug objects when a launcher is set. A dependency
+      # that adds /Zi itself would make its objects uncacheable again, and one that drops /Z7 would lose debug information.
       - name: Check that every object is cacheable (Windows)
         if: runner.os == 'Windows'
         shell: python
+        env:
+          CONFIG: ${{ matrix.config }}
         run: |
-          import json, re, sys
+          import json, os, re, sys
           commands = json.load(open("build/compile_commands.json"))
-          files = [e["file"] for e in commands if re.search(r"[-/]Z[iI](\s|$)", e["command"])]
-          if files:
-              print("::error::%d sources compile with /Zi or /ZI, which sccache cannot cache, e.g.:" % len(files))
-              print("\n".join(files[:20]))
+          shared = [e["file"] for e in commands if re.search(r"[-/]Z[iI](\s|$)", e["command"])]
+          if shared:
+              print("::error::%d sources compile with /Zi or /ZI, which sccache cannot cache, e.g.:" % len(shared))
+              print("\n".join(shared[:20]))
               sys.exit(1)
+          if os.environ["CONFIG"] == "Debug":
+              plain = [e["file"] for e in commands if not re.search(r"[-/]Z7(\s|$)", e["command"])]
+              if plain:
+                  print("::error::%d Debug sources compile without /Z7 (no debug information), e.g.:" % len(plain))
+                  print("\n".join(plain[:20]))
+                  sys.exit(1)
 
       - name: Check that the build uses the caches
         shell: bash
-        run: scripts/ci-cache.sh check build
+        run: scripts/ci-check-caches.sh build
 
       - name: Build
         run: cmake --build build -- -k 0
@@ -160,20 +173,22 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: _deps
-          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'scripts/ci-cache.sh') }}
+          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'scripts/ci-fetch-deps.sh') }}
 
       - name: Compiler cache
         uses: hendrikmuhs/ccache-action@v1.2.24
         with:
           key: asan
           max-size: 800M
+          evict-old-files: 7d
 
       - name: Fetch dependency sources
         if: steps.deps.outputs.cache-hit != 'true'
         shell: bash
-        run: scripts/ci-cache.sh fetch-deps _deps
+        run: scripts/ci-fetch-deps.sh _deps
 
-      # Saved right away, so a later failure (a red test, a fuzz finding) does not keep the next runs downloading.
+      # Saved right away (actions/cache saves only after a successful job), so a later failing step does not leave the
+      # next runs fetching again.
       - name: Save dependency sources
         if: steps.deps.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
@@ -189,7 +204,7 @@ jobs:
 
       - name: Check that the build uses the caches
         shell: bash
-        run: scripts/ci-cache.sh check build
+        run: scripts/ci-check-caches.sh build
 
       - name: Build
         run: cmake --build build -- -k 0
@@ -215,20 +230,22 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: _deps
-          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'scripts/ci-cache.sh') }}
+          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'scripts/ci-fetch-deps.sh') }}
 
       - name: Compiler cache
         uses: hendrikmuhs/ccache-action@v1.2.24
         with:
           key: clang-tidy
           max-size: 600M
+          evict-old-files: 7d
 
       - name: Fetch dependency sources
         if: steps.deps.outputs.cache-hit != 'true'
         shell: bash
-        run: scripts/ci-cache.sh fetch-deps _deps
+        run: scripts/ci-fetch-deps.sh _deps
 
-      # Saved right away, so a later failure (a red test, a fuzz finding) does not keep the next runs downloading.
+      # Saved right away (actions/cache saves only after a successful job), so a later failing step does not leave the
+      # next runs fetching again.
       - name: Save dependency sources
         if: steps.deps.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
@@ -244,7 +261,7 @@ jobs:
 
       - name: Check that the build uses the caches
         shell: bash
-        run: scripts/ci-cache.sh check build
+        run: scripts/ci-check-caches.sh build
 
       - name: Build
         run: cmake --build build -- -k 0
@@ -268,20 +285,22 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: _deps
-          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'scripts/ci-cache.sh') }}
+          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'scripts/ci-fetch-deps.sh') }}
 
       - name: Compiler cache
         uses: hendrikmuhs/ccache-action@v1.2.24
         with:
           key: coverage
           max-size: 400M
+          evict-old-files: 7d
 
       - name: Fetch dependency sources
         if: steps.deps.outputs.cache-hit != 'true'
         shell: bash
-        run: scripts/ci-cache.sh fetch-deps _deps
+        run: scripts/ci-fetch-deps.sh _deps
 
-      # Saved right away, so a later failure (a red test, a fuzz finding) does not keep the next runs downloading.
+      # Saved right away (actions/cache saves only after a successful job), so a later failing step does not leave the
+      # next runs fetching again.
       - name: Save dependency sources
         if: steps.deps.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
@@ -294,7 +313,7 @@ jobs:
 
       - name: Check that the build uses the caches
         shell: bash
-        run: scripts/ci-cache.sh check build-coverage
+        run: scripts/ci-check-caches.sh build-coverage
 
       - name: Summary
         if: always()
@@ -346,20 +365,22 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: _deps
-          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'scripts/ci-cache.sh') }}
+          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'scripts/ci-fetch-deps.sh') }}
 
       - name: Compiler cache
         uses: hendrikmuhs/ccache-action@v1.2.24
         with:
           key: lavapipe
           max-size: 300M
+          evict-old-files: 7d
 
       - name: Fetch dependency sources
         if: steps.deps.outputs.cache-hit != 'true'
         shell: bash
-        run: scripts/ci-cache.sh fetch-deps _deps
+        run: scripts/ci-fetch-deps.sh _deps
 
-      # Saved right away, so a later failure (a red test, a fuzz finding) does not keep the next runs downloading.
+      # Saved right away (actions/cache saves only after a successful job), so a later failing step does not leave the
+      # next runs fetching again.
       - name: Save dependency sources
         if: steps.deps.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
@@ -372,13 +393,14 @@ jobs:
 
       - name: Check that the build uses the caches
         shell: bash
-        run: scripts/ci-cache.sh check build
+        run: scripts/ci-check-caches.sh build
 
       - name: Build
         id: build
         run: cmake --build build -- -k 0
 
-      # The headless tests listed here are the ones ubuntu/Release used to run on its own.
+      # The GPU regressions, plus headless tests showing that this job also covers ubuntu-24.04 / Release (excluded from
+      # the build-and-test matrix).
       - name: Verify the expected tests are registered
         run: |
           ctest --test-dir build -N --show-only=json-v1 > /tmp/basalt-tests.json
@@ -434,20 +456,22 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: _deps
-          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'scripts/ci-cache.sh') }}
+          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'scripts/ci-fetch-deps.sh') }}
 
       - name: Compiler cache
         uses: hendrikmuhs/ccache-action@v1.2.24
         with:
           key: fuzz
           max-size: 800M
+          evict-old-files: 7d
 
       - name: Fetch dependency sources
         if: steps.deps.outputs.cache-hit != 'true'
         shell: bash
-        run: scripts/ci-cache.sh fetch-deps _deps
+        run: scripts/ci-fetch-deps.sh _deps
 
-      # Saved right away, so a later failure (a red test, a fuzz finding) does not keep the next runs downloading.
+      # Saved right away (actions/cache saves only after a successful job), so a later failing step does not leave the
+      # next runs fetching again.
       - name: Save dependency sources
         if: steps.deps.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
@@ -460,7 +484,7 @@ jobs:
 
       - name: Check that the build uses the caches
         shell: bash
-        run: scripts/ci-cache.sh check build-fuzz
+        run: scripts/ci-check-caches.sh build-fuzz
 
       - name: Upload crash inputs
         if: failure() || cancelled()
