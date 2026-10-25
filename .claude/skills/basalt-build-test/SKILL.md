@@ -26,8 +26,9 @@ Extra checks (each one is also a CI job; run locally when touching memory handli
   build, then `ctest --test-dir build-asan -LE "gpu|format"`. Fix reports in Basalt code; only third-party
   reports go into `cmake/sanitizers/*.supp`.
 - clang-tidy: `scripts/clang_tidy.py -p build [files...]` checks the sources of every Basalt target in a configured
-  build (CI: `--shard I/3`), or configure with `-DBASALT_CLANG_TIDY=ON` to check while compiling (checks in
-  `.clang-tidy`). Include changed test files. Fix findings, or `NOLINT(check-name)` with a reason when the check is wrong.
+  build (CI splits them with `--shard I/N`), or configure with `-DBASALT_CLANG_TIDY=ON` to check while compiling
+  (checks in `.clang-tidy`). When passing files, include changed test files too. Fix findings, or
+  `NOLINT(check-name)` with a reason when the check is wrong.
 - Fuzzing: `scripts/fuzz.sh [seconds] [target]` builds and runs the libFuzzer targets in `Tests/Fuzz/` matching
   `[target]` (all by default; Clang, on macOS Homebrew LLVM), `FUZZ_JOBS=N` of them at a time. Run it after touching a parser or loader. A crash input lands
   in `build-fuzz/crashes/<Target>/`: reproduce with `build-fuzz/bin/<Target> <file>`, turn it into a

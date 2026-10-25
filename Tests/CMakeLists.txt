@@ -30,11 +30,11 @@ add_test(NAME DependencySources COMMAND "${CMAKE_COMMAND}" -DREPO_DIR=${PROJECT_
 	"-DGENERATOR=${CMAKE_GENERATOR}" "-DMAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}" -P "${CMAKE_CURRENT_SOURCE_DIR}/Dependencies/CheckDependencySources.cmake")
 set_tests_properties(DependencySources PROPERTIES LABELS unit TIMEOUT 60)
 
-# scripts/fuzz.sh's argument handling (the nightly fuzz workflow's target list and input checks). Bash is not part of
-# the Windows toolchain.
+# scripts/fuzz.sh: the nightly fuzz workflow's target list, input checks, and running targets side by side (FUZZ_JOBS)
+# with stand-ins. Bash is not part of the Windows toolchain.
 if(NOT WIN32)
 	add_test(NAME FuzzScript COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/Fuzz/CheckFuzzScript.sh" "${PROJECT_SOURCE_DIR}")
-	set_tests_properties(FuzzScript PROPERTIES LABELS unit TIMEOUT 30)
+	set_tests_properties(FuzzScript PROPERTIES LABELS unit TIMEOUT 60)
 endif()
 
 # Feature test: plays Tests/Data/FeatureTest headlessly through the basalt CLI. The scene uses every

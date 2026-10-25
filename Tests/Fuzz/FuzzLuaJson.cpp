@@ -18,9 +18,10 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 		const sol::object object = Basalt::JsonToLua(lua, json);
 		Basalt::LuaToJson(object);
 	}
-	catch (const std::exception&)
+	// LuaToJson reports unsupported values (functions, too-deep tables) by throwing; callers catch it, and here an
+	// expected rejection is not a finding.
+	catch (const std::exception&) // NOLINT(bugprone-empty-catch)
 	{
-		// LuaToJson reports unsupported values (functions, too-deep tables) by throwing; callers catch it.
 	}
 	lua.collect_garbage();
 	return 0;

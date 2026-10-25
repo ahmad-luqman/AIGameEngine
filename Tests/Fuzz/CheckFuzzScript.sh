@@ -24,18 +24,13 @@ if output="$(bash "$script" 10 NoSuchTarget 2>&1)"; then
 fi
 [[ "$output" == *"No fuzz target matches 'NoSuchTarget'"* ]] || fail "an unknown target printed '$output'"
 
-for jobs in 0 abc -2 1.5; do
-	if output="$(FUZZ_JOBS="$jobs" bash "$script" 10 FuzzGltf 2>&1)"; then
-		fail "FUZZ_JOBS '$jobs' was accepted"
-	fi
-	[[ "$output" == *"FUZZ_JOBS must be a positive integer"* ]] || fail "FUZZ_JOBS '$jobs' printed '$output'"
-done
-
-# Running targets side by side, in a copy of the script with stand-ins for cmake, brew and the fuzz targets. FuzzAlpha
-# and FuzzBeta each wait for the other to start, so they pass only when they run at the same time.
+# The rest runs a copy of the script with stand-ins for cmake, brew and the fuzz targets, so nothing is built or fuzzed
+# here even if a check regresses. FuzzAlpha and FuzzBeta each wait for the other to start, so they pass only when they
+# run at the same time; FAKE_CRASH, FAKE_KILL and FAKE_NODONE make the named target misbehave.
+unset FUZZ_JOBS
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
-mkdir -p "$work/scripts" "$work/Tests/Fuzz" "$work/tools" "$work/llvm/bin" "$work/build-fuzz/bin"
+mkdir -p "$work/scripts" "$work/Tests/Fuzz/Corpus/FuzzAlpha" "$work/tools" "$work/llvm/bin" "$work/build-fuzz/bin"
 cp "$script" "$work/scripts/fuzz.sh"
 printf '#!/bin/sh\nexit 0\n' > "$work/tools/cmake"
 printf '#!/bin/sh\necho "%s"\n' "$work/llvm" > "$work/tools/brew"
@@ -43,11 +38,19 @@ printf '#!/bin/sh\nexit 0\n' > "$work/llvm/bin/clang++"
 cat > "$work/fake-fuzzer" << 'EOF_FUZZER'
 #!/usr/bin/env bash
 name="$(basename "$0")"
+echo "arguments: $*"
+echo "ASAN_OPTIONS=$ASAN_OPTIONS"
 for argument in "$@"; do
 	[[ "$argument" == -artifact_prefix=* ]] && crashes="${argument#-artifact_prefix=}"
 	[[ "$argument" == -rss_limit_mb=* ]] && rss="${argument#-rss_limit_mb=}"
 done
 touch "$FAKE_STATE/$name.started"
+if [[ "${FAKE_CRASH:-}" == "$name" ]]; then
+	echo "==1== ERROR: AddressSanitizer: planted"
+	echo planted > "${crashes}crash-1"
+	exit 1
+fi
+[[ "${FAKE_KILL:-}" == "$name" ]] && kill -9 $$
 wait_for()
 {
 	for _ in $(seq 100); do
@@ -60,15 +63,9 @@ wait_for()
 case "$name" in
 	FuzzAlpha) wait_for FuzzBeta ;;
 	FuzzBeta) wait_for FuzzAlpha ;;
-	FuzzGamma)
-		if [[ -n "${FAKE_CRASH:-}" ]]; then
-			echo "==1== ERROR: AddressSanitizer: planted"
-			echo planted > "${crashes}crash-1"
-			exit 1
-		fi ;;
 esac
 echo "stat::peak_rss_mb: limit $rss"
-echo "#100 DONE cov: 1"
+[[ "${FAKE_NODONE:-}" == "$name" ]] || printf '#100\tDONE   cov: 1 %s\n' "$name"
 EOF_FUZZER
 for target in FuzzAlpha FuzzBeta FuzzGamma; do
 	touch "$work/Tests/Fuzz/$target.cpp"
@@ -79,23 +76,64 @@ export FAKE_STATE="$work"
 fuzz()
 {
 	rm -f "$work"/*.started
-	PATH="$work/tools:$PATH" FUZZ_JOBS=2 bash "$work/scripts/fuzz.sh" 5 2>&1
+	(cd "$work" && PATH="$work/tools:$PATH" FUZZ_JOBS="${JOBS:-2}" "${SHELL_UNDER_TEST:-bash}" scripts/fuzz.sh 5 "$@" 2>&1)
+}
+# Each summary block is whole and they come in target order: every DONE line names the target of the block it is in.
+check_blocks()
+{
+	local blocks
+	blocks="$(awk '/^=== /{ name = $2; order = order " " name } /DONE/{ if ($NF != name) bad = 1 } END { print (bad ? "mixed" : order) }' <<< "$1")"
+	[[ "$blocks" == " FuzzAlpha FuzzBeta FuzzGamma" ]] || fail "summaries are not whole blocks in target order ($blocks): $1"
 }
 
-output="$(fuzz)" || fail "two targets at a time failed: $output"
-for target in FuzzAlpha FuzzBeta FuzzGamma; do
-	[[ "$output" == *"=== $target (5s)"*"#100 DONE"* ]] || fail "$target printed no summary: $output"
+for jobs in 0 abc -2 1.5; do
+	if output="$(JOBS="$jobs" fuzz FuzzGamma)"; then
+		fail "FUZZ_JOBS '$jobs' was accepted"
+	fi
+	[[ "$output" == *"FUZZ_JOBS must be a positive integer"* ]] || fail "FUZZ_JOBS '$jobs' printed '$output'"
+done
+
+shells=(bash)
+# macOS's own bash is 3.2, which the script must support (no wait -n); bash on PATH is often a newer Homebrew one.
+[[ "$(uname)" == "Darwin" && -x /bin/bash ]] && shells+=(/bin/bash)
+for shell in "${shells[@]}"; do
+	output="$(SHELL_UNDER_TEST="$shell" fuzz)" || fail "two targets at a time failed under $shell: $output"
+	for target in FuzzAlpha FuzzBeta FuzzGamma; do
+		[[ "$output" == *"$target: passed"* ]] || fail "$target did not pass under $shell: $output"
+	done
+	check_blocks "$output"
 done
 [[ "$output" == *"limit 3072"* && "$output" != *"limit 4096"* ]] || fail "parallel targets kept the single-target memory limit: $output"
+log="$(cat "$work/build-fuzz/logs/FuzzAlpha.log")"
+[[ "$log" == *"arguments: build-fuzz/corpus/FuzzAlpha Tests/Fuzz/Corpus/FuzzAlpha -max_total_time=5 "* ]] ||
+	fail "FuzzAlpha did not get its corpus, seeds and time limit: $log"
+[[ "$log" == *"ASAN_OPTIONS=detect_leaks=0"* ]] || fail "the sanitizer options were not passed on: $log"
 
-if output="$(FAKE_CRASH=1 fuzz)"; then
+# One target at a time by default (the nightly runs), with the full memory limit.
+output="$(cd "$work" && PATH="$work/tools:$PATH" bash scripts/fuzz.sh 5 FuzzGamma 2>&1)" || fail "a single target failed: $output"
+[[ "$output" == *"1 at a time"* && "$output" == *"limit 4096"* ]] || fail "one target at a time did not get 4096 MB: $output"
+
+# A target failing first does not stop or hide the others.
+if output="$(FAKE_CRASH=FuzzAlpha fuzz)"; then
 	fail "a crashing target did not fail the run: $output"
 fi
-[[ "$output" == *"FuzzGamma: exited with 1"*"AddressSanitizer: planted"* ]] || fail "the crash was not reported: $output"
-[[ "$output" == *"=== FuzzAlpha"* && "$output" == *"=== FuzzBeta"* ]] || fail "a crash hid other targets: $output"
+[[ "$output" == *"FuzzAlpha: FAILED (exited with 1)"*"AddressSanitizer: planted"* ]] || fail "the crash was not reported: $output"
+[[ "$output" == *"FuzzBeta: passed"* && "$output" == *"FuzzGamma: passed"* ]] || fail "a crash stopped other targets: $output"
+check_blocks "$output"
 # The crash input it left keeps failing the target until it is removed.
 if output="$(fuzz)"; then
 	fail "a leftover crash input did not fail the run: $output"
 fi
-[[ "$output" == *"FuzzGamma: exited with 0; crash inputs"* ]] || fail "the leftover crash input was not reported: $output"
+[[ "$output" == *"FuzzAlpha: FAILED (left crash inputs)"* ]] || fail "the leftover crash input was not reported: $output"
+rm -f "$work/build-fuzz/crashes/FuzzAlpha/"*
+
+if output="$(FAKE_KILL=FuzzGamma fuzz)"; then
+	fail "a killed target did not fail the run: $output"
+fi
+[[ "$output" == *"FuzzGamma: FAILED (killed by signal 9 (SIGKILL, likely the kernel's out-of-memory killer))"* ]] ||
+	fail "the kill was not reported: $output"
+if output="$(FAKE_NODONE=FuzzGamma fuzz)"; then
+	fail "a target that did not fuzz passed: $output"
+fi
+[[ "$output" == *"FuzzGamma: FAILED (finished without libFuzzer's DONE line)"* ]] || fail "the missing DONE line was not reported: $output"
 echo "fuzz.sh checks passed"
