@@ -10,8 +10,9 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# Every configure, including those in scripts/coverage.sh and scripts/fuzz.sh, compiles through ccache (sccache on
-# Windows), and finds the dependency sources restored from the shared cache (cmake/Dependencies.cmake).
+# Every build, including those in scripts/coverage.sh and scripts/fuzz.sh, compiles through ccache (build-and-test uses
+# sccache on Windows) and takes the dependency sources from the cache that every workflow shares (scripts/ci-cache.sh,
+# cmake/DependencySources.cmake). A cache miss fetches them into the same directory first, so both compile the same paths.
 env:
   CMAKE_C_COMPILER_LAUNCHER: ccache
   CMAKE_CXX_COMPILER_LAUNCHER: ccache
@@ -31,9 +32,13 @@ jobs:
           # The lavapipe job builds the same Release configuration and runs these tests too.
           - os: ubuntu-24.04
             config: Release
+        include:
+          # Windows builds use sccache; everything else ccache.
+          - os: windows-latest
+            launcher: sccache
     env:
-      CMAKE_C_COMPILER_LAUNCHER: ${{ matrix.os == 'windows-latest' && 'sccache' || 'ccache' }}
-      CMAKE_CXX_COMPILER_LAUNCHER: ${{ matrix.os == 'windows-latest' && 'sccache' || 'ccache' }}
+      CMAKE_C_COMPILER_LAUNCHER: ${{ matrix.launcher || 'ccache' }}
+      CMAKE_CXX_COMPILER_LAUNCHER: ${{ matrix.launcher || 'ccache' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -66,51 +71,61 @@ jobs:
         if: runner.os == 'Windows'
         run: choco install ninja -y
 
-      - name: Cache dependency sources
+      - name: Restore dependency sources
         id: deps
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: _deps
-          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake') }}
+          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'scripts/ci-cache.sh') }}
 
+      # Each cache keeps growing to its max-size (about twice one build; the Actions cache holds 10 GB in all), and a
+      # failed or cancelled job saves only more than it restored.
       - name: Compiler cache
         uses: hendrikmuhs/ccache-action@v1.2.24
         with:
           key: ${{ matrix.os }}-${{ matrix.config }}
-          variant: ${{ runner.os == 'Windows' && 'sccache' || 'ccache' }}
-          max-size: ${{ matrix.config == 'Debug' && '1G' || '500M' }}
-          evict-old-files: job
+          variant: ${{ matrix.launcher || 'ccache' }}
+          max-size: ${{ matrix.config == 'Release' && '300M' || matrix.launcher && '1G' || '600M' }}
 
-      # MSVC writes /Zi debug information into a shared PDB, which sccache cannot cache; /Z7 embeds it in each object.
+      - name: Fetch dependency sources
+        if: steps.deps.outputs.cache-hit != 'true'
+        shell: bash
+        run: scripts/ci-cache.sh fetch-deps _deps
+
+      # Saved right away, so a later failure (a red test, a fuzz finding) does not keep the next runs downloading.
+      - name: Save dependency sources
+        if: steps.deps.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: _deps
+          key: ${{ steps.deps.outputs.cache-primary-key }}
+
       - name: Configure
         shell: bash
         run: |
           formatCheck=OFF
           profile=OFF
-          extra=()
           if [[ "${{ runner.os }}" == "Linux" && "${{ matrix.config }}" == "Debug" ]]; then profile=ON; fi
           if [[ "${{ runner.os }}" == "macOS" && "${{ matrix.config }}" == "Debug" ]]; then formatCheck=ON; fi
-          if [[ "${{ runner.os }}" == "Windows" ]]; then extra+=(-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded); fi
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DBASALT_CHECK_FORMAT=$formatCheck -DBASALT_PROFILE=$profile -DBASALT_BENCHMARK_TESTS=${{ matrix.config == 'Release' && 'ON' || 'OFF' }} "${extra[@]}"
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DBASALT_CHECK_FORMAT=$formatCheck -DBASALT_PROFILE=$profile -DBASALT_BENCHMARK_TESTS=${{ matrix.config == 'Release' && 'ON' || 'OFF' }}
 
-      # A dependency that adds /Zi itself would silently make its objects uncacheable again.
+      # cmake/Dependencies.cmake embeds MSVC debug information (/Z7) when a launcher is set; a dependency that adds /Zi
+      # itself would silently make its objects uncacheable again.
       - name: Check that every object is cacheable (Windows)
         if: runner.os == 'Windows'
-        shell: bash
+        shell: python
         run: |
-          python - <<'EOF'
-          import json, re
-          files = [e["file"] for e in json.load(open("build/compile_commands.json")) if re.search(r'[-/]Zi(\s|$)', e["command"])]
+          import json, re, sys
+          commands = json.load(open("build/compile_commands.json"))
+          files = [e["file"] for e in commands if re.search(r"[-/]Z[iI](\s|$)", e["command"])]
           if files:
-              print("::error::%d sources compile with /Zi, which sccache cannot cache, e.g.:" % len(files))
+              print("::error::%d sources compile with /Zi or /ZI, which sccache cannot cache, e.g.:" % len(files))
               print("\n".join(files[:20]))
-              exit(1)
-          EOF
+              sys.exit(1)
 
-      - name: Collect dependency sources
-        if: steps.deps.outputs.cache-hit != 'true'
+      - name: Check that the build uses the caches
         shell: bash
-        run: scripts/ci-collect-deps.sh build _deps
+        run: scripts/ci-cache.sh check build
 
       - name: Build
         run: cmake --build build -- -k 0
@@ -140,19 +155,31 @@ jobs:
         run: |
           scripts/ci-apt-install.sh ninja-build glslc libvulkan1 clang libdbus-1-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols
 
-      - name: Cache dependency sources
+      - name: Restore dependency sources
         id: deps
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: _deps
-          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake') }}
+          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'scripts/ci-cache.sh') }}
 
       - name: Compiler cache
         uses: hendrikmuhs/ccache-action@v1.2.24
         with:
           key: asan
-          max-size: 1G
-          evict-old-files: job
+          max-size: 800M
+
+      - name: Fetch dependency sources
+        if: steps.deps.outputs.cache-hit != 'true'
+        shell: bash
+        run: scripts/ci-cache.sh fetch-deps _deps
+
+      # Saved right away, so a later failure (a red test, a fuzz finding) does not keep the next runs downloading.
+      - name: Save dependency sources
+        if: steps.deps.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: _deps
+          key: ${{ steps.deps.outputs.cache-primary-key }}
 
       - name: Configure
         run: |
@@ -160,10 +187,9 @@ jobs:
             -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
             "-DBASALT_SANITIZE=address;undefined" -DBASALT_CHECK_FORMAT=OFF
 
-      - name: Collect dependency sources
-        if: steps.deps.outputs.cache-hit != 'true'
+      - name: Check that the build uses the caches
         shell: bash
-        run: scripts/ci-collect-deps.sh build _deps
+        run: scripts/ci-cache.sh check build
 
       - name: Build
         run: cmake --build build -- -k 0
@@ -184,19 +210,31 @@ jobs:
         run: |
           scripts/ci-apt-install.sh ninja-build glslc libvulkan1 clang clang-tidy libdbus-1-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols
 
-      - name: Cache dependency sources
+      - name: Restore dependency sources
         id: deps
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: _deps
-          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake') }}
+          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'scripts/ci-cache.sh') }}
 
       - name: Compiler cache
         uses: hendrikmuhs/ccache-action@v1.2.24
         with:
           key: clang-tidy
-          max-size: 1G
-          evict-old-files: job
+          max-size: 600M
+
+      - name: Fetch dependency sources
+        if: steps.deps.outputs.cache-hit != 'true'
+        shell: bash
+        run: scripts/ci-cache.sh fetch-deps _deps
+
+      # Saved right away, so a later failure (a red test, a fuzz finding) does not keep the next runs downloading.
+      - name: Save dependency sources
+        if: steps.deps.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: _deps
+          key: ${{ steps.deps.outputs.cache-primary-key }}
 
       # clang-tidy itself is never cached; only the compile that follows it is.
       - name: Configure
@@ -204,10 +242,9 @@ jobs:
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
             -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DBASALT_CLANG_TIDY=ON
 
-      - name: Collect dependency sources
-        if: steps.deps.outputs.cache-hit != 'true'
+      - name: Check that the build uses the caches
         shell: bash
-        run: scripts/ci-collect-deps.sh build _deps
+        run: scripts/ci-cache.sh check build
 
       - name: Build
         run: cmake --build build -- -k 0
@@ -226,27 +263,38 @@ jobs:
         run: |
           scripts/ci-apt-install.sh ninja-build glslc libvulkan1 clang llvm libdbus-1-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols
 
-      - name: Cache dependency sources
+      - name: Restore dependency sources
         id: deps
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: _deps
-          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake') }}
+          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'scripts/ci-cache.sh') }}
 
       - name: Compiler cache
         uses: hendrikmuhs/ccache-action@v1.2.24
         with:
           key: coverage
-          max-size: 500M
-          evict-old-files: job
+          max-size: 400M
+
+      - name: Fetch dependency sources
+        if: steps.deps.outputs.cache-hit != 'true'
+        shell: bash
+        run: scripts/ci-cache.sh fetch-deps _deps
+
+      # Saved right away, so a later failure (a red test, a fuzz finding) does not keep the next runs downloading.
+      - name: Save dependency sources
+        if: steps.deps.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: _deps
+          key: ${{ steps.deps.outputs.cache-primary-key }}
 
       - name: Coverage
         run: scripts/coverage.sh
 
-      - name: Collect dependency sources
-        if: steps.deps.outputs.cache-hit != 'true'
+      - name: Check that the build uses the caches
         shell: bash
-        run: scripts/ci-collect-deps.sh build-coverage _deps
+        run: scripts/ci-cache.sh check build-coverage
 
       - name: Summary
         if: always()
@@ -293,42 +341,57 @@ jobs:
       - name: Vulkan device
         run: vulkaninfo --summary || true
 
-      - name: Cache dependency sources
+      - name: Restore dependency sources
         id: deps
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: _deps
-          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake') }}
+          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'scripts/ci-cache.sh') }}
 
       - name: Compiler cache
         uses: hendrikmuhs/ccache-action@v1.2.24
         with:
           key: lavapipe
-          max-size: 500M
-          evict-old-files: job
+          max-size: 300M
+
+      - name: Fetch dependency sources
+        if: steps.deps.outputs.cache-hit != 'true'
+        shell: bash
+        run: scripts/ci-cache.sh fetch-deps _deps
+
+      # Saved right away, so a later failure (a red test, a fuzz finding) does not keep the next runs downloading.
+      - name: Save dependency sources
+        if: steps.deps.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: _deps
+          key: ${{ steps.deps.outputs.cache-primary-key }}
 
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBASALT_GPU_TESTS=ON -DBASALT_GOLDEN_DRIVER=lavapipe -DBASALT_CHECK_FORMAT=OFF -DBASALT_BENCHMARK_TESTS=ON
 
-      - name: Collect dependency sources
-        if: steps.deps.outputs.cache-hit != 'true'
+      - name: Check that the build uses the caches
         shell: bash
-        run: scripts/ci-collect-deps.sh build _deps
+        run: scripts/ci-cache.sh check build
 
       - name: Build
+        id: build
         run: cmake --build build -- -k 0
 
-      - name: Verify editor integration is registered
+      # The headless tests listed here are the ones ubuntu/Release used to run on its own.
+      - name: Verify the expected tests are registered
         run: |
           ctest --test-dir build -N --show-only=json-v1 > /tmp/basalt-tests.json
-          python3 -c 'import json; tests = json.load(open("/tmp/basalt-tests.json"))["tests"]; names = {t["name"] for t in tests}; missing = {"EditorViewport", "ViewportGPU", "PostProcessGPU", "TemporalAAGPU", "PreviewRendererGPU", "Benchmark_gpu"} - names; missing and exit(f"Missing GPU regressions: {missing}")'
+          python3 -c 'import json; tests = json.load(open("/tmp/basalt-tests.json"))["tests"]; names = {t["name"] for t in tests}; missing = {"EditorViewport", "ViewportGPU", "PostProcessGPU", "TemporalAAGPU", "PreviewRendererGPU", "Benchmark_gpu", "BasaltTests", "Benchmark_cpu", "PhysicsDeterminism", "FeatureTest"} - names; missing and exit(f"Missing tests: {missing}")'
 
+      # Each test step runs whenever the build succeeded, so a headless failure never hides the GPU results.
       - name: Test
-        run: ctest --test-dir build --output-on-failure -LE "gpu|format"
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: ctest --test-dir build --output-on-failure --no-tests=error -LE "gpu|format"
 
       - name: GPU tests
-        if: ${{ !cancelled() }}
-        run: ctest --test-dir build --output-on-failure -L gpu
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: ctest --test-dir build --output-on-failure --no-tests=error -L gpu
 
       - name: Upload benchmark report
         if: always()
@@ -366,27 +429,38 @@ jobs:
         run: |
           scripts/ci-apt-install.sh ninja-build glslc libvulkan1 clang libdbus-1-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols
 
-      - name: Cache dependency sources
+      - name: Restore dependency sources
         id: deps
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: _deps
-          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake') }}
+          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'scripts/ci-cache.sh') }}
 
       - name: Compiler cache
         uses: hendrikmuhs/ccache-action@v1.2.24
         with:
           key: fuzz
-          max-size: 1G
-          evict-old-files: job
+          max-size: 800M
+
+      - name: Fetch dependency sources
+        if: steps.deps.outputs.cache-hit != 'true'
+        shell: bash
+        run: scripts/ci-cache.sh fetch-deps _deps
+
+      # Saved right away, so a later failure (a red test, a fuzz finding) does not keep the next runs downloading.
+      - name: Save dependency sources
+        if: steps.deps.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: _deps
+          key: ${{ steps.deps.outputs.cache-primary-key }}
 
       - name: Fuzz (60 s per target)
         run: scripts/fuzz.sh 60
 
-      - name: Collect dependency sources
-        if: steps.deps.outputs.cache-hit != 'true'
+      - name: Check that the build uses the caches
         shell: bash
-        run: scripts/ci-collect-deps.sh build-fuzz _deps
+        run: scripts/ci-cache.sh check build-fuzz
 
       - name: Upload crash inputs
         if: failure() || cancelled()

@@ -232,8 +232,8 @@ scripts/test.sh             # build + ctest (unit tests, format check, ...)
   `ParseJson` and read floats with `JsonToFloat` (`Basalt/Core/JsonUtils.h`). Tests carry ctest labels
   (`unit`, `integration`, `gpu`, `format`, `benchmark`) for `ctest -L/-LE`. Details: the basalt-build-test skill.
 - CI compiles through ccache (sccache on Windows, with `/Z7`) set by the `CMAKE_<LANG>_COMPILER_LAUNCHER` environment
-  variables, and restores pinned dependency sources into `BASALT_DEPS_SOURCE_DIR` (`cmake/Dependencies.cmake`,
-  `scripts/ci-collect-deps.sh`). Locally the same variable lets a worktree reuse another tree's `build/_deps`.
+  variables, and takes dependency sources from `BASALT_DEPS_SOURCE_DIR` (`cmake/DependencySources.cmake`), a directory
+  `scripts/ci-cache.sh fetch-deps` fills and stamps with the pins it matches; a directory with another stamp is ignored.
 - **macOS + Homebrew:** Homebrew's validation layer manifest names its library without a path, so non-Dist
   builds point `VK_ADD_LAYER_PATH` at a copy with the absolute path (`Renderer/ValidationLayerManifest`; prefixes
   `$HOMEBREW_PREFIX`, `/opt/homebrew`, `/usr/local`); no
