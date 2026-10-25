@@ -45,15 +45,21 @@ real_source = os.path.realpath(source_dir)
 owned_dirs = [os.path.join(real_source, path) for path in ("Basalt/Source", "Basalt-Editor/Source", "Basalt-Runtime/Source",
     "Basalt-CLI/Source", "Tests/Source", "Tests/Rendering", "Tests/Benchmarks", "Tests/Fuzz")]
 generated = os.path.join(os.path.realpath(build_dir), "Basalt", "EmbeddedShaders", "EmbeddedShaders.cpp")
+
+
+def in_owned_dirs(path):
+    return any(path.startswith(directory + os.sep) for directory in owned_dirs)
+
+
 for path in everything:
-    if path != generated and not any(path.startswith(directory + os.sep) for directory in owned_dirs):
+    if path != generated and not in_owned_dirs(path):
         fail(f"a file outside Basalt's source directories was selected: {path}")
 if generated not in everything:
     fail(f"{generated} was not selected")
 # A coverage floor: a target dropping out of the list (or the filter) would leave its files unchecked.
 with open(os.path.join(build_dir, "compile_commands.json"), encoding="utf-8") as file:
     compiled = {os.path.realpath(os.path.join(entry["directory"], entry["file"])) for entry in json.load(file)}
-unchecked = sorted(path for path in compiled - set(everything) if any(path.startswith(d + os.sep) for d in owned_dirs))
+unchecked = sorted(path for path in compiled - set(everything) if in_owned_dirs(path))
 if unchecked:
     fail("compiled Basalt sources are not selected:\n  " + "\n  ".join(unchecked))
 
@@ -76,7 +82,8 @@ for jobs in ("0", "-1", "x"):
 shutil.rmtree(work_dir, ignore_errors=True)
 fake_build = os.path.join(work_dir, "build")
 os.makedirs(fake_build)
-names = ("Good.cpp", "Bad.cpp", "Quiet.cpp", "Crash.cpp", "Other.cpp", "Third.cpp")
+owned_names = ("Good.cpp", "Bad.cpp", "Quiet.cpp", "Crash.cpp", "Other.cpp")
+names = owned_names + ("Third.cpp",)
 sources = {name: os.path.realpath(os.path.join(work_dir, name)) for name in names}
 for path in sources.values():
     open(path, "w", encoding="utf-8").close()
@@ -94,7 +101,7 @@ def write_tree(commands, targets):
         file.write("".join(target + "\n" for target in targets))
 
 
-commands = [entry(name, "Owned") for name in names[:5]] + [entry("Good.cpp", "OwnedTests"), entry("Third.cpp", "Owned_deps")]
+commands = [entry(name, "Owned") for name in owned_names] + [entry("Good.cpp", "OwnedTests"), entry("Third.cpp", "Owned_deps")]
 write_tree(commands, ["Owned", "OwnedTests"])
 calls = os.path.join(work_dir, "calls.txt")
 fake_tidy = os.path.join(work_dir, "fake-clang-tidy")
@@ -103,6 +110,12 @@ with open(fake_tidy, "w", encoding="utf-8") as file:
 import os, signal, sys
 if sys.argv[1:] == ["--version"]:
     print("fake clang-tidy version 1")
+    sys.exit(1 if "VERSION_FAIL" in os.environ else 0)
+if sys.argv[1:] == ["--verify-config"]:
+    if "CONFIG_FAIL" in os.environ:
+        print("warning: unknown check 'modernize-use-overide'")
+        sys.exit(1)
+    print("No config errors detected.")
     sys.exit(0)
 if len(sys.argv) != 5 or sys.argv[1] != "-p" or os.path.realpath(sys.argv[2]) != {os.path.realpath(fake_build)!r} \
         or sys.argv[3] != "--quiet":
@@ -115,8 +128,8 @@ name = os.path.basename(source)
 if name == "Bad.cpp":
     print(source + ":1:1: error: planted finding [bugprone-planted,-warnings-as-errors]")
     sys.exit(1)
-if name == "Quiet.cpp" and "QUIET_FINDING" in os.environ:
-    print(source + ":2:3: warning: not promoted [bugprone-planted]")
+if name == "Quiet.cpp" and "QUIET_OUTPUT" in os.environ:
+    print(source + os.environ["QUIET_OUTPUT"])
 if name == "Crash.cpp" and "CRASH" in os.environ:
     # Killed by a signal, as a crash would be, but SIGTERM: a SIGSEGV would open macOS's crash reporter dialog.
     os.kill(os.getpid(), signal.SIGTERM)
@@ -133,7 +146,7 @@ def checked_files():
 
 
 selected = listed("-p", fake_build)
-owned_sources = sorted(sources[name] for name in names[:5])
+owned_sources = sorted(sources[name] for name in owned_names)
 if selected != owned_sources:
     fail(f"the stand-in tree selected {selected}, not {owned_sources} (a target named like an owned one must not match)")
 
@@ -145,14 +158,21 @@ if "warnings generated" in result.stdout:
 if checked_files() != owned_sources:
     fail("not every selected file was checked")
 
-environment = dict(os.environ, QUIET_FINDING="1")
-result = run("-p", fake_build, "--clang-tidy", fake_tidy, sources["Quiet.cpp"], env=environment)
-if result.returncode != 1 or "not promoted" not in result.stdout or "not errors" not in result.stdout:
-    fail(f"a finding that exits 0 passed (exit {result.returncode}):\n{result.stdout}")
-checked_files()
-environment = dict(os.environ, CRASH="1")
-result = run("-p", fake_build, "--clang-tidy", fake_tidy, sources["Crash.cpp"], env=environment)
-if result.returncode != 1 or "Crash.cpp: clang-tidy exited with -" not in result.stdout:
+# Findings that exit 0 (the forms real check names take) fail; the other lines a clean run can print do not.
+for line in (":2:3: warning: not promoted [bugprone-planted]", ":2:3: warning: magic [cppcoreguidelines-avoid-magic-numbers,"
+        "readability-magic-numbers]", ":2:3: warning: zero [clang-analyzer-core.DivideZero]",
+        ":2:3: warning: extension [clang-diagnostic-c++20-extensions]", ":2:3: warning: pragma [clang-diagnostic-#warnings]"):
+    result = run("-p", fake_build, "--clang-tidy", fake_tidy, sources["Quiet.cpp"], env=dict(os.environ, QUIET_OUTPUT=line))
+    if result.returncode != 1 or "not errors" not in result.stdout:
+        fail(f"a finding that exits 0 passed ({line}, exit {result.returncode}):\n{result.stdout}")
+    checked_files()
+for line in (":2:3: note: expanded from here", "\n    2 | int x = 1 / 0;\n      |         ^", "\nSuppressed 3 warnings"):
+    result = run("-p", fake_build, "--clang-tidy", fake_tidy, sources["Quiet.cpp"], env=dict(os.environ, QUIET_OUTPUT=line))
+    if result.returncode != 0:
+        fail(f"a clean file's output failed the run ({line!r}):\n{result.stdout}")
+    checked_files()
+result = run("-p", fake_build, "--clang-tidy", fake_tidy, sources["Crash.cpp"], env=dict(os.environ, CRASH="1"))
+if result.returncode != 1 or "Crash.cpp: clang-tidy was killed by SIGTERM" not in result.stdout:
     fail(f"a crashing clang-tidy passed (exit {result.returncode}):\n{result.stdout}")
 checked_files()
 
@@ -164,16 +184,24 @@ if checked_files() != sorted([sources["Good.cpp"], sources["Other.cpp"]]):
     fail("a restricted run checked other files")
 if listed("-p", "build", "--shard", "2/2", "Good.cpp", "Other.cpp", cwd=work_dir) != [sources["Other.cpp"]]:
     fail("a shard of given files is not the second of the two")
+rejected("has no files", "--list", "-p", fake_build, "--shard", "3/3", sources["Good.cpp"], sources["Other.cpp"])
 rejected("Not translation units", "-p", fake_build, "--clang-tidy", fake_tidy, sources["Third.cpp"])
 
 # The executable: a named one must exist (no fallback to another version), and CLANG_TIDY names one too.
 rejected("was not found", "-p", fake_build, "--clang-tidy", os.path.join(work_dir, "missing"), sources["Good.cpp"])
 rejected("was not found", "-p", fake_build, sources["Good.cpp"],
     env=dict(os.environ, CLANG_TIDY=os.path.join(work_dir, "missing")))
+rejected("was not found", "-p", fake_build, sources["Good.cpp"], env=dict(os.environ, CLANG_TIDY=""))
 result = run("-p", fake_build, sources["Good.cpp"], env=dict(os.environ, CLANG_TIDY=fake_tidy))
 if result.returncode != 0 or "fake clang-tidy version 1" not in result.stdout:
     fail(f"CLANG_TIDY was not used:\n{result.stdout}")
 checked_files()
+# A clang-tidy that cannot report its version, or rejects .clang-tidy (a misspelled check would silently go unchecked).
+rejected("--version exited with 1", "-p", fake_build, "--clang-tidy", fake_tidy, sources["Good.cpp"],
+    env=dict(os.environ, VERSION_FAIL="1"))
+rejected("unknown check", "-p", fake_build, "--clang-tidy", fake_tidy, sources["Good.cpp"], env=dict(os.environ, CONFIG_FAIL="1"))
+if os.path.exists(calls):
+    fail("files were checked although clang-tidy was unusable")
 
 # Stale or foreign build trees: no target list, an empty one, a listed target without compile commands, and a compile
 # database without object paths.

@@ -21,7 +21,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 	const auto written = Basalt::MaterialAsset::ToJson(*material, false, error);
 	const auto reread = written ? Basalt::MaterialAsset::FromJson(*written, error) : std::nullopt;
 	const auto rewritten = reread ? Basalt::MaterialAsset::ToJson(*reread, false, error) : std::nullopt;
-	if (!rewritten || *rewritten != *written)
+	if (!written || !rewritten || *rewritten != *written)
 		std::abort();
 	return 0;
 }

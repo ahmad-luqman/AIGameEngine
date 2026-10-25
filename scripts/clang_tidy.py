@@ -17,15 +17,17 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 
+SOURCE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TARGETS_FILE = "ClangTidyTargets.txt"
-# Tried in order when neither --clang-tidy nor CLANG_TIDY names one; the names cmake/CompilerWarnings.cmake's
-# find_program uses (keep both lists in sync).
-CANDIDATES = ["clang-tidy", "clang-tidy-18", "clang-tidy-19", "/opt/homebrew/opt/llvm/bin/clang-tidy"]
-# A diagnostic from a check, e.g. "Foo.cpp:12:3: warning: ... [bugprone-foo]".
-FINDING = re.compile(r":\d+:\d+: (warning|error): .*\[[\w.,-]+\]$", re.MULTILINE)
+# Tried in order when neither --clang-tidy nor CLANG_TIDY names one: cmake/CompilerWarnings.cmake's find_program names,
+# Homebrew LLVM first as there (its HINTS come before PATH). Keep both lists in sync.
+CANDIDATES = ["/opt/homebrew/opt/llvm/bin/clang-tidy", "clang-tidy", "clang-tidy-18", "clang-tidy-19"]
+# A diagnostic from a check, e.g. "Foo.cpp:12:3: warning: ... [bugprone-foo]" or "[clang-diagnostic-c++20-extensions]".
+FINDING = re.compile(r":\d+:\d+: (warning|error): .*\[[^\]\s]+\]$", re.MULTILINE)
 
 
 def parse_shard(text):
@@ -77,12 +79,13 @@ def select_sources(build_dir):
 
 
 def find_clang_tidy(requested):
-    # An executable named on purpose must exist: falling back would check with another version than intended.
-    named = requested or os.environ.get("CLANG_TIDY")
-    if named:
-        path = shutil.which(named)
+    # An executable named on purpose (even an empty name) must exist: falling back would check with another version.
+    source = "--clang-tidy" if requested is not None else "CLANG_TIDY"
+    named = requested if requested is not None else os.environ.get("CLANG_TIDY")
+    if named is not None:
+        path = shutil.which(named) if named else None
         if not path:
-            sys.exit(f"clang-tidy '{named}' (from {'--clang-tidy' if requested else 'CLANG_TIDY'}) was not found")
+            sys.exit(f"clang-tidy '{named}' (from {source}) was not found")
         return path
     for candidate in CANDIDATES:
         path = shutil.which(candidate)
@@ -92,9 +95,29 @@ def find_clang_tidy(requested):
 
 
 def run_clang_tidy(clang_tidy, build_dir, source):
-    result = subprocess.run([clang_tidy, "-p", build_dir, "--quiet", source], stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT, text=True, errors="replace", check=False)
+    try:
+        result = subprocess.run([clang_tidy, "-p", build_dir, "--quiet", source], stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, text=True, errors="replace", check=False)
+    except OSError as error:
+        return None, str(error)
     return result.returncode, result.stdout
+
+
+def failure_reason(code, output):
+    """Returns why a file's run failed, or None when it is clean."""
+    if code is None:
+        return "clang-tidy did not start"
+    if code < 0:
+        return f"clang-tidy was killed by {signal.Signals(-code).name}" if -code in signal.valid_signals() \
+            else f"clang-tidy was killed by signal {-code}"
+    if code != 0:
+        return f"clang-tidy exited with {code}"
+    # .clang-tidy makes every finding an error. A finding that still exits 0 means a configuration lost that (a nested
+    # .clang-tidy without InheritParentConfig, or the generated EmbeddedShaders.cpp of a build tree outside the checkout,
+    # which no .clang-tidy covers). Other output of a clean file (warnings in third-party headers the filter hides) is noise.
+    if FINDING.search(output):
+        return "findings that are not errors (WarningsAsErrors?)"
+    return None
 
 
 def main():
@@ -103,7 +126,7 @@ def main():
     parser.add_argument("--shard", type=parse_shard, default=(1, 1), help="check only shard I of N")
     parser.add_argument("-j", dest="jobs", type=parse_jobs, default=os.cpu_count() or 1, help="parallel clang-tidy runs")
     parser.add_argument("--clang-tidy", dest="clang_tidy",
-        help="clang-tidy executable (default: CLANG_TIDY, else the first of " + ", ".join(CANDIDATES) + ")")
+        help="clang-tidy executable (default: CLANG_TIDY, else the first found of " + ", ".join(CANDIDATES) + ")")
     parser.add_argument("--list", action="store_true", help="print the selected files instead of checking them")
     parser.add_argument("files", nargs="*", help="check only these translation units")
     args = parser.parse_args()
@@ -129,32 +152,29 @@ def main():
     if version.returncode != 0:
         sys.exit(f"{clang_tidy} --version exited with {version.returncode}:\n{version.stdout}")
     version_line = next((line.strip() for line in version.stdout.splitlines() if "version" in line), clang_tidy)
+    # clang-tidy ignores a misspelled check or option in .clang-tidy, which would quietly stop checking it.
+    config = subprocess.run([clang_tidy, "--verify-config"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        check=False, cwd=SOURCE_DIR)
+    if config.returncode != 0:
+        sys.exit(f"{clang_tidy} --verify-config rejected .clang-tidy:\n{config.stdout}")
     print(f"{version_line}: {len(selected)} of {len(sources)} files (shard {index}/{count}), {args.jobs} at a time",
         flush=True)
     failed = []
-    checked = 0
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as executor:
         futures = {executor.submit(run_clang_tidy, clang_tidy, args.build_dir, source): source for source in selected}
         for future in concurrent.futures.as_completed(futures):
             source = futures[future]
             code, output = future.result()
-            checked += 1
-            # .clang-tidy makes every finding an error. A finding that still exits 0 means a configuration lost that
-            # (a nested .clang-tidy without InheritParentConfig, a build tree outside the checkout), so it fails too.
-            # Other output of a clean file (counts of warnings in third-party headers, which the filter hides) is noise.
-            if code != 0 or FINDING.search(output):
-                reason = f"clang-tidy exited with {code}" if code != 0 else "findings that are not errors (WarningsAsErrors?)"
+            reason = failure_reason(code, output)
+            if reason:
                 failed.append(source)
                 print(f"=== {os.path.relpath(source)}: {reason}\n{output.rstrip()}", flush=True)
-    if checked != len(selected):
-        print(f"clang-tidy ran on only {checked} of {len(selected)} files", file=sys.stderr)
-        return 1
     if failed:
         print(f"clang-tidy failed on {len(failed)} of {len(selected)} files:", file=sys.stderr)
         for source in sorted(failed):
             print(f"  {os.path.relpath(source)}", file=sys.stderr)
         return 1
-    print(f"clang-tidy passed on {checked} files")
+    print(f"clang-tidy passed on {len(selected)} files")
     return 0
 
 

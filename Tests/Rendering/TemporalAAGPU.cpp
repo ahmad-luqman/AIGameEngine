@@ -409,8 +409,8 @@ TEST_CASE("TAA resolve blends history, clips color, rejects depth and clamps to 
 	auto resolve = [&](bool valid) {
 		commands->open();
 		commands->writeTexture(color, 0, 0, colors.data(), Size * 4 * sizeof(uint16_t));
-		commands->writeTexture(depth, 0, 0, depths.data(), 8 * sizeof(float));
-		commands->writeTexture(motion, 0, 0, motions.data(), 8 * sizeof(glm::vec4));
+		commands->writeTexture(depth, 0, 0, depths.data(), Size * sizeof(float));
+		commands->writeTexture(motion, 0, 0, motions.data(), Size * sizeof(glm::vec4));
 		taa.Render(commands, area, valid, skyReprojection, jitterDelta);
 		commands->close();
 		device->executeCommandList(commands);

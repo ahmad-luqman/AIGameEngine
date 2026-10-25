@@ -208,10 +208,11 @@ Record per session: PR number, measured job times after merge, anything that dev
     targets' entries from `compile_commands.json` (by object path, `CMakeFiles/<target>.dir/`) and deals the sorted
     files round-robin over the shards. That is exactly the set `BASALT_CLANG_TIDY=ON` checks, and every file is in
     exactly one shard by construction, so the checker step became the `ClangTidyScript` ctest (selection against every
-    compiled Basalt source, shard coverage, argument checks, and a stand-in clang-tidy for findings, crashes and files
-    that were never run). The script also fails a listed target without compile commands, and a finding that exits 0
-    (a lost `WarningsAsErrors`). No `run-clang-tidy`: the script prints each failing file's output in one block. The
-    shard count is the matrix size (`strategy.job-total`).
+    compiled Basalt source, shard coverage, argument checks, and a stand-in clang-tidy that logs every file it checks,
+    for findings and crashes); the tidy jobs run it too, as theirs is the only tree with fuzz and GPU targets. The script
+    also fails a listed target without compile commands, a finding that exits 0 (a lost `WarningsAsErrors`) and a
+    `.clang-tidy` that `--verify-config` rejects (a misspelled check is otherwise ignored). No `run-clang-tidy`: the
+    script prints each failing file's output in one block. Shards come from `strategy.job-index`/`job-total`.
   - Test sources stay checked (the user's open question; CI has caught real findings in `Tests/Source`). The tidy
     configure also enables `BASALT_GPU_TESTS` and `BASALT_FUZZ`, so the GPU test and fuzz target sources are checked
     for the first time, and the header filter now covers `Tests/Rendering`, `Tests/Benchmarks` and `Tests/Fuzz`.
@@ -219,13 +220,14 @@ Record per session: PR number, measured job times after merge, anything that dev
     `Tests/Rendering/.clang-tidy` turns off `bugprone-unchecked-optional-access` as `Tests/Source/.clang-tidy` does
     (doctest's `REQUIRE` ends a test, which the check cannot see; clang-tidy 18 with libstdc++ flagged more of these
     than Homebrew's 23 locally).
-  - Shard check (run 40212392455): a planted `modernize-use-nullptr` in `Tests/Source/SceneTests.cpp` and
-    `Core/Log.cpp` failed exactly shards 1 and 3; the commit was dropped.
+  - Shard check (run 40212392455): planted `modernize-use-nullptr` findings in `Tests/Source/SceneTests.cpp` and
+    `Core/Log.cpp` were reported by exactly shards 1 and 3 (shard 2 failed on `ViewportGPU.cpp`'s optional-access
+    findings, now turned off by `Tests/Rendering/.clang-tidy`); the commit was dropped.
   - The tidy jobs compile nothing but the shaders, so they have no compiler cache (launcher variables cleared for the job).
   - Fuzzing: `FUZZ_JOBS` (CI: `nproc`, 4) runs targets through `xargs -P`, since `wait -n` needs bash 4.3 and macOS
     ships 3.2. Concurrent output interleaves, so each target prints one status line as it finishes and the summaries
     follow in target order. Summaries now include `stat::peak_rss_mb` (250-650 MB on CI) and the `DONE` line, which the
-    old pattern never matched (libFuzzer writes a tab there); a clean exit without it, a kill by a signal (named, with
-    SIGKILL pointing at the OOM killer) and a target that never ran fail the run. Concurrent targets get
+    old pattern never matched (libFuzzer writes a tab there); a clean exit without it, a kill by a signal (SIGKILL is
+    flagged as the likely out-of-memory killer) and a target that never finished fail the run. Concurrent targets get
     `-rss_limit_mb=3072` instead of 4096 (16 GB runners); one at a time (the nightly) keeps 4096. Pushes keep 60 s per
     target.

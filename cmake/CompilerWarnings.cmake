@@ -35,14 +35,14 @@ function(basalt_set_warnings target)
 	endif()
 endfunction()
 
-# Lists the targets basalt_set_warnings saw for scripts/clang_tidy.py. Deferred to the end of the top-level directory,
-# so targets added after this file is included, in any subdirectory, are all in it.
+# Lists the targets basalt_set_warnings saw for scripts/clang_tidy.py. Deferred to the end of the top-level directory
+# (wherever this file is included from), so targets added later, in any subdirectory, are all in it.
 function(basalt_write_clang_tidy_targets)
 	get_property(targets GLOBAL PROPERTY BASALT_WARNING_TARGETS)
 	list(JOIN targets "\n" lines)
 	file(WRITE "${CMAKE_BINARY_DIR}/ClangTidyTargets.txt" "${lines}\n")
 endfunction()
-cmake_language(DEFER CALL basalt_write_clang_tidy_targets)
+cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL basalt_write_clang_tidy_targets)
 
 option(BASALT_WARNINGS_AS_ERRORS "Treat warnings in Basalt code as errors" ON)
 
