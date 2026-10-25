@@ -108,7 +108,9 @@ find_program(bash bash)
 if(bash AND NOT WIN32)
 	file(MAKE_DIRECTORY "${WORK_DIR}/Downloaded/_deps/glm-src" "${WORK_DIR}/Used/_deps/glm-build")
 	file(MAKE_DIRECTORY "${WORK_DIR}/UsedCrlf/_deps")
-	file(WRITE "${WORK_DIR}/Used/CMakeCache.txt" "CMAKE_CXX_COMPILER_LAUNCHER:STRING=ccache\n")
+	# Real caches are tens of kilobytes, more than a pipe buffer holds, with the launcher well before the end.
+	string(REPEAT "SOME_ENTRY:STRING=value\n" 5000 padding)
+	file(WRITE "${WORK_DIR}/Used/CMakeCache.txt" "CMAKE_CXX_COMPILER_LAUNCHER:STRING=ccache\n${padding}")
 	# As CMake writes it on Windows.
 	file(WRITE "${WORK_DIR}/UsedCrlf/CMakeCache.txt" "CMAKE_CXX_COMPILER_LAUNCHER:STRING=sccache\r\n")
 
