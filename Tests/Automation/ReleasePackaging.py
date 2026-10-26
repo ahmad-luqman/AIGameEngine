@@ -53,6 +53,7 @@ def main():
     mismatch = run(["--check-tag", "v999.0.0"])
     require(mismatch.returncode == 1 and "does not match the engine version" in mismatch.stderr, f"a mismatched tag: {mismatch.stderr}")
     require(run(["--build", str(build), "--output", "x", "--notarize", "profile"]).returncode == 2, "--notarize without --sign-identity")
+    require(run(["--build", str(build), "--output", "x", "--compression-level", "0"]).returncode == 2, "--compression-level 0")
     unknown = run(["--build", str(build), "--output", "x", "--samples", "NoSuchSample"])
     require(unknown.returncode == 1 and "unknown samples: NoSuchSample" in unknown.stderr, f"an unknown sample: {unknown.stderr}")
 
@@ -66,7 +67,8 @@ def main():
                 (sdk / name).write_text("stand-in")
             env["VULKAN_SDK"] = str(sdk.parent)
         output = Path(temp, "dist")
-        arguments = ["--build", str(build), "--output", str(output), "--samples", "Tetris"] + ([] if with_engine else ["--skip-engine"])
+        # The fastest gzip level: level 9 takes minutes over a Debug build's binaries (Linux; other hosts zip).
+        arguments = ["--build", str(build), "--output", str(output), "--samples", "Tetris", "--compression-level", "1"] + ([] if with_engine else ["--skip-engine"])
         packaged = run(arguments, env)
         require(packaged.returncode == 0, f"package_release.py failed: {packaged.stdout}{packaged.stderr}")
         files = sorted(path.name for path in output.iterdir())
@@ -74,6 +76,13 @@ def main():
         sample = next((name for name in files if name.startswith(f"Basalt-{version}-Tetris-{platform}")), None)
         engine = next((name for name in files if name.startswith(f"Basalt-{version}-{platform}.")), None)
         require(sample and checksums_name in files and bool(engine) == with_engine and len(files) == 2 + with_engine, f"unexpected release files {files}")
+
+        # gzip records level 1 as "fastest" in its header (XFL, byte 8; level 9 records 2).
+        for name in files:
+            if name.endswith(".tar.gz"):
+                with open(Path(output, name), "rb") as file:
+                    header = file.read(10)
+                require(header[:2] == b"\x1f\x8b" and header[8] == 4, f"{name} was not compressed at level 1: header {header.hex()}")
 
         # Each archive's digest, computed here.
         expected = "".join(f"{hashlib.sha256(Path(output, name).read_bytes()).hexdigest()}  {name}\n" for name in sorted(filter(None, [sample, engine])))

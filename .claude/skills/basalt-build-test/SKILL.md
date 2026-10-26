@@ -6,8 +6,11 @@ description: Build Basalt, run its unit tests and format check, and verify rende
 # Build and test Basalt
 
 1. Format: `scripts/format.sh`
-2. Build + all tests: `scripts/test.sh` (Debug; wraps `cmake` + `ctest --output-on-failure`).
+2. Build + all tests: `scripts/test.sh` (Debug; wraps `cmake` + `ctest --output-on-failure -j <cores>`; pass `-j 1` or
+   set `CTEST_PARALLEL_LEVEL` to run fewer at once).
    - Filter unit tests: `./build/bin/BasaltTests -tc="*Scene*"`; list them: `--list-test-cases`.
+   - ctest runs the unit tests as `BasaltTests_<Shard>` entries (test files listed in `Tests/CMakeLists.txt`) plus
+     `BasaltTests` for every other file; `ctest -R BasaltTests` runs them all.
 3. If the change touches rendering, the editor, or the runtime, launch it with validation:
    ```bash
    ./build/bin/BasaltRuntime   # macOS/Homebrew: the engine finds Homebrew's layer itself
@@ -23,7 +26,7 @@ description: Build Basalt, run its unit tests and format check, and verify rende
 
 Extra checks (each one is also a CI job; run locally when touching memory handling or before big commits):
 - Sanitizers: `cmake -S . -B build-asan -G Ninja -DBASALT_SANITIZE="address;undefined" -DBASALT_CHECK_FORMAT=OFF`,
-  build, then `ctest --test-dir build-asan -LE "gpu|format"`. Fix reports in Basalt code; only third-party
+  build, then `ctest --test-dir build-asan -LE "gpu|format" -j <cores>`. Fix reports in Basalt code; only third-party
   reports go into `cmake/sanitizers/*.supp`.
 - clang-tidy: `scripts/clang_tidy.py -p build [files...]` checks the sources of every Basalt target in a configured
   build (CI splits them with `--shard I/N`), or configure with `-DBASALT_CLANG_TIDY=ON` to check while compiling

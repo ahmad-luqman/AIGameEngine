@@ -143,8 +143,10 @@ jobs:
       - name: Build
         run: cmake --build build -- -k 0
 
+      # One test per core (NUMBER_OF_PROCESSORS on Windows); Benchmark_cpu runs alone (RUN_SERIAL).
       - name: Test
-        run: ctest --test-dir build --output-on-failure
+        shell: bash
+        run: ctest --test-dir build --output-on-failure -j "${NUMBER_OF_PROCESSORS:-$(getconf _NPROCESSORS_ONLN)}"
 
       - name: Upload benchmark report
         if: always() && matrix.config == 'Release'
@@ -210,7 +212,7 @@ jobs:
         run: cmake --build build -- -k 0
 
       - name: Test
-        run: ctest --test-dir build --output-on-failure -LE "gpu|format"
+        run: ctest --test-dir build --output-on-failure -LE "gpu|format" -j "$(nproc)"
 
   # clang-tidy over the sources of every Basalt target (engine, apps, tests, GPU tests, benchmark and fuzz targets;
   # third-party code never), split over the matrix's jobs by scripts/clang_tidy.py. Any finding fails the job
@@ -349,10 +351,19 @@ jobs:
 
   # The Linux Release build: every headless test, then the feature scene rendered on Mesa's lavapipe (a conformant CPU
   # Vulkan 1.3 driver) with the Khronos validation layer. Render tests run offscreen; the editor integration uses Xvfb.
+  # lavapipe renders on the CPU, and the GPU tests already fill a runner's cores (one at a time they took 657 s; side by
+  # side, at best 486 s), so two jobs split them. Part 1 runs the script-driven renders (each starts the runtime or the
+  # editor many times), the GPU benchmark and the headless tests; part 2 every other GPU test, new ones included.
   gpu-lavapipe:
-    name: ubuntu-24.04 / Release + GPU (lavapipe)
+    name: ubuntu-24.04 / Release + GPU (lavapipe ${{ matrix.part }}/2)
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [ 1, 2 ]
+    env:
+      GPU_PART_1: '^(LocalShadowRender|EditorViewport|FSR1Render|StatisticsOverlay|UIFollowupsRender|Benchmark_gpu)$'
     steps:
       - uses: actions/checkout@v4
 
@@ -382,12 +393,14 @@ jobs:
           path: _deps
           key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'scripts/ci-fetch-deps.sh') }}
 
+      # Both parts build the same tree; part 1 saves the cache for both.
       - name: Compiler cache
         uses: hendrikmuhs/ccache-action@v1.2.24
         with:
           key: lavapipe
           max-size: 300M
           evict-old-files: 7d
+          save: ${{ matrix.part == 1 }}
 
       - name: Fetch dependency sources
         if: steps.deps.outputs.cache-hit != 'true'
@@ -423,15 +436,22 @@ jobs:
 
       # Each test step runs whenever the build succeeded, so a headless failure never hides the GPU results.
       - name: Test
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
-        run: ctest --test-dir build --output-on-failure --no-tests=error -LE "gpu|format"
+        if: ${{ matrix.part == 1 && !cancelled() && steps.build.outcome == 'success' }}
+        run: ctest --test-dir build --output-on-failure --no-tests=error -LE "gpu|format" -j "$(nproc)"
 
+      # Two at a time with two lavapipe threads each (lavapipe otherwise starts one per core in every test); more at once
+      # only slowed the long script-driven tests. Benchmark_gpu runs alone with every core (RUN_SERIAL, LP_NUM_THREADS
+      # unset).
       - name: GPU tests
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
-        run: ctest --test-dir build --output-on-failure --no-tests=error -L gpu
+        env:
+          LP_NUM_THREADS: 2
+        run: |
+          if [[ "${{ matrix.part }}" == 1 ]]; then select=(-R "$GPU_PART_1"); else select=(-E "$GPU_PART_1"); fi
+          ctest --test-dir build --output-on-failure --no-tests=error -L gpu "${select[@]}" -j 2
 
       - name: Upload benchmark report
-        if: always()
+        if: always() && matrix.part == 1
         uses: actions/upload-artifact@v4
         with:
           name: benchmark-Linux-Release
@@ -442,7 +462,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: lavapipe-screenshots
+          name: lavapipe-screenshots-${{ matrix.part }}
           path: |
             build/Tests/Benchmark-*
             build/Tests/Golden/**/*.png

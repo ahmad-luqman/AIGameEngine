@@ -23,7 +23,8 @@ cmake --build "$buildDir"
 profileDir="$PWD/$buildDir/profiles"
 rm -rf "$profileDir"
 mkdir -p "$profileDir"
-LLVM_PROFILE_FILE="$profileDir/%p-%m.profraw" ctest --test-dir "$buildDir" --output-on-failure -LE "gpu|format"
+# One profile per process (%p), so tests can run side by side.
+LLVM_PROFILE_FILE="$profileDir/%p-%m.profraw" ctest --test-dir "$buildDir" --output-on-failure -LE "gpu|format" -j "$(getconf _NPROCESSORS_ONLN)"
 
 outDir="$buildDir/coverage"
 mkdir -p "$outDir"
