@@ -279,8 +279,9 @@ Record per session: PR number, measured job times after merge, anything that dev
     fails on a stale or unlabelled name), each `-j2` with `LP_NUM_THREADS=2`. The first run's GPU steps took 175 s (part
     1: the Python-driven renders, the benchmark) and 313 s (part 2). Moving the three longest GPU test executables into
     part 1 overshot (347 / 220 s), also because ctest, with no timing history, started LocalShadowRender last. The long
-    Python-driven tests and TemporalAAGPU now have a `COST`, so they start first, and only TemporalAAGPU moved (an
-    estimated 4.5 min per part from that run's test times; to be confirmed after the merge).
+    Python-driven tests and TemporalAAGPU now have a `COST`, so they start first, and only TemporalAAGPU moved: 172 /
+    284 s (run 40311999141). Part 2 could shed another test or two, but its job already ends with the clang-tidy shards
+    (which have no compiler cache, 9-10 min), so that would not shorten the run.
   - Headless tests run one per core everywhere (`scripts/test.sh` too, overridable with `-j` or `CTEST_PARALLEL_LEVEL`;
     `scripts/coverage.sh`, whose profiles are already per process), with `--no-tests=error`. Three `-j4` runs each on
     Linux Debug, ASan and Windows Debug passed before the shards; under `-j4` the single `BasaltTests` grew from 95 to
@@ -288,5 +289,7 @@ Record per session: PR number, measured job times after merge, anything that dev
   - First PR run (40306777393, bf1b712; builds partly cold): 10.5 min wall, down from 13 (session 2's run 40217059412;
     `main`'s 40233518562 took 31.6 min with a cold lavapipe build). Test steps, before -> after:
     ASan 321 -> 102 s, Linux Debug 271 -> 65, Windows Debug 246 -> 111, macOS Debug 114 -> 75, macOS Release 54 -> 24,
-    Windows Release 54 -> 27, lavapipe headless 62 -> 10 and GPU 657 -> 175 / 313. Times with warm caches go here after
-    the merge.
+    Windows Release 54 -> 27, lavapipe headless 62 -> 10 and GPU 657 -> 175 / 313. The next two runs took 11.6 and 10.2
+    min, their builds also partly cold (each changed widely included test or engine headers); the ASan job of the last
+    ran every test about twice as slowly as the run before (runner variance). Times with warm caches go here after the
+    merge.
