@@ -307,14 +307,16 @@ Other rules:
 
 - Every feature ships with unit tests in `Tests/Source/<Module>Tests.cpp`. Tests must be headless and
   deterministic (fixed timesteps, no wall-clock dependence, no network).
-- ctest runs tests side by side (headless tests one per core in `scripts/test.sh` and CI; CI's lavapipe GPU tests two
-  at a time), so a test writes only into a directory of its own: unit tests under `BasaltTest::TempDirectory`, scripts
-  into a fresh temporary directory or the test's build subdirectory, with their own `BASALT_USER_DATA_DIR` (CMake's
-  `ENVIRONMENT` property) when the run saves user data. Servers take a free port (listen on port 0, or reserve one
-  through it); a test that must run alone gets `RUN_SERIAL`. `BasaltTests` runs as several ctest entries split by test
-  file (`BasaltTests_<Shard>`, listed in `Tests/CMakeLists.txt`; the entry `BasaltTests` runs every other file, and
-  `BasaltTestShards` checks each test case runs once): move a slow test file into a shard when any entry clearly
-  outlasts the rest.
+- ctest runs tests side by side (every test one per core in `scripts/test.sh`, GPU tests included; headless tests one
+  per core in CI, whose lavapipe GPU tests run two at a time), so a test writes only into a directory of its own: unit
+  tests under `BasaltTest::TempDirectory`, scripts into a fresh temporary directory or the test's build subdirectory,
+  with their own `BASALT_USER_DATA_DIR` (the test's `ENVIRONMENT` property, or set by the script) when the run saves
+  user data. Copies of a test project leave out `Saved/`, where FeatureTest and SampleTetrisReplay record their replays.
+  Servers take a free port (listen on port 0, or reserve one through it); a test that must run alone gets `RUN_SERIAL`,
+  and a long one a `COST` so `ctest -j` starts it first. `BasaltTests` runs as several ctest entries split by test file
+  (`BasaltTests_<Shard>`, listed in `Tests/CMakeLists.txt`; the entry `BasaltTests` runs every other file, and
+  `BasaltTestShards` checks each test case runs once): rebalance (move test files between entries, or add a shard) when
+  any entry clearly outlasts the rest.
 - New engine behaviour that is reachable from Lua or the automation API must also be exercised by the
   feature test (`Tests/Data/FeatureTest`: scene `Assets/Scenes/FeatureTest.bscene`, driver
   `Assets/Scripts/FeatureTest.lua`, run by ctest through `basalt batch FeatureTest.batch.json`). Add a

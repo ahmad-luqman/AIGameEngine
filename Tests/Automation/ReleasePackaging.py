@@ -13,7 +13,6 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-import types
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -67,18 +66,21 @@ def main():
             (folder / "usr" / "tool").write_text("#!/bin/sh\n")
             (folder / "usr" / "tool").chmod(0o755)
             (folder / "AppRun").symlink_to("usr/tool")
-            package_release.sys = types.SimpleNamespace(platform="linux")
-            try:
-                for level, xfl in ((1, 4), (9, 2)):
-                    path = package_release.archive(folder, Path(temp, f"level{level}"), level)
-                    require(path.name == f"level{level}.tar.gz" and path.read_bytes()[8] == xfl, f"level {level}: {path.name}, header {path.read_bytes()[:10].hex()}")
-                    with tarfile.open(path) as file:
-                        entries = {info.name: info for info in file.getmembers()}
-                    require(sorted(entries) == ["App.AppDir", "App.AppDir/AppRun", "App.AppDir/usr", "App.AppDir/usr/tool"], f"tarball members {sorted(entries)}")
-                    require(entries["App.AppDir/AppRun"].issym() and entries["App.AppDir/AppRun"].linkname == "usr/tool", "AppRun is not a link to usr/tool")
-                    require(entries["App.AppDir/usr/tool"].mode & 0o111 == 0o111, f"tool mode {entries['App.AppDir/usr/tool'].mode:o}")
-            finally:
-                package_release.sys = sys
+            for level, xfl in ((1, 4), (9, 2)):
+                path = package_release.archive(folder, Path(temp, f"level{level}"), level, host="linux")
+                header = path.read_bytes()[:10]
+                require(path.name == f"level{level}.tar.gz" and header[8] == xfl, f"level {level}: {path.name}, header {header.hex()}")
+                with tarfile.open(path) as file:
+                    entries = {info.name: info for info in file.getmembers()}
+                require(sorted(entries) == ["App.AppDir", "App.AppDir/AppRun", "App.AppDir/usr", "App.AppDir/usr/tool"], f"tarball members {sorted(entries)}")
+                link, tool = entries["App.AppDir/AppRun"], entries["App.AppDir/usr/tool"]
+                require(link.issym() and link.linkname == "usr/tool", "AppRun is not a link to usr/tool")
+                require(tool.mode & 0o111 == 0o111, f"tool mode {tool.mode:o}")
+    # Where archives are zips, the option is refused politely: a warning, then the run goes on (here to the unknown
+    # sample).
+    if package_release.writes_zip():
+        ignored = run(["--build", str(build), "--output", "x", "--samples", "NoSuchSample", "--gzip-level", "1"])
+        require(ignored.returncode == 1 and "--gzip-level has no effect here" in ignored.stdout, f"--gzip-level on a zip host: {ignored.stdout}{ignored.stderr}")
     unknown = run(["--build", str(build), "--output", "x", "--samples", "NoSuchSample"])
     require(unknown.returncode == 1 and "unknown samples: NoSuchSample" in unknown.stderr, f"an unknown sample: {unknown.stderr}")
 
@@ -104,16 +106,18 @@ def main():
         engine = next((name for name in files if name.startswith(f"Basalt-{version}-{platform}.")), None)
         require(sample and checksums_name in files and bool(engine) == with_engine and len(files) == 2 + with_engine, f"unexpected release files {files}")
 
-        # Python's gzip records level 1 in the header (XFL, byte 8, is 4). Linux only: the sample is a tarball unless
-        # appimagetool built an AppImage, and the tools archive always is.
-        for name in filter(None, [sample, engine]):
-            if name.endswith(".tar.gz"):
-                with open(Path(output, name), "rb") as file:
-                    header = file.read(10)
-                require(header[:2] == b"\x1f\x8b" and header[8] == 4, f"{name} was not compressed at level 1: header {header.hex()}")
+        # Checks the tarballs, which only Linux writes: the sample unless appimagetool built an AppImage, and always the
+        # tools archive. Python's gzip records level 1 in the header (XFL, byte 8, is 4).
+        archives = sorted(filter(None, [sample, engine]))
+        tarballs = [name for name in archives if name.endswith(".tar.gz")]
+        require(not linux or not engine or engine in tarballs, f"the tools archive is not a tarball: {engine}")
+        for name in tarballs:
+            with open(Path(output, name), "rb") as file:
+                header = file.read(10)
+            require(header[:2] == b"\x1f\x8b" and header[8] == 4, f"{name} was not compressed at level 1: header {header.hex()}")
 
         # Each archive's digest, computed here.
-        expected = "".join(f"{hashlib.sha256(Path(output, name).read_bytes()).hexdigest()}  {name}\n" for name in sorted(filter(None, [sample, engine])))
+        expected = "".join(f"{hashlib.sha256(Path(output, name).read_bytes()).hexdigest()}  {name}\n" for name in archives)
         checksums = Path(output, checksums_name).read_text()
         require(checksums == expected, f"checksums: {checksums!r}, expected {expected!r}")
 

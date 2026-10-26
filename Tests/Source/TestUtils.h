@@ -12,12 +12,6 @@
 
 #include <doctest/doctest.h>
 
-#if defined(_WIN32)
-	#include <process.h>
-#else
-	#include <unistd.h>
-#endif
-
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -34,22 +28,13 @@ namespace BasaltTest {
 	// Fixed frame time of the tests (60 Hz).
 	inline constexpr float Step = 1.0f / 60.0f;
 
-	inline int GetProcessId()
-	{
-#if defined(_WIN32)
-		return _getpid();
-#else
-		return static_cast<int>(getpid());
-#endif
-	}
-
 	// Scratch root of this test run: <temp>/BasaltTests/Run-<process ID>-<clock>, unique per process, so test runs at the
 	// same time (the BasaltTests shards ctest starts together, Debug and ASan builds) never share or delete each other's
 	// files. The process ID keeps processes started in the same clock tick apart; the clock keeps a reused process ID out
 	// of a crashed earlier run's leftover directory.
 	inline const std::filesystem::path& GetRunDirectory()
 	{
-		static const std::string run = "Run-" + std::to_string(GetProcessId()) + "-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+		static const std::string run = "Run-" + std::to_string(Basalt::Platform::GetProcessId()) + "-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
 		static const std::filesystem::path directory = std::filesystem::temp_directory_path() / "BasaltTests" / run;
 		return directory;
 	}

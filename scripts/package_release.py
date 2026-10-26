@@ -15,8 +15,8 @@ The first form writes, for the host platform:
                                             executable has icon and version resources, or an AppImage (an AppDir tarball
                                             when appimagetool is missing, unless --require-appimage)
   SHA256SUMS-<platform>.txt                 (the release workflow joins the platforms' lists into SHA256SUMS.txt)
---gzip-level sets the gzip level of the .tar.gz archives (Linux; default 9); the tests take 1, since level 9 spends
-minutes on a Debug build's binaries. Other hosts write zip archives and ignore it, with a warning.
+--gzip-level sets the gzip level of the .tar.gz archives (Linux; default 9); the ReleasePackaging test passes 1 there,
+since level 9 spends minutes on a Debug build's binaries. Other hosts write zip archives and ignore it, with a warning.
 The second form exits 1 unless the tag is v<version> for the version in CMakeLists.txt.
 """
 import argparse
@@ -86,15 +86,20 @@ def run_cli(cli, project, command, params, env):
     return response["result"]
 
 
-def archive(source, destination, gzip_level):
+def writes_zip(host=sys.platform):
+    """Whether archive() zips on this host (Windows, macOS) rather than writing a .tar.gz."""
+    return host in ("darwin", "win32")
+
+
+def archive(source, destination, gzip_level, host=sys.platform):
     """Zips (Windows, macOS) or tars (Linux, keeping permissions and links; gzip_level 1-9) a file or directory, named
     after it."""
-    if sys.platform == "darwin":
+    if host == "darwin":
         # ditto keeps the bundle structure and its code signature (in the binaries and _CodeSignature/, not in extended
         # attributes); resource forks, extended attributes and ACLs are left out, so no Finder metadata ships.
         subprocess.run(["ditto", "-c", "-k", "--norsrc", "--noextattr", "--noacl", "--keepParent", str(source), f"{destination}.zip"], check=True)
         return Path(f"{destination}.zip")
-    if sys.platform == "win32":
+    if host == "win32":
         return Path(shutil.make_archive(str(destination), "zip", root_dir=source.parent, base_dir=source.name))
     # What shutil.make_archive's gztar writes, at a chosen gzip level (it always uses 9).
     path = Path(f"{destination}.tar.gz")
@@ -205,7 +210,7 @@ def main():
         parser.error("--notarize needs --sign-identity")
     if options.gzip_level is None:
         options.gzip_level = 9
-    elif not sys.platform.startswith("linux"):
+    elif writes_zip():
         warn("--gzip-level has no effect here: this host writes zip archives")
     build = options.build.resolve()
     output = options.output.resolve()

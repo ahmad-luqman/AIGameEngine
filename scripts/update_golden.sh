@@ -17,7 +17,7 @@ fi
 cmake --build "$buildDir"
 
 # Only the renders: the comparisons would fail against the old references.
-ctest --test-dir "$buildDir" --output-on-failure -R '^FeatureTestRender(_[A-Za-z]+)?$'
+ctest --test-dir "$buildDir" --output-on-failure --no-tests=error -R '^FeatureTestRender(_[A-Za-z]+)?$'
 
 target="Tests/Data/Golden/$driver"
 mkdir -p "$target"

@@ -248,39 +248,45 @@ Record per session: PR number, measured job times after merge, anything that dev
     240-300 MB tools (DWARF) at level 9; level 6 took a third of the time for 1% more bytes, level 1 a tenth for 13% more
     (`BasaltEditor`: 34.8 s / 87 MB, 10.7 s / 88 MB, 3.4 s / 98 MB). `package_release.py --gzip-level` (default 9, so
     releases are unchanged; other hosts warn that it does nothing) writes the Linux `.tar.gz` with `tarfile` directly
-    (`shutil.make_archive` always uses 9). The test passes 1 and checks the gzip header, and also runs the tarball code
-    on macOS (header level, names, executable bits, the AppRun link). macOS (`ditto`) and Windows (zip; MSVC keeps debug
+    (`shutil.make_archive` always uses 9). On Linux the test passes 1 and checks the gzip header; on every host but
+    Windows it also runs the tarball code (header level, names, executable bits, the AppRun link). macOS (`ditto`) and Windows (zip; MSVC keeps debug
     information in separate `.pdb` files, which are not packaged) were never slow. `Saved/` (sample replays) no longer
     reaches the tools archive.
   - `BasaltTests` is five ctest entries: `BasaltTests_Editor`, `_Physics`, `_Animation` and `_Core` name their test files
     in `Tests/CMakeLists.txt`, and `BasaltTests` runs every other file through the same patterns as
     `--source-file-exclude`, so a new file always runs. Split by the per-file times of Windows Debug and ASan (doctest's
-    XML reporter with `--duration`, used for proportions: in one process, 137 and 159 s), 20-37 s per entry. Configure
-    fails on a shard with no files, a file in two shards, or a name that does not match exactly one file (doctest
+    XML reporter with `--duration`, used for proportions: in one process, 137 and 159 s), planned at 20-37 s per entry;
+    in the first PR run, side by side, they took 34-46 s (ASan) and 35-61 s (Windows Debug). Configure fails on a
+    shard with no files, a file listed twice, or a name that does not match exactly one file (doctest
     matches the pattern against the whole path, ignoring case: `*MathTests.cpp` also takes `RenderMathTests.cpp`).
     BasaltTests fails a run whose filters select no test case (doctest would report success), and the `BasaltTestShards`
     test lists each registered entry's test cases, fails unless every case runs exactly once, and checks that the
-    entries share labels, timeout, environment (the sanitizer options) and working directory. All 51 test files also
+    entries are every ctest entry running the binary, differ only in their file filter, and share labels, timeout,
+    environment (the sanitizer options) and working directory. All 51 test files also
     pass alone, each in its own process (macOS Debug). The per-process scratch directory now includes the process ID,
     and two `CoreTests` cases that used a fixed temporary path use it too.
-  - No `RESOURCE_LOCK`. Tests use the source projects read-only (the runtime never writes a project; the CLI saves only
-    with `--scene`, which only McpIntegration and PrefabFeature pass, on their own copies) or fresh temporary copies;
-    the one exception, FeatureTest's replay in `Tests/Data/FeatureTest/Saved/`, is left out of the copies the other
-    tests make. `EditorViewport` reserves a free port and `xvfb-run -a` takes a free display. The benchmarks (and the
+  - No `RESOURCE_LOCK`. Tests use the source projects read-only (the runtime never writes a project; the CLI auto-saves
+    only with `--scene`, which only McpIntegration and PrefabFeature pass, on their own copies, and the source-project
+    batches never save) or fresh temporary copies. The two exceptions, the replays FeatureTest and SampleTetrisReplay
+    record into their projects' `Saved/`, are left out of the copies other tests make (ArchiveExport,
+    AssetPipelineFeature, PrefabFeature, and `package_release.py`'s copy of `Samples/`). `EditorViewport` reserves a free port and `xvfb-run -a` takes a free display. The benchmarks (and the
     local-only windowed render) are `RUN_SERIAL`.
   - lavapipe: running GPU tests side by side barely helps, because lavapipe already uses every core. Without the
     benchmark they took 634 s one at a time, and side by side 559 s (`-j2`, `LP_NUM_THREADS=2`), 493 s (`-j4`, 1), 486 s
     (`-j3`, 2) and 497 s (`-j4`, lavapipe's default of a thread per core); at `-j4`, LocalShadowRender, which starts the
     runtime again and again, went from 102 to about 320 s. So the job is split over two runners (`gpu-lavapipe` matrix
     `part`, selected with one regular expression as `-R`/`-E`, so new GPU tests land in part 2; the registration check
-    fails on a stale name), each `-j2` with `LP_NUM_THREADS=2`. The first run took 175 s (part 1: the Python-driven
-    renders, the benchmark) and 313 s (part 2); moving the three longest GPU test executables into part 1 should even
-    them out.
+    fails on a stale or unlabelled name), each `-j2` with `LP_NUM_THREADS=2`. The first run's GPU steps took 175 s (part
+    1: the Python-driven renders, the benchmark) and 313 s (part 2). Moving the three longest GPU test executables into
+    part 1 overshot (347 / 220 s), also because ctest, with no timing history, started LocalShadowRender last. The long
+    Python-driven tests and TemporalAAGPU now have a `COST`, so they start first, and only TemporalAAGPU moved (an
+    estimated 4.5 min per part from that run's test times; to be confirmed after the merge).
   - Headless tests run one per core everywhere (`scripts/test.sh` too, overridable with `-j` or `CTEST_PARALLEL_LEVEL`;
     `scripts/coverage.sh`, whose profiles are already per process), with `--no-tests=error`. Three `-j4` runs each on
     Linux Debug, ASan and Windows Debug passed before the shards; under `-j4` the single `BasaltTests` grew from 95 to
     215 s (ASan) and from 139 to 166-183 s (Windows Debug).
-  - First PR run (40306777393, bf1b712; builds partly cold): 10.5 min wall, down from 13. Test steps, before -> after:
+  - First PR run (40306777393, bf1b712; builds partly cold): 10.5 min wall, down from 13 (session 2's run 40217059412;
+    `main`'s 40233518562 took 31.6 min with a cold lavapipe build). Test steps, before -> after:
     ASan 321 -> 102 s, Linux Debug 271 -> 65, Windows Debug 246 -> 111, macOS Debug 114 -> 75, macOS Release 54 -> 24,
     Windows Release 54 -> 27, lavapipe headless 62 -> 10 and GPU 657 -> 175 / 313. Times with warm caches go here after
     the merge.
