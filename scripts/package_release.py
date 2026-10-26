@@ -3,7 +3,7 @@
 
   package_release.py --build <dir> --output <dir> [--samples Tetris,Breakout] [--skip-engine]
                      [--sign-identity <Developer ID> [--notarize <profile>]] [--require-appimage]
-                     [--compression-level 1-9]
+                     [--gzip-level 1-9]
   package_release.py --check-tag <tag>
 
 The first form writes, for the host platform:
@@ -15,6 +15,8 @@ The first form writes, for the host platform:
                                             executable has icon and version resources, or an AppImage (an AppDir tarball
                                             when appimagetool is missing, unless --require-appimage)
   SHA256SUMS-<platform>.txt                 (the release workflow joins the platforms' lists into SHA256SUMS.txt)
+--gzip-level sets the gzip level of the .tar.gz archives (Linux; default 9); the tests take 1, since level 9 spends
+minutes on a Debug build's binaries. Other hosts write zip archives and ignore it, with a warning.
 The second form exits 1 unless the tag is v<version> for the version in CMakeLists.txt.
 """
 import argparse
@@ -33,8 +35,8 @@ import tempfile
 ROOT = Path(__file__).resolve().parent.parent
 EXE = ".exe" if sys.platform == "win32" else ""
 SMOKE_TEST_FRAMES = 60
-# Sample files that are not part of a sample project (editor state).
-IGNORED = shutil.ignore_patterns("Cache", "imgui.ini", "*.log", ".DS_Store")
+# Sample files that are not part of a sample project (editor state, and replays the sample tests record).
+IGNORED = shutil.ignore_patterns("Cache", "Saved", "imgui.ini", "*.log", ".DS_Store")
 
 
 def fail(message):
@@ -84,8 +86,9 @@ def run_cli(cli, project, command, params, env):
     return response["result"]
 
 
-def archive(source, destination, compression_level):
-    """Zips (Windows, macOS) or tars (Linux, keeping permissions and links) a file or directory, named after it."""
+def archive(source, destination, gzip_level):
+    """Zips (Windows, macOS) or tars (Linux, keeping permissions and links; gzip_level 1-9) a file or directory, named
+    after it."""
     if sys.platform == "darwin":
         # ditto keeps the bundle structure and its code signature (in the binaries and _CodeSignature/, not in extended
         # attributes); resource forks, extended attributes and ACLs are left out, so no Finder metadata ships.
@@ -95,7 +98,7 @@ def archive(source, destination, compression_level):
         return Path(shutil.make_archive(str(destination), "zip", root_dir=source.parent, base_dir=source.name))
     # What shutil.make_archive's gztar writes, at a chosen gzip level (it always uses 9).
     path = Path(f"{destination}.tar.gz")
-    with tarfile.open(path, "w:gz", compresslevel=compression_level) as file:
+    with tarfile.open(path, "w:gz", compresslevel=gzip_level) as file:
         file.add(source, arcname=source.name)
     return path
 
@@ -134,7 +137,7 @@ def package_engine(build, stage, output, name, options):
     shutil.copytree(ROOT / "Samples", folder / "Samples", ignore=IGNORED)
     for document in ("README.md", "LICENSE"):
         shutil.copy2(ROOT / document, folder)
-    return archive(folder, output / name, options.compression_level)
+    return archive(folder, output / name, options.gzip_level)
 
 
 def package_sample(cli, sample, stage, output, prefix, options, env):
@@ -162,7 +165,7 @@ def package_sample(cli, sample, stage, output, prefix, options, env):
         return target
     elif sys.platform.startswith("linux") and options.require_appimage:
         fail(f"{sample.name}: no AppImage was built: {'; '.join(result.get('warnings', []))}")
-    return archive(package, output / name, options.compression_level)
+    return archive(package, output / name, options.gzip_level)
 
 
 def write_checksums(files, destination):
@@ -186,9 +189,8 @@ def main():
     parser.add_argument("--sign-identity", help="macOS Developer ID for scripts/sign-macos.sh (default: ad hoc)")
     parser.add_argument("--notarize", metavar="PROFILE", help="notarize the macOS samples with this notarytool keychain profile")
     parser.add_argument("--require-appimage", action="store_true", help="fail on Linux when appimagetool cannot build the AppImage")
-    # Level 9 gzips a Debug build's binaries (hundreds of MB of debug information) for minutes; tests take level 1.
-    parser.add_argument("--compression-level", type=int, choices=range(1, 10), default=9, metavar="1-9",
-                        help="gzip level of the Linux .tar.gz archives (default: 9)")
+    parser.add_argument("--gzip-level", type=int, choices=range(1, 10), metavar="1-9",
+                        help="gzip level of the .tar.gz archives (Linux; default: 9)")
     options = parser.parse_args()
 
     version = engine_version()
@@ -201,6 +203,10 @@ def main():
         parser.error("--build and --output are required (or use --check-tag)")
     if options.notarize and not options.sign_identity:
         parser.error("--notarize needs --sign-identity")
+    if options.gzip_level is None:
+        options.gzip_level = 9
+    elif not sys.platform.startswith("linux"):
+        warn("--gzip-level has no effect here: this host writes zip archives")
     build = options.build.resolve()
     output = options.output.resolve()
     if output.exists() and any(output.iterdir()):

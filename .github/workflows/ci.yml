@@ -143,10 +143,10 @@ jobs:
       - name: Build
         run: cmake --build build -- -k 0
 
-      # One test per core (NUMBER_OF_PROCESSORS on Windows); Benchmark_cpu runs alone (RUN_SERIAL).
+      # One test per core (NUMBER_OF_PROCESSORS on Windows); in Release, Benchmark_cpu runs alone (RUN_SERIAL).
       - name: Test
         shell: bash
-        run: ctest --test-dir build --output-on-failure -j "${NUMBER_OF_PROCESSORS:-$(getconf _NPROCESSORS_ONLN)}"
+        run: ctest --test-dir build --output-on-failure --no-tests=error -j "${NUMBER_OF_PROCESSORS:-$(getconf _NPROCESSORS_ONLN)}"
 
       - name: Upload benchmark report
         if: always() && matrix.config == 'Release'
@@ -212,7 +212,7 @@ jobs:
         run: cmake --build build -- -k 0
 
       - name: Test
-        run: ctest --test-dir build --output-on-failure -LE "gpu|format" -j "$(nproc)"
+        run: ctest --test-dir build --output-on-failure --no-tests=error -LE "gpu|format" -j "$(nproc)"
 
   # clang-tidy over the sources of every Basalt target (engine, apps, tests, GPU tests, benchmark and fuzz targets;
   # third-party code never), split over the matrix's jobs by scripts/clang_tidy.py. Any finding fails the job
@@ -351,9 +351,11 @@ jobs:
 
   # The Linux Release build: every headless test, then the feature scene rendered on Mesa's lavapipe (a conformant CPU
   # Vulkan 1.3 driver) with the Khronos validation layer. Render tests run offscreen; the editor integration uses Xvfb.
-  # lavapipe renders on the CPU, and the GPU tests already fill a runner's cores (one at a time they took 657 s; side by
-  # side, at best 486 s), so two jobs split them. Part 1 runs the script-driven renders (each starts the runtime or the
-  # editor many times), the GPU benchmark and the headless tests; part 2 every other GPU test, new ones included.
+  # lavapipe renders on the CPU, and the GPU tests already fill a runner's cores (without the benchmark, 634 s one at a
+  # time and at best 486 s side by side), so two jobs split them. Part 1 runs the Python-driven renders (LocalShadowRender,
+  # FSR1Render and StatisticsOverlay start the runtime again and again; EditorViewport is the longest single run), the
+  # three longest GPU test executables, the GPU benchmark and the headless tests; part 2 every other GPU test, new ones
+  # included (about four minutes each). Both select with GPU_PART_1.
   gpu-lavapipe:
     name: ubuntu-24.04 / Release + GPU (lavapipe ${{ matrix.part }}/2)
     runs-on: ubuntu-24.04
@@ -361,9 +363,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        part: [ 1, 2 ]
+        include:
+          - part: 1
+            select: -R
+          - part: 2
+            select: -E
     env:
-      GPU_PART_1: '^(LocalShadowRender|EditorViewport|FSR1Render|StatisticsOverlay|UIFollowupsRender|Benchmark_gpu)$'
+      GPU_PART_1: '^(LocalShadowRender|EditorViewport|FSR1Render|StatisticsOverlay|UIFollowupsRender|TemporalAAGPU|ViewportGPU|LightClustersGPU|Benchmark_gpu)$'
     steps:
       - uses: actions/checkout@v4
 
@@ -429,26 +435,26 @@ jobs:
 
       # The GPU regressions, plus headless tests showing that this job also covers ubuntu-24.04 / Release (excluded from
       # the build-and-test matrix).
+      # Every name in GPU_PART_1 too: a renamed one would quietly move its test into part 2.
       - name: Verify the expected tests are registered
         run: |
           ctest --test-dir build -N --show-only=json-v1 > /tmp/basalt-tests.json
-          python3 -c 'import json; tests = json.load(open("/tmp/basalt-tests.json"))["tests"]; names = {t["name"] for t in tests}; missing = {"EditorViewport", "ViewportGPU", "PostProcessGPU", "TemporalAAGPU", "PreviewRendererGPU", "Benchmark_gpu", "BasaltTests", "Benchmark_cpu", "PhysicsDeterminism", "FeatureTest"} - names; missing and exit(f"Missing tests: {missing}")'
+          python3 -c 'import json, os; tests = json.load(open("/tmp/basalt-tests.json"))["tests"]; names = {t["name"] for t in tests}; part1 = set(os.environ["GPU_PART_1"].strip("^()$").split("|")); missing = ({"ViewportGPU", "PostProcessGPU", "TemporalAAGPU", "PreviewRendererGPU", "BasaltTests", "BasaltTests_Core", "BasaltTestShards", "Benchmark_cpu", "PhysicsDeterminism", "FeatureTest"} | part1) - names; missing and exit(f"Missing tests: {missing}")'
 
-      # Each test step runs whenever the build succeeded, so a headless failure never hides the GPU results.
+      # Each test step runs whenever the build succeeded (the headless one in part 1 only), so a headless failure never
+      # hides the GPU results.
       - name: Test
         if: ${{ matrix.part == 1 && !cancelled() && steps.build.outcome == 'success' }}
         run: ctest --test-dir build --output-on-failure --no-tests=error -LE "gpu|format" -j "$(nproc)"
 
-      # Two at a time with two lavapipe threads each (lavapipe otherwise starts one per core in every test); more at once
-      # only slowed the long script-driven tests. Benchmark_gpu runs alone with every core (RUN_SERIAL, LP_NUM_THREADS
-      # unset).
+      # Two at a time with two lavapipe threads each (lavapipe otherwise starts one per core in every test). More at once
+      # barely changed the total but stretched the long Python-driven tests (LocalShadowRender 102 s alone, about 320 s at
+      # -j4), which set part 1's length. Benchmark_gpu runs alone with every core (RUN_SERIAL, LP_NUM_THREADS unset).
       - name: GPU tests
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         env:
           LP_NUM_THREADS: 2
-        run: |
-          if [[ "${{ matrix.part }}" == 1 ]]; then select=(-R "$GPU_PART_1"); else select=(-E "$GPU_PART_1"); fi
-          ctest --test-dir build --output-on-failure --no-tests=error -L gpu "${select[@]}" -j 2
+        run: ctest --test-dir build --output-on-failure --no-tests=error -L gpu ${{ matrix.select }} "$GPU_PART_1" -j 2
 
       - name: Upload benchmark report
         if: always() && matrix.part == 1

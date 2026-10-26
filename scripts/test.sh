@@ -5,4 +5,4 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 scripts/build.sh Debug
-ctest --test-dir build --output-on-failure -j "${CTEST_PARALLEL_LEVEL:-$(getconf _NPROCESSORS_ONLN)}" "$@"
+ctest --test-dir build --output-on-failure --no-tests=error -j "${CTEST_PARALLEL_LEVEL:-$(getconf _NPROCESSORS_ONLN)}" "$@"

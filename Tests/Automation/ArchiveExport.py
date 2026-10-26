@@ -40,7 +40,8 @@ def main():
                 (sdk / name).write_text("stand-in")
             env["VULKAN_SDK"] = str(sdk.parent)
         project = root / "FeatureTest"
-        shutil.copytree(source, project, ignore=shutil.ignore_patterns("Cache", "*.batch.json"))
+        # Saved/ holds the FeatureTest batch's replay, which that test may be writing right now (ctest -j).
+        shutil.copytree(source, project, ignore=shutil.ignore_patterns("Cache", "Saved", "*.batch.json"))
         # Saving the scenes (and the project) stores their references as UUID/path objects, with .meta files.
         scenes = sorted(str(path.relative_to(project).as_posix()) for path in (project / "Assets" / "Scenes").glob("*.bscene"))
         batch = [step for scene in scenes for step in ({"command": "scene.open", "params": {"path": scene}}, {"command": "scene.save"})]

@@ -15,7 +15,8 @@ cli = pathlib.Path(sys.argv[1]).resolve()
 source = pathlib.Path(sys.argv[2]).resolve()
 with tempfile.TemporaryDirectory(prefix="BasaltAssetPipeline-") as temp:
     project = pathlib.Path(temp) / "Project"
-    shutil.copytree(source, project)
+    # Saved/ holds the FeatureTest batch's replay, which that test may be writing right now (ctest -j).
+    shutil.copytree(source, project, ignore=shutil.ignore_patterns("Saved"))
     compression = {"path": "Assets/Textures/Checker.png", "output": "Assets/Textures/Checker.ktx2", "srgb": True}
     def command(name, params):
         result = subprocess.run([str(cli), "--project", str(project), name, json.dumps(params)], capture_output=True, text=True, timeout=60)

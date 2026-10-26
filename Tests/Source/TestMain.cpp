@@ -63,6 +63,29 @@ namespace BasaltCrashTest {
 
 namespace {
 
+	// Whether the last run's filters selected no test case. A BasaltTests ctest entry whose --source-file patterns
+	// stopped matching would otherwise pass without running anything (doctest reports success then).
+	bool s_SelectedNothing = false;
+
+	// Only watches the end of a run (listings and other queries never reach it).
+	struct EmptyRunListener final : doctest::IReporter
+	{
+		explicit EmptyRunListener(const doctest::ContextOptions& /*options*/) {}
+		void report_query(const doctest::QueryData& /*data*/) override {}
+		void test_run_start() override {}
+		void test_run_end(const doctest::TestRunStats& stats) override { s_SelectedNothing = stats.numTestCasesPassingFilters == 0; }
+		void test_case_start(const doctest::TestCaseData& /*data*/) override {}
+		void test_case_reenter(const doctest::TestCaseData& /*data*/) override {}
+		void test_case_end(const doctest::CurrentTestCaseStats& /*stats*/) override {}
+		void test_case_exception(const doctest::TestCaseException& /*exception*/) override {}
+		void subcase_start(const doctest::SubcaseSignature& /*signature*/) override {}
+		void subcase_end() override {}
+		void log_assert(const doctest::AssertData& /*data*/) override {}
+		void log_message(const doctest::MessageData& /*data*/) override {}
+		void test_case_skipped(const doctest::TestCaseData& /*data*/) override {}
+	};
+	REGISTER_LISTENER("empty-run", 1, EmptyRunListener);
+
 	int Number(const char* text)
 	{
 		return static_cast<int>(std::strtol(text, nullptr, 10));
@@ -295,7 +318,12 @@ int main(int argc, char** argv)
 
 	doctest::Context context;
 	context.applyCommandLine(argc, argv);
-	const int result = context.run();
+	int result = context.run();
+	if (s_SelectedNothing && result == 0)
+	{
+		BS_CORE_ERROR("Tests: the filters selected no test case");
+		result = 1;
+	}
 	std::error_code error;
 	std::filesystem::remove_all(BasaltTest::GetRunDirectory(), error);
 
