@@ -17,6 +17,9 @@ namespace Basalt::Platform {
 	bool SetEnvVar(const char* name, const std::string& value);
 	bool UnsetEnvVar(const char* name);
 
+	// This process's ID, for names that must differ between processes running at the same time.
+	int GetProcessId();
+
 	// Overrides GetUserDataDirectory (tests and tools point it at a scratch directory).
 	inline constexpr const char* UserDataDirectoryVariable = "BASALT_USER_DATA_DIR";
 	// Base directory for per-user application data: $BASALT_USER_DATA_DIR when set, otherwise %APPDATA%

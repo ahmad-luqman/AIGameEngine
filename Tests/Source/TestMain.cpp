@@ -64,7 +64,8 @@ namespace BasaltCrashTest {
 namespace {
 
 	// Whether the last run's filters selected no test case. A BasaltTests ctest entry whose --source-file patterns
-	// stopped matching would otherwise pass without running anything (doctest reports success then).
+	// stopped matching would otherwise pass without running anything (doctest reports success then). doctest does not
+	// count test cases marked doctest::skip, so an entry of only those would fail too (none exist).
 	bool s_SelectedNothing = false;
 
 	// Only watches the end of a run (listings and other queries never reach it).
@@ -319,7 +320,7 @@ int main(int argc, char** argv)
 	doctest::Context context;
 	context.applyCommandLine(argc, argv);
 	int result = context.run();
-	if (s_SelectedNothing && result == 0)
+	if (result == 0 && s_SelectedNothing)
 	{
 		BS_CORE_ERROR("Tests: the filters selected no test case");
 		result = 1;

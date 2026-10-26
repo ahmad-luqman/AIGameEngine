@@ -3,14 +3,9 @@
 #include "Basalt/Core/Assert.h"
 #include "Basalt/Core/Base.h"
 #include "Basalt/Core/Log.h"
+#include "Basalt/Core/Platform.h"
 
 #include <spdlog/fmt/fmt.h>
-
-#if defined(_WIN32)
-	#include <process.h>
-#else
-	#include <unistd.h>
-#endif
 
 #include <algorithm>
 #include <atomic>
@@ -309,13 +304,8 @@ namespace Basalt {
 		// A name of its own per write (process, then a counter): several processes (parallel test runs) may replace the
 		// same file at once.
 		static std::atomic<uint64_t> s_TempCounter = 0;
-#if defined(_WIN32)
-		const int processId = _getpid();
-#else
-		const int processId = static_cast<int>(getpid());
-#endif
 		std::filesystem::path tempPath = path;
-		tempPath += fmt::format(".{}-{}.tmp", processId, s_TempCounter.fetch_add(1));
+		tempPath += fmt::format(".{}-{}.tmp", Platform::GetProcessId(), s_TempCounter.fetch_add(1));
 		return tempPath;
 	}
 

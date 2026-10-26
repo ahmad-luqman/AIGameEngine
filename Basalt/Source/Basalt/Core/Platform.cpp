@@ -7,7 +7,10 @@
 #include <cstring>
 
 #if defined(BS_PLATFORM_WINDOWS)
+	#include <process.h>
 	#include <windows.h>
+#else
+	#include <unistd.h>
 #endif
 
 namespace Basalt::Platform {
@@ -42,6 +45,15 @@ namespace Basalt::Platform {
 
 	}
 #endif
+
+	int GetProcessId()
+	{
+#if defined(BS_PLATFORM_WINDOWS)
+		return _getpid();
+#else
+		return static_cast<int>(getpid());
+#endif
+	}
 
 	std::optional<std::string> GetEnvVar(const char* name)
 	{
