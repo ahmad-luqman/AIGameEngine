@@ -307,6 +307,12 @@ Other rules:
 
 - Every feature ships with unit tests in `Tests/Source/<Module>Tests.cpp`. Tests must be headless and
   deterministic (fixed timesteps, no wall-clock dependence, no network).
+- ctest runs tests side by side (`ctest -j`, one per core in `scripts/test.sh` and CI), so a test must not share files,
+  ports or user data with another: unit tests write under `BasaltTest::TempDirectory`, scripts under a fresh temporary
+  directory with their own `BASALT_USER_DATA_DIR`, servers listen on port 0; a test that must run alone gets
+  `RUN_SERIAL`. `BasaltTests` runs as several ctest entries split by test file (`BasaltTests_<Shard>`, listed in
+  `Tests/CMakeLists.txt`; the entry `BasaltTests` runs every other file, and `BasaltTestShards` checks each test case runs
+  once): put a new slow test file into a shard when the `BasaltTests` entry outgrows the others.
 - New engine behaviour that is reachable from Lua or the automation API must also be exercised by the
   feature test (`Tests/Data/FeatureTest`: scene `Assets/Scenes/FeatureTest.bscene`, driver
   `Assets/Scripts/FeatureTest.lua`, run by ctest through `basalt batch FeatureTest.batch.json`). Add a

@@ -3,6 +3,7 @@
 
   package_release.py --build <dir> --output <dir> [--samples Tetris,Breakout] [--skip-engine]
                      [--sign-identity <Developer ID> [--notarize <profile>]] [--require-appimage]
+                     [--compression-level 1-9]
   package_release.py --check-tag <tag>
 
 The first form writes, for the host platform:
@@ -26,6 +27,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -82,15 +84,20 @@ def run_cli(cli, project, command, params, env):
     return response["result"]
 
 
-def archive(source, destination):
+def archive(source, destination, compression_level):
     """Zips (Windows, macOS) or tars (Linux, keeping permissions and links) a file or directory, named after it."""
     if sys.platform == "darwin":
         # ditto keeps the bundle structure and its code signature (in the binaries and _CodeSignature/, not in extended
         # attributes); resource forks, extended attributes and ACLs are left out, so no Finder metadata ships.
         subprocess.run(["ditto", "-c", "-k", "--norsrc", "--noextattr", "--noacl", "--keepParent", str(source), f"{destination}.zip"], check=True)
         return Path(f"{destination}.zip")
-    kind = "zip" if sys.platform == "win32" else "gztar"
-    return Path(shutil.make_archive(str(destination), kind, root_dir=source.parent, base_dir=source.name))
+    if sys.platform == "win32":
+        return Path(shutil.make_archive(str(destination), "zip", root_dir=source.parent, base_dir=source.name))
+    # What shutil.make_archive's gztar writes, at a chosen gzip level (it always uses 9).
+    path = Path(f"{destination}.tar.gz")
+    with tarfile.open(path, "w:gz", compresslevel=compression_level) as file:
+        file.add(source, arcname=source.name)
+    return path
 
 
 def find_vulkan_libraries():
@@ -106,7 +113,7 @@ def find_vulkan_libraries():
     return found
 
 
-def package_engine(build, stage, output, name):
+def package_engine(build, stage, output, name, options):
     folder = stage / name
     bin_dir = folder / "bin"
     bin_dir.mkdir(parents=True)
@@ -127,7 +134,7 @@ def package_engine(build, stage, output, name):
     shutil.copytree(ROOT / "Samples", folder / "Samples", ignore=IGNORED)
     for document in ("README.md", "LICENSE"):
         shutil.copy2(ROOT / document, folder)
-    return archive(folder, output / name)
+    return archive(folder, output / name, options.compression_level)
 
 
 def package_sample(cli, sample, stage, output, prefix, options, env):
@@ -155,7 +162,7 @@ def package_sample(cli, sample, stage, output, prefix, options, env):
         return target
     elif sys.platform.startswith("linux") and options.require_appimage:
         fail(f"{sample.name}: no AppImage was built: {'; '.join(result.get('warnings', []))}")
-    return archive(package, output / name)
+    return archive(package, output / name, options.compression_level)
 
 
 def write_checksums(files, destination):
@@ -179,6 +186,9 @@ def main():
     parser.add_argument("--sign-identity", help="macOS Developer ID for scripts/sign-macos.sh (default: ad hoc)")
     parser.add_argument("--notarize", metavar="PROFILE", help="notarize the macOS samples with this notarytool keychain profile")
     parser.add_argument("--require-appimage", action="store_true", help="fail on Linux when appimagetool cannot build the AppImage")
+    # Level 9 gzips a Debug build's binaries (hundreds of MB of debug information) for minutes; tests take level 1.
+    parser.add_argument("--compression-level", type=int, choices=range(1, 10), default=9, metavar="1-9",
+                        help="gzip level of the Linux .tar.gz archives (default: 9)")
     options = parser.parse_args()
 
     version = engine_version()
@@ -211,7 +221,7 @@ def main():
         # Smoke tests save game data; keep it out of the user's (or the runner's) real data directory.
         env = dict(os.environ, BASALT_USER_DATA_DIR=str(stage / "UserData"))
         cli = build / "bin" / f"basalt{EXE}"
-        files = [] if options.skip_engine else [package_engine(build, stage, output, f"{prefix}-{platform_name()}")]
+        files = [] if options.skip_engine else [package_engine(build, stage, output, f"{prefix}-{platform_name()}", options)]
         for sample in samples:
             files.append(package_sample(cli, sample, stage, output, prefix, options, env))
             print(f"package_release: {files[-1].name}")

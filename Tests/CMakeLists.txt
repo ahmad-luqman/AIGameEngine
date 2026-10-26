@@ -11,9 +11,53 @@ if(WIN32)
 endif()
 target_compile_definitions(BasaltTests PRIVATE BASALT_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Data" BASALT_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 
-add_test(NAME BasaltTests COMMAND BasaltTests --reporters=console --no-intro=true WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+# BasaltTests runs as several ctest entries split by test file (doctest's --source-file filters), so `ctest -j` spreads
+# the unit tests over the cores. Each shard below names files in Source/; the entry called BasaltTests runs every other
+# file, so a new test file always runs. Split by measured time on CI's slowest test jobs (ASan, Windows Debug):
+# rebalance when one entry clearly outlasts the others.
+set(basaltTestShards Editor Physics Animation Core)
+set(basaltTestShard_Editor EditorHistoryTests EditorReviewTests)
+set(basaltTestShard_Physics PhysicsTests CharacterControllerTests RagdollTests BenchmarkTests)
+set(basaltTestShard_Animation AnimationTests SpringBoneTests MorphTargetTests InverseKinematicsTests RetargetingTests AnimationLayerTests)
+set(basaltTestShard_Core CoreTests ScriptingTests AudioTests ProjectTests)
+set(basaltUnitTests "")
+set(basaltShardPatterns "")
+foreach(shard IN LISTS basaltTestShards)
+	set(patterns "")
+	foreach(name IN LISTS basaltTestShard_${shard})
+		# doctest matches a pattern against each test's full source path, ignoring case, and "*" crosses directory
+		# separators (Windows paths use backslashes). So "*<name>.cpp" must end exactly one test file's path, or it would
+		# also take another file into this shard (or into none, after a rename).
+		string(TOLOWER "${name}.cpp" suffix)
+		string(LENGTH "${suffix}" suffixLength)
+		set(matches "")
+		foreach(source IN LISTS TEST_SOURCES)
+			string(TOLOWER "${source}" lowerSource)
+			string(LENGTH "${lowerSource}" sourceLength)
+			if(sourceLength GREATER_EQUAL suffixLength)
+				math(EXPR start "${sourceLength} - ${suffixLength}")
+				string(SUBSTRING "${lowerSource}" ${start} -1 ending)
+				if(ending STREQUAL suffix)
+					list(APPEND matches "${source}")
+				endif()
+			endif()
+		endforeach()
+		list(LENGTH matches matchCount)
+		if(NOT matchCount EQUAL 1 OR NOT matches STREQUAL "${CMAKE_CURRENT_SOURCE_DIR}/Source/${name}.cpp")
+			message(FATAL_ERROR "BasaltTests shard ${shard}: '*${name}.cpp' must match Source/${name}.cpp only, but matches: ${matches}")
+		endif()
+		list(APPEND patterns "*${name}.cpp")
+	endforeach()
+	list(JOIN patterns "," filter)
+	add_test(NAME BasaltTests_${shard} COMMAND BasaltTests --reporters=console --no-intro=true "--source-file=${filter}" WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+	list(APPEND basaltUnitTests BasaltTests_${shard})
+	list(APPEND basaltShardPatterns ${patterns})
+endforeach()
+list(JOIN basaltShardPatterns "," excluded)
+add_test(NAME BasaltTests COMMAND BasaltTests --reporters=console --no-intro=true "--source-file-exclude=${excluded}" WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+list(APPEND basaltUnitTests BasaltTests)
 
-set_tests_properties(BasaltTests PROPERTIES TIMEOUT 600)
+set_tests_properties(${basaltUnitTests} PROPERTIES TIMEOUT 600)
 
 # Formatting check. clang-format output differs between major versions, so CI enables this on one job only.
 find_program(BASALT_CLANG_FORMAT clang-format)
@@ -56,6 +100,11 @@ if(Python3_Interpreter_FOUND)
 	set_tests_properties(PrefabFeature PROPERTIES LABELS integration TIMEOUT 90 ENVIRONMENT "BASALT_USER_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/PrefabUserData")
 	add_test(NAME AssetPipelineFeature COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/Automation/AssetPipeline.py" $<TARGET_FILE:BasaltCLI> "${CMAKE_CURRENT_SOURCE_DIR}/Data/FeatureTest")
 	set_tests_properties(AssetPipelineFeature PROPERTIES LABELS integration TIMEOUT 180 ENVIRONMENT "BASALT_USER_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/AssetPipelineUserData")
+
+	# The BasaltTests shards above, as ctest registered them, run every test case exactly once.
+	add_test(NAME BasaltTestShards COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/Shards/CheckBasaltTestShards.py"
+		"${CMAKE_CTEST_COMMAND}" "${PROJECT_BINARY_DIR}" $<TARGET_FILE:BasaltTests>)
+	set_tests_properties(BasaltTestShards PROPERTIES LABELS unit TIMEOUT 60)
 
 	add_test(NAME BenchmarkHarness COMMAND "${Python3_EXECUTABLE}" -B -O "${CMAKE_CURRENT_SOURCE_DIR}/Benchmarks/RunTests.py")
 	set_tests_properties(BenchmarkHarness PROPERTIES LABELS unit TIMEOUT 30)
@@ -222,7 +271,8 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 	if(NOT DEFINED ENV{CI})
 		add_test(NAME FeatureTestRenderWindowed
 			COMMAND BasaltRuntime ${basaltRenderArgs} --screenshot "${CMAKE_CURRENT_BINARY_DIR}/FeatureTestRenderWindowed.png")
-		set_tests_properties(FeatureTestRenderWindowed PROPERTIES FAIL_REGULAR_EXPRESSION "${noGpuTimingsRegex}")
+		# Its window shares the desktop with nothing else that `ctest -j` runs (scripts/test.sh runs tests side by side).
+		set_tests_properties(FeatureTestRenderWindowed PROPERTIES FAIL_REGULAR_EXPRESSION "${noGpuTimingsRegex}" RUN_SERIAL TRUE)
 		list(APPEND basaltGpuTests FeatureTestRenderWindowed)
 	endif()
 	if(Python3_Interpreter_FOUND)
@@ -365,14 +415,14 @@ add_test(NAME PhysicsDeterminism
 	COMMAND BasaltCLI --project "${PROJECT_SOURCE_DIR}/Tests/Data/Determinism" --no-save batch "${PROJECT_SOURCE_DIR}/Tests/Data/Determinism/Determinism.batch.json")
 
 # Labels let CI jobs pick test groups (ctest -L gpu, ctest -LE "gpu|format").
-set_tests_properties(BasaltTests PROPERTIES LABELS unit)
+set_tests_properties(${basaltUnitTests} PROPERTIES LABELS unit)
 set(basaltIntegrationTests FeatureTest SampleTetris SampleTetrisReplay SampleJoints SampleMarbleRun SampleBreakout SampleFirstPerson SampleMovementDemo SamplePlatformer PhysicsDeterminism)
 set_tests_properties(${basaltIntegrationTests} PROPERTIES LABELS integration)
 if(TEST CodeFormat)
 	set_tests_properties(CodeFormat CheckFormatBatches PROPERTIES LABELS format)
 endif()
 if(BASALT_SANITIZE)
-	set_property(TEST BasaltTests ${basaltIntegrationTests} APPEND PROPERTY ENVIRONMENT ${BASALT_SANITIZER_ENVIRONMENT})
+	set_property(TEST ${basaltUnitTests} ${basaltIntegrationTests} APPEND PROPERTY ENVIRONMENT ${BASALT_SANITIZER_ENVIRONMENT})
 endif()
 
 # Release benchmarks use the same fixed workload on every runner; timing gates are opt-in locally.
@@ -398,9 +448,12 @@ if(BASALT_BENCHMARK_TESTS)
 			COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/Benchmarks/Run.py"
 				--binary $<TARGET_FILE:BasaltBenchmark> --mode ${mode}
 				--output "${CMAKE_CURRENT_BINARY_DIR}/Benchmark-${mode}.json")
-		set_tests_properties(Benchmark_${mode} PROPERTIES LABELS benchmark TIMEOUT 300)
+		# Alone on the machine, so `ctest -j` never skews the recorded frame times.
+		set_tests_properties(Benchmark_${mode} PROPERTIES LABELS benchmark TIMEOUT 300 RUN_SERIAL TRUE)
 		if(mode STREQUAL "gpu")
 			set_property(TEST Benchmark_${mode} APPEND PROPERTY LABELS gpu)
+			# lavapipe uses every core unless LP_NUM_THREADS (CI's limit for GPU tests run side by side) says otherwise.
+			set_property(TEST Benchmark_${mode} PROPERTY ENVIRONMENT_MODIFICATION "LP_NUM_THREADS=unset:")
 		endif()
 	endforeach()
 endif()

@@ -219,6 +219,9 @@ scripts/build.sh Dist
 python3 scripts/package_release.py --build build-dist --output release      # --samples Tetris --skip-engine for a quick run
 ```
 
+On Linux, `--compression-level 1` gzips the `.tar.gz` archives fastest (the default is 9). The `ReleasePackaging` test
+uses it, because a Debug build's binaries hold hundreds of megabytes of debug information.
+
 **macOS signing in CI.** Without secrets, the samples are signed ad hoc, and a tag release shows a warning. To sign and
 notarize them, add all of these repository secrets. Once `MACOS_CERTIFICATE` is set, the job fails and names any other
 one that is missing; without it, the rest are ignored, and a tag release also says in its notes that the macOS samples

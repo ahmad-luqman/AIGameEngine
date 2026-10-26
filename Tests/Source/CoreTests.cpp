@@ -1071,8 +1071,8 @@ TEST_SUITE("Core")
 
 	TEST_CASE("FileSystem writes atomically and reads back")
 	{
-		const auto directory = std::filesystem::temp_directory_path() / "BasaltTests" / "FileSystem";
-		std::filesystem::remove_all(directory);
+		const BasaltTest::TempDirectory scratch("FileSystem");
+		const auto& directory = scratch.GetPath();
 		const auto path = directory / "nested" / "file.txt";
 
 		CHECK_FALSE(FileSystem::ReadTextFile(path).has_value());
@@ -1091,7 +1091,6 @@ TEST_SUITE("Core")
 		CHECK(*readBytes == std::vector<uint8_t>(std::begin(bytes), std::end(bytes)));
 
 		CHECK(std::filesystem::exists(FileSystem::GetExecutableDirectory()));
-		std::filesystem::remove_all(directory);
 	}
 
 	TEST_CASE("FileSystem copies over a target, retrying while Windows reports it locked")
@@ -1170,9 +1169,8 @@ TEST_SUITE("Core")
 
 	TEST_CASE("FileSystem write failure leaves the target untouched and no temp file")
 	{
-		const auto directory = std::filesystem::temp_directory_path() / "BasaltTests" / "FileSystemFailure";
-		std::filesystem::remove_all(directory);
-		std::filesystem::create_directories(directory);
+		const BasaltTest::TempDirectory scratch("FileSystemFailure");
+		const auto& directory = scratch.GetPath();
 
 		// The target's "parent directory" is a regular file, so the temp file cannot be created.
 		const auto blocker = directory / "blocker";
@@ -1186,8 +1184,6 @@ TEST_SUITE("Core")
 		CHECK_FALSE(FileSystem::WriteTextFile(occupied, "data"));
 		CHECK(std::filesystem::is_directory(occupied));
 		CHECK_FALSE(BasaltTest::HasTempFiles(directory));
-
-		std::filesystem::remove_all(directory);
 	}
 }
 

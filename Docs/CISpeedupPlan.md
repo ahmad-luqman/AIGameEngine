@@ -54,10 +54,10 @@ Target after sessions 1–3: about 15 minutes per run.
 |---|----|-----------------|--------|
 | 1 | Compiler cache, one dependency-source cache, merge ubuntu/Release into lavapipe | Yes (every build) | Merged (#56) |
 | 2 | Shard clang-tidy; run fuzz targets concurrently | Yes (two longest jobs) | Merged (#57) |
-| 3 | Parallel ctest, fast `ReleasePackaging`, shard `BasaltTests` | Yes (test steps) | Todo |
+| 3 | Parallel ctest, fast `ReleasePackaging`, shard `BasaltTests` | Yes (test steps) | In review |
 | 4 | Remove redundant jobs; early format job; coverage on `main` only | Runner minutes, faster feedback | Todo |
 | 5 | Shared setup action; nightly fuzz builds once | Maintenance | Todo |
-| — | Nightly fuzz findings (FuzzGltf, FuzzCommand) | Separate bug-fix PRs | FuzzCommand in review (#58); FuzzGltf Todo |
+| — | Nightly fuzz findings (FuzzGltf, FuzzCommand) | Separate bug-fix PRs | FuzzCommand merged (#58); FuzzGltf Todo |
 
 ### Session 1 — compiler cache and dependency cache
 
@@ -242,3 +242,31 @@ Record per session: PR number, measured job times after merge, anything that dev
   - Measured on run 40217059412 (e10c9cc, 239 files tidied): 13 min wall, down from 22. clang-tidy shards 355/472/477 s
     (tidy itself 320-449 s; round-robin balances file counts, not cost), fuzz 366 s (fuzzing 336 s for 13 targets, 4 at
     a time). lavapipe (772 s, of which GPU tests 656 s run serially) is now the critical path: session 3.
+- 2026-10-26, session 3, deviations from the plan (measured first on a throwaway branch, run 40301624736):
+  - `ReleasePackaging`: confirmed. 119.5 of `package_release.py`'s 122 s on Linux Debug went to zlib, gzipping 240-400 MB
+    binaries (DWARF) at level 9; level 6 took a third of the time for 1% more bytes, level 1 a tenth for 13% more
+    (`BasaltEditor`: 34.8 s / 87 MB, 10.7 s / 88 MB, 3.4 s / 98 MB). `package_release.py --compression-level` (default 9,
+    so releases are unchanged) writes the Linux `.tar.gz` with `tarfile` directly (`shutil.make_archive` always uses 9);
+    the test passes 1 and checks the gzip header records it. macOS (`ditto`) and Windows (zip, `/Z7` keeps debug
+    information out of the binaries) were never slow.
+  - `BasaltTests` is five ctest entries: `BasaltTests_Editor`, `_Physics`, `_Animation` and `_Core` name their test files
+    in `Tests/CMakeLists.txt`, and `BasaltTests` runs every other file through the same patterns as `--source-file-exclude`,
+    so a new file always runs. Split by the per-file times of Windows Debug and ASan (doctest's XML reporter with
+    `--duration`): 137 and 159 s in all, 20-37 s per entry. A configure check makes each name match exactly one file
+    (doctest matches the pattern against the whole path, ignoring case: `*MathTests.cpp` also takes `RenderMathTests.cpp`),
+    and the `BasaltTestShards` test lists each registered entry's test cases and fails unless every case runs exactly
+    once. All 51 test files also pass alone, each in its own process (macOS Debug). The per-process scratch directory now
+    includes the process ID, and two `CoreTests` cases that used a fixed temporary path use it too.
+  - Nothing else needed `RESOURCE_LOCK`: the scripted tests copy their projects into fresh temporary directories with
+    their own user data, the CLI saves only with `--scene`, which no test passes, `EditorViewport` takes a free port and
+    `xvfb-run -a` a free display. The benchmarks (and the local-only windowed render) are `RUN_SERIAL`.
+  - lavapipe: running GPU tests side by side barely helps, because lavapipe already uses every core. The GPU tests took
+    657 s one at a time, and side by side 559 s (`-j2`, `LP_NUM_THREADS=2`), 492 s (`-j4`, 1), 486 s (`-j3`, 2) and
+    497 s (`-j4`, lavapipe's default of one thread per core); at `-j4`, LocalShadowRender, which starts the runtime many
+    times in a row, went from 102 to 320 s. So the job is split over two runners (`gpu-lavapipe` matrix `part`): part 1 runs
+    the script-driven renders, `Benchmark_gpu` and the headless tests, and part 2 every other GPU test (a regular
+    expression in the workflow, so new GPU tests land in part 2), each `-j2` with `LP_NUM_THREADS=2`.
+  - Headless tests run one per core everywhere (`scripts/test.sh` too, overridable with `-j` or `CTEST_PARALLEL_LEVEL`;
+    `scripts/coverage.sh`, whose profiles are already per process). Three `-j4` runs each on Linux Debug, ASan and
+    Windows Debug passed before the split; under `-j4` the single `BasaltTests` grew from 95 to 215 s (ASan) and from
+    139 to 166-183 s (Windows Debug), which the shards address.
