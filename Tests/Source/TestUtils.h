@@ -34,17 +34,22 @@ namespace BasaltTest {
 	// Fixed frame time of the tests (60 Hz).
 	inline constexpr float Step = 1.0f / 60.0f;
 
-	// Scratch root of this test run: <temp>/BasaltTests/<run>, unique per process, so test runs at the same time (the
-	// BasaltTests shards ctest starts together, Debug and ASan builds) never share or delete each other's files. The
-	// process ID keeps processes started in the same clock tick apart.
-	inline const std::filesystem::path& GetRunDirectory()
+	inline int GetProcessId()
 	{
 #if defined(_WIN32)
-		static const int processId = _getpid();
+		return _getpid();
 #else
-		static const int processId = static_cast<int>(getpid());
+		return static_cast<int>(getpid());
 #endif
-		static const std::string run = "Run-" + std::to_string(processId) + "-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+	}
+
+	// Scratch root of this test run: <temp>/BasaltTests/Run-<process ID>-<clock>, unique per process, so test runs at the
+	// same time (the BasaltTests shards ctest starts together, Debug and ASan builds) never share or delete each other's
+	// files. The process ID keeps processes started in the same clock tick apart; the clock keeps a reused process ID out
+	// of a crashed earlier run's leftover directory.
+	inline const std::filesystem::path& GetRunDirectory()
+	{
+		static const std::string run = "Run-" + std::to_string(GetProcessId()) + "-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
 		static const std::filesystem::path directory = std::filesystem::temp_directory_path() / "BasaltTests" / run;
 		return directory;
 	}
@@ -71,6 +76,7 @@ namespace BasaltTest {
 		{
 			std::error_code error;
 			std::filesystem::remove_all(m_Path, error);
+			REQUIRE_MESSAGE(!error, "cannot empty '", m_Path.string(), "': ", error.message());
 			std::filesystem::create_directories(m_Path, error);
 			REQUIRE_MESSAGE(!error, "cannot create '", m_Path.string(), "': ", error.message());
 		}

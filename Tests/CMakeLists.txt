@@ -14,36 +14,39 @@ target_compile_definitions(BasaltTests PRIVATE BASALT_TEST_DATA_DIR="${CMAKE_CUR
 # BasaltTests runs as several ctest entries split by test file (doctest's --source-file filters), so `ctest -j` spreads
 # the unit tests over the cores. Each shard below names files in Source/; the entry called BasaltTests runs every other
 # file, so a new test file always runs. Split by measured time on CI's slowest test jobs (ASan, Windows Debug):
-# rebalance when one entry clearly outlasts the others.
+# rebalance when any entry clearly outlasts the rest. BasaltTests itself fails a run whose filters select no test case
+# (TestMain.cpp), and the BasaltTestShards test checks that every test case runs exactly once.
 set(basaltTestShards Editor Physics Animation Core)
 set(basaltTestShard_Editor EditorHistoryTests EditorReviewTests)
 set(basaltTestShard_Physics PhysicsTests CharacterControllerTests RagdollTests BenchmarkTests)
 set(basaltTestShard_Animation AnimationTests SpringBoneTests MorphTargetTests InverseKinematicsTests RetargetingTests AnimationLayerTests)
 set(basaltTestShard_Core CoreTests ScriptingTests AudioTests ProjectTests)
 set(basaltUnitTests "")
+set(basaltShardFiles "")
 set(basaltShardPatterns "")
 foreach(shard IN LISTS basaltTestShards)
+	if(NOT basaltTestShard_${shard})
+		# An empty --source-file filter selects every test case.
+		message(FATAL_ERROR "BasaltTests shard ${shard} names no test files (basaltTestShard_${shard})")
+	endif()
 	set(patterns "")
 	foreach(name IN LISTS basaltTestShard_${shard})
+		if(name IN_LIST basaltShardFiles)
+			message(FATAL_ERROR "BasaltTests shard ${shard}: ${name} is already in another shard")
+		endif()
+		list(APPEND basaltShardFiles ${name})
 		# doctest matches a pattern against each test's full source path, ignoring case, and "*" crosses directory
 		# separators (Windows paths use backslashes). So "*<name>.cpp" must end exactly one test file's path, or it would
 		# also take another file into this shard (or into none, after a rename).
-		string(TOLOWER "${name}.cpp" suffix)
-		string(LENGTH "${suffix}" suffixLength)
+		string(TOLOWER "${name}" lowerName)
 		set(matches "")
 		foreach(source IN LISTS TEST_SOURCES)
 			string(TOLOWER "${source}" lowerSource)
-			string(LENGTH "${lowerSource}" sourceLength)
-			if(sourceLength GREATER_EQUAL suffixLength)
-				math(EXPR start "${sourceLength} - ${suffixLength}")
-				string(SUBSTRING "${lowerSource}" ${start} -1 ending)
-				if(ending STREQUAL suffix)
-					list(APPEND matches "${source}")
-				endif()
+			if(lowerSource MATCHES "${lowerName}\\.cpp$")
+				list(APPEND matches "${source}")
 			endif()
 		endforeach()
-		list(LENGTH matches matchCount)
-		if(NOT matchCount EQUAL 1 OR NOT matches STREQUAL "${CMAKE_CURRENT_SOURCE_DIR}/Source/${name}.cpp")
+		if(NOT matches STREQUAL "${CMAKE_CURRENT_SOURCE_DIR}/Source/${name}.cpp")
 			message(FATAL_ERROR "BasaltTests shard ${shard}: '*${name}.cpp' must match Source/${name}.cpp only, but matches: ${matches}")
 		endif()
 		list(APPEND patterns "*${name}.cpp")
@@ -101,10 +104,10 @@ if(Python3_Interpreter_FOUND)
 	add_test(NAME AssetPipelineFeature COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/Automation/AssetPipeline.py" $<TARGET_FILE:BasaltCLI> "${CMAKE_CURRENT_SOURCE_DIR}/Data/FeatureTest")
 	set_tests_properties(AssetPipelineFeature PROPERTIES LABELS integration TIMEOUT 180 ENVIRONMENT "BASALT_USER_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/AssetPipelineUserData")
 
-	# The BasaltTests shards above, as ctest registered them, run every test case exactly once.
+	# The BasaltTests entries above, as ctest registered them, run every test case exactly once.
 	add_test(NAME BasaltTestShards COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/Shards/CheckBasaltTestShards.py"
-		"${CMAKE_CTEST_COMMAND}" "${PROJECT_BINARY_DIR}" $<TARGET_FILE:BasaltTests>)
-	set_tests_properties(BasaltTestShards PROPERTIES LABELS unit TIMEOUT 60)
+		"${CMAKE_CTEST_COMMAND}" "${PROJECT_BINARY_DIR}" $<TARGET_FILE:BasaltTests> ${basaltUnitTests})
+	set_tests_properties(BasaltTestShards PROPERTIES LABELS unit TIMEOUT 120)
 
 	add_test(NAME BenchmarkHarness COMMAND "${Python3_EXECUTABLE}" -B -O "${CMAKE_CURRENT_SOURCE_DIR}/Benchmarks/RunTests.py")
 	set_tests_properties(BenchmarkHarness PROPERTIES LABELS unit TIMEOUT 30)
@@ -271,7 +274,8 @@ if(BASALT_GPU_TESTS AND TARGET BasaltRuntime)
 	if(NOT DEFINED ENV{CI})
 		add_test(NAME FeatureTestRenderWindowed
 			COMMAND BasaltRuntime ${basaltRenderArgs} --screenshot "${CMAKE_CURRENT_BINARY_DIR}/FeatureTestRenderWindowed.png")
-		# Its window shares the desktop with nothing else that `ctest -j` runs (scripts/test.sh runs tests side by side).
+		# Alone, so while it presents and reads back its swapchain no other test's window (EditorViewport's) covers it on
+		# a developer's desktop: scripts/test.sh runs tests side by side.
 		set_tests_properties(FeatureTestRenderWindowed PROPERTIES FAIL_REGULAR_EXPRESSION "${noGpuTimingsRegex}" RUN_SERIAL TRUE)
 		list(APPEND basaltGpuTests FeatureTestRenderWindowed)
 	endif()

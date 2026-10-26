@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import types
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -53,7 +54,31 @@ def main():
     mismatch = run(["--check-tag", "v999.0.0"])
     require(mismatch.returncode == 1 and "does not match the engine version" in mismatch.stderr, f"a mismatched tag: {mismatch.stderr}")
     require(run(["--build", str(build), "--output", "x", "--notarize", "profile"]).returncode == 2, "--notarize without --sign-identity")
-    require(run(["--build", str(build), "--output", "x", "--compression-level", "0"]).returncode == 2, "--compression-level 0")
+    bad_level = run(["--build", str(build), "--output", "x", "--gzip-level", "0"])
+    require(bad_level.returncode == 2 and "--gzip-level" in bad_level.stderr and "invalid choice" in bad_level.stderr, f"--gzip-level 0: {bad_level.stderr}")
+
+    # archive()'s Linux branch, here on every host but Windows (no symbolic links without privileges): the gzip level
+    # reaches the header (XFL, byte 8: 4 for level 1, 2 for level 9), and the tarball keeps the folder's name, the
+    # executable bits and an AppDir's AppRun link.
+    if sys.platform != "win32":
+        with tempfile.TemporaryDirectory(prefix="BasaltArchive-") as temp:
+            folder = Path(temp, "App.AppDir")
+            (folder / "usr").mkdir(parents=True)
+            (folder / "usr" / "tool").write_text("#!/bin/sh\n")
+            (folder / "usr" / "tool").chmod(0o755)
+            (folder / "AppRun").symlink_to("usr/tool")
+            package_release.sys = types.SimpleNamespace(platform="linux")
+            try:
+                for level, xfl in ((1, 4), (9, 2)):
+                    path = package_release.archive(folder, Path(temp, f"level{level}"), level)
+                    require(path.name == f"level{level}.tar.gz" and path.read_bytes()[8] == xfl, f"level {level}: {path.name}, header {path.read_bytes()[:10].hex()}")
+                    with tarfile.open(path) as file:
+                        entries = {info.name: info for info in file.getmembers()}
+                    require(sorted(entries) == ["App.AppDir", "App.AppDir/AppRun", "App.AppDir/usr", "App.AppDir/usr/tool"], f"tarball members {sorted(entries)}")
+                    require(entries["App.AppDir/AppRun"].issym() and entries["App.AppDir/AppRun"].linkname == "usr/tool", "AppRun is not a link to usr/tool")
+                    require(entries["App.AppDir/usr/tool"].mode & 0o111 == 0o111, f"tool mode {entries['App.AppDir/usr/tool'].mode:o}")
+            finally:
+                package_release.sys = sys
     unknown = run(["--build", str(build), "--output", "x", "--samples", "NoSuchSample"])
     require(unknown.returncode == 1 and "unknown samples: NoSuchSample" in unknown.stderr, f"an unknown sample: {unknown.stderr}")
 
@@ -67,8 +92,10 @@ def main():
                 (sdk / name).write_text("stand-in")
             env["VULKAN_SDK"] = str(sdk.parent)
         output = Path(temp, "dist")
-        # The fastest gzip level: level 9 takes minutes over a Debug build's binaries (Linux; other hosts zip).
-        arguments = ["--build", str(build), "--output", str(output), "--samples", "Tetris", "--compression-level", "1"] + ([] if with_engine else ["--skip-engine"])
+        # The fastest gzip level: level 9 takes minutes over a Debug build's binaries. Only Linux writes .tar.gz archives
+        # (other hosts zip and would warn that the option does nothing).
+        linux = sys.platform.startswith("linux")
+        arguments = ["--build", str(build), "--output", str(output), "--samples", "Tetris"] + (["--gzip-level", "1"] if linux else []) + ([] if with_engine else ["--skip-engine"])
         packaged = run(arguments, env)
         require(packaged.returncode == 0, f"package_release.py failed: {packaged.stdout}{packaged.stderr}")
         files = sorted(path.name for path in output.iterdir())
@@ -77,8 +104,9 @@ def main():
         engine = next((name for name in files if name.startswith(f"Basalt-{version}-{platform}.")), None)
         require(sample and checksums_name in files and bool(engine) == with_engine and len(files) == 2 + with_engine, f"unexpected release files {files}")
 
-        # gzip records level 1 as "fastest" in its header (XFL, byte 8; level 9 records 2).
-        for name in files:
+        # Python's gzip records level 1 in the header (XFL, byte 8, is 4). Linux only: the sample is a tarball unless
+        # appimagetool built an AppImage, and the tools archive always is.
+        for name in filter(None, [sample, engine]):
             if name.endswith(".tar.gz"):
                 with open(Path(output, name), "rb") as file:
                     header = file.read(10)

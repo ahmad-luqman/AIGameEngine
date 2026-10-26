@@ -77,7 +77,8 @@ def main():
     source = Path(sys.argv[2]).resolve()
     with tempfile.TemporaryDirectory(prefix="BasaltPrefabs-") as temp:
         project = Path(temp, "Project")
-        shutil.copytree(source, project)
+        # Saved/ holds the FeatureTest batch's replay, which that test may be writing right now (ctest -j).
+        shutil.copytree(source, project, ignore=shutil.ignore_patterns("Saved"))
         with Path(temp, "cli.log").open("w+") as log:
             process = subprocess.Popen([cli, "--project", str(project), "--no-save", "serve"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, text=True)
             def require(value, message):
