@@ -42,10 +42,13 @@ Mesh import uses pinned meshoptimizer v1.0.1: vertex-cache order, overdraw order
 threshold), then vertex fetch. Complete interleaved vertices move together, including skin attributes.
 Blended primitives keep their authored triangle order and only optimize vertex fetch. Triangle reordering
 can alter exact coplanar depth ties. Built-in primitives keep their existing topology.
+
 meshoptimizer's vertex-cache order and simplifier take time that grows with the squares of vertex valences (how
 many triangle corners name each vertex), so a primitive whose squared valences sum to more than 64 per index plus
-16,777,216 keeps its triangle order and vertex layout and gets no LODs, with a warning (ordinary meshes sum to about
-6 per index; a vertex shared by every triangle of a large fan or of repeated degenerate triangles does not fit).
+16,777,216 keeps its triangle order and gets no LODs, with a warning; its vertices are still ordered for fetch.
+Ordinary meshes sum to at most about 6 per index; a vertex in more than about 4,000 triangles (a large fan, or
+repeated degenerate triangles) does not fit. Blended primitives are never reordered, so the limit does not apply to
+them, and a reduced level whose collapses pass it keeps the simplifier's triangle order.
 
 Static opaque/masked primitives generate up to three LOD index ranges (targets 50%, 25%, 12.5%, maximum
 relative geometric error 1%, locked borders). Material boundaries and vertex seams are retained. A level
@@ -85,10 +88,12 @@ allocates and reports the reason instead:
 - Accessors must fit their buffer views (and sparse accessors their index and value views), and a view may not point
   into a buffer without data (a buffer without a URI outside a GLB's binary chunk). Accessor data must be aligned to its
   component size, and a GLB's JSON chunk padded to a multiple of 4 bytes (as the specification requires), since the
-  binary chunk is read in place.
+  binary chunk is read in place (a GLB without a binary chunk reads nothing in place).
 - A model's triangle primitives may have at most 16,777,216 vertices and 67,108,864 indices, counted once per
   primitive that uses an accessor. At most 65,536 of those vertices and indices may come from accessors without a
-  buffer view (zero-filled); real files use those for sparse morph targets.
+  buffer view (zero-filled apart from any sparse values), each counted once more per morph target of its primitive,
+  since each target can generate the normals again. Real files use such accessors for sparse morph targets, which do
+  not count.
 
 ## Morph targets
 

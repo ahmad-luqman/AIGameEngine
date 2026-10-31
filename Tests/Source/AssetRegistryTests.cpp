@@ -19,9 +19,89 @@
 #include <cstring>
 #include <limits>
 #include <set>
+#include <span>
 
 using namespace Basalt;
 using json = nlohmann::json;
+
+namespace {
+
+	// k indices naming one vertex cost 1 + 3 + ... + (2k - 1) = k^2: the most the valence cost limit allows.
+	size_t SingleVertexValenceLimit()
+	{
+		size_t count = 0;
+		while ((count + 1) * (count + 1) <= MeshOptimizer::MaxValenceCostPerIndex * (count + 1) + MeshOptimizer::ValenceCostAllowance)
+			count++;
+		return count;
+	}
+
+	// Average vertex cache misses per triangle for a 16-entry FIFO cache (about 0.7 after meshoptimizer's ordering, near
+	// 3 for shuffled triangles).
+	float AverageCacheMisses(std::span<const uint32_t> indices)
+	{
+		std::vector<uint32_t> cache;
+		size_t misses = 0;
+		for (const uint32_t index : indices)
+		{
+			if (std::find(cache.begin(), cache.end(), index) != cache.end())
+				continue;
+			misses++;
+			cache.push_back(index);
+			if (cache.size() > 16)
+				cache.erase(cache.begin());
+		}
+		return 3.0f * static_cast<float>(misses) / static_cast<float>(indices.size());
+	}
+
+	// Shuffles whole triangles with a fixed linear congruential generator (std::shuffle differs between standard libraries).
+	void ShuffleTriangles(std::vector<uint32_t>& indices)
+	{
+		uint32_t state = 12345;
+		for (size_t i = indices.size() / 3; i > 1; i--)
+		{
+			state = state * 1664525u + 1013904223u;
+			const size_t j = state % i;
+			std::swap_ranges(indices.begin() + static_cast<std::ptrdiff_t>((i - 1) * 3), indices.begin() + static_cast<std::ptrdiff_t>(i * 3), indices.begin() + static_cast<std::ptrdiff_t>(j * 3));
+		}
+	}
+
+	// A fan of triangles around vertex 0, whose valence is the triangle count; rim vertices are in at most two.
+	void MakeFan(uint32_t triangles, std::vector<Vertex>& vertices, std::vector<uint32_t>& indices)
+	{
+		vertices.assign(triangles + 2, Vertex{});
+		indices.clear();
+		for (uint32_t i = 0; i <= triangles; i++)
+		{
+			const float angle = 3.14159265f * static_cast<float>(i) / static_cast<float>(triangles);
+			vertices[i + 1].Position = { std::cos(angle), 0, std::sin(angle) };
+		}
+		for (uint32_t i = 1; i <= triangles; i++)
+			indices.insert(indices.end(), { 0, i + 1, i });
+	}
+
+	// A closed double cone: each apex is in every triangle on its side, each rim vertex in four.
+	Ref<MeshSource> MakeBicone(uint32_t segments)
+	{
+		std::vector<Vertex> vertices(segments + 2);
+		for (uint32_t i = 0; i < segments; i++)
+		{
+			const float angle = 6.2831853f * static_cast<float>(i) / static_cast<float>(segments);
+			vertices[i].Position = { std::cos(angle), 0, std::sin(angle) };
+		}
+		vertices[segments].Position = { 0, 1, 0 };
+		vertices[segments + 1].Position = { 0, -1, 0 };
+		std::vector<uint32_t> indices;
+		for (uint32_t i = 0; i < segments; i++)
+		{
+			const uint32_t next = (i + 1) % segments;
+			indices.insert(indices.end(), { segments, next, i, segments + 1, i, next });
+		}
+		auto source = CreateRef<MeshSource>();
+		source->AddSubmesh(vertices, indices, 0);
+		return source;
+	}
+
+}
 
 TEST_SUITE("AssetPipeline")
 {
@@ -200,7 +280,7 @@ TEST_SUITE("AssetPipeline")
 		ordered.reserve(indices.size());
 		for (const auto index : indices)
 			ordered.push_back(vertices[index]);
-		REQUIRE(MeshOptimizer::Optimize(vertices, indices, false));
+		REQUIRE(MeshOptimizer::Optimize(vertices, indices, false) == MeshOptimizer::OptimizeResult::Optimized);
 		CHECK(vertices.size() == source->Vertices.size());
 		for (size_t i = 0; i < indices.size(); ++i)
 		{
@@ -214,7 +294,7 @@ TEST_SUITE("AssetPipeline")
 			CHECK(actual.Weights == expected.Weights);
 		}
 		indices[0] = UINT32_MAX;
-		CHECK_FALSE(MeshOptimizer::Optimize(vertices, indices, true));
+		CHECK(MeshOptimizer::Optimize(vertices, indices, true) == MeshOptimizer::OptimizeResult::Invalid);
 	}
 
 	TEST_CASE("Static LODs reduce triangles with valid shared vertices and bounded selection")
@@ -247,52 +327,110 @@ TEST_SUITE("AssetPipeline")
 		CHECK(skinned->Submeshes[0].LODs.empty());
 	}
 
-	// Regression (FuzzGltf, nightly): meshoptimizer's vertex cache order rescans a vertex's remaining triangles whenever
-	// the vertex is touched, so 46116 indices naming one vertex took 22 s with ASan.
-	TEST_CASE("Mesh optimization and LODs skip geometry whose vertex valences cost too much")
+	TEST_CASE("Valence cost sums squared index references per vertex")
 	{
-		// The most indices naming a single vertex that the limit allows, in whole triangles.
-		auto allowed = [](size_t count) { return count * count <= MeshOptimizer::MaxValenceCostPerIndex * count + MeshOptimizer::ValenceCostAllowance; };
-		size_t limit = 3;
-		while (allowed(limit + 3))
-			limit += 3;
+		const size_t limit = SingleVertexValenceLimit();
+		CHECK(MeshOptimizer::WithinValenceCost(std::vector<uint32_t>(limit, 0), 1));
+		CHECK_FALSE(MeshOptimizer::WithinValenceCost(std::vector<uint32_t>(limit + 1, 0), 1));
+		// The same references spread over two vertices cost half as much.
+		std::vector<uint32_t> split(limit + 1, 0);
+		std::fill(split.begin(), split.begin() + static_cast<std::ptrdiff_t>(split.size() / 2), 1u);
+		CHECK(MeshOptimizer::WithinValenceCost(split, 2));
+		// A closed grid (a torus: every vertex in six triangles) costs 6 per index, far below the limit at any size.
+		constexpr uint32_t Size = 256;
+		std::vector<uint32_t> torus;
+		for (uint32_t y = 0; y < Size; y++)
+			for (uint32_t x = 0; x < Size; x++)
+			{
+				const uint32_t a = y * Size + x, b = y * Size + (x + 1) % Size, c = (y + 1) % Size * Size + x, d = (y + 1) % Size * Size + (x + 1) % Size;
+				torus.insert(torus.end(), { a, c, b, b, c, d });
+			}
+		CHECK(MeshOptimizer::WithinValenceCost(torus, size_t{ Size } * Size));
+		CHECK_FALSE(MeshOptimizer::WithinValenceCost(std::vector<uint32_t>{ 0, 1, 2 }, 2));
+	}
+
+	// Regression (FuzzGltf, nightly): meshoptimizer's vertex cache order rescans the remaining triangles of every cached
+	// vertex after each triangle it emits, so 46116 indices naming one vertex took 22 s in the fuzz build.
+	TEST_CASE("Mesh optimization keeps the triangle order of geometry whose vertex valences cost too much")
+	{
+		// Whole triangles of one degenerate vertex, at and just past the limit.
+		const size_t limit = SingleVertexValenceLimit() / 3 * 3;
 		std::vector<Vertex> vertices(3);
 		std::vector<uint32_t> indices(limit, 0);
-		CHECK(MeshOptimizer::Optimize(vertices, indices, true));
-		vertices.assign(3, Vertex{});
+		CHECK(MeshOptimizer::Optimize(vertices, indices, true) == MeshOptimizer::OptimizeResult::Optimized);
+		vertices.assign(3, Vertex{}); // the call above removed the unused vertices
 		indices.assign(limit + 3, 0);
-		CHECK_FALSE(MeshOptimizer::Optimize(vertices, indices, true));
-		CHECK(vertices.size() == 3);
-		CHECK(indices == std::vector<uint32_t>(limit + 3, 0));
+		CHECK(MeshOptimizer::Optimize(vertices, indices, true) == MeshOptimizer::OptimizeResult::TriangleOrderKept);
 
-		// A closed double cone: each apex is in every triangle on its side, each rim vertex in four.
-		auto bicone = [](uint32_t segments) {
-			std::vector<Vertex> coneVertices(segments + 2);
-			for (uint32_t i = 0; i < segments; i++)
-			{
-				const float angle = 6.2831853f * static_cast<float>(i) / static_cast<float>(segments);
-				coneVertices[i].Position = { std::cos(angle), 0, std::sin(angle) };
-			}
-			coneVertices[segments].Position = { 0, 1, 0 };
-			coneVertices[segments + 1].Position = { 0, -1, 0 };
-			std::vector<uint32_t> coneIndices;
-			for (uint32_t i = 0; i < segments; i++)
-			{
-				const uint32_t next = (i + 1) % segments;
-				coneIndices.insert(coneIndices.end(), { segments, next, i, segments + 1, i, next });
-			}
-			auto source = CreateRef<MeshSource>();
-			source->AddSubmesh(coneVertices, coneIndices, 0);
-			return source;
-		};
-		auto small = bicone(64);
-		MeshOptimizer::GenerateLODs(*small, 0);
-		CHECK_FALSE(small->Submeshes[0].LODs.empty());
-		auto large = bicone(4096);
+		// A fan past the limit, with its triangles shuffled and a morph target that moves each vertex by its own position.
+		MakeFan(5000, vertices, indices);
+		ShuffleTriangles(indices);
+		std::vector<MorphDelta> deltas(vertices.size());
+		for (size_t i = 0; i < vertices.size(); i++)
+			deltas[i].Position = vertices[i].Position;
+		std::vector<glm::vec3> corners;
+		corners.reserve(indices.size());
+		for (const uint32_t index : indices)
+			corners.push_back(vertices[index].Position);
+		const auto original = vertices;
+		auto kept = indices;
+		auto keptDeltas = deltas;
+		REQUIRE(MeshOptimizer::Optimize(vertices, kept, true, &keptDeltas, 1) == MeshOptimizer::OptimizeResult::TriangleOrderKept);
+		// The triangles keep their order, while the vertices (and their deltas) are renumbered in fetch order.
+		REQUIRE(kept.size() == corners.size());
+		for (size_t i = 0; i < kept.size(); i++)
+			CHECK(vertices[kept[i]].Position == corners[i]);
+		for (size_t i = 0; i < vertices.size(); i++)
+			CHECK(keptDeltas[i].Position == vertices[i].Position);
+		CHECK(kept[0] == 0);
+
+		// Blended geometry is never reordered, so its valences do not matter.
+		vertices = original;
+		auto blended = indices;
+		CHECK(MeshOptimizer::Optimize(vertices, blended, false) == MeshOptimizer::OptimizeResult::Optimized);
+
+		// A fan within the limit is ordered for the vertex cache.
+		MakeFan(2000, vertices, indices);
+		ShuffleTriangles(indices);
+		REQUIRE(AverageCacheMisses(indices) > 1.8f);
+		CHECK(MeshOptimizer::Optimize(vertices, indices, true) == MeshOptimizer::OptimizeResult::Optimized);
+		CHECK(AverageCacheMisses(indices) < 1.2f);
+	}
+
+	TEST_CASE("LODs skip geometry whose vertex valences cost too much and order their triangles for the vertex cache")
+	{
+		// About 8 million against a limit near 17.6 million, and about 33.6 million against one near 18.4 million.
+		auto affordable = MakeBicone(2048);
+		auto copy = affordable->Vertices;
+		auto copyIndices = affordable->Indices;
+		CHECK(MeshOptimizer::Optimize(copy, copyIndices, true) == MeshOptimizer::OptimizeResult::Optimized);
+		MeshOptimizer::GenerateLODs(*affordable, 0);
+		CHECK_FALSE(affordable->Submeshes[0].LODs.empty());
+		auto large = MakeBicone(4096);
+		const size_t indexCount = large->Indices.size();
 		MeshOptimizer::GenerateLODs(*large, 0);
 		CHECK(large->Submeshes[0].LODs.empty());
-		CHECK_FALSE(MeshOptimizer::Optimize(large->Vertices, large->Indices, true));
+		CHECK(large->Indices.size() == indexCount);
+		CHECK(MeshOptimizer::Optimize(large->Vertices, large->Indices, true) == MeshOptimizer::OptimizeResult::TriangleOrderKept);
+
+		// An index past the submesh's vertices gets no LODs (the simplifier would read past them).
+		auto broken = MakeBicone(64);
+		broken->Indices[5] = broken->Submeshes[0].VertexCount;
+		MeshOptimizer::GenerateLODs(*broken, 0);
+		CHECK(broken->Submeshes[0].LODs.empty());
+
+		// Reduced levels of a shuffled sphere are ordered for the vertex cache too.
+		const auto sphere = Primitives::CreateSphere(64, 32);
+		auto shuffled = sphere->Indices;
+		ShuffleTriangles(shuffled);
+		auto source = CreateRef<MeshSource>();
+		source->AddSubmesh(sphere->Vertices, shuffled, 0);
+		MeshOptimizer::GenerateLODs(*source, 0);
+		REQUIRE_FALSE(source->Submeshes[0].LODs.empty());
+		for (const auto& lod : source->Submeshes[0].LODs)
+			CHECK(AverageCacheMisses(std::span(source->Indices).subspan(lod.BaseIndex, lod.IndexCount)) < 1.2f);
 	}
+
 	TEST_CASE("Unrelated corrupt metadata does not lock out authoring or prefab spawning")
 	{
 		BasaltTest::TempProject project("AssetDiagnostics");
@@ -480,7 +618,7 @@ TEST_SUITE("AssetPipeline")
 			return result;
 		};
 		const auto before = triangles(source->Vertices, source->Indices);
-		REQUIRE(MeshOptimizer::Optimize(source->Vertices, source->Indices, true));
+		REQUIRE(MeshOptimizer::Optimize(source->Vertices, source->Indices, true) == MeshOptimizer::OptimizeResult::Optimized);
 		CHECK(triangles(source->Vertices, source->Indices) == before);
 	}
 	TEST_CASE("Metadata import locks prevent replacing concurrent identities and failed scans keep the index")

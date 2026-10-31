@@ -71,6 +71,26 @@ namespace {
 		return { { "byteLength", buffer.size() }, { "uri", "data:application/octet-stream;base64," + BasaltTest::Base64(buffer.data(), buffer.size()) } };
 	}
 
+	// A binary glTF container. The caller pads the JSON chunk (or leaves it unpadded on purpose); no binary chunk when
+	// binary is empty.
+	std::string MakeGlb(const std::string& json, const std::string& binary)
+	{
+		auto put32 = [](std::string& out, uint32_t value) { out.append(reinterpret_cast<const char*>(&value), 4); };
+		std::string glb = "glTF";
+		put32(glb, 2);
+		put32(glb, static_cast<uint32_t>(12 + 8 + json.size() + (binary.empty() ? 0 : 8 + binary.size())));
+		put32(glb, static_cast<uint32_t>(json.size()));
+		glb += "JSON";
+		glb += json;
+		if (!binary.empty())
+		{
+			put32(glb, static_cast<uint32_t>(binary.size()));
+			glb.append("BIN\0", 4);
+			glb += binary;
+		}
+		return glb;
+	}
+
 	// The quad without textures, for tests that only exercise buffers and accessors.
 	nlohmann::json MakeUntexturedGltfJson(const nlohmann::json& buffer)
 	{
@@ -461,17 +481,7 @@ TEST_SUITE("Assets")
 		while (json.size() % 4 != 0)
 			json += ' ';
 
-		auto put32 = [](std::string& out, uint32_t value) { out.append(reinterpret_cast<const char*>(&value), 4); };
-		std::string glb = "glTF";
-		put32(glb, 2);
-		put32(glb, static_cast<uint32_t>(12 + 8 + json.size() + 8 + binary.size()));
-		put32(glb, static_cast<uint32_t>(json.size()));
-		glb += "JSON";
-		glb += json;
-		put32(glb, static_cast<uint32_t>(binary.size()));
-		glb.append("BIN\0", 4);
-		glb += binary;
-		project.WriteFile("Assets/Models/Quad.glb", glb);
+		project.WriteFile("Assets/Models/Quad.glb", MakeGlb(json, binary));
 
 		AssetManager::Clear();
 		Ref<MeshSource> mesh = AssetManager::GetMesh("Assets/Models/Quad.glb");
@@ -701,33 +711,27 @@ TEST_SUITE("Assets")
 	TEST_CASE("GLB chunks must be padded to 4 bytes")
 	{
 		BasaltTest::TempProject project("GlbPadding");
-		const std::string binary = MakeQuadBuffer() + std::string(4, '\0');
-		auto glb = [&](size_t jsonPadding) {
-			std::string json = MakeUntexturedGltfJson({ { "byteLength", binary.size() } }).dump();
-			while (json.size() % 4 != jsonPadding)
+		const std::string binary = MakeQuadBuffer();
+		// A JSON chunk this many bytes past a multiple of 4, with or without a binary chunk holding the quad.
+		auto glb = [&](size_t remainder, bool withBinary) {
+			std::string json = MakeUntexturedGltfJson(withBinary ? nlohmann::json{ { "byteLength", binary.size() } } : EmbeddedBufferJson(binary)).dump();
+			while (json.size() % 4 != remainder)
 				json += ' ';
-			auto put32 = [](std::string& out, uint32_t value) { out.append(reinterpret_cast<const char*>(&value), 4); };
-			std::string out = "glTF";
-			put32(out, 2);
-			put32(out, static_cast<uint32_t>(12 + 8 + json.size() + 8 + binary.size()));
-			put32(out, static_cast<uint32_t>(json.size()));
-			out += "JSON";
-			out += json;
-			put32(out, static_cast<uint32_t>(binary.size()));
-			out.append("BIN\0", 4);
-			out += binary;
-			return out;
+			return MakeGlb(json, withBinary ? binary : std::string());
 		};
-		project.WriteFile("Assets/Models/Padded.glb", glb(0));
-		AssetManager::Clear();
-		CHECK_MESSAGE(AssetManager::GetMesh("Assets/Models/Padded.glb"), AssetManager::GetError("Assets/Models/Padded.glb"));
-		for (size_t padding = 1; padding < 4; padding++)
-		{
-			CAPTURE(padding);
-			project.WriteFile("Assets/Models/Unpadded.glb", glb(padding));
+		auto load = [&](const std::string& name, const std::string& contents) {
+			project.WriteFile("Assets/Models/" + name, contents);
 			AssetManager::Clear();
-			CHECK_FALSE(AssetManager::GetMesh("Assets/Models/Unpadded.glb"));
+			return AssetManager::GetMesh("Assets/Models/" + name) != nullptr;
+		};
+		CHECK_MESSAGE(load("Padded.glb", glb(0, true)), AssetManager::GetError("Assets/Models/Padded.glb"));
+		for (size_t remainder = 1; remainder < 4; remainder++)
+		{
+			CAPTURE(remainder);
+			CHECK_FALSE(load("Unpadded.glb", glb(remainder, true)));
 			CHECK(AssetManager::GetError("Assets/Models/Unpadded.glb").find("not padded to a multiple of 4") != std::string::npos);
+			// Without a binary chunk nothing is read in place, so the padding does not matter.
+			CHECK_MESSAGE(load("UnpaddedWithoutBinary.glb", glb(remainder, false)), AssetManager::GetError("Assets/Models/UnpaddedWithoutBinary.glb"));
 		}
 		AssetManager::Clear();
 	}
@@ -992,6 +996,16 @@ TEST_SUITE("Assets")
 			gltf["accessors"][0]["count"] = MaxZeroFilledElements + 1;
 			CHECK_FALSE(load("ZeroFilledPastLimit.gltf", gltf));
 			CHECK(has("ZeroFilledPastLimit.gltf", "more than " + std::to_string(MaxZeroFilledElements) + " vertices and indices in accessors without a buffer view"));
+			// Each morph target can generate the normals again, so zero-filled elements count once more per target of their
+			// primitive (64 targets over 65535 zero-filled positions took 10 s in the fuzz build).
+			nlohmann::json morphed = gltf;
+			morphed["accessors"][0]["count"] = MaxZeroFilledElements / 64;
+			morphed["accessors"].push_back(morphed["accessors"][0]);
+			morphed["meshes"][0]["primitives"][0]["targets"] = nlohmann::json(63, { { "POSITION", morphed["accessors"].size() - 1 } });
+			CHECK_MESSAGE(load("ZeroFilledTargets.gltf", morphed), AssetManager::GetError("Assets/Models/ZeroFilledTargets.gltf"));
+			morphed["meshes"][0]["primitives"][0]["targets"].push_back(morphed["meshes"][0]["primitives"][0]["targets"][0]);
+			CHECK_FALSE(load("ZeroFilledPastTargets.gltf", morphed));
+			CHECK(has("ZeroFilledPastTargets.gltf", "more than " + std::to_string(MaxZeroFilledElements) + " vertices and indices in accessors without a buffer view (each counted once more per morph target of its primitive); mesh 0 primitive 0 passes it"));
 			gltf["accessors"][0]["count"] = 400000000;
 			CHECK_FALSE(load("ZeroFilledHuge.gltf", gltf));
 			CHECK(has("ZeroFilledHuge.gltf", "more than " + std::to_string(MaxZeroFilledElements) + " vertices and indices in accessors without a buffer view"));
@@ -1047,7 +1061,9 @@ TEST_SUITE("Assets")
 	}
 
 	// Regression (FuzzGltf, nightly): 46116 zero-filled indices name one vertex, and meshoptimizer's vertex cache order,
-	// whose time grows with the squared valences, took over 10 s on them. The model keeps its triangle order instead.
+	// whose time grows with the squared valences, took over 10 s on them. The model keeps its triangle order instead. (The
+	// fuzzer's file, Tests/Fuzz/Corpus/FuzzGltf/ZeroFilledIndexValence.gltf, only parses because cgltf's JSON reader is
+	// lenient; this is its clean equivalent.)
 	TEST_CASE("glTF primitives whose vertices are in too many triangles skip optimization")
 	{
 		BasaltTest::TempProject project("GltfValence");
@@ -1061,9 +1077,9 @@ TEST_SUITE("Assets")
 		REQUIRE_MESSAGE(mesh, AssetManager::GetError("Assets/Models/Valence.gltf"));
 		REQUIRE(mesh->Submeshes.size() == 1);
 		CHECK(mesh->Submeshes[0].IndexCount == 46116);
-		CHECK(mesh->Submeshes[0].VertexCount == 4); // unused vertices stay without the vertex fetch remap
+		CHECK(mesh->Submeshes[0].VertexCount == 1); // the vertex fetch remap still drops the unused vertices
 		CHECK(mesh->Submeshes[0].LODs.empty());
-		CHECK(BasaltTest::CountLogMessages(since, "vertices shared by too many triangles, in mesh 'QuadMesh'") == 1);
+		CHECK(BasaltTest::CountLogMessages(since, "mesh 'QuadMesh' primitive 0: its vertices are shared by too many triangles") == 1);
 		AssetManager::Clear();
 	}
 

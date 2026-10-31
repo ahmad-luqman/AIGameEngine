@@ -129,14 +129,14 @@ TEST_SUITE("MorphTargets")
 			std::vector<MorphDelta> deltas(8);
 			for (size_t i = 0; i < deltas.size(); i++)
 				deltas[i].Position = glm::vec3(0, static_cast<float>(i), 0);
-			REQUIRE(MeshOptimizer::Optimize(vertices, indices, false, &deltas, 2));
+			REQUIRE(MeshOptimizer::Optimize(vertices, indices, false, &deltas, 2) == MeshOptimizer::OptimizeResult::Optimized);
 			REQUIRE(vertices.size() == 3);
 			REQUIRE(deltas.size() == 6);
 			for (size_t target = 0; target < 2; target++)
 				for (size_t v = 0; v < vertices.size(); v++)
 					CHECK(deltas[target * 3 + v].Position.y == static_cast<float>(target * 4) + vertices[v].Position.x);
 			std::vector<MorphDelta> mismatched(3);
-			CHECK_FALSE(MeshOptimizer::Optimize(vertices, indices, false, &mismatched, 2));
+			CHECK(MeshOptimizer::Optimize(vertices, indices, false, &mismatched, 2) == MeshOptimizer::OptimizeResult::Invalid);
 		}
 	}
 
@@ -368,6 +368,7 @@ TEST_SUITE("MorphTargets")
 
 	TEST_CASE("Morph targets past the import limits are dropped with a warning; the geometry still loads")
 	{
+		constexpr size_t MorphLimitVertices = 16385;
 		auto data = MorphJson();
 		std::string expected;
 		// The mesh that loses its targets, and the one that keeps them.
@@ -384,15 +385,21 @@ TEST_SUITE("MorphTargets")
 		}
 		SUBCASE("more deltas than a model may hold")
 		{
-			// Zero-filled accessors without a bufferView keep the file small: 256 targets x 16385 vertices pass MaxMorphDeltas
-			// (and the base positions stay within MaxZeroFilledElements).
-			const nlohmann::json zeros = { { "componentType", 5126 }, { "count", 16385 }, { "type", "VEC3" }, { "min", { 0, 0, 0 } }, { "max", { 0, 0, 0 } } };
+			// MaxMorphTargets (256) targets x 16385 vertices pass MaxMorphDeltas. The targets are zero-filled accessors without
+			// a bufferView, which keeps the file small; the base positions read Zeros.bin, since zero-filled ones would count
+			// once per target against MaxZeroFilledElements.
+			nlohmann::json zeros = { { "componentType", 5126 }, { "count", MorphLimitVertices }, { "type", "VEC3" }, { "min", { 0, 0, 0 } }, { "max", { 0, 0, 0 } } };
 			data["accessors"].push_back(zeros);
-			const size_t index = data["accessors"].size() - 1;
-			const nlohmann::json targets(MaxMorphTargets, { { "POSITION", index } });
-			data["meshes"][1]["primitives"][0] = { { "attributes", { { "POSITION", index } } }, { "targets", targets } };
+			const size_t target = data["accessors"].size() - 1;
+			data["buffers"].push_back({ { "byteLength", MorphLimitVertices * 12 }, { "uri", "Zeros.bin" } });
+			data["bufferViews"].push_back({ { "buffer", data["buffers"].size() - 1 }, { "byteLength", MorphLimitVertices * 12 } });
+			zeros["bufferView"] = data["bufferViews"].size() - 1;
+			data["accessors"].push_back(zeros);
+			const size_t base = data["accessors"].size() - 1;
+			const nlohmann::json targets(MaxMorphTargets, { { "POSITION", target } });
+			data["meshes"][1]["primitives"][0] = { { "attributes", { { "POSITION", base } } }, { "targets", targets } };
 			data["meshes"][1]["extras"].erase("targetNames");
-			// Teeth's animated weights are now 256 wide.
+			// Teeth's animated weights are now MaxMorphTargets wide.
 			data["animations"][0]["channels"].erase(1);
 			expected = "its morph targets need 4194560 deltas, past the 4194286 left of the limit of 4194304 per model";
 		}
@@ -414,6 +421,8 @@ TEST_SUITE("MorphTargets")
 		}
 		ClearAssetCache cacheGuard;
 		TempDirectory directory("MorphLimits");
+		const std::vector<uint8_t> zeroBytes(MorphLimitVertices * 12);
+		REQUIRE(FileSystem::WriteBinaryFile(directory.GetPath() / "Zeros.bin", zeroBytes.data(), zeroBytes.size()));
 		const auto since = Log::GetHistory().GetTotalCount();
 		const auto source = AnimationTest::LoadModified(data, directory.GetPath(), "Limits.gltf");
 		CHECK(CountLogMessages(since, expected) == 1);

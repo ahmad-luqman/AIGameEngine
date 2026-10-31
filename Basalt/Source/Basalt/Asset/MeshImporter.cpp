@@ -276,18 +276,18 @@ namespace Basalt {
 			return true;
 		}
 
-		// glTF requires accessor data to be aligned to its component size (spec 3.6.2.4). cgltf_validate reads
-		// index data before checking that, through misaligned pointers (undefined behaviour, found by
-		// FuzzGltf), so non-conforming files are rejected first.
+		// glTF requires accessor data to be aligned to its component size (spec 3.6.2.4), and a GLB's chunks to be padded
+		// to 4 bytes (4.4.3.1). cgltf_validate reads index data before checking either, through misaligned pointers
+		// (undefined behaviour, found by FuzzGltf), so non-conforming files are rejected first.
 		bool CheckAccessorAlignment(const cgltf_data* data, const std::filesystem::path& path, std::string& outError)
 		{
 			// Offsets are relative to the buffer, and a GLB's binary chunk is read in place, 28 bytes plus the JSON chunk's
-			// length into the file (which cgltf holds in memory from malloc). GLB pads every chunk to 4 bytes (spec 4.4.3.1),
-			// but cgltf does not check it, so after an unpadded JSON chunk aligned offsets were misaligned in memory (found by
-			// nightly FuzzGltf).
+			// length into the file (which cgltf holds in memory from malloc), so after an unpadded JSON chunk aligned offsets
+			// were misaligned in memory (found by nightly FuzzGltf). A GLB with a binary chunk is rejected even when no buffer
+			// uses it, as the specification asks; one without a binary chunk reads nothing in place.
 			if (data->file_type == cgltf_file_type_glb && data->bin && data->json_size % 4 != 0)
 			{
-				outError = fmt::format("{}: GLB JSON chunk is {} bytes, not padded to a multiple of 4", path.filename().string(), data->json_size);
+				outError = fmt::format("{}: GLB JSON chunk is {} bytes, not padded to a multiple of 4 as the glTF specification requires (re-export the file)", path.filename().string(), data->json_size);
 				return false;
 			}
 			auto aligned = [](const cgltf_buffer_view* view, cgltf_size offset, cgltf_size size) { return !view || size == 0 || (view->offset + offset) % size == 0; };
@@ -469,29 +469,36 @@ namespace Basalt {
 			// Counts come from the file (each below 2^63, and JSON lets a primitive repeat an attribute), so the sums
 			// saturate instead of wrapping.
 			const auto add = [](uint64_t& total, uint64_t value) { total = value > UINT64_MAX - total ? UINT64_MAX : total + value; };
-			const auto count = [&](const cgltf_accessor* accessor, uint64_t& total) {
-				if (!accessor)
-					return;
-				add(total, accessor->count);
-				if (!accessor->buffer_view)
-					add(zeroFilled, accessor->count);
-			};
 			for (cgltf_size m = 0; m < data->meshes_count; m++)
 				for (cgltf_size p = 0; p < data->meshes[m].primitives_count; p++)
 				{
 					const cgltf_primitive& primitive = data->meshes[m].primitives[p];
 					if (primitive.type != cgltf_primitive_type_triangles)
 						continue;
+					uint64_t primitiveZeroFilled = 0;
+					const auto count = [&](const cgltf_accessor* accessor, uint64_t& total) {
+						if (!accessor)
+							return;
+						add(total, accessor->count);
+						if (!accessor->buffer_view)
+							add(primitiveZeroFilled, accessor->count);
+					};
 					for (cgltf_size a = 0; a < primitive.attributes_count; a++)
 						if (primitive.attributes[a].type == cgltf_attribute_type_position)
 							count(primitive.attributes[a].data, vertices);
 					count(primitive.indices, indices);
+					// Each morph target without NORMAL deltas generates the primitive's normals again, so zero-filled elements
+					// count once more per target (64 targets over 65535 zero-filled positions took 10 s in the fuzz build;
+					// found by review).
+					const uint64_t uses = uint64_t{ primitive.targets_count } + 1;
+					add(zeroFilled, primitiveZeroFilled > UINT64_MAX / uses ? UINT64_MAX : primitiveZeroFilled * uses);
+					const auto where = [&] { return fmt::format("; mesh {} primitive {} passes it", m, p); };
 					if (zeroFilled > MaxZeroFilledElements)
-						return fmt::format("its meshes have more than {} vertices and indices in accessors without a buffer view", MaxZeroFilledElements);
+						return fmt::format("its meshes have more than {} vertices and indices in accessors without a buffer view (each counted once more per morph target of its primitive){}", MaxZeroFilledElements, where());
 					if (vertices > MaxModelVertices)
-						return fmt::format("its meshes have more than {} vertices (counted once per primitive that uses them)", MaxModelVertices);
+						return fmt::format("its meshes have more than {} vertices (counted once per primitive that uses them){}", MaxModelVertices, where());
 					if (indices > MaxModelIndices)
-						return fmt::format("its meshes have more than {} indices (counted once per primitive that uses them)", MaxModelIndices);
+						return fmt::format("its meshes have more than {} indices (counted once per primitive that uses them){}", MaxModelIndices, where());
 				}
 			return {};
 		}
@@ -1054,13 +1061,23 @@ namespace Basalt {
 
 				const uint32_t materialIndex = primitive.material ? static_cast<uint32_t>(primitive.material - data->materials) : defaultMaterial;
 				const bool reorder = !source->Materials[materialIndex].IsBlended();
-				const bool optimized = MeshOptimizer::Optimize(vertices, indices, reorder, &morphDeltas, targets);
-				if (!optimized)
+				const MeshOptimizer::OptimizeResult optimized = MeshOptimizer::Optimize(vertices, indices, reorder, &morphDeltas, targets);
+				switch (optimized)
 				{
-					BS_CORE_WARN("MeshImporter: {}: optimization and LODs skipped for empty, malformed or non-finite geometry, or vertices shared by too many triangles, in mesh '{}'", path.filename().string(), meshData.Name);
+					case MeshOptimizer::OptimizeResult::Optimized:
+						break;
+					case MeshOptimizer::OptimizeResult::TriangleOrderKept:
+						BS_CORE_WARN("MeshImporter: {}: mesh '{}' primitive {}: its vertices are shared by too many triangles (squared valences past {} per index plus {}), so it keeps its triangle order and gets no LODs", key, meshData.Name, primitiveIndex, MeshOptimizer::MaxValenceCostPerIndex, MeshOptimizer::ValenceCostAllowance);
+						break;
+					case MeshOptimizer::OptimizeResult::Invalid:
+						BS_CORE_WARN("MeshImporter: {}: mesh '{}' primitive {}: optimization and LODs skipped for empty or malformed geometry", key, meshData.Name, primitiveIndex);
+						break;
+					case MeshOptimizer::OptimizeResult::NonFinite:
+						BS_CORE_WARN("MeshImporter: {}: mesh '{}' primitive {}: optimization and LODs skipped for non-finite vertex positions", key, meshData.Name, primitiveIndex);
+						break;
 				}
 				const auto submesh = source->AddSubmesh(vertices, indices, materialIndex, morphDeltas, targets);
-				if (optimized)
+				if (optimized == MeshOptimizer::OptimizeResult::Optimized)
 					MeshOptimizer::GenerateLODs(*source, submesh);
 				meshData.Submeshes.push_back(submesh);
 			}
