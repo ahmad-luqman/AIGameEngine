@@ -277,12 +277,12 @@ namespace Basalt {
 		}
 
 		// glTF requires accessor data to be aligned to its component size (spec 3.6.2.4), and a GLB's chunks to be padded
-		// to 4 bytes (4.4.3.1). cgltf_validate reads index data before checking either, through misaligned pointers
+		// to 4 bytes (4.4.3.1). cgltf checks neither, and cgltf_validate reads index data through misaligned pointers
 		// (undefined behaviour, found by FuzzGltf), so non-conforming files are rejected first.
 		bool CheckAccessorAlignment(const cgltf_data* data, const std::filesystem::path& path, std::string& outError)
 		{
 			// Offsets are relative to the buffer, and a GLB's binary chunk is read in place, 28 bytes plus the JSON chunk's
-			// length into the file (which cgltf holds in memory from malloc), so after an unpadded JSON chunk aligned offsets
+			// length into the file (which ReadGltfFile copies into malloc'd, suitably aligned memory), so after an unpadded JSON chunk aligned offsets
 			// were misaligned in memory (found by nightly FuzzGltf). A GLB with a binary chunk is rejected even when no buffer
 			// uses it, as the specification asks; one without a binary chunk reads nothing in place.
 			if (data->file_type == cgltf_file_type_glb && data->bin && data->json_size % 4 != 0)
@@ -349,6 +349,14 @@ namespace Basalt {
 				// cgltf_validate rejects invalid types and component types before it uses their sizes.
 				if (elementSize == 0)
 					continue;
+				// glTF forbids a byteStride smaller than the element (glTF-Validator's ACCESSOR_SMALL_BYTESTRIDE), and cgltf does
+				// not check it: overlapping elements let a few bytes declare many vertices for each primitive that uses them
+				// (found by review).
+				if (accessor.buffer_view && accessor.stride < elementSize)
+				{
+					outError = fmt::format("{}: accessor {} has {}-byte elements, but its buffer view's byteStride is only {}", path.filename().string(), i, elementSize, accessor.stride);
+					return false;
+				}
 				bool ok = !accessor.buffer_view || fits(*accessor.buffer_view, accessor.offset, accessor.count, elementSize, accessor.stride);
 				if (ok && accessor.is_sparse)
 				{
@@ -487,12 +495,13 @@ namespace Basalt {
 						if (primitive.attributes[a].type == cgltf_attribute_type_position)
 							count(primitive.attributes[a].data, vertices);
 					count(primitive.indices, indices);
-					// Each morph target without NORMAL deltas generates the primitive's normals again, so zero-filled elements
-					// count once more per target (64 targets over 65535 zero-filled positions took 10 s in the fuzz build;
-					// found by review).
+					// Each morph target with POSITION but no NORMAL deltas generates the primitive's normals again, so
+					// zero-filled elements count once more per target (64 targets over 65535 zero-filled positions took 10 s in
+					// the fuzz build; found by review).
 					const uint64_t uses = uint64_t{ primitive.targets_count } + 1;
 					add(zeroFilled, primitiveZeroFilled > UINT64_MAX / uses ? UINT64_MAX : primitiveZeroFilled * uses);
-					const auto where = [&] { return fmt::format("; mesh {} primitive {} passes it", m, p); };
+					// The totals are the model's; this is where they pass the limit.
+					const auto where = [&] { return data->meshes[m].name ? fmt::format(" (reached at mesh '{}' primitive {})", data->meshes[m].name, p) : fmt::format(" (reached at mesh {} primitive {})", m, p); };
 					if (zeroFilled > MaxZeroFilledElements)
 						return fmt::format("its meshes have more than {} vertices and indices in accessors without a buffer view (each counted once more per morph target of its primitive){}", MaxZeroFilledElements, where());
 					if (vertices > MaxModelVertices)
@@ -879,6 +888,7 @@ namespace Basalt {
 			return nullptr;
 		}
 		size_t morphBudget = MaxMorphDeltas;
+		uint64_t valenceAllowance = MeshOptimizer::ValenceCostAllowance;
 		std::vector<bool> droppedMorphs;
 		for (cgltf_size meshIndex = 0; meshIndex < data->meshes_count; meshIndex++)
 		{
@@ -902,7 +912,7 @@ namespace Basalt {
 				const cgltf_primitive& primitive = mesh.primitives[primitiveIndex];
 				if (primitive.type != cgltf_primitive_type_triangles)
 				{
-					BS_CORE_WARN("MeshImporter: {}: skipping non-triangle primitive in mesh '{}'", path.filename().string(), meshData.Name);
+					BS_CORE_WARN("MeshImporter: {}: mesh '{}' primitive {}: skipped, it is not made of triangles", key, meshData.Name, primitiveIndex);
 					continue;
 				}
 
@@ -938,7 +948,7 @@ namespace Basalt {
 				}
 				if (!positions || positions->count == 0)
 				{
-					BS_CORE_WARN("MeshImporter: {}: primitive without positions in mesh '{}'", path.filename().string(), meshData.Name);
+					BS_CORE_WARN("MeshImporter: {}: mesh '{}' primitive {}: skipped, it has no positions", key, meshData.Name, primitiveIndex);
 					continue;
 				}
 
@@ -946,7 +956,7 @@ namespace Basalt {
 				std::vector<glm::vec3> positionData;
 				if (!ReadAccessor(positions, positionData, 3))
 				{
-					BS_CORE_WARN("MeshImporter: {}: unreadable positions in mesh '{}'", path.filename().string(), meshData.Name);
+					BS_CORE_WARN("MeshImporter: {}: mesh '{}' primitive {}: skipped, its positions are unreadable", key, meshData.Name, primitiveIndex);
 					continue;
 				}
 				for (size_t v = 0; v < vertices.size(); v++)
@@ -1018,7 +1028,13 @@ namespace Basalt {
 				{
 					if (!ReadIndices(primitive.indices, indices))
 					{
-						BS_CORE_WARN("MeshImporter: {}: unreadable indices in mesh '{}'", path.filename().string(), meshData.Name);
+						BS_CORE_WARN("MeshImporter: {}: mesh '{}' primitive {}: skipped, its indices are unreadable", key, meshData.Name, primitiveIndex);
+						continue;
+					}
+					// cgltf accepts an index accessor with no elements (the specification does not); it would draw nothing.
+					if (indices.empty())
+					{
+						BS_CORE_WARN("MeshImporter: {}: mesh '{}' primitive {}: skipped, its index accessor is empty", key, meshData.Name, primitiveIndex);
 						continue;
 					}
 				}
@@ -1034,7 +1050,7 @@ namespace Basalt {
 					indicesValid = indicesValid && index < vertices.size();
 				if (!indicesValid)
 				{
-					BS_CORE_WARN("MeshImporter: {}: invalid index data in mesh '{}'", path.filename().string(), meshData.Name);
+					BS_CORE_WARN("MeshImporter: {}: mesh '{}' primitive {}: skipped, its index data is invalid (not whole triangles, or an index past its vertices)", key, meshData.Name, primitiveIndex);
 					continue;
 				}
 
@@ -1061,23 +1077,27 @@ namespace Basalt {
 
 				const uint32_t materialIndex = primitive.material ? static_cast<uint32_t>(primitive.material - data->materials) : defaultMaterial;
 				const bool reorder = !source->Materials[materialIndex].IsBlended();
-				const MeshOptimizer::OptimizeResult optimized = MeshOptimizer::Optimize(vertices, indices, reorder, &morphDeltas, targets);
-				switch (optimized)
+				const MeshOptimizer::OptimizeResult result = MeshOptimizer::Optimize(vertices, indices, reorder, &morphDeltas, targets, &valenceAllowance);
+				switch (result)
 				{
 					case MeshOptimizer::OptimizeResult::Optimized:
 						break;
-					case MeshOptimizer::OptimizeResult::TriangleOrderKept:
-						BS_CORE_WARN("MeshImporter: {}: mesh '{}' primitive {}: its vertices are shared by too many triangles (squared valences past {} per index plus {}), so it keeps its triangle order and gets no LODs", key, meshData.Name, primitiveIndex, MeshOptimizer::MaxValenceCostPerIndex, MeshOptimizer::ValenceCostAllowance);
+					case MeshOptimizer::OptimizeResult::ValenceCostExceeded:
+					{
+						const uint64_t limit = MeshOptimizer::MaxValenceCostPerIndex * indices.size() + MeshOptimizer::ValenceCostAllowance;
+						BS_CORE_WARN("MeshImporter: {}: mesh '{}' primitive {}: the squares of its vertices' triangle counts sum past {} per index plus the model's allowance (at most {} for its {} indices), so it keeps its triangle order{}; split vertices shared by thousands of triangles or remove repeated degenerate triangles", key, meshData.Name, primitiveIndex, MeshOptimizer::MaxValenceCostPerIndex, limit, indices.size(), targets == 0 && !joints ? " and gets no LODs" : "");
 						break;
+					}
 					case MeshOptimizer::OptimizeResult::Invalid:
-						BS_CORE_WARN("MeshImporter: {}: mesh '{}' primitive {}: optimization and LODs skipped for empty or malformed geometry", key, meshData.Name, primitiveIndex);
+						// The checks above leave nothing Optimize rejects, so this is an importer bug.
+						BS_CORE_ERROR("MeshImporter: {}: mesh '{}' primitive {}: inconsistent geometry buffers; optimization and LODs skipped", key, meshData.Name, primitiveIndex);
 						break;
 					case MeshOptimizer::OptimizeResult::NonFinite:
 						BS_CORE_WARN("MeshImporter: {}: mesh '{}' primitive {}: optimization and LODs skipped for non-finite vertex positions", key, meshData.Name, primitiveIndex);
 						break;
 				}
 				const auto submesh = source->AddSubmesh(vertices, indices, materialIndex, morphDeltas, targets);
-				if (optimized == MeshOptimizer::OptimizeResult::Optimized)
+				if (result == MeshOptimizer::OptimizeResult::Optimized)
 					MeshOptimizer::GenerateLODs(*source, submesh);
 				meshData.Submeshes.push_back(submesh);
 			}

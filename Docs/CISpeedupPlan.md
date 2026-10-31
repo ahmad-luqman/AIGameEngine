@@ -177,12 +177,23 @@ From nightly run 40077058550 (2026-10-24):
     cached vertex after each triangle it emits, so its time grows with the squared vertex valences (22 s for one vertex
     in every triangle); the simplifier's edge scans grow the same way. `MeshOptimizer::Optimize` now keeps the triangle
     order (still ordering vertices for fetch) and the importer skips LODs, with a warning, when the squared valences sum
-    to more than 64 per index plus 2^24.
+    to more than 16 per index plus an allowance of 2^22 shared by the model (review found eight primitives sharing one
+    busy index accessor taking 12 s with a per-primitive allowance, and 64 per index too generous once the simplifier's
+    passes count).
   - 4,000,008 zero-filled positions without indices: linear, but 27 s per run (simplifier 44%, tangents 20%,
     optimization 18%; libFuzzer runs an input twice when its allocations outnumber its frees, to look for leaks). The
     zero-filled limit drops from 2^22 to 2^16 elements, which import in 0.45 s per run.
-  - Found by review: morph targets multiplied that work (each target without NORMAL deltas generates the normals
-    again; 64 targets over 65535 zero-filled positions took 10 s), so zero-filled elements count once more per target.
+  - Found by review: morph targets multiplied that work (each target with POSITION but no NORMAL deltas generates the
+    normals again; 64 targets over 65535 zero-filled positions took 10 s), so zero-filled elements count once more per
+    target; and a byteStride smaller than the element (forbidden by the specification) let a few bytes declare many
+    vertices, which is now rejected.
+  - Known, bounded and not fixed: primitives may share accessors (multi-material exports do), and each primitive
+    processes everything it uses, at about 7 us per index in the fuzz build. A 15 KB GLB of 250 primitives sharing one
+    16x16 grid's 1350 indices takes 2.7 s per run there (Release is many times faster); with the leak check's second run
+    and a slower runner that approaches the 10 s timeout. `scripts/fuzz.sh` sets no `-max_len`, so the largest seed
+    (`MixamoRig.gltf`, 12.3 KB) sets it. Follow-ups if it fires: give primitives that use the same accessors the earlier
+    submesh's ranges with their own material, or compact each primitive to the vertices its indices use before
+    generating normals and tangents.
 
 ## Progress log
 

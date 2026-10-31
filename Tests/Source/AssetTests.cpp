@@ -5,6 +5,7 @@
 #include <Basalt/Asset/ImageUtils.h>
 #include <Basalt/Asset/TextureSource.h>
 #include <Basalt/Asset/MeshImporter.h>
+#include <Basalt/Asset/MeshOptimizer.h>
 #include <Basalt/Asset/Thumbnails.h>
 #include <Basalt/Scene/Scene.h>
 
@@ -13,6 +14,7 @@
 #include <stb_image_write.h>
 
 #include <cstring>
+#include <limits>
 #include <thread>
 #include <glm/gtc/epsilon.hpp>
 
@@ -696,6 +698,10 @@ TEST_SUITE("Assets")
 		const std::string buffer = MakeQuadBuffer() + std::string(4, '\0');
 		nlohmann::json gltf = MakeUntexturedGltfJson(EmbeddedBufferJson(buffer));
 		project.WriteFile("Assets/Models/Aligned.gltf", gltf.dump());
+		// Overlapping elements: the positions' buffer view strides 4 bytes over 12-byte elements.
+		nlohmann::json overlapping = gltf;
+		overlapping["bufferViews"][0]["byteStride"] = 4;
+		project.WriteFile("Assets/Models/Overlapping.gltf", overlapping.dump());
 		gltf["accessors"][2]["byteOffset"] = 1; // uint16 indices starting at an odd address
 		project.WriteFile("Assets/Models/Misaligned.gltf", gltf.dump());
 
@@ -703,6 +709,8 @@ TEST_SUITE("Assets")
 		CHECK_MESSAGE(AssetManager::GetMesh("Assets/Models/Aligned.gltf"), AssetManager::GetError("Assets/Models/Aligned.gltf"));
 		CHECK_FALSE(AssetManager::GetMesh("Assets/Models/Misaligned.gltf"));
 		CHECK(AssetManager::GetError("Assets/Models/Misaligned.gltf").find("not aligned") != std::string::npos);
+		CHECK_FALSE(AssetManager::GetMesh("Assets/Models/Overlapping.gltf"));
+		CHECK(AssetManager::GetError("Assets/Models/Overlapping.gltf").find("accessor 0 has 12-byte elements, but its buffer view's byteStride is only 4") != std::string::npos);
 		AssetManager::Clear();
 	}
 
@@ -1005,7 +1013,17 @@ TEST_SUITE("Assets")
 			CHECK_MESSAGE(load("ZeroFilledTargets.gltf", morphed), AssetManager::GetError("Assets/Models/ZeroFilledTargets.gltf"));
 			morphed["meshes"][0]["primitives"][0]["targets"].push_back(morphed["meshes"][0]["primitives"][0]["targets"][0]);
 			CHECK_FALSE(load("ZeroFilledPastTargets.gltf", morphed));
-			CHECK(has("ZeroFilledPastTargets.gltf", "more than " + std::to_string(MaxZeroFilledElements) + " vertices and indices in accessors without a buffer view (each counted once more per morph target of its primitive); mesh 0 primitive 0 passes it"));
+			CHECK(has("ZeroFilledPastTargets.gltf", "more than " + std::to_string(MaxZeroFilledElements) + " vertices and indices in accessors without a buffer view (each counted once more per morph target of its primitive) (reached at mesh 'QuadMesh' primitive 0)"));
+			// The multiplier is per primitive: zero-filled positions without targets, then a quad with 64 targets, load.
+			nlohmann::json scoped = MakeUntexturedGltfJson(EmbeddedBufferJson(buffer));
+			scoped["accessors"].push_back({ { "componentType", 5126 }, { "count", 60000 }, { "type", "VEC3" } });
+			scoped["accessors"].push_back({ { "componentType", 5126 }, { "count", 4 }, { "type", "VEC3" } });
+			scoped["meshes"].push_back(scoped["meshes"][0]);
+			scoped["meshes"][0]["primitives"][0] = { { "attributes", { { "POSITION", 3 } } } };
+			scoped["meshes"][1]["primitives"][0]["targets"] = nlohmann::json(64, { { "POSITION", 4 } });
+			scoped["nodes"].push_back({ { "mesh", 1 } });
+			scoped["scenes"][0]["nodes"].push_back(scoped["nodes"].size() - 1);
+			CHECK_MESSAGE(load("ZeroFilledScoped.gltf", scoped), AssetManager::GetError("Assets/Models/ZeroFilledScoped.gltf"));
 			gltf["accessors"][0]["count"] = 400000000;
 			CHECK_FALSE(load("ZeroFilledHuge.gltf", gltf));
 			CHECK(has("ZeroFilledHuge.gltf", "more than " + std::to_string(MaxZeroFilledElements) + " vertices and indices in accessors without a buffer view"));
@@ -1030,7 +1048,7 @@ TEST_SUITE("Assets")
 			const nlohmann::json positions = { { "componentType", 5126 }, { "count", 65536 }, { "type", "VEC3" }, { "min", { 0, 0, 0 } }, { "max", { 0, 0, 0 } } };
 			const nlohmann::json vertices = share(gltf, "Positions.bin", size_t{ 65536 } * 12, positions, false, MaxModelVertices / 65536 + 1);
 			CHECK_FALSE(load("Vertices.gltf", vertices));
-			CHECK(has("Vertices.gltf", "its meshes have more than " + std::to_string(MaxModelVertices) + " vertices"));
+			CHECK(has("Vertices.gltf", "its meshes have more than " + std::to_string(MaxModelVertices) + " vertices (counted once per primitive that uses them) (reached at mesh 'QuadMesh' primitive 256)"));
 
 			// The limits are per model, not per mesh.
 			nlohmann::json split = vertices;
@@ -1044,7 +1062,7 @@ TEST_SUITE("Assets")
 			split["nodes"].push_back({ { "mesh", 1 } });
 			split["scenes"][0]["nodes"].push_back(split["nodes"].size() - 1);
 			CHECK_FALSE(load("Meshes.gltf", split));
-			CHECK(has("Meshes.gltf", "its meshes have more than " + std::to_string(MaxModelVertices) + " vertices"));
+			CHECK(has("Meshes.gltf", "its meshes have more than " + std::to_string(MaxModelVertices) + " vertices (counted once per primitive that uses them) (reached at mesh 1 primitive 127)"));
 
 			// Primitives the importer skips (points here) do not count; the quad still loads.
 			nlohmann::json points = vertices;
@@ -1055,7 +1073,7 @@ TEST_SUITE("Assets")
 			// 65 primitives x 2^20 byte indices pass the index limit.
 			const nlohmann::json indices = { { "componentType", 5121 }, { "count", 1 << 20 }, { "type", "SCALAR" } };
 			CHECK_FALSE(load("Indices.gltf", share(gltf, "Indices.bin", 1 << 20, indices, true, MaxModelIndices / (1 << 20) + 1)));
-			CHECK(has("Indices.gltf", "its meshes have more than " + std::to_string(MaxModelIndices) + " indices"));
+			CHECK(has("Indices.gltf", "its meshes have more than " + std::to_string(MaxModelIndices) + " indices (counted once per primitive that uses them) (reached at mesh 'QuadMesh' primitive 64)"));
 		}
 		AssetManager::Clear();
 	}
@@ -1079,7 +1097,48 @@ TEST_SUITE("Assets")
 		CHECK(mesh->Submeshes[0].IndexCount == 46116);
 		CHECK(mesh->Submeshes[0].VertexCount == 1); // the vertex fetch remap still drops the unused vertices
 		CHECK(mesh->Submeshes[0].LODs.empty());
-		CHECK(BasaltTest::CountLogMessages(since, "mesh 'QuadMesh' primitive 0: its vertices are shared by too many triangles") == 1);
+		CHECK(BasaltTest::CountLogMessages(since, "Valence.gltf: mesh 'QuadMesh' primitive 0: the squares of its vertices' triangle counts sum past " + std::to_string(MeshOptimizer::MaxValenceCostPerIndex) + " per index") == 1);
+
+		// Primitives share the model's allowance: two whose busy vertex fits it alone, but not twice, sharing one index
+		// accessor (eight such primitives took 12 s in the fuzz build before).
+		gltf["accessors"][2]["count"] = 1800;
+		gltf["meshes"][0]["primitives"].push_back(gltf["meshes"][0]["primitives"][0]);
+		project.WriteFile("Assets/Models/Shared.gltf", gltf.dump());
+		AssetManager::Clear();
+		const auto sharedSince = Log::GetHistory().GetTotalCount();
+		const auto shared = AssetManager::GetMesh("Assets/Models/Shared.gltf");
+		REQUIRE_MESSAGE(shared, AssetManager::GetError("Assets/Models/Shared.gltf"));
+		CHECK(BasaltTest::CountLogMessages(sharedSince, "Shared.gltf: mesh 'QuadMesh' primitive 0: the squares") == 0);
+		CHECK(BasaltTest::CountLogMessages(sharedSince, "Shared.gltf: mesh 'QuadMesh' primitive 1: the squares") == 1);
+		AssetManager::Clear();
+	}
+
+	TEST_CASE("glTF primitives with non-finite positions or empty indices are reported")
+	{
+		BasaltTest::TempProject project("GltfPrimitiveWarnings");
+		std::string buffer = MakeQuadBuffer();
+		const float nan = std::numeric_limits<float>::quiet_NaN();
+		std::memcpy(buffer.data() + 4, &nan, sizeof(nan)); // the first position's y
+		project.WriteFile("Assets/Models/NaN.gltf", MakeUntexturedGltfJson(EmbeddedBufferJson(buffer)).dump());
+		AssetManager::Clear();
+		auto since = Log::GetHistory().GetTotalCount();
+		const auto nonFinite = AssetManager::GetMesh("Assets/Models/NaN.gltf");
+		REQUIRE_MESSAGE(nonFinite, AssetManager::GetError("Assets/Models/NaN.gltf"));
+		CHECK(nonFinite->Submeshes[0].LODs.empty());
+		CHECK(BasaltTest::CountLogMessages(since, "NaN.gltf: mesh 'QuadMesh' primitive 0: optimization and LODs skipped for non-finite vertex positions") == 1);
+
+		// cgltf accepts an index accessor without elements; that primitive is skipped and the next one still loads.
+		nlohmann::json empty = MakeUntexturedGltfJson(EmbeddedBufferJson(MakeQuadBuffer()));
+		empty["accessors"].push_back({ { "bufferView", 2 }, { "componentType", 5123 }, { "count", 0 }, { "type", "SCALAR" } });
+		empty["meshes"][0]["primitives"].push_back(empty["meshes"][0]["primitives"][0]);
+		empty["meshes"][0]["primitives"][0]["indices"] = 3;
+		project.WriteFile("Assets/Models/Empty.gltf", empty.dump());
+		AssetManager::Clear();
+		since = Log::GetHistory().GetTotalCount();
+		const auto skipped = AssetManager::GetMesh("Assets/Models/Empty.gltf");
+		REQUIRE_MESSAGE(skipped, AssetManager::GetError("Assets/Models/Empty.gltf"));
+		CHECK(skipped->Submeshes.size() == 1);
+		CHECK(BasaltTest::CountLogMessages(since, "Empty.gltf: mesh 'QuadMesh' primitive 0: skipped, its index accessor is empty") == 1);
 		AssetManager::Clear();
 	}
 

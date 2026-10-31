@@ -26,7 +26,7 @@ using json = nlohmann::json;
 
 namespace {
 
-	// k indices naming one vertex cost 1 + 3 + ... + (2k - 1) = k^2: the most the valence cost limit allows.
+	// The largest k for which k indices naming one vertex (costing 1 + 3 + ... + (2k - 1) = k^2) fit the valence cost limit.
 	size_t SingleVertexValenceLimit()
 	{
 		size_t count = 0;
@@ -35,8 +35,8 @@ namespace {
 		return count;
 	}
 
-	// Average vertex cache misses per triangle for a 16-entry FIFO cache (about 0.7 after meshoptimizer's ordering, near
-	// 3 for shuffled triangles).
+	// Average vertex cache misses per triangle for a 16-entry FIFO cache: for closed grids about 0.7 after meshoptimizer's
+	// ordering and near 3 shuffled; for a fan, whose hub always hits, about 1.1 and 2.1.
 	float AverageCacheMisses(std::span<const uint32_t> indices)
 	{
 		std::vector<uint32_t> cache;
@@ -61,7 +61,8 @@ namespace {
 		{
 			state = state * 1664525u + 1013904223u;
 			const size_t j = state % i;
-			std::swap_ranges(indices.begin() + static_cast<std::ptrdiff_t>((i - 1) * 3), indices.begin() + static_cast<std::ptrdiff_t>(i * 3), indices.begin() + static_cast<std::ptrdiff_t>(j * 3));
+			for (size_t k = 0; k < 3; k++)
+				std::swap(indices[(i - 1) * 3 + k], indices[j * 3 + k]);
 		}
 	}
 
@@ -293,6 +294,19 @@ TEST_SUITE("AssetPipeline")
 			CHECK(actual.Joints == expected.Joints);
 			CHECK(actual.Weights == expected.Weights);
 		}
+		// Rejected geometry is left as it was: a remap that ran would drop the unused vertex 3.
+		std::vector<Vertex> rejected(4);
+		rejected[1].Position = { 1, 0, 0 };
+		rejected[2].Position = { 0, std::numeric_limits<float>::quiet_NaN(), 0 };
+		std::vector<uint32_t> rejectedIndices = { 2, 1, 0, 0, 1, 2 };
+		const auto rejectedBefore = rejectedIndices;
+		CHECK(MeshOptimizer::Optimize(rejected, rejectedIndices, true) == MeshOptimizer::OptimizeResult::NonFinite);
+		CHECK(rejected.size() == 4);
+		CHECK(rejectedIndices == rejectedBefore);
+		// An index past the vertices is reported before a non-finite position.
+		rejectedIndices[0] = 4;
+		CHECK(MeshOptimizer::Optimize(rejected, rejectedIndices, true) == MeshOptimizer::OptimizeResult::Invalid);
+		CHECK(rejected.size() == 4);
 		indices[0] = UINT32_MAX;
 		CHECK(MeshOptimizer::Optimize(vertices, indices, true) == MeshOptimizer::OptimizeResult::Invalid);
 	}
@@ -334,7 +348,7 @@ TEST_SUITE("AssetPipeline")
 		CHECK_FALSE(MeshOptimizer::WithinValenceCost(std::vector<uint32_t>(limit + 1, 0), 1));
 		// The same references spread over two vertices cost half as much.
 		std::vector<uint32_t> split(limit + 1, 0);
-		std::fill(split.begin(), split.begin() + static_cast<std::ptrdiff_t>(split.size() / 2), 1u);
+		std::fill_n(split.begin(), split.size() / 2, 1u);
 		CHECK(MeshOptimizer::WithinValenceCost(split, 2));
 		// A closed grid (a torus: every vertex in six triangles) costs 6 per index, far below the limit at any size.
 		constexpr uint32_t Size = 256;
@@ -342,11 +356,30 @@ TEST_SUITE("AssetPipeline")
 		for (uint32_t y = 0; y < Size; y++)
 			for (uint32_t x = 0; x < Size; x++)
 			{
-				const uint32_t a = y * Size + x, b = y * Size + (x + 1) % Size, c = (y + 1) % Size * Size + x, d = (y + 1) % Size * Size + (x + 1) % Size;
+				const uint32_t nextX = (x + 1) % Size;
+				const uint32_t nextY = (y + 1) % Size;
+				const uint32_t a = y * Size + x;
+				const uint32_t b = y * Size + nextX;
+				const uint32_t c = nextY * Size + x;
+				const uint32_t d = nextY * Size + nextX;
 				torus.insert(torus.end(), { a, c, b, b, c, d });
 			}
 		CHECK(MeshOptimizer::WithinValenceCost(torus, size_t{ Size } * Size));
 		CHECK_FALSE(MeshOptimizer::WithinValenceCost(std::vector<uint32_t>{ 0, 1, 2 }, 2));
+
+		// A cost exactly at the limit fits and uses up the allowance; one more fails and keeps it. 3000 references to one
+		// vertex cost 3000^2, of which 64 per reference come free.
+		const std::vector<uint32_t> busy(3000, 0);
+		const uint64_t pastFree = uint64_t{ 3000 } * 3000 - MeshOptimizer::MaxValenceCostPerIndex * 3000;
+		uint64_t allowance = pastFree;
+		CHECK(MeshOptimizer::WithinValenceCost(busy, 1, allowance));
+		CHECK(allowance == 0);
+		allowance = pastFree - 1;
+		CHECK_FALSE(MeshOptimizer::WithinValenceCost(busy, 1, allowance));
+		CHECK(allowance == pastFree - 1);
+		allowance = pastFree + 5;
+		CHECK(MeshOptimizer::WithinValenceCost(busy, 1, allowance));
+		CHECK(allowance == 5);
 	}
 
 	// Regression (FuzzGltf, nightly): meshoptimizer's vertex cache order rescans the remaining triangles of every cached
@@ -360,7 +393,7 @@ TEST_SUITE("AssetPipeline")
 		CHECK(MeshOptimizer::Optimize(vertices, indices, true) == MeshOptimizer::OptimizeResult::Optimized);
 		vertices.assign(3, Vertex{}); // the call above removed the unused vertices
 		indices.assign(limit + 3, 0);
-		CHECK(MeshOptimizer::Optimize(vertices, indices, true) == MeshOptimizer::OptimizeResult::TriangleOrderKept);
+		CHECK(MeshOptimizer::Optimize(vertices, indices, true) == MeshOptimizer::OptimizeResult::ValenceCostExceeded);
 
 		// A fan past the limit, with its triangles shuffled and a morph target that moves each vertex by its own position.
 		MakeFan(5000, vertices, indices);
@@ -375,7 +408,7 @@ TEST_SUITE("AssetPipeline")
 		const auto original = vertices;
 		auto kept = indices;
 		auto keptDeltas = deltas;
-		REQUIRE(MeshOptimizer::Optimize(vertices, kept, true, &keptDeltas, 1) == MeshOptimizer::OptimizeResult::TriangleOrderKept);
+		REQUIRE(MeshOptimizer::Optimize(vertices, kept, true, &keptDeltas, 1) == MeshOptimizer::OptimizeResult::ValenceCostExceeded);
 		// The triangles keep their order, while the vertices (and their deltas) are renumbered in fetch order.
 		REQUIRE(kept.size() == corners.size());
 		for (size_t i = 0; i < kept.size(); i++)
@@ -389,8 +422,22 @@ TEST_SUITE("AssetPipeline")
 		auto blended = indices;
 		CHECK(MeshOptimizer::Optimize(vertices, blended, false) == MeshOptimizer::OptimizeResult::Optimized);
 
+		// Primitives past MaxValenceCostPerIndex per index share one allowance: the second fan only fits a fresh one.
+		MakeFan(1800, vertices, indices);
+		const auto fanVertices = vertices;
+		const auto fanIndices = indices;
+		uint64_t modelAllowance = MeshOptimizer::ValenceCostAllowance;
+		CHECK(MeshOptimizer::Optimize(vertices, indices, true, nullptr, 0, &modelAllowance) == MeshOptimizer::OptimizeResult::Optimized);
+		CHECK(modelAllowance < MeshOptimizer::ValenceCostAllowance / 2);
+		vertices = fanVertices;
+		indices = fanIndices;
+		CHECK(MeshOptimizer::Optimize(vertices, indices, true, nullptr, 0, &modelAllowance) == MeshOptimizer::OptimizeResult::ValenceCostExceeded);
+		vertices = fanVertices;
+		indices = fanIndices;
+		CHECK(MeshOptimizer::Optimize(vertices, indices, true) == MeshOptimizer::OptimizeResult::Optimized);
+
 		// A fan within the limit is ordered for the vertex cache.
-		MakeFan(2000, vertices, indices);
+		MakeFan(1500, vertices, indices);
 		ShuffleTriangles(indices);
 		REQUIRE(AverageCacheMisses(indices) > 1.8f);
 		CHECK(MeshOptimizer::Optimize(vertices, indices, true) == MeshOptimizer::OptimizeResult::Optimized);
@@ -399,8 +446,9 @@ TEST_SUITE("AssetPipeline")
 
 	TEST_CASE("LODs skip geometry whose vertex valences cost too much and order their triangles for the vertex cache")
 	{
-		// About 8 million against a limit near 17.6 million, and about 33.6 million against one near 18.4 million.
-		auto affordable = MakeBicone(2048);
+		// Valence costs of about 2.1 million (1024 segments) against a limit near 4.6 million, and about 33.6 million (4096)
+		// against one near 5.8 million.
+		auto affordable = MakeBicone(1024);
 		auto copy = affordable->Vertices;
 		auto copyIndices = affordable->Indices;
 		CHECK(MeshOptimizer::Optimize(copy, copyIndices, true) == MeshOptimizer::OptimizeResult::Optimized);
@@ -411,7 +459,7 @@ TEST_SUITE("AssetPipeline")
 		MeshOptimizer::GenerateLODs(*large, 0);
 		CHECK(large->Submeshes[0].LODs.empty());
 		CHECK(large->Indices.size() == indexCount);
-		CHECK(MeshOptimizer::Optimize(large->Vertices, large->Indices, true) == MeshOptimizer::OptimizeResult::TriangleOrderKept);
+		CHECK(MeshOptimizer::Optimize(large->Vertices, large->Indices, true) == MeshOptimizer::OptimizeResult::ValenceCostExceeded);
 
 		// An index past the submesh's vertices gets no LODs (the simplifier would read past them).
 		auto broken = MakeBicone(64);
