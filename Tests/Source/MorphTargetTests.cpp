@@ -386,8 +386,8 @@ TEST_SUITE("MorphTargets")
 		SUBCASE("more deltas than a model may hold")
 		{
 			// MaxMorphTargets (256) targets x 16385 vertices pass MaxMorphDeltas. The targets are zero-filled accessors without
-			// a bufferView, which keeps the file small; the base positions read Zeros.bin, since zero-filled ones would count
-			// once per target against MaxZeroFilledElements.
+			// a bufferView, which keeps the file small; the base positions read Zeros.bin, since zero-filled ones would count once
+			// more per target against MaxZeroFilledElements.
 			nlohmann::json zeros = { { "componentType", 5126 }, { "count", MorphLimitVertices }, { "type", "VEC3" }, { "min", { 0, 0, 0 } }, { "max", { 0, 0, 0 } } };
 			data["accessors"].push_back(zeros);
 			const size_t target = data["accessors"].size() - 1;
