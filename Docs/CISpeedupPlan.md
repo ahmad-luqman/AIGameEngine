@@ -188,9 +188,9 @@ From nightly run 40077058550 (2026-10-24):
     target; and a byteStride smaller than the element (forbidden by the specification) let a few bytes declare many
     vertices, which is now rejected.
   - Known, bounded and not fixed: primitives may share accessors (multi-material exports do), and each primitive
-    processes everything it uses, at about 7 us per index in the fuzz build. A 15 KB GLB of 250 primitives sharing one
-    16x16 grid's 1350 indices takes 2.7 s per run there (Release is many times faster); with the leak check's second run
-    and a slower runner that approaches the 10 s timeout. `scripts/fuzz.sh` sets no `-max_len`, so the largest seed
+    processes everything it uses, at about 7 us per index in the fuzz build. GLBs of 14-15 KB whose 100-250 primitives
+    share one 16x16 grid's indices take 2.7-5 s per run there (Release is many times faster); with the leak check's
+    second run and a slower runner that reaches the 10 s timeout. `scripts/fuzz.sh` sets no `-max_len`, so the largest seed
     (`MixamoRig.gltf`, 12.3 KB) sets it. Follow-ups if it fires: give primitives that use the same accessors the earlier
     submesh's ranges with their own material, or compact each primitive to the vertices its indices use before
     generating normals and tangents.
