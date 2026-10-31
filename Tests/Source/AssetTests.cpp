@@ -696,6 +696,42 @@ TEST_SUITE("Assets")
 		AssetManager::Clear();
 	}
 
+	// Regression (FuzzGltf, nightly): cgltf reads a GLB's binary chunk in place, so after a JSON chunk not padded to 4
+	// bytes the uint16 indices (aligned within the buffer) were read through a misaligned pointer.
+	TEST_CASE("GLB chunks must be padded to 4 bytes")
+	{
+		BasaltTest::TempProject project("GlbPadding");
+		const std::string binary = MakeQuadBuffer() + std::string(4, '\0');
+		auto glb = [&](size_t jsonPadding) {
+			std::string json = MakeUntexturedGltfJson({ { "byteLength", binary.size() } }).dump();
+			while (json.size() % 4 != jsonPadding)
+				json += ' ';
+			auto put32 = [](std::string& out, uint32_t value) { out.append(reinterpret_cast<const char*>(&value), 4); };
+			std::string out = "glTF";
+			put32(out, 2);
+			put32(out, static_cast<uint32_t>(12 + 8 + json.size() + 8 + binary.size()));
+			put32(out, static_cast<uint32_t>(json.size()));
+			out += "JSON";
+			out += json;
+			put32(out, static_cast<uint32_t>(binary.size()));
+			out.append("BIN\0", 4);
+			out += binary;
+			return out;
+		};
+		project.WriteFile("Assets/Models/Padded.glb", glb(0));
+		AssetManager::Clear();
+		CHECK_MESSAGE(AssetManager::GetMesh("Assets/Models/Padded.glb"), AssetManager::GetError("Assets/Models/Padded.glb"));
+		for (size_t padding = 1; padding < 4; padding++)
+		{
+			CAPTURE(padding);
+			project.WriteFile("Assets/Models/Unpadded.glb", glb(padding));
+			AssetManager::Clear();
+			CHECK_FALSE(AssetManager::GetMesh("Assets/Models/Unpadded.glb"));
+			CHECK(AssetManager::GetError("Assets/Models/Unpadded.glb").find("not padded to a multiple of 4") != std::string::npos);
+		}
+		AssetManager::Clear();
+	}
+
 	// Regression (FuzzGltf, CI): cgltf_validate read a sparse accessor's indices through a buffer view past the end of
 	// its buffer before checking the view's bounds.
 	TEST_CASE("glTF buffer views must lie inside their buffers")
@@ -949,6 +985,13 @@ TEST_SUITE("Assets")
 			gltf["accessors"][0].erase("bufferView");
 			gltf["meshes"][0]["primitives"][0]["attributes"].erase("TEXCOORD_0");
 			CHECK_MESSAGE(load("ZeroFilled.gltf", gltf), AssetManager::GetError("Assets/Models/ZeroFilled.gltf"));
+			// The indices use the first four positions. Nightly FuzzGltf found 4,000,008 zero-filled positions under the
+			// old limit taking longer than its 10 s timeout to import.
+			gltf["accessors"][0]["count"] = MaxZeroFilledElements;
+			CHECK_MESSAGE(load("ZeroFilledLimit.gltf", gltf), AssetManager::GetError("Assets/Models/ZeroFilledLimit.gltf"));
+			gltf["accessors"][0]["count"] = MaxZeroFilledElements + 1;
+			CHECK_FALSE(load("ZeroFilledPastLimit.gltf", gltf));
+			CHECK(has("ZeroFilledPastLimit.gltf", "more than " + std::to_string(MaxZeroFilledElements) + " vertices and indices in accessors without a buffer view"));
 			gltf["accessors"][0]["count"] = 400000000;
 			CHECK_FALSE(load("ZeroFilledHuge.gltf", gltf));
 			CHECK(has("ZeroFilledHuge.gltf", "more than " + std::to_string(MaxZeroFilledElements) + " vertices and indices in accessors without a buffer view"));
@@ -1000,6 +1043,27 @@ TEST_SUITE("Assets")
 			CHECK_FALSE(load("Indices.gltf", share(gltf, "Indices.bin", 1 << 20, indices, true, MaxModelIndices / (1 << 20) + 1)));
 			CHECK(has("Indices.gltf", "its meshes have more than " + std::to_string(MaxModelIndices) + " indices"));
 		}
+		AssetManager::Clear();
+	}
+
+	// Regression (FuzzGltf, nightly): 46116 zero-filled indices name one vertex, and meshoptimizer's vertex cache order,
+	// whose time grows with the squared valences, took over 10 s on them. The model keeps its triangle order instead.
+	TEST_CASE("glTF primitives whose vertices are in too many triangles skip optimization")
+	{
+		BasaltTest::TempProject project("GltfValence");
+		nlohmann::json gltf = MakeUntexturedGltfJson(EmbeddedBufferJson(MakeQuadBuffer()));
+		gltf["accessors"][2].erase("bufferView");
+		gltf["accessors"][2]["count"] = 46116;
+		project.WriteFile("Assets/Models/Valence.gltf", gltf.dump());
+		AssetManager::Clear();
+		const auto since = Log::GetHistory().GetTotalCount();
+		const auto mesh = AssetManager::GetMesh("Assets/Models/Valence.gltf");
+		REQUIRE_MESSAGE(mesh, AssetManager::GetError("Assets/Models/Valence.gltf"));
+		REQUIRE(mesh->Submeshes.size() == 1);
+		CHECK(mesh->Submeshes[0].IndexCount == 46116);
+		CHECK(mesh->Submeshes[0].VertexCount == 4); // unused vertices stay without the vertex fetch remap
+		CHECK(mesh->Submeshes[0].LODs.empty());
+		CHECK(BasaltTest::CountLogMessages(since, "vertices shared by too many triangles, in mesh 'QuadMesh'") == 1);
 		AssetManager::Clear();
 	}
 

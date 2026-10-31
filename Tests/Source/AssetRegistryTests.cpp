@@ -15,6 +15,7 @@
 #include "MeshTestUtils.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <limits>
 #include <set>
@@ -244,6 +245,53 @@ TEST_SUITE("AssetPipeline")
 		skinned->Submeshes[0].JointBounds.push_back({});
 		MeshOptimizer::GenerateLODs(*skinned, 0);
 		CHECK(skinned->Submeshes[0].LODs.empty());
+	}
+
+	// Regression (FuzzGltf, nightly): meshoptimizer's vertex cache order rescans a vertex's remaining triangles whenever
+	// the vertex is touched, so 46116 indices naming one vertex took 22 s with ASan.
+	TEST_CASE("Mesh optimization and LODs skip geometry whose vertex valences cost too much")
+	{
+		// The most indices naming a single vertex that the limit allows, in whole triangles.
+		auto allowed = [](size_t count) { return count * count <= MeshOptimizer::MaxValenceCostPerIndex * count + MeshOptimizer::ValenceCostAllowance; };
+		size_t limit = 3;
+		while (allowed(limit + 3))
+			limit += 3;
+		std::vector<Vertex> vertices(3);
+		std::vector<uint32_t> indices(limit, 0);
+		CHECK(MeshOptimizer::Optimize(vertices, indices, true));
+		vertices.assign(3, Vertex{});
+		indices.assign(limit + 3, 0);
+		CHECK_FALSE(MeshOptimizer::Optimize(vertices, indices, true));
+		CHECK(vertices.size() == 3);
+		CHECK(indices == std::vector<uint32_t>(limit + 3, 0));
+
+		// A closed double cone: each apex is in every triangle on its side, each rim vertex in four.
+		auto bicone = [](uint32_t segments) {
+			std::vector<Vertex> coneVertices(segments + 2);
+			for (uint32_t i = 0; i < segments; i++)
+			{
+				const float angle = 6.2831853f * static_cast<float>(i) / static_cast<float>(segments);
+				coneVertices[i].Position = { std::cos(angle), 0, std::sin(angle) };
+			}
+			coneVertices[segments].Position = { 0, 1, 0 };
+			coneVertices[segments + 1].Position = { 0, -1, 0 };
+			std::vector<uint32_t> coneIndices;
+			for (uint32_t i = 0; i < segments; i++)
+			{
+				const uint32_t next = (i + 1) % segments;
+				coneIndices.insert(coneIndices.end(), { segments, next, i, segments + 1, i, next });
+			}
+			auto source = CreateRef<MeshSource>();
+			source->AddSubmesh(coneVertices, coneIndices, 0);
+			return source;
+		};
+		auto small = bicone(64);
+		MeshOptimizer::GenerateLODs(*small, 0);
+		CHECK_FALSE(small->Submeshes[0].LODs.empty());
+		auto large = bicone(4096);
+		MeshOptimizer::GenerateLODs(*large, 0);
+		CHECK(large->Submeshes[0].LODs.empty());
+		CHECK_FALSE(MeshOptimizer::Optimize(large->Vertices, large->Indices, true));
 	}
 	TEST_CASE("Unrelated corrupt metadata does not lock out authoring or prefab spawning")
 	{

@@ -42,6 +42,10 @@ Mesh import uses pinned meshoptimizer v1.0.1: vertex-cache order, overdraw order
 threshold), then vertex fetch. Complete interleaved vertices move together, including skin attributes.
 Blended primitives keep their authored triangle order and only optimize vertex fetch. Triangle reordering
 can alter exact coplanar depth ties. Built-in primitives keep their existing topology.
+meshoptimizer's vertex-cache order and simplifier take time that grows with the squares of vertex valences (how
+many triangle corners name each vertex), so a primitive whose squared valences sum to more than 64 per index plus
+16,777,216 keeps its triangle order and vertex layout and gets no LODs, with a warning (ordinary meshes sum to about
+6 per index; a vertex shared by every triangle of a large fan or of repeated degenerate triangles does not fit).
 
 Static opaque/masked primitives generate up to three LOD index ranges (targets 50%, 25%, 12.5%, maximum
 relative geometric error 1%, locked borders). Material boundaries and vertex seams are retained. A level
@@ -79,9 +83,11 @@ allocates and reports the reason instead:
   project are read), and data URIs must be base64. Buffers may share a file, but each one reads it again; a model may
   reread at most 64 MiB, and its buffers may declare at most 4 GiB in total.
 - Accessors must fit their buffer views (and sparse accessors their index and value views), and a view may not point
-  into a buffer without data (a buffer without a URI outside a GLB's binary chunk).
+  into a buffer without data (a buffer without a URI outside a GLB's binary chunk). Accessor data must be aligned to its
+  component size, and a GLB's JSON chunk padded to a multiple of 4 bytes (as the specification requires), since the
+  binary chunk is read in place.
 - A model's triangle primitives may have at most 16,777,216 vertices and 67,108,864 indices, counted once per
-  primitive that uses an accessor. At most 4,194,304 of those vertices and indices may come from accessors without a
+  primitive that uses an accessor. At most 65,536 of those vertices and indices may come from accessors without a
   buffer view (zero-filled); real files use those for sparse morph targets.
 
 ## Morph targets
