@@ -122,10 +122,12 @@ namespace Basalt {
 
 	// Import limits for a model's triangle geometry, summed over every primitive that is read (primitives can share one
 	// accessor). At the limits a model holds 1.4 GiB of Vertex data and 256 MiB of indices before per-attribute scratch.
-	// Elements of accessors without a buffer view are zero-filled from no data at all, so a few bytes of JSON could
-	// otherwise ask for seconds of import work per million elements (normals, tangents, optimization and LODs; 4 million
-	// zero-filled positions took 27 s in the fuzz build, found by FuzzGltf), and they have a far tighter limit. Real
-	// files use them for sparse morph targets, which MaxMorphDeltas bounds separately.
+	// Elements of accessors without a buffer view are zero-filled (apart from any sparse values) from almost no data, so a
+	// few bytes of JSON could otherwise ask for seconds of import work per million elements (normals, tangents,
+	// optimization and LODs; 4 million zero-filled positions took 27 s in the fuzz build, found by FuzzGltf). They have a
+	// far tighter limit, counted once more per morph target of their primitive (each target can generate the normals
+	// again); 2^16 import in under half a second there. Real files use them for sparse morph targets, which do not count
+	// (MaxMorphDeltas bounds their memory).
 	inline constexpr uint32_t MaxModelVertices = 1u << 24;
 	inline constexpr uint32_t MaxModelIndices = 1u << 26;
 	inline constexpr uint32_t MaxZeroFilledElements = 1u << 16;

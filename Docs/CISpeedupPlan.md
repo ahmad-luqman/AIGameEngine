@@ -57,7 +57,7 @@ Target after sessions 1–3: about 15 minutes per run.
 | 3 | Parallel ctest, fast `ReleasePackaging`, shard `BasaltTests` | Yes (test steps) | Merged (#59) |
 | 4 | Remove redundant jobs; early format job; coverage on `main` only | Runner minutes, faster feedback | Todo |
 | 5 | Shared setup action; nightly fuzz builds once | Maintenance | Todo |
-| — | Nightly fuzz findings (FuzzGltf, FuzzCommand) | Separate bug-fix PRs | FuzzCommand merged (#58); FuzzGltf in review |
+| — | Nightly fuzz findings (FuzzGltf, FuzzCommand) | Separate bug-fix PRs | FuzzCommand merged (#58); FuzzGltf in review (#61) |
 
 ### Session 1 — compiler cache and dependency cache
 
@@ -161,23 +161,28 @@ From nightly run 40077058550 (2026-10-24):
 - **FuzzGltf**: UBSan misaligned load in `cgltf.h:1566` (`unsigned short` from an odd address). Third-party: decide
   between a cgltf fix upstream/pin bump, a narrow `ubsan.supp` entry (currently empty), or copying unaligned buffers
   before cgltf reads them. Crash input is in the run's `fuzz-crashes-FuzzGltf` artifact; add it as a regression test.
+  Fixed in #61 (see the FuzzGltf bullet below): the GLB's JSON chunk was not padded.
 - **FuzzCommand** (#58): died with SIGTRAP outside libFuzzer's reporting. A run with `handle_sigtrap=1` and a Jolt assert
   hook (40223333979) showed Jolt's `JobSystemWithBarrier` assert `job_ptr != nullptr && job_ptr->IsDone()` after
   `play.step`: on Linux its barrier waits in `sem_wait`, which libFuzzer's timer signal (handler installed without
   `SA_RESTART`) interrupts with EINTR, which Jolt ignores, so a physics step continued past running jobs. Input-independent; not a command bug. `PhysicsJobs` now has its
   own mutex/condition-variable barrier, and failed Jolt asserts are logged like Basalt's.
-- **FuzzGltf, fixed together** (the misaligned load above, and timeouts in nightly runs 40854373678 on 2026-10-29 and
-  41189784641 on 2026-10-31); each input is now in `Tests/Fuzz/Corpus/FuzzGltf` with a doctest:
+- **FuzzGltf, fixed together in #61** (the misaligned load above, and timeouts in nightly runs 40854373678 on
+  2026-10-29 and 41189784641 on 2026-10-31). Each input is now a fuzz seed in `Tests/Fuzz/Corpus/FuzzGltf`, and each has
+  a doctest rebuilding it. Times are from the fuzz build (Debug with ASan, UBSan and coverage):
   - The misaligned load came from a GLB whose JSON chunk was 1241 bytes. GLB pads every chunk to 4 bytes, but cgltf
     neither checks that nor copies the binary chunk, so accessor offsets aligned within the buffer were odd addresses in
     memory. The importer rejects such GLBs (in `CheckAccessorAlignment`) before `cgltf_validate`.
-  - 46116 zero-filled indices over 3 vertices: `meshopt_optimizeVertexCache` rescans a vertex's remaining triangles each
-    time the vertex is touched, so its time grows with the squared vertex valences (22 s with ASan for one vertex in
-    every triangle). `MeshOptimizer` now skips the vertex-cache order, overdraw order and LODs (the simplifier grows the
-    same way) when the squared valences sum to more than 64 per index plus 2^24, with the importer's warning.
-  - 4,000,008 zero-filled positions without indices: linear, but 27 s per run in the fuzz build (simplifier 44%,
-    tangents 20%, optimization 18%; libFuzzer runs an input twice when its allocations outnumber its frees, to look for
-    leaks). The zero-filled limit drops from 2^22 to 2^16 elements, which import in 0.45 s per run.
+  - 46116 zero-filled indices over 3 vertices: `meshopt_optimizeVertexCache` rescans the remaining triangles of every
+    cached vertex after each triangle it emits, so its time grows with the squared vertex valences (22 s for one vertex
+    in every triangle); the simplifier's edge scans grow the same way. `MeshOptimizer::Optimize` now keeps the triangle
+    order (still ordering vertices for fetch) and the importer skips LODs, with a warning, when the squared valences sum
+    to more than 64 per index plus 2^24.
+  - 4,000,008 zero-filled positions without indices: linear, but 27 s per run (simplifier 44%, tangents 20%,
+    optimization 18%; libFuzzer runs an input twice when its allocations outnumber its frees, to look for leaks). The
+    zero-filled limit drops from 2^22 to 2^16 elements, which import in 0.45 s per run.
+  - Found by review: morph targets multiplied that work (each target without NORMAL deltas generates the normals
+    again; 64 targets over 65535 zero-filled positions took 10 s), so zero-filled elements count once more per target.
 
 ## Progress log
 
@@ -303,5 +308,8 @@ Record per session: PR number, measured job times after merge, anything that dev
     ASan 321 -> 102 s, Linux Debug 271 -> 65, Windows Debug 246 -> 111, macOS Debug 114 -> 75, macOS Release 54 -> 24,
     Windows Release 54 -> 27, lavapipe headless 62 -> 10 and GPU 657 -> 175 / 313. The next two runs took 11.6 and 10.2
     min, their builds also partly cold (each changed widely included test or engine headers); the ASan job of the last
-    ran every test about twice as slowly as the run before (runner variance). Times with warm caches go here after the
-    merge.
+    ran every test about twice as slowly as the run before (runner variance). The merge of #59 ran no CI on `main` (its
+    head commit said `[skip ci]`), so the next times come from #61's first push (run 41238549772, caches restored from
+    `main`, but it changed `MeshSource.h`, which many sources include): 12.8 min wall, set by windows/Release (12.8), ASan (11.7) and lavapipe part 1
+    (11.6); lavapipe part 2 9.9, fuzz 10.3, macOS Release 10.4 and Debug 9.9, windows/Debug 9.2, ubuntu/Debug 8.3,
+    coverage 6.8, clang-tidy shards 6.0, 7.2 and 5.5.

@@ -7,39 +7,40 @@
 
 namespace Basalt::MeshOptimizer {
 
-	namespace {
-
-		// Whether the indices' sum of squared vertex valences is within the limit; false for an index past vertexCount.
-		bool WithinValenceCost(const uint32_t* indices, size_t indexCount, size_t vertexCount)
+	bool WithinValenceCost(std::span<const uint32_t> indices, size_t vertexCount)
+	{
+		const uint64_t limit = MaxValenceCostPerIndex * indices.size() + ValenceCostAllowance;
+		std::vector<uint32_t> valences(vertexCount);
+		uint64_t cost = 0;
+		// Each new reference to a vertex of valence v raises its square by 2v + 1. Stopping at the limit keeps the sum and
+		// the valences far from wrapping.
+		for (const uint32_t index : indices)
 		{
-			std::vector<uint32_t> valences(vertexCount);
-			uint64_t cost = 0;
-			// Each new reference to a vertex of valence v raises its square by 2v + 1. The sum is at most the index count
-			// squared, so it cannot wrap for fewer than 2^32 indices.
-			for (size_t i = 0; i < indexCount; i++)
-			{
-				if (indices[i] >= vertexCount)
-					return false;
-				cost += 2 * uint64_t{ valences[indices[i]]++ } + 1;
-			}
-			return cost <= MaxValenceCostPerIndex * indexCount + ValenceCostAllowance;
+			if (index >= vertexCount)
+				return false;
+			cost += 2 * uint64_t{ valences[index]++ } + 1;
+			if (cost > limit)
+				return false;
 		}
-
+		return true;
 	}
 
-	bool Optimize(std::vector<Vertex>& vertices, std::vector<uint32_t>& indices, bool reorderTriangles, std::vector<MorphDelta>* morphDeltas, uint32_t morphTargets)
+	OptimizeResult Optimize(std::vector<Vertex>& vertices, std::vector<uint32_t>& indices, bool reorderTriangles, std::vector<MorphDelta>* morphDeltas, uint32_t morphTargets)
 	{
 		if (vertices.empty() || indices.empty() || indices.size() % 3 != 0)
-			return false;
+			return OptimizeResult::Invalid;
 		if (morphTargets > 0 && (!morphDeltas || morphDeltas->size() != static_cast<size_t>(morphTargets) * vertices.size()))
-			return false;
-		if (!WithinValenceCost(indices.data(), indices.size(), vertices.size()))
-			return false;
+			return OptimizeResult::Invalid;
+		for (const auto index : indices)
+			if (index >= vertices.size())
+				return OptimizeResult::Invalid;
 		for (const auto& vertex : vertices)
 			for (int axis = 0; axis < 3; ++axis)
 				if (!std::isfinite(vertex.Position[axis]))
-					return false;
-		if (reorderTriangles)
+					return OptimizeResult::NonFinite;
+		// Vertex fetch order stays linear in the index count, so only triangle reordering depends on the valences.
+		const bool reorder = reorderTriangles && WithinValenceCost(indices, vertices.size());
+		if (reorder)
 		{
 			meshopt_optimizeVertexCache(indices.data(), indices.data(), indices.size(), vertices.size());
 			meshopt_optimizeOverdraw(indices.data(), indices.data(), indices.size(), &vertices[0].Position.x, vertices.size(), sizeof(Vertex), 1.05f);
@@ -59,7 +60,7 @@ namespace Basalt::MeshOptimizer {
 			*morphDeltas = std::move(reordered);
 		}
 		vertices = std::move(remapped);
-		return true;
+		return reorderTriangles && !reorder ? OptimizeResult::TriangleOrderKept : OptimizeResult::Optimized;
 	}
 
 	void GenerateLODs(MeshSource& source, uint32_t submeshIndex)
@@ -72,9 +73,10 @@ namespace Basalt::MeshOptimizer {
 			return;
 		if (submesh.MaterialIndex < source.Materials.size() && source.Materials[submesh.MaterialIndex].IsBlended())
 			return;
-		std::vector<uint32_t> base(source.Indices.begin() + submesh.BaseIndex, source.Indices.begin() + submesh.BaseIndex + submesh.IndexCount);
-		if (!WithinValenceCost(base.data(), base.size(), submesh.VertexCount))
+		const auto range = std::span(source.Indices).subspan(submesh.BaseIndex, submesh.IndexCount);
+		if (!WithinValenceCost(range, submesh.VertexCount))
 			return;
+		std::vector<uint32_t> base(range.begin(), range.end());
 		const auto* positions = &source.Vertices[submesh.BaseVertex].Position.x;
 		size_t previous = base.size();
 		for (uint32_t level = 1; level <= 3; ++level)
@@ -88,8 +90,9 @@ namespace Basalt::MeshOptimizer {
 			if (count == 0 || count >= previous)
 				continue;
 			reduced.resize(count);
-			// Collapses raise the valences of the vertices that remain.
-			if (WithinValenceCost(reduced.data(), reduced.size(), submesh.VertexCount))
+			// Collapses raise the valences of the vertices that remain, so a level past the limit keeps the simplifier's
+			// triangle order (defensive: no tested shape gets there, since the simplifier removes the busiest fans' rims first).
+			if (WithinValenceCost(reduced, submesh.VertexCount))
 				meshopt_optimizeVertexCache(reduced.data(), reduced.data(), reduced.size(), submesh.VertexCount);
 			submesh.LODs.push_back({ static_cast<uint32_t>(source.Indices.size()), static_cast<uint32_t>(count), error });
 			source.Indices.insert(source.Indices.end(), reduced.begin(), reduced.end());
