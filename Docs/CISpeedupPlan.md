@@ -54,10 +54,10 @@ Target after sessions 1–3: about 15 minutes per run.
 |---|----|-----------------|--------|
 | 1 | Compiler cache, one dependency-source cache, merge ubuntu/Release into lavapipe | Yes (every build) | Merged (#56) |
 | 2 | Shard clang-tidy; run fuzz targets concurrently | Yes (two longest jobs) | Merged (#57) |
-| 3 | Parallel ctest, fast `ReleasePackaging`, shard `BasaltTests` | Yes (test steps) | In review |
+| 3 | Parallel ctest, fast `ReleasePackaging`, shard `BasaltTests` | Yes (test steps) | Merged (#59) |
 | 4 | Remove redundant jobs; early format job; coverage on `main` only | Runner minutes, faster feedback | Todo |
 | 5 | Shared setup action; nightly fuzz builds once | Maintenance | Todo |
-| — | Nightly fuzz findings (FuzzGltf, FuzzCommand) | Separate bug-fix PRs | FuzzCommand merged (#58); FuzzGltf Todo |
+| — | Nightly fuzz findings (FuzzGltf, FuzzCommand) | Separate bug-fix PRs | FuzzCommand merged (#58); FuzzGltf in review |
 
 ### Session 1 — compiler cache and dependency cache
 
@@ -166,6 +166,18 @@ From nightly run 40077058550 (2026-10-24):
   `play.step`: on Linux its barrier waits in `sem_wait`, which libFuzzer's timer signal (handler installed without
   `SA_RESTART`) interrupts with EINTR, which Jolt ignores, so a physics step continued past running jobs. Input-independent; not a command bug. `PhysicsJobs` now has its
   own mutex/condition-variable barrier, and failed Jolt asserts are logged like Basalt's.
+- **FuzzGltf, fixed together** (the misaligned load above, and timeouts in nightly runs 40854373678 on 2026-10-29 and
+  41189784641 on 2026-10-31); each input is now in `Tests/Fuzz/Corpus/FuzzGltf` with a doctest:
+  - The misaligned load came from a GLB whose JSON chunk was 1241 bytes. GLB pads every chunk to 4 bytes, but cgltf
+    neither checks that nor copies the binary chunk, so accessor offsets aligned within the buffer were odd addresses in
+    memory. The importer rejects such GLBs (in `CheckAccessorAlignment`) before `cgltf_validate`.
+  - 46116 zero-filled indices over 3 vertices: `meshopt_optimizeVertexCache` rescans a vertex's remaining triangles each
+    time the vertex is touched, so its time grows with the squared vertex valences (22 s with ASan for one vertex in
+    every triangle). `MeshOptimizer` now skips the vertex-cache order, overdraw order and LODs (the simplifier grows the
+    same way) when the squared valences sum to more than 64 per index plus 2^24, with the importer's warning.
+  - 4,000,008 zero-filled positions without indices: linear, but 27 s per run in the fuzz build (simplifier 44%,
+    tangents 20%, optimization 18%; libFuzzer runs an input twice when its allocations outnumber its frees, to look for
+    leaks). The zero-filled limit drops from 2^22 to 2^16 elements, which import in 0.45 s per run.
 
 ## Progress log
 

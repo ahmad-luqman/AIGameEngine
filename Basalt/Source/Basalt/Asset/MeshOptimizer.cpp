@@ -7,15 +7,34 @@
 
 namespace Basalt::MeshOptimizer {
 
+	namespace {
+
+		// Whether the indices' sum of squared vertex valences is within the limit; false for an index past vertexCount.
+		bool WithinValenceCost(const uint32_t* indices, size_t indexCount, size_t vertexCount)
+		{
+			std::vector<uint32_t> valences(vertexCount);
+			uint64_t cost = 0;
+			// Each new reference to a vertex of valence v raises its square by 2v + 1. The sum is at most the index count
+			// squared, so it cannot wrap for fewer than 2^32 indices.
+			for (size_t i = 0; i < indexCount; i++)
+			{
+				if (indices[i] >= vertexCount)
+					return false;
+				cost += 2 * uint64_t{ valences[indices[i]]++ } + 1;
+			}
+			return cost <= MaxValenceCostPerIndex * indexCount + ValenceCostAllowance;
+		}
+
+	}
+
 	bool Optimize(std::vector<Vertex>& vertices, std::vector<uint32_t>& indices, bool reorderTriangles, std::vector<MorphDelta>* morphDeltas, uint32_t morphTargets)
 	{
 		if (vertices.empty() || indices.empty() || indices.size() % 3 != 0)
 			return false;
 		if (morphTargets > 0 && (!morphDeltas || morphDeltas->size() != static_cast<size_t>(morphTargets) * vertices.size()))
 			return false;
-		for (const auto index : indices)
-			if (index >= vertices.size())
-				return false;
+		if (!WithinValenceCost(indices.data(), indices.size(), vertices.size()))
+			return false;
 		for (const auto& vertex : vertices)
 			for (int axis = 0; axis < 3; ++axis)
 				if (!std::isfinite(vertex.Position[axis]))
@@ -54,6 +73,8 @@ namespace Basalt::MeshOptimizer {
 		if (submesh.MaterialIndex < source.Materials.size() && source.Materials[submesh.MaterialIndex].IsBlended())
 			return;
 		std::vector<uint32_t> base(source.Indices.begin() + submesh.BaseIndex, source.Indices.begin() + submesh.BaseIndex + submesh.IndexCount);
+		if (!WithinValenceCost(base.data(), base.size(), submesh.VertexCount))
+			return;
 		const auto* positions = &source.Vertices[submesh.BaseVertex].Position.x;
 		size_t previous = base.size();
 		for (uint32_t level = 1; level <= 3; ++level)
@@ -67,7 +88,9 @@ namespace Basalt::MeshOptimizer {
 			if (count == 0 || count >= previous)
 				continue;
 			reduced.resize(count);
-			meshopt_optimizeVertexCache(reduced.data(), reduced.data(), reduced.size(), submesh.VertexCount);
+			// Collapses raise the valences of the vertices that remain.
+			if (WithinValenceCost(reduced.data(), reduced.size(), submesh.VertexCount))
+				meshopt_optimizeVertexCache(reduced.data(), reduced.data(), reduced.size(), submesh.VertexCount);
 			submesh.LODs.push_back({ static_cast<uint32_t>(source.Indices.size()), static_cast<uint32_t>(count), error });
 			source.Indices.insert(source.Indices.end(), reduced.begin(), reduced.end());
 			previous = count;

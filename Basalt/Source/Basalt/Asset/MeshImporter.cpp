@@ -281,6 +281,15 @@ namespace Basalt {
 		// FuzzGltf), so non-conforming files are rejected first.
 		bool CheckAccessorAlignment(const cgltf_data* data, const std::filesystem::path& path, std::string& outError)
 		{
+			// Offsets are relative to the buffer, and a GLB's binary chunk is read in place, 28 bytes plus the JSON chunk's
+			// length into the file (which cgltf holds in memory from malloc). GLB pads every chunk to 4 bytes (spec 4.4.3.1),
+			// but cgltf does not check it, so after an unpadded JSON chunk aligned offsets were misaligned in memory (found by
+			// nightly FuzzGltf).
+			if (data->file_type == cgltf_file_type_glb && data->bin && data->json_size % 4 != 0)
+			{
+				outError = fmt::format("{}: GLB JSON chunk is {} bytes, not padded to a multiple of 4", path.filename().string(), data->json_size);
+				return false;
+			}
 			auto aligned = [](const cgltf_buffer_view* view, cgltf_size offset, cgltf_size size) { return !view || size == 0 || (view->offset + offset) % size == 0; };
 			for (cgltf_size i = 0; i < data->accessors_count; i++)
 			{
@@ -1048,7 +1057,7 @@ namespace Basalt {
 				const bool optimized = MeshOptimizer::Optimize(vertices, indices, reorder, &morphDeltas, targets);
 				if (!optimized)
 				{
-					BS_CORE_WARN("MeshImporter: {}: optimization and LODs skipped for empty, malformed or non-finite geometry in mesh '{}'", path.filename().string(), meshData.Name);
+					BS_CORE_WARN("MeshImporter: {}: optimization and LODs skipped for empty, malformed or non-finite geometry, or vertices shared by too many triangles, in mesh '{}'", path.filename().string(), meshData.Name);
 				}
 				const auto submesh = source->AddSubmesh(vertices, indices, materialIndex, morphDeltas, targets);
 				if (optimized)

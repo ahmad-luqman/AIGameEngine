@@ -384,15 +384,17 @@ TEST_SUITE("MorphTargets")
 		}
 		SUBCASE("more deltas than a model may hold")
 		{
-			// Zero-filled accessors without a bufferView keep the file small: 4 targets x 1048578 vertices pass MaxMorphDeltas.
-			const nlohmann::json zeros = { { "componentType", 5126 }, { "count", 1048578 }, { "type", "VEC3" }, { "min", { 0, 0, 0 } }, { "max", { 0, 0, 0 } } };
+			// Zero-filled accessors without a bufferView keep the file small: 256 targets x 16385 vertices pass MaxMorphDeltas
+			// (and the base positions stay within MaxZeroFilledElements).
+			const nlohmann::json zeros = { { "componentType", 5126 }, { "count", 16385 }, { "type", "VEC3" }, { "min", { 0, 0, 0 } }, { "max", { 0, 0, 0 } } };
 			data["accessors"].push_back(zeros);
 			const size_t index = data["accessors"].size() - 1;
-			data["meshes"][1]["primitives"][0] = { { "attributes", { { "POSITION", index } } }, { "targets", { { { "POSITION", index } }, { { "POSITION", index } }, { { "POSITION", index } }, { { "POSITION", index } } } } };
+			const nlohmann::json targets(MaxMorphTargets, { { "POSITION", index } });
+			data["meshes"][1]["primitives"][0] = { { "attributes", { { "POSITION", index } } }, { "targets", targets } };
 			data["meshes"][1]["extras"].erase("targetNames");
-			// Teeth's animated weights are now four wide.
+			// Teeth's animated weights are now 256 wide.
 			data["animations"][0]["channels"].erase(1);
-			expected = "its morph targets need 4194312 deltas, past the 4194286 left of the limit of 4194304 per model";
+			expected = "its morph targets need 4194560 deltas, past the 4194286 left of the limit of 4194304 per model";
 		}
 		SUBCASE("too many targets on a node with weights")
 		{
