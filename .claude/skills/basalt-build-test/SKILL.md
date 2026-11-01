@@ -5,7 +5,8 @@ description: Build Basalt, run its unit tests and format check, and verify rende
 
 # Build and test Basalt
 
-1. Format: `scripts/format.sh`
+1. Format: `scripts/format.sh` (CI pins clang-format's version, `CLANG_FORMAT_VERSION` in `.github/workflows/ci.yml`;
+   the script warns when yours is another major, and `CLANG_FORMAT=<path>` picks another binary).
 2. Build + all tests: `scripts/test.sh` (Debug; wraps `cmake` + `ctest --output-on-failure -j <cores>`; pass `-j 1` or
    set `CTEST_PARALLEL_LEVEL` to run fewer at once).
    - Filter unit tests: `./build/bin/BasaltTests -tc="*Scene*"`; list them: `--list-test-cases`.
@@ -25,7 +26,8 @@ description: Build Basalt, run its unit tests and format check, and verify rende
 6. Test groups are labelled: `ctest --test-dir build -L unit|integration|gpu|format|benchmark` (or `-LE` to exclude).
 
 Extra checks (each one is also a CI job; run locally when touching memory handling or before big commits):
-- Sanitizers: `cmake -S . -B build-asan -G Ninja -DBASALT_SANITIZE="address;undefined" -DBASALT_CHECK_FORMAT=OFF`,
+- Sanitizers: `cmake -S . -B build-asan -G Ninja -DBASALT_SANITIZE="address;undefined" -DBASALT_CHECK_FORMAT=OFF`
+  (CI adds `-DBASALT_PROFILE=ON`, Tracy),
   build, then `ctest --test-dir build-asan -LE "gpu|format" -j <cores>`. Fix reports in Basalt code; only third-party
   reports go into `cmake/sanitizers/*.supp`.
 - clang-tidy: `scripts/clang_tidy.py -p build [files...]` checks the sources of every Basalt target in a configured
@@ -40,7 +42,8 @@ Extra checks (each one is also a CI job; run locally when touching memory handli
   target (`scripts/fuzz.sh --list`) and uploads `fuzz-crashes-<Target>` when libFuzzer writes crash, timeout or
   out-of-memory inputs.
 - Coverage: `scripts/coverage.sh` (Clang) prints a per-file summary and writes
-  `build-coverage/coverage/html/index.html`. Use it to find untested code; it is not a gate.
+  `build-coverage/coverage/html/index.html`. Use it to find untested code; it is not a gate (CI runs it on pushes to
+  `main` and manual runs).
 
 Failure handling:
 - A compiler warning is an error — fix the code, never silence the warning.

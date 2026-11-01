@@ -61,13 +61,18 @@ list(APPEND basaltUnitTests BasaltTests)
 
 set_tests_properties(${basaltUnitTests} PROPERTIES TIMEOUT 600)
 
-# Formatting check. clang-format output differs between major versions, so CI enables this on one job only.
+# Formatting check, with the clang-format on PATH (or -DBASALT_CLANG_FORMAT=<path>). CI turns it off in its build jobs and runs these two scripts in its
+# format job with a pinned clang-format (.github/workflows/ci.yml), which another major version may disagree with.
 find_program(BASALT_CLANG_FORMAT clang-format)
 option(BASALT_CHECK_FORMAT "Register the clang-format check as a test" ON)
 if(BASALT_CHECK_FORMAT AND BASALT_CLANG_FORMAT)
+	# A warning, not an error: a local clang-format of another major version still checks most code the same way.
+	set(CLANG_FORMAT "${BASALT_CLANG_FORMAT}")
+	include("${PROJECT_SOURCE_DIR}/cmake/CheckClangFormatVersion.cmake")
 	add_test(NAME CodeFormat COMMAND "${CMAKE_COMMAND}" -DCLANG_FORMAT=${BASALT_CLANG_FORMAT} -DSOURCE_DIR=${PROJECT_SOURCE_DIR} -P "${PROJECT_SOURCE_DIR}/cmake/CheckFormat.cmake")
-	# The check itself: batch boundaries, an empty tree and a clang-format that cannot start.
+	# The checks themselves (each script's header lists its cases).
 	add_test(NAME CheckFormatBatches COMMAND "${CMAKE_COMMAND}" -DCLANG_FORMAT=${BASALT_CLANG_FORMAT} -DREPO_DIR=${PROJECT_SOURCE_DIR} "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/CheckFormatBatches" -P "${CMAKE_CURRENT_SOURCE_DIR}/Format/CheckFormatBatches.cmake")
+	add_test(NAME CheckFormatVersion COMMAND "${CMAKE_COMMAND}" -DCLANG_FORMAT=${BASALT_CLANG_FORMAT} -DREPO_DIR=${PROJECT_SOURCE_DIR} "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/CheckFormatVersion" -P "${CMAKE_CURRENT_SOURCE_DIR}/Format/CheckFormatVersion.cmake")
 endif()
 
 # CI's dependency-source cache (cmake/DependencySources.cmake, scripts/ci-fetch-deps.sh) and scripts/ci-check-caches.sh.
@@ -431,7 +436,7 @@ set_tests_properties(${basaltUnitTests} PROPERTIES LABELS unit)
 set(basaltIntegrationTests FeatureTest SampleTetris SampleTetrisReplay SampleJoints SampleMarbleRun SampleBreakout SampleFirstPerson SampleMovementDemo SamplePlatformer PhysicsDeterminism)
 set_tests_properties(${basaltIntegrationTests} PROPERTIES LABELS integration)
 if(TEST CodeFormat)
-	set_tests_properties(CodeFormat CheckFormatBatches PROPERTIES LABELS format)
+	set_tests_properties(CodeFormat CheckFormatBatches CheckFormatVersion PROPERTIES LABELS format)
 endif()
 if(BASALT_SANITIZE)
 	set_property(TEST ${basaltUnitTests} ${basaltIntegrationTests} APPEND PROPERTY ENVIRONMENT ${BASALT_SANITIZER_ENVIRONMENT})

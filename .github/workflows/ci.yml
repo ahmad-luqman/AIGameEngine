@@ -4,10 +4,13 @@ on:
   push:
     branches: [ main ]
   pull_request:
+  # Runs every job on a chosen branch, coverage included (pull requests skip it).
+  workflow_dispatch:
 
-# A newer push to the same branch makes older runs pointless: cancel them instead of queueing.
+# A newer push to the same branch makes older runs pointless: cancel them instead of queueing. Manual runs have a group
+# of their own, so they and pushes never cancel each other.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 # Every build that compiles C++, including those in scripts/coverage.sh and scripts/fuzz.sh, compiles through ccache
@@ -22,6 +25,56 @@ env:
   BASALT_DEPS_SOURCE_DIR: ${{ github.workspace }}/_deps
 
 jobs:
+  # Formatting, checked alone so a style failure shows within a minute instead of after the builds; no job waits for it.
+  # clang-format's output differs between major versions, so the version is pinned (PyPI), and scripts/format.sh and the
+  # CodeFormat configure warn locally when theirs is another major (cmake/CheckClangFormatVersion.cmake reads this line).
+  # Bump CLANG_FORMAT_VERSION and reformat the tree with that version in one PR.
+  format:
+    name: ubuntu-24.04 / format
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      CLANG_FORMAT_VERSION: 23.1.3
+    steps:
+      - uses: actions/checkout@v4
+
+      # A virtual environment, since Ubuntu's system pip refuses installs (PEP 668); the checks call its clang-format by
+      # path, never the runner's. Wheels only, never a source build. (shell: bash adds pipefail.)
+      - name: Install clang-format
+        shell: bash
+        run: |
+          venv="$RUNNER_TEMP/clang-format"
+          python3 -m venv "$venv"
+          "$venv/bin/pip" install --quiet --disable-pip-version-check --only-binary=:all: "clang-format==$CLANG_FORMAT_VERSION"
+          "$venv/bin/clang-format" --version | grep -Fw "version $CLANG_FORMAT_VERSION"
+          echo "CLANG_FORMAT=$venv/bin/clang-format" >> "$GITHUB_ENV"
+
+      # The CodeFormat ctest (off in every build job).
+      - name: Check formatting
+        run: cmake "-DCLANG_FORMAT=$CLANG_FORMAT" "-DSOURCE_DIR=$GITHUB_WORKSPACE" -P cmake/CheckFormat.cmake
+
+      # STRICT fails where the local tools only warn, so the version line above must stay readable to them.
+      - name: Check the version check
+        run: |
+          cmake "-DCLANG_FORMAT=$CLANG_FORMAT" -DSTRICT=ON -P cmake/CheckClangFormatVersion.cmake
+          cmake "-DCLANG_FORMAT=$CLANG_FORMAT" "-DREPO_DIR=$GITHUB_WORKSPACE" "-DWORK_DIR=$RUNNER_TEMP/CheckFormatVersion" -P Tests/Format/CheckFormatVersion.cmake
+
+      # The CheckFormatBatches ctest, which tests CheckFormat.cmake itself (the script lists its cases).
+      - name: Check the format check
+        run: cmake "-DCLANG_FORMAT=$CLANG_FORMAT" "-DREPO_DIR=$GITHUB_WORKSPACE" "-DWORK_DIR=$RUNNER_TEMP/CheckFormatBatches" -P Tests/Format/CheckFormatBatches.cmake
+
+      # scripts/format.sh with the pinned clang-format leaves the tree unchanged and warns about nothing (a source directory
+      # it lists but that no longer exists fails it).
+      - name: Check scripts/format.sh
+        shell: bash
+        run: |
+          scripts/format.sh 2> "$RUNNER_TEMP/format.err" || { cat "$RUNNER_TEMP/format.err"; exit 1; }
+          if [[ -s "$RUNNER_TEMP/format.err" ]]; then cat "$RUNNER_TEMP/format.err"; exit 1; fi
+          git diff --exit-code
+
+  # Windows and macOS. Linux has no job here: the ASan job builds Debug with Clang and runs the same headless tests
+  # (CrashReport skips under ASan), and the lavapipe job builds Release with GCC, keeping GCC's extra warnings, and its
+  # part 1 runs them all.
   build-and-test:
     name: ${{ matrix.os }} / ${{ matrix.config }}
     runs-on: ${{ matrix.os }}
@@ -29,12 +82,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ ubuntu-24.04, windows-latest, macos-15 ]
+        os: [ windows-latest, macos-15 ]
         config: [ Debug, Release ]
-        exclude:
-          # The lavapipe job builds the same Release configuration and runs these tests too.
-          - os: ubuntu-24.04
-            config: Release
         include:
           - os: windows-latest
             launcher: sccache
@@ -45,16 +94,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install dependencies (Linux)
-        timeout-minutes: 20
-        if: runner.os == 'Linux'
-        run: |
-          scripts/ci-apt-install.sh ninja-build glslc libvulkan1 libdbus-1-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols
-
       - name: Install dependencies (macOS)
         timeout-minutes: 10
         if: runner.os == 'macOS'
-        run: brew install ninja shaderc clang-format
+        run: brew install ninja shaderc
 
       - name: Install Vulkan SDK (Windows)
         if: runner.os == 'Windows'
@@ -80,9 +123,10 @@ jobs:
           path: _deps
           key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'scripts/ci-fetch-deps.sh') }}
 
-      # Each compiler cache is capped at about twice one build (300M for Release, 1G for Windows Debug, 600M otherwise;
-      # about 5.7 GB over all jobs, of the repository's 10 GB Actions cache). Saving prunes only files unused for a week
-      # (ccache), so a failed or cancelled job never saves a smaller cache than the one it restored.
+      # Each compiler cache is capped (300M for Release, 1G for Windows Debug, 600M for macOS Debug). One generation of every
+      # job's cache plus the dependency sources should fit the repository's 10 GB Actions cache; each run saves a new entry
+      # per job and branch, and GitHub evicts the least recently used ones beyond 10 GB. Saving prunes only files unused for
+      # a week (ccache), so a failed or cancelled job never saves a smaller cache than the one it restored.
       - name: Compiler cache
         uses: hendrikmuhs/ccache-action@v1.2.24
         with:
@@ -106,13 +150,7 @@ jobs:
           key: ${{ steps.deps.outputs.cache-primary-key }}
 
       - name: Configure
-        shell: bash
-        run: |
-          formatCheck=OFF
-          profile=OFF
-          if [[ "${{ runner.os }}" == "Linux" && "${{ matrix.config }}" == "Debug" ]]; then profile=ON; fi
-          if [[ "${{ runner.os }}" == "macOS" && "${{ matrix.config }}" == "Debug" ]]; then formatCheck=ON; fi
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DBASALT_CHECK_FORMAT=$formatCheck -DBASALT_PROFILE=$profile -DBASALT_BENCHMARK_TESTS=${{ matrix.config == 'Release' && 'ON' || 'OFF' }}
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DBASALT_CHECK_FORMAT=OFF -DBASALT_BENCHMARK_TESTS=${{ matrix.config == 'Release' && 'ON' || 'OFF' }}
 
       # cmake/Dependencies.cmake embeds MSVC debug information (/Z7) in Debug objects when a launcher is set. A dependency
       # that adds /Zi itself would make its objects uncacheable again, and one that drops /Z7 would lose debug information.
@@ -157,7 +195,9 @@ jobs:
           if-no-files-found: warn
 
   # AddressSanitizer + UndefinedBehaviorSanitizer over every headless test. All code, third-party
-  # included, is instrumented (cmake/Sanitizers.cmake).
+  # included, is instrumented (cmake/Sanitizers.cmake). It is also CI's only Linux Debug build of the engine, apps and
+  # tests on pull requests (fuzz builds only its targets; coverage runs only on main and manual runs), and its only Tracy (BASALT_PROFILE)
+  # build.
   sanitizers:
     name: ubuntu-24.04 / ASan+UBSan
     runs-on: ubuntu-24.04
@@ -202,7 +242,21 @@ jobs:
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
             -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
-            "-DBASALT_SANITIZE=address;undefined" -DBASALT_CHECK_FORMAT=OFF
+            "-DBASALT_SANITIZE=address;undefined" -DBASALT_CHECK_FORMAT=OFF -DBASALT_PROFILE=ON
+
+      # BASALT_PROFILE quietly does nothing if Tracy's target is missing (Basalt/CMakeLists.txt), and Tracy's crash handlers
+      # must stay off under the sanitizers (cmake/Dependencies.cmake). This job stands in for Linux Debug: the tests a
+      # missing tool (Python) or a stale name would drop must be registered (CrashReport, which skips here, is checked in
+      # lavapipe part 1).
+      - name: Check the configuration
+        shell: bash
+        run: |
+          grep -q -- "-DBASALT_PROFILE" build/compile_commands.json || { echo "::error::Tracy is not enabled"; exit 1; }
+          grep -q -- "-DTRACY_NO_CRASH_HANDLER" build/compile_commands.json || { echo "::error::Tracy's crash handlers are on"; exit 1; }
+          tests=$(ctest --test-dir build -N)
+          for name in BasaltTests BasaltTestShards PhysicsDeterminism FeatureTest; do
+            grep -qE "Test +#[0-9]+: $name\$" <<< "$tests" || { echo "::error::$name is not registered"; exit 1; }
+          done
 
       - name: Check that the build uses the caches
         shell: bash
@@ -283,10 +337,13 @@ jobs:
       - name: clang-tidy
         run: scripts/clang_tidy.py -p build --shard $(( ${{ strategy.job-index }} + 1 ))/${{ strategy.job-total }} -j "$(nproc)"
 
-  # Source-based coverage of the headless tests. Informational only: the summary is shown on the run
-  # page and the HTML report is uploaded as an artifact.
+  # Source-based coverage of the headless tests, on pushes to main and manual runs only (pull requests skip this extra
+  # full Clang build). The numbers are informational, never a gate, but a failing test still fails the job, so a failure
+  # that only coverage's build shows first appears on main. The summary is shown on the run page and the HTML report is
+  # uploaded as an artifact.
   coverage:
     name: ubuntu-24.04 / coverage
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -338,7 +395,7 @@ jobs:
           {
             echo '## Code coverage (headless tests)'
             echo '```'
-            cat build-coverage/coverage/summary.txt
+            cat build-coverage/coverage/summary.txt || echo "(no summary: the coverage step failed before writing it)"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -433,10 +490,8 @@ jobs:
         id: build
         run: cmake --build build -- -k 0
 
-      # The GPU regressions, plus headless tests showing that this job also covers ubuntu-24.04 / Release (excluded from
-      # the build-and-test matrix).
-      # Every name in GPU_PART_1 too, with the gpu label: a renamed one would quietly move its test into part 2, and one
-      # without the label would leave both parts.
+      # The GPU regressions and the headless tests must be registered, and every name in GPU_PART_1 with the gpu label: a
+      # renamed one would quietly move its test into part 2, and one without the label would leave both parts.
       - name: Verify the expected tests are registered
         run: |
           ctest --test-dir build -N --show-only=json-v1 > /tmp/basalt-tests.json
@@ -444,7 +499,7 @@ jobs:
           import json, os, sys
           labels = {test["name"]: next((p["value"] for p in test.get("properties", []) if p["name"] == "LABELS"), []) for test in json.load(open("/tmp/basalt-tests.json"))["tests"]}
           part1 = set(os.environ["GPU_PART_1"].strip("^()$").split("|"))
-          missing = ({"ViewportGPU", "PostProcessGPU", "PreviewRendererGPU", "BasaltTests", "BasaltTests_Core", "BasaltTestShards", "Benchmark_cpu", "PhysicsDeterminism", "FeatureTest"} | part1) - labels.keys()
+          missing = ({"ViewportGPU", "PostProcessGPU", "PreviewRendererGPU", "BasaltTests", "BasaltTests_Core", "BasaltTestShards", "Benchmark_cpu", "PhysicsDeterminism", "FeatureTest", "CrashReport"} | part1) - labels.keys()
           missing and sys.exit(f"Missing tests: {missing}")
           unlabelled = {name for name in part1 if "gpu" not in labels[name]}
           unlabelled and sys.exit(f"GPU_PART_1 tests without the gpu label: {unlabelled}")
@@ -452,9 +507,15 @@ jobs:
 
       # Each test step runs whenever the build succeeded (the headless one in part 1 only), so a headless failure never
       # hides the GPU results.
+      # CrashReport runs on Linux only here (it skips under ASan), and ctest counts a skip as a pass, so a skip fails.
       - name: Test
         if: ${{ matrix.part == 1 && !cancelled() && steps.build.outcome == 'success' }}
-        run: ctest --test-dir build --output-on-failure --no-tests=error -LE "gpu|format" -j "$(nproc)"
+        shell: bash
+        run: |
+          ctest --test-dir build --output-on-failure --no-tests=error -LE "gpu|format" -j "$(nproc)" | tee "$RUNNER_TEMP/headless.log"
+          if grep -E "Test +#[0-9]+: CrashReport .*Skipped" "$RUNNER_TEMP/headless.log"; then
+            echo "::error::CrashReport was skipped"; exit 1
+          fi
 
       # Two at a time with two lavapipe threads each (lavapipe otherwise starts one per core in every test). More at once
       # shortened the whole set by at most 13% (559 -> 486 s) but stretched the long Python-driven tests (LocalShadowRender
