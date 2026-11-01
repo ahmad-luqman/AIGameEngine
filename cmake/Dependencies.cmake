@@ -309,10 +309,13 @@ if(BASALT_PROFILE AND NOT CMAKE_BUILD_TYPE STREQUAL "Dist")
 	set(TRACY_ON_DEMAND ON CACHE BOOL "" FORCE)
 	set(TRACY_ONLY_LOCALHOST ON CACHE BOOL "" FORCE)
 	set(TRACY_NO_BROADCAST ON CACHE BOOL "" FORCE)
-	# Tracy installs its own crash signal handlers once a profiler connects; sanitizer builds keep the sanitizers' (as
-	# Core/CrashReporter does).
+	# While a profiler is connected, Tracy installs crash handlers (signal handlers on Linux, an unhandled-exception filter
+	# on Windows). Sanitizer builds turn them off so the sanitizers report crashes themselves (Core/CrashReporter likewise
+	# stays off under AddressSanitizer).
 	if(BASALT_SANITIZE)
 		set(TRACY_NO_CRASH_HANDLER ON CACHE BOOL "" FORCE)
+	else()
+		set(TRACY_NO_CRASH_HANDLER OFF CACHE BOOL "" FORCE)
 	endif()
 	FetchContent_Declare(tracy SYSTEM
 		GIT_REPOSITORY https://github.com/wolfpld/tracy.git

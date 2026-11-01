@@ -1,5 +1,6 @@
 # Fails if any Basalt source file is not formatted according to .clang-format.
 # Usage: cmake -DCLANG_FORMAT=<path> -DSOURCE_DIR=<repo root> -P CheckFormat.cmake
+# The directories match scripts/format.sh's; change both together.
 
 file(GLOB_RECURSE files RELATIVE "${SOURCE_DIR}"
 	"${SOURCE_DIR}/Basalt/Source/*.cpp" "${SOURCE_DIR}/Basalt/Source/*.h"
@@ -43,6 +44,10 @@ if(unformatted)
 	message(FATAL_ERROR "Code is not formatted. Run scripts/format.sh (or clang-format -i) and commit the result.")
 endif()
 
-# Evidence of what a passing run checked.
-execute_process(COMMAND "${CLANG_FORMAT}" --version OUTPUT_VARIABLE version OUTPUT_STRIP_TRAILING_WHITESPACE)
-message(STATUS "${count} files formatted as ${version} expects")
+# Evidence of what a passing run checked (Tests/Format/CheckFormatBatches.cmake reads the count).
+execute_process(COMMAND "${CLANG_FORMAT}" --version OUTPUT_VARIABLE clangFormatVersion ERROR_QUIET
+	OUTPUT_STRIP_TRAILING_WHITESPACE)
+if(NOT clangFormatVersion)
+	set(clangFormatVersion "${CLANG_FORMAT}")
+endif()
+message(STATUS "${count} files formatted as ${clangFormatVersion} expects")

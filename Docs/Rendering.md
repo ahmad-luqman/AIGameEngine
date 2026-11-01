@@ -420,7 +420,8 @@ Use `wait=true` for one-shot warmup and diagnostics.
 Configure with `-DBASALT_PROFILE=ON` to enable pinned Tracy 0.12.2 CPU zones for frames, jobs, scene,
 scripts, animation, physics, glTF import, texture decode and rendering. Run a matching Tracy profiler
 and connect locally; the client records on demand. Default builds do not fetch or link Tracy, and
-Dist builds compile instrumentation out. The ASan+UBSan CI job (Linux, Clang Debug) builds the profiled configuration and runs the headless tests with it.
+Dist builds compile instrumentation out. The ASan+UBSan CI job (Linux, Clang Debug) builds and tests the
+profiled configuration.
 See the [Tracy integration manual](https://github.com/wolfpld/tracy/blob/v0.12.2/manual/tracy.tex).
 
 `memory.stats` works headlessly, and `render.stats.memory` and the editor Statistics panel show the
