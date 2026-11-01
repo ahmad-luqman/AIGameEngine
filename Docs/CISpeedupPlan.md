@@ -330,29 +330,43 @@ Record per session: PR number, measured job times after merge, anything that dev
     lavapipe job), so that job lost its Linux install step and Tracy switch. Tracy (`BASALT_PROFILE=ON`) moved to the ASan
     job, which on pull requests is now CI's only Linux Debug build of the engine, apps and tests (fuzz builds only its
     targets). A new step there fails when Tracy is not enabled (`BASALT_PROFILE` quietly does nothing without Tracy's
-    target) or when a test a missing tool or rename would drop (`FeatureTest`, `PhysicsDeterminism`, `CrashReport`, the
-    `BasaltTests` entries) is not registered. The first run passed with LeakSanitizer (locally, on macOS, ASan and UBSan
-    only). Lost with the job: `CrashReport` in a Linux Debug build (it skips under ASan; lavapipe runs it in Release), and
-    GCC at -O0 (GCC now compiles only Release, in lavapipe, and Dist, in `release.yml`), so a GCC warning that shows only in
-    unoptimized builds shows up only locally. No sources use `BS_DEBUG`, and asserts stay on in Release. Tracy's crash
-    signal handlers (installed once a profiler connects) are off in sanitizer builds, as `Core/CrashReporter` is.
+    target), when Tracy's crash handlers are on, or when a test a missing tool or rename would drop (`BasaltTests`,
+    `BasaltTestShards`, `FeatureTest`, `PhysicsDeterminism`) is not registered. The first CI run's ASan job passed with
+    LeakSanitizer on (local macOS runs have only ASan and UBSan; Apple's runtime has no LSan).
+  - Lost with the job: `CrashReport` in a Linux Debug build (it skips under ASan), and GCC at -O0 (GCC now compiles only
+    Release, in lavapipe, and Dist, in `release.yml`), so a GCC warning that shows only in unoptimized builds shows up only
+    locally; no sources use `BS_DEBUG`, and asserts stay on in Release. Lavapipe part 1 is now the only Linux run of
+    `CrashReport`, so its registration check lists it and its headless step fails when ctest reports it skipped (ctest
+    counts a skip as a pass). While a profiler is connected, Tracy installs crash handlers (signals on Linux, an
+    exception filter on Windows); sanitizer builds turn them off, so CI compiles Tracy only without them.
   - Coverage runs on pushes to `main` and on manual runs (`workflow_dispatch`, new, which runs every job on a chosen
-    branch). Its numbers were never a gate, but a test that fails only in its instrumented build now first fails on `main`.
-    Coverage now runs nowhere else, so a merge whose head commit says `[skip ci]`, or whose run a quickly following push
-    to `main` cancels (`cancel-in-progress`), leaves that commit without a report.
+    branch; manual runs have their own concurrency group, so they and pushes never cancel each other). Its numbers were
+    never a gate, but a test that fails only in its instrumented build now first fails on `main`. Coverage runs nowhere
+    else, so a merge whose head commit says `[skip ci]`, or whose run a quickly following push to `main` cancels
+    (`cancel-in-progress`), leaves that commit without a report.
   - The format job does not take clang-format from apt: Ubuntu 24.04's clang-format 18 reports 9 places in the current
     tree that 22.1.8 and 23.1.3 (PyPI) and 23.1.4 (Homebrew) all accept. The job installs the `CLANG_FORMAT_VERSION`
     wheel (23.1.3, PyPI's newest) into a virtual environment (Ubuntu's system pip refuses installs), checks the reported
     version, and runs `cmake/CheckFormat.cmake` and `Tests/Format/CheckFormatBatches.cmake` directly (no configure, so no
     dependency sources). They replace the `CodeFormat` and `CheckFormatBatches` ctests on macOS Debug, which no longer
     installs clang-format. No job waits for it. `CheckFormat.cmake` now reports how many files it checked and with which
-    version. Locally, `scripts/format.sh` (which takes `CLANG_FORMAT`) and the configure that registers `CodeFormat` warn
-    when the clang-format's major version differs from the pin, read from `ci.yml`.
+    version.
+  - Locally, `scripts/format.sh` (which takes `CLANG_FORMAT`) and the configure that registers `CodeFormat` warn when
+    their clang-format's major version differs from the pin, through one script, `cmake/CheckClangFormatVersion.cmake`,
+    which reads the pin from `ci.yml` (quoted, commented or CRLF) and only warns when the workflow is missing. The format
+    job runs it with `STRICT=ON`, which fails instead, so a pin line it can no longer read is caught; runs its test
+    (`CheckFormatVersion`, also a ctest); and runs `scripts/format.sh` itself, which must change nothing and warn about
+    nothing.
   - The first run's format job failed in `CheckFormatBatches`, a bug the macOS ctest had hidden: CMake wraps `message()`
-    text, and with the runner's shorter path "failed to run" broke over two lines. The script now collapses whitespace
-    before matching, and the launch-failure case now runs with paths of every length that moves the wrap through the
-    phrase (it fails without the fix). Review also found that its misformatted-file case never reached the last batch (`File101.cpp` sorted
-    third); the generated names are now zero-padded.
+    text, and on the runner's 63-character path "failed to run" broke over two lines (44-51 and 59-64 characters split
+    it; from about 65 the path takes a line of its own, as on macOS's build path). The script now collapses whitespace
+    before matching, and the launch-failure case runs with paths of 33 to 73 characters (it fails without the fix).
+    Review also found that its misformatted-file case never reached the last batch (`File101.cpp` sorted fourth, after
+    `File1`, `File10` and `File100`); the generated names are now zero-padded, and misformatted first, 100th and last
+    files are checked too (dropping a file at a batch boundary, or keeping only the last batch's verdict, passed before).
   - Not done: folding the per-push fuzz run into the ASan job (optional in the plan, left for a later discussion).
-  - First run (41320853453, 331ffc6): 9.2 min wall, set by clang-tidy shard 2 (9.1 min; the shards took 4.6-9.1 min) with
-    fuzz 5.7, ASan 5.9 and lavapipe 5.0 / 3.4; Windows 4.3 / 2.9 and macOS 2.2 / 1.3 (Debug / Release); format 12 s.
+  - First run (41320853453, 331ffc6, failed in the format job): 9.2 min wall, set by clang-tidy shard 2 (9.1 min; the
+    shards took 4.6-9.1 min) with fuzz 5.7, ASan 5.9 and lavapipe 5.0 / 3.4; Windows 4.3 / 2.9 and macOS 2.2 / 1.3
+    (Debug / Release); format 11 s. Second run (41323447289, dfa7a49, green; the commit changed
+    `cmake/Dependencies.cmake`, which keys the dependency-source cache, so every job fetched the sources, 88-117 s): clang-tidy 7.5-10.5 min, fuzz 7.7, lavapipe
+    5.3 / 7.0, Windows 5.7 / 5.1, macOS 4.0 / 3.1, ASan 4.7; format 9 s.
