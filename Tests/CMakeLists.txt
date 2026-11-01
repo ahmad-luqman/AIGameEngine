@@ -61,7 +61,8 @@ list(APPEND basaltUnitTests BasaltTests)
 
 set_tests_properties(${basaltUnitTests} PROPERTIES TIMEOUT 600)
 
-# Formatting check. clang-format output differs between major versions, so CI enables this on one job only.
+# Formatting check. clang-format output differs between major versions, so CI turns this off in its build jobs and runs
+# the same two scripts in its format job with a pinned clang-format (.github/workflows/ci.yml).
 find_program(BASALT_CLANG_FORMAT clang-format)
 option(BASALT_CHECK_FORMAT "Register the clang-format check as a test" ON)
 if(BASALT_CHECK_FORMAT AND BASALT_CLANG_FORMAT)

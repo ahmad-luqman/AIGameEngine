@@ -22,6 +22,37 @@ env:
   BASALT_DEPS_SOURCE_DIR: ${{ github.workspace }}/_deps
 
 jobs:
+  # Formatting, checked alone so a style failure shows within a minute instead of after the builds; no build job waits for
+  # it. clang-format's output differs between major versions (Ubuntu's apt clang-format 18 reformats code that 23 accepts),
+  # so the version is pinned from PyPI. Bump CLANG_FORMAT_VERSION and reformat the tree (scripts/format.sh) in one PR.
+  format:
+    name: ubuntu-24.04 / format
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      CLANG_FORMAT_VERSION: 23.1.3
+    steps:
+      - uses: actions/checkout@v4
+
+      # A virtual environment, so its clang-format is the one checked whatever the runner image puts on PATH.
+      - name: Install clang-format
+        run: |
+          python3 -m venv "$RUNNER_TEMP/clang-format"
+          "$RUNNER_TEMP/clang-format/bin/pip" install --quiet --disable-pip-version-check "clang-format==$CLANG_FORMAT_VERSION"
+          "$RUNNER_TEMP/clang-format/bin/clang-format" --version | grep -F "version $CLANG_FORMAT_VERSION"
+          echo "CLANG_FORMAT=$RUNNER_TEMP/clang-format/bin/clang-format" >> "$GITHUB_ENV"
+
+      # The CodeFormat ctest (off in every build job).
+      - name: Check formatting
+        run: cmake "-DCLANG_FORMAT=$CLANG_FORMAT" "-DSOURCE_DIR=$GITHUB_WORKSPACE" -P cmake/CheckFormat.cmake
+
+      # The CheckFormatBatches ctest: the check itself fails on a misformatted file, an empty tree and a clang-format that
+      # cannot start.
+      - name: Check the format check
+        run: cmake "-DCLANG_FORMAT=$CLANG_FORMAT" "-DREPO_DIR=$GITHUB_WORKSPACE" "-DWORK_DIR=$RUNNER_TEMP/CheckFormatBatches" -P Tests/Format/CheckFormatBatches.cmake
+
+  # Windows and macOS. Linux has no job here: the ASan job builds Debug and runs the same headless tests (with Clang), and
+  # the lavapipe job builds Release (with GCC, keeping its extra warnings) and runs them too.
   build-and-test:
     name: ${{ matrix.os }} / ${{ matrix.config }}
     runs-on: ${{ matrix.os }}
@@ -29,12 +60,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ ubuntu-24.04, windows-latest, macos-15 ]
+        os: [ windows-latest, macos-15 ]
         config: [ Debug, Release ]
-        exclude:
-          # The lavapipe job builds the same Release configuration and runs these tests too.
-          - os: ubuntu-24.04
-            config: Release
         include:
           - os: windows-latest
             launcher: sccache
@@ -45,16 +72,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install dependencies (Linux)
-        timeout-minutes: 20
-        if: runner.os == 'Linux'
-        run: |
-          scripts/ci-apt-install.sh ninja-build glslc libvulkan1 libdbus-1-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols
-
       - name: Install dependencies (macOS)
         timeout-minutes: 10
         if: runner.os == 'macOS'
-        run: brew install ninja shaderc clang-format
+        run: brew install ninja shaderc
 
       - name: Install Vulkan SDK (Windows)
         if: runner.os == 'Windows'
@@ -106,13 +127,7 @@ jobs:
           key: ${{ steps.deps.outputs.cache-primary-key }}
 
       - name: Configure
-        shell: bash
-        run: |
-          formatCheck=OFF
-          profile=OFF
-          if [[ "${{ runner.os }}" == "Linux" && "${{ matrix.config }}" == "Debug" ]]; then profile=ON; fi
-          if [[ "${{ runner.os }}" == "macOS" && "${{ matrix.config }}" == "Debug" ]]; then formatCheck=ON; fi
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DBASALT_CHECK_FORMAT=$formatCheck -DBASALT_PROFILE=$profile -DBASALT_BENCHMARK_TESTS=${{ matrix.config == 'Release' && 'ON' || 'OFF' }}
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DBASALT_CHECK_FORMAT=OFF -DBASALT_BENCHMARK_TESTS=${{ matrix.config == 'Release' && 'ON' || 'OFF' }}
 
       # cmake/Dependencies.cmake embeds MSVC debug information (/Z7) in Debug objects when a launcher is set. A dependency
       # that adds /Zi itself would make its objects uncacheable again, and one that drops /Z7 would lose debug information.
@@ -157,7 +172,8 @@ jobs:
           if-no-files-found: warn
 
   # AddressSanitizer + UndefinedBehaviorSanitizer over every headless test. All code, third-party
-  # included, is instrumented (cmake/Sanitizers.cmake).
+  # included, is instrumented (cmake/Sanitizers.cmake). It is also CI's only Linux Debug build, and the only build with
+  # Tracy (BASALT_PROFILE), which would otherwise go uncompiled.
   sanitizers:
     name: ubuntu-24.04 / ASan+UBSan
     runs-on: ubuntu-24.04
@@ -202,7 +218,7 @@ jobs:
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
             -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
-            "-DBASALT_SANITIZE=address;undefined" -DBASALT_CHECK_FORMAT=OFF
+            "-DBASALT_SANITIZE=address;undefined" -DBASALT_CHECK_FORMAT=OFF -DBASALT_PROFILE=ON
 
       - name: Check that the build uses the caches
         shell: bash
@@ -283,10 +299,11 @@ jobs:
       - name: clang-tidy
         run: scripts/clang_tidy.py -p build --shard $(( ${{ strategy.job-index }} + 1 ))/${{ strategy.job-total }} -j "$(nproc)"
 
-  # Source-based coverage of the headless tests. Informational only: the summary is shown on the run
-  # page and the HTML report is uploaded as an artifact.
+  # Source-based coverage of the headless tests, on pushes to main only (pull requests skip a full build). Informational
+  # only, never a gate: the summary is shown on the run page and the HTML report is uploaded as an artifact.
   coverage:
     name: ubuntu-24.04 / coverage
+    if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -433,8 +450,8 @@ jobs:
         id: build
         run: cmake --build build -- -k 0
 
-      # The GPU regressions, plus headless tests showing that this job also covers ubuntu-24.04 / Release (excluded from
-      # the build-and-test matrix).
+      # The GPU regressions, plus headless tests showing that this job also covers ubuntu-24.04 / Release (the
+      # build-and-test matrix has no Linux jobs).
       # Every name in GPU_PART_1 too, with the gpu label: a renamed one would quietly move its test into part 2, and one
       # without the label would leave both parts.
       - name: Verify the expected tests are registered

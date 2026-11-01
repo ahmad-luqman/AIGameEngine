@@ -40,7 +40,8 @@ Extra checks (each one is also a CI job; run locally when touching memory handli
   target (`scripts/fuzz.sh --list`) and uploads `fuzz-crashes-<Target>` when libFuzzer writes crash, timeout or
   out-of-memory inputs.
 - Coverage: `scripts/coverage.sh` (Clang) prints a per-file summary and writes
-  `build-coverage/coverage/html/index.html`. Use it to find untested code; it is not a gate.
+  `build-coverage/coverage/html/index.html`. Use it to find untested code; it is not a gate (CI runs it on pushes to
+  `main` only).
 
 Failure handling:
 - A compiler warning is an error — fix the code, never silence the warning.
