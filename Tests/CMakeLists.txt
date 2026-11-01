@@ -61,11 +61,22 @@ list(APPEND basaltUnitTests BasaltTests)
 
 set_tests_properties(${basaltUnitTests} PROPERTIES TIMEOUT 600)
 
-# Formatting check. clang-format output differs between major versions, so CI turns this off in its build jobs and runs
-# the same two scripts in its format job with a pinned clang-format (.github/workflows/ci.yml).
+# Formatting check, with the clang-format on PATH. CI turns it off in its build jobs and runs these two scripts in its
+# format job with a pinned clang-format (.github/workflows/ci.yml), which another major version may disagree with.
 find_program(BASALT_CLANG_FORMAT clang-format)
 option(BASALT_CHECK_FORMAT "Register the clang-format check as a test" ON)
 if(BASALT_CHECK_FORMAT AND BASALT_CLANG_FORMAT)
+	# A warning, not an error: a local clang-format of another major version still checks most code the same way.
+	file(STRINGS "${PROJECT_SOURCE_DIR}/.github/workflows/ci.yml" pinnedFormatLine REGEX "^ *CLANG_FORMAT_VERSION: *[0-9]")
+	execute_process(COMMAND "${BASALT_CLANG_FORMAT}" --version OUTPUT_VARIABLE localFormatVersion ERROR_QUIET
+		OUTPUT_STRIP_TRAILING_WHITESPACE)
+	string(REGEX MATCH "CLANG_FORMAT_VERSION: *([0-9]+)" pinnedFormatMatch "${pinnedFormatLine}")
+	set(pinnedFormatMajor "${CMAKE_MATCH_1}")
+	string(REGEX MATCH "clang-format version ([0-9]+)" localFormatMatch "${localFormatVersion}")
+	if(NOT pinnedFormatMajor OR NOT CMAKE_MATCH_1 STREQUAL pinnedFormatMajor)
+		message(WARNING "CodeFormat uses ${BASALT_CLANG_FORMAT} (${localFormatVersion}), but CI checks with clang-format "
+			"${pinnedFormatMajor} (CLANG_FORMAT_VERSION in .github/workflows/ci.yml), which may judge some code differently.")
+	endif()
 	add_test(NAME CodeFormat COMMAND "${CMAKE_COMMAND}" -DCLANG_FORMAT=${BASALT_CLANG_FORMAT} -DSOURCE_DIR=${PROJECT_SOURCE_DIR} -P "${PROJECT_SOURCE_DIR}/cmake/CheckFormat.cmake")
 	# The check itself: batch boundaries, an empty tree and a clang-format that cannot start.
 	add_test(NAME CheckFormatBatches COMMAND "${CMAKE_COMMAND}" -DCLANG_FORMAT=${BASALT_CLANG_FORMAT} -DREPO_DIR=${PROJECT_SOURCE_DIR} "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/CheckFormatBatches" -P "${CMAKE_CURRENT_SOURCE_DIR}/Format/CheckFormatBatches.cmake")

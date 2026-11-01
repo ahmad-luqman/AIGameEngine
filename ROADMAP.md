@@ -17,8 +17,9 @@ single-session milestones). Run each milestone as one long autonomous session at
 - All requirements of the original specification are implemented: glTF import, gizmos, PBR, IBL from
   HDRIs, soft cascaded shadows, SSAO, HDR + tonemapping, Jolt physics, Lua scripting with
   creation/destruction/prefabs, an editor, export, and a full automation API (CLI + TCP).
-- CI builds and tests on Windows, Ubuntu and macOS (Debug + Release) — but without a GPU. Rendering has
-  only been verified on macOS (Apple M4 Max via MoltenVK) with zero validation errors.
+- CI builds and tests on Windows and macOS (Debug + Release) and Ubuntu (Debug under ASan+UBSan; Release with the GPU
+  tests on lavapipe, Mesa's CPU Vulkan driver). On a real GPU, rendering has only been verified on macOS (Apple M4 Max
+  via MoltenVK) with zero validation errors.
 - Over 800 unit test cases, a feature test with over 600 Lua checks, and Tetris, Joints, Marble Run, Breakout, First
   Person, Movement Demo and Platformer samples with scripted gameplay tests.
 

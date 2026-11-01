@@ -227,8 +227,8 @@ scripts/test.sh             # build + ctest (unit tests, format check, ...)
   `Dist` (shipping: no asserts — defines `BS_DIST`).
 - Warnings are errors (`BASALT_WARNINGS_AS_ERRORS=ON`). Do not disable warnings to make code compile.
 - CI also runs ASan+UBSan (`-DBASALT_SANITIZE="address;undefined"`), clang-tidy (`scripts/clang_tidy.py`, three shards;
-  checks in `.clang-tidy`), a coverage report (`scripts/coverage.sh`, on pushes to `main` only) and libFuzzer targets for every untrusted input
-  (`scripts/fuzz.sh`, `Tests/Fuzz/`, `FUZZ_JOBS` targets at a time; nightly long runs). Parse untrusted JSON with
+  checks in `.clang-tidy`), a coverage report (`scripts/coverage.sh`, on pushes to `main` only) and libFuzzer targets
+  for every untrusted input (`scripts/fuzz.sh`, `Tests/Fuzz/`, `FUZZ_JOBS` targets at a time; nightly long runs). Parse untrusted JSON with
   `ParseJson` and read floats with `JsonToFloat` (`Basalt/Core/JsonUtils.h`). Tests carry ctest labels
   (`unit`, `integration`, `gpu`, `format`, `benchmark`) for `ctest -L/-LE`. Details: the basalt-build-test skill.
 - CI compiles through ccache (sccache on Windows; Debug objects then embed debug information, `/Z7`) set by the
@@ -246,9 +246,10 @@ scripts/test.sh             # build + ctest (unit tests, format check, ...)
 
 Formatting is enforced by `.clang-format` (tabs, Allman braces for classes/functions/control flow,
 namespace braces on the same line, namespace contents indented). Run `scripts/format.sh` before every
-commit; the `CodeFormat` test fails on unformatted code. CI checks formatting in its `format` job with the clang-format
-release pinned there (`CLANG_FORMAT_VERSION` in `.github/workflows/ci.yml`, 23.x); other major versions format some
-code differently (Ubuntu's apt clang-format 18 does), so bump the pin and reformat the tree in one change.
+commit; the `CodeFormat` test fails on unformatted code. CI's `format` job pins clang-format (`CLANG_FORMAT_VERSION` in
+`.github/workflows/ci.yml`); other major versions format some code differently, so `scripts/format.sh` warns when its
+clang-format (`CLANG_FORMAT`, else the one on `PATH`) is another major (it says how to install the pinned
+one), and a bump of the pin reformats the tree in the same change.
 
 Naming:
 
@@ -324,7 +325,7 @@ Other rules:
   `Assets/Scripts/FeatureTest.lua`, run by ctest through `basalt batch FeatureTest.batch.json`). Add a
   `Check(...)` for every new API function and put every new component in the scene.
 - `PhysicsDeterminism` (`Tests/Data/Determinism`) pins the state hashes of a physics-heavy scene, which
-  must match on every CI platform and configuration (Debug, Release, ASan, coverage). Deliberate changes to
+  must match on every CI platform and configuration (Debug, Release, ASan; coverage on pushes to `main`). Deliberate changes to
   physics, the runtime UUID stream, scene serialization or the component registry legitimately move them: update the expected
   hashes (see its README). An unexplained change is a determinism bug.
 - GPU tests (label `gpu`) are registered by `scripts/build.sh` unless `CI` is set (CI registers them
