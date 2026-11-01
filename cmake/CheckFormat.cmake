@@ -42,3 +42,7 @@ endwhile()
 if(unformatted)
 	message(FATAL_ERROR "Code is not formatted. Run scripts/format.sh (or clang-format -i) and commit the result.")
 endif()
+
+# Evidence of what a passing run checked.
+execute_process(COMMAND "${CLANG_FORMAT}" --version OUTPUT_VARIABLE version OUTPUT_STRIP_TRAILING_WHITESPACE)
+message(STATUS "${count} files formatted as ${version} expects")

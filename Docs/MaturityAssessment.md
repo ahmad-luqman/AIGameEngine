@@ -29,7 +29,7 @@ not benchmarks. Competitor facts are from general knowledge plus the sources at 
 | Shaders | ~1.8K lines GLSL, 38 shader files |
 | Tests | 36.5K lines, ~1,035 test cases/subcases, 600+ feature-test Lua checks (per ROADMAP; 334 `Check(` call sites), 11 libFuzzer targets, 7 sample games with scripted tests, GPU golden tests |
 | Test:engine ratio | ~0.66 (very high; most engines are far lower) |
-| CI | Win/macOS × Debug/Release, Linux Release + lavapipe GPU job, Linux Debug ASan+UBSan, clang-tidy, format, coverage (on `main`), nightly fuzz, benchmarks, determinism hash pinning |
+| CI | Win/macOS × Debug/Release, Linux Release with lavapipe GPU tests, Linux Debug ASan+UBSan, clang-tidy, format, coverage (on `main`), fuzz on every push and nightly, benchmarks, determinism hash pinning |
 | Docs | ~7.6K lines: Scripting API (116 KB), Automation commands (generated), Components (generated), MCP, Rendering, LuaLS defs |
 | Scale reference | Godot ≈ 1.5M+ lines, Bevy ≈ 300K+, O3DE ≈ multi-million, Unreal ≈ 10M+ |
 

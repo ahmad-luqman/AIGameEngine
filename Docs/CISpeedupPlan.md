@@ -55,7 +55,7 @@ Target after sessions 1–3: about 15 minutes per run.
 | 1 | Compiler cache, one dependency-source cache, merge ubuntu/Release into lavapipe | Yes (every build) | Merged (#56) |
 | 2 | Shard clang-tidy; run fuzz targets concurrently | Yes (two longest jobs) | Merged (#57) |
 | 3 | Parallel ctest, fast `ReleasePackaging`, shard `BasaltTests` | Yes (test steps) | Merged (#59) |
-| 4 | Remove redundant jobs; early format job; coverage on `main` only | Runner minutes, faster feedback | In review |
+| 4 | Remove redundant jobs; early format job; coverage on `main` only | Runner minutes, faster feedback | In review (#62) |
 | 5 | Shared setup action; nightly fuzz builds once | Maintenance | Todo |
 | — | Nightly fuzz findings (FuzzGltf, FuzzCommand) | Separate bug-fix PRs | FuzzCommand merged (#58); FuzzGltf merged (#61) |
 
@@ -137,7 +137,8 @@ Goal: test steps shrink to their longest single test.
   Residual risk: a GCC-only warning in Debug-only code — check with g++ locally per the GCC CI memory.
 - Coverage: run on `push` to `main` only (`if: github.event_name == 'push'`); it is informational, never a gate.
 - Early format job (~1 min, ubuntu, `clang-format` from apt at the version `cmake/CheckFormat.cmake` expects) so
-  style failures appear before the macOS build; keep or drop the `CodeFormat` ctest on macOS Debug accordingly.
+  style failures appear before the macOS build; keep or drop the `CodeFormat` ctest on macOS Debug accordingly. (Done
+  differently: a clang-format pinned from PyPI, see the progress log.)
 - Optional, discuss first: fold the per-push fuzz run into the ASan job (`BASALT_FUZZ=ON` adds
   `-fsanitize=fuzzer-no-link` everywhere, so the ASan tests run instrumented binaries; saves one full Clang ASan
   build per run).
@@ -324,17 +325,34 @@ Record per session: PR number, measured job times after merge, anything that dev
     `main`, but it changed `MeshSource.h`, which many sources include): 12.8 min wall, set by windows/Release (12.8), ASan (11.7) and lavapipe part 1
     (11.6); lavapipe part 2 9.9, fuzz 10.3, macOS Release 10.4 and Debug 9.9, windows/Debug 9.2, ubuntu/Debug 8.3,
     coverage 6.8, clang-tidy shards 6.0, 7.2 and 5.5.
-- 2026-11-01, session 4, deviations from the plan:
+- 2026-11-01, session 4 (#62), deviations from the plan:
   - ubuntu/Debug is gone, and with it every Linux entry of the `build-and-test` matrix (ubuntu/Release already ran in the
     lavapipe job), so that job lost its Linux install step and Tracy switch. Tracy (`BASALT_PROFILE=ON`) moved to the ASan
-    job, now CI's only Linux Debug build; locally (macOS, ASan and UBSan; Apple's runtime has no LeakSanitizer) every
-    headless test passed with it. GCC now compiles only Release (lavapipe), so a GCC warning in Debug-only code shows up
-    only locally.
-  - Coverage runs on pushes to `main` only (`if: github.event_name == 'push'`; `on.push` already lists only `main`). A
-    merge whose head commit says `[skip ci]` therefore also skips the coverage report.
+    job, which on pull requests is now CI's only Linux Debug build of the engine, apps and tests (fuzz builds only its
+    targets). A new step there fails when Tracy is not enabled (`BASALT_PROFILE` quietly does nothing without Tracy's
+    target) or when a test a missing tool or rename would drop (`FeatureTest`, `PhysicsDeterminism`, `CrashReport`, the
+    `BasaltTests` entries) is not registered. The first run passed with LeakSanitizer (locally, on macOS, ASan and UBSan
+    only). Lost with the job: `CrashReport` in a Linux Debug build (it skips under ASan; lavapipe runs it in Release), and
+    GCC at -O0 (GCC now compiles only Release, in lavapipe, and Dist, in `release.yml`), so a GCC warning that shows only in
+    unoptimized builds shows up only locally. No sources use `BS_DEBUG`, and asserts stay on in Release. Tracy's crash
+    signal handlers (installed once a profiler connects) are off in sanitizer builds, as `Core/CrashReporter` is.
+  - Coverage runs on pushes to `main` and on manual runs (`workflow_dispatch`, new, which runs every job on a chosen
+    branch). Its numbers were never a gate, but a test that fails only in its instrumented build now first fails on `main`.
+    Coverage now runs nowhere else, so a merge whose head commit says `[skip ci]`, or whose run a quickly following push
+    to `main` cancels (`cancel-in-progress`), leaves that commit without a report.
   - The format job does not take clang-format from apt: Ubuntu 24.04's clang-format 18 reports 9 places in the current
-    tree that 22.1.8 and 23.1.3 (PyPI) and 23.1.4 (Homebrew) all accept. The job installs `CLANG_FORMAT_VERSION`
-    (23.1.3, PyPI's newest) into a virtual environment, checks the reported version, and runs `cmake/CheckFormat.cmake` and
-    `Tests/Format/CheckFormatBatches.cmake` directly (no configure, so no dependency sources), replacing the `CodeFormat`
-    and `CheckFormatBatches` ctests on macOS Debug, which no longer installs clang-format. No job waits for it.
+    tree that 22.1.8 and 23.1.3 (PyPI) and 23.1.4 (Homebrew) all accept. The job installs the `CLANG_FORMAT_VERSION`
+    wheel (23.1.3, PyPI's newest) into a virtual environment (Ubuntu's system pip refuses installs), checks the reported
+    version, and runs `cmake/CheckFormat.cmake` and `Tests/Format/CheckFormatBatches.cmake` directly (no configure, so no
+    dependency sources). They replace the `CodeFormat` and `CheckFormatBatches` ctests on macOS Debug, which no longer
+    installs clang-format. No job waits for it. `CheckFormat.cmake` now reports how many files it checked and with which
+    version. Locally, `scripts/format.sh` (which takes `CLANG_FORMAT`) and the configure that registers `CodeFormat` warn
+    when the clang-format's major version differs from the pin, read from `ci.yml`.
+  - The first run's format job failed in `CheckFormatBatches`, a bug the macOS ctest had hidden: CMake wraps `message()`
+    text, and with the runner's shorter path "failed to run" broke over two lines. The script now collapses whitespace
+    before matching, and the launch-failure case now runs with paths of every length that moves the wrap through the
+    phrase (it fails without the fix). Review also found that its misformatted-file case never reached the last batch (`File101.cpp` sorted
+    third); the generated names are now zero-padded.
   - Not done: folding the per-push fuzz run into the ASan job (optional in the plan, left for a later discussion).
+  - First run (41320853453, 331ffc6): 9.2 min wall, set by clang-tidy shard 2 (9.1 min; the shards took 4.6-9.1 min) with
+    fuzz 5.7, ASan 5.9 and lavapipe 5.0 / 3.4; Windows 4.3 / 2.9 and macOS 2.2 / 1.3 (Debug / Release); format 12 s.
