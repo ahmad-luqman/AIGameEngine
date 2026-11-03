@@ -1,15 +1,18 @@
 name: Release
 
 # A v<version> tag builds Dist on every platform, packages the tools and the samples (scripts/package_release.py) and
-# publishes them as a GitHub release. Pull requests that change the main inputs of the packages (the workflow, the
-# packaging scripts, the Project module, the runtime, the Process, Window, VulkanLoader, PackArchive and CrashReporter
-# sources, the samples), and manual runs, do everything except publishing, so the pipeline is tested before a tag needs it.
+# publishes them as a GitHub release. Pull requests that change the main inputs of the packages (the workflow, the shared
+# setup action and the CI scripts it and this workflow run, the packaging scripts, the Project module, the runtime, the
+# Process, Window, VulkanLoader, PackArchive and CrashReporter sources, the samples), and manual runs, do everything except
+# publishing, so the pipeline is tested before a tag needs it.
 on:
   push:
     tags: [ 'v*' ]
   pull_request:
     paths:
       - .github/workflows/release.yml
+      - .github/actions/setup-basalt/**
+      - scripts/ci-*.sh
       - scripts/package_release.py
       - scripts/sign-macos.sh
       - Basalt/Source/Basalt/Project/**
@@ -28,11 +31,6 @@ concurrency:
 
 permissions:
   contents: read
-
-# Dependency sources come from CI's dependency-source cache (main's entry, or this ref's own; scripts/ci-fetch-deps.sh,
-# cmake/DependencySources.cmake).
-env:
-  BASALT_DEPS_SOURCE_DIR: ${{ github.workspace }}/_deps
 
 jobs:
   package:
@@ -56,11 +54,14 @@ jobs:
         shell: bash
         run: python scripts/package_release.py --check-tag "$GITHUB_REF_NAME"
 
-      - name: Install dependencies (Linux)
-        timeout-minutes: 20
-        if: runner.os == 'Linux'
-        run: |
-          scripts/ci-apt-install.sh ninja-build glslc libvulkan1 libdbus-1-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols
+      # Build tools, plus the Vulkan loader and MoltenVK on macOS: the exported .app bundles them, and so does the macOS
+      # tools archive. Dependency sources come from CI's dependency-source cache (main's entry, or this ref's own;
+      # scripts/ci-fetch-deps.sh, cmake/DependencySources.cmake).
+      - name: Set up the build tools
+        timeout-minutes: 30
+        uses: ./.github/actions/setup-basalt
+        with:
+          brew-packages: vulkan-loader molten-vk
 
       # Pinned and checksummed. The type2 runtime is passed explicitly; appimagetool would otherwise download the
       # latest one while it builds each AppImage.
@@ -77,50 +78,6 @@ jobs:
           printf '#!/bin/sh\nexec "%s/appimagetool" --runtime-file "%s/runtime" "$@"\n' "$tools" "$tools" > "$tools/appimagetool-pinned"
           chmod +x "$tools/appimagetool-pinned"
           echo "APPIMAGETOOL=$tools/appimagetool-pinned" >> "$GITHUB_ENV"
-
-      # The exported .app bundles the Vulkan loader and MoltenVK, and so does the macOS tools archive.
-      - name: Install dependencies (macOS)
-        timeout-minutes: 10
-        if: runner.os == 'macOS'
-        run: brew install ninja shaderc vulkan-loader molten-vk
-
-      - name: Install Vulkan SDK (Windows)
-        if: runner.os == 'Windows'
-        uses: jakoch/install-vulkan-sdk-action@v1
-        with:
-          vulkan_version: latest
-          install_runtime: true
-          cache: true
-          stripdown: true
-
-      - name: Set up MSVC (Windows)
-        if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
-
-      - name: Install Ninja (Windows)
-        if: runner.os == 'Windows'
-        run: choco install ninja -y
-
-      - name: Restore dependency sources
-        id: deps
-        uses: actions/cache/restore@v4
-        with:
-          path: _deps
-          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'scripts/ci-fetch-deps.sh') }}
-
-      - name: Fetch dependency sources
-        if: steps.deps.outputs.cache-hit != 'true'
-        shell: bash
-        run: scripts/ci-fetch-deps.sh _deps
-
-      # Saved right away (actions/cache saves only after a successful job), so a later failing step does not leave the
-      # next runs fetching again.
-      - name: Save dependency sources
-        if: steps.deps.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: _deps
-          key: ${{ steps.deps.outputs.cache-primary-key }}
 
       # Dist: optimized, no asserts. The tests run in CI on every push; here the samples' smoke tests check the build.
       - name: Configure

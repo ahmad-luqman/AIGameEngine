@@ -27,13 +27,14 @@ fi
 # The rest runs a copy of the script with stand-ins for cmake, brew and the fuzz targets, so nothing is built or fuzzed
 # here even if a check regresses. FuzzAlpha and FuzzBeta each wait for the other to start, so they pass only when they
 # run at the same time, and FuzzAlpha finishes after FuzzBeta, against the target order. FAKE_CRASH, FAKE_KILL,
-# FAKE_KILLSHELL and FAKE_NODONE make the named target misbehave; FAKE_BUILD_FAIL fails the build.
+# FAKE_KILLSHELL and FAKE_NODONE make the named target misbehave; FAKE_BUILD_FAIL fails the build. cmake.calls logs every
+# cmake command.
 unset FUZZ_JOBS
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/scripts" "$work/Tests/Fuzz/Corpus/FuzzAlpha" "$work/tools" "$work/llvm/bin" "$work/build-fuzz/bin"
 cp "$script" "$work/scripts/fuzz.sh"
-printf '#!/bin/sh\ncase "$*" in *--build*) [ -n "${FAKE_BUILD_FAIL:-}" ] && exit 1 ;; esac\nexit 0\n' > "$work/tools/cmake"
+printf '#!/bin/sh\necho "$*" >> "$FAKE_STATE/cmake.calls"\ncase "$*" in *--build*) [ -n "${FAKE_BUILD_FAIL:-}" ] && exit 1 ;; esac\nexit 0\n' > "$work/tools/cmake"
 printf '#!/bin/sh\necho "%s"\n' "$work/llvm" > "$work/tools/brew"
 printf '#!/bin/sh\nexit 0\n' > "$work/llvm/bin/clang++"
 cat > "$work/fake-fuzzer" << 'EOF_FUZZER'
@@ -82,7 +83,7 @@ chmod +x "$work/tools/"* "$work/llvm/bin/clang++" "$work/build-fuzz/bin/"*
 export FAKE_STATE="$work"
 fuzz()
 {
-	rm -f "$work"/*.started "$work"/*.done
+	rm -f "$work"/*.started "$work"/*.done "$work/cmake.calls"
 	(cd "$work" && PATH="$work/tools:$PATH" FUZZ_JOBS="${JOBS:-2}" "${SHELL_UNDER_TEST:-bash}" scripts/fuzz.sh 5 "$@" 2>&1)
 }
 # Each summary block is whole and they come in target order: every DONE line names the target of the block it is in.
@@ -161,4 +162,44 @@ if output="$(FAKE_BUILD_FAIL=1 fuzz)"; then
 	fail "a failed build passed: $output"
 fi
 compgen -G "$work/*.started" > /dev/null && fail "targets ran after a failed build: $output"
+
+# FUZZ_MODE: build only builds (the nightly's build job), run only runs what is in build-fuzz/bin (its per-target jobs).
+for mode in "" Build all build-only; do
+	if output="$(FUZZ_MODE="$mode" fuzz FuzzGamma)"; then
+		[[ -z "$mode" ]] && continue
+		fail "FUZZ_MODE '$mode' was accepted"
+	fi
+	[[ "$output" == *"FUZZ_MODE must be build, run or build-and-run, not '$mode'"* ]] || fail "FUZZ_MODE '$mode' printed '$output'"
+done
+output="$(FUZZ_MODE=build fuzz)" || fail "FUZZ_MODE=build failed: $output"
+[[ "$output" == *"Built 3 targets in build-fuzz/bin"* ]] || fail "FUZZ_MODE=build did not report the build: $output"
+grep -q -- "--build build-fuzz --target FuzzAlpha FuzzBeta FuzzGamma" "$work/cmake.calls" ||
+	fail "FUZZ_MODE=build did not build every target: $(cat "$work/cmake.calls")"
+compgen -G "$work/*.started" > /dev/null && fail "FUZZ_MODE=build ran targets: $output"
+if output="$(FUZZ_MODE=build FAKE_BUILD_FAIL=1 fuzz)"; then
+	fail "FUZZ_MODE=build passed a failed build: $output"
+fi
+output="$(FUZZ_MODE=run fuzz)" || fail "FUZZ_MODE=run failed: $output"
+[[ ! -e "$work/cmake.calls" ]] || fail "FUZZ_MODE=run ran cmake: $(cat "$work/cmake.calls")"
+for target in FuzzAlpha FuzzBeta FuzzGamma; do
+	[[ "$output" == *"$target: passed"* ]] || fail "$target did not pass with FUZZ_MODE=run: $output"
+done
+check_blocks "$output"
+# Every selected target must be there and executable before any of them fuzzes; unselected ones may be missing.
+chmod -x "$work/build-fuzz/bin/FuzzGamma"
+if output="$(FUZZ_MODE=run fuzz)"; then
+	fail "FUZZ_MODE=run passed with a target it cannot execute: $output"
+fi
+[[ "$output" == *"build-fuzz/bin lacks (or cannot execute) FuzzGamma"* ]] || fail "the unusable target was not reported: $output"
+compgen -G "$work/*.started" > /dev/null && fail "targets ran although one could not: $output"
+mv "$work/build-fuzz/bin/FuzzGamma" "$work/FuzzGamma.moved"
+if output="$(FUZZ_MODE=run fuzz)"; then
+	fail "FUZZ_MODE=run passed without a target: $output"
+fi
+[[ "$output" == *"build-fuzz/bin lacks (or cannot execute) FuzzGamma"* ]] || fail "the missing target was not reported: $output"
+# FuzzGamma is the stand-in that runs alone (the other two wait for each other).
+mv "$work/FuzzGamma.moved" "$work/build-fuzz/bin/FuzzGamma"
+chmod +x "$work/build-fuzz/bin/FuzzGamma"
+rm "$work/build-fuzz/bin/FuzzAlpha"
+output="$(FUZZ_MODE=run fuzz FuzzGamma)" || fail "FUZZ_MODE=run needed a target it did not select: $output"
 echo "fuzz.sh checks passed"

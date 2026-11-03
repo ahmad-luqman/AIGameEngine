@@ -1,65 +1,58 @@
 name: Fuzz (nightly)
 
 # Longer fuzzing than the per-push CI job, one job per target so the wall-clock time does not grow with the number
-# of targets (twelve targets at 20 minutes each outlasted the old single job's 150-minute timeout). Each target's
-# grown corpus is cached between nights so each run starts from everything found before.
+# of targets (twelve targets at 20 minutes each outlasted the old single job's 150-minute timeout). One job builds every
+# target and the per-target jobs download them, so they need no compiler, dependency sources or compiler cache. Each
+# target's grown corpus is cached between nights so each run starts from everything found before. After changing this
+# workflow or .github/actions/setup-basalt, start it by hand on the branch (gh workflow run fuzz-nightly.yml --ref
+# <branch> -f seconds=60): nothing else runs it before the next night.
 on:
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:
     inputs:
       seconds:
-        description: Seconds per fuzz target (at most 2400; the Fuzz step's 80-minute timeout also covers the build)
+        description: Seconds per fuzz target (at most 2400, so a run fits the Fuzz step's 60-minute timeout)
         default: "1200"
 
-# The fuzz build compiles through ccache, restoring (never saving) the CI fuzz job's cache, and takes the dependency
-# sources from main's entry of CI's dependency-source cache (scripts/ci-fetch-deps.sh, cmake/DependencySources.cmake).
-# Without libdbus-1-dev a fetch would leave out nativefiledialog, so the jobs only restore that cache; on a miss their
-# configure downloads as usual.
 env:
-  CMAKE_C_COMPILER_LAUNCHER: ccache
-  CMAKE_CXX_COMPILER_LAUNCHER: ccache
-  CCACHE_COMPILERCHECK: content
-  BASALT_DEPS_SOURCE_DIR: ${{ github.workspace }}/_deps
+  SECONDS_PER_TARGET: ${{ github.event.inputs.seconds || '1200' }}
 
 jobs:
-  targets:
+  # The build compiles through ccache, restoring (never saving) the CI fuzz job's cache, and takes the dependency
+  # sources from CI's dependency-source cache (main's entry; scripts/ci-fetch-deps.sh, cmake/DependencySources.cmake).
+  build:
+    name: build
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CMAKE_C_COMPILER_LAUNCHER: ccache
+      CMAKE_CXX_COMPILER_LAUNCHER: ccache
+      CCACHE_COMPILERCHECK: content
     outputs:
       targets: ${{ steps.list.outputs.targets }}
     steps:
       - uses: actions/checkout@v4
 
+      # Checked before anything is built, so a bad manual input fails once instead of in every fuzz job.
+      - name: Check the input
+        run: |
+          if [[ ! "$SECONDS_PER_TARGET" =~ ^[0-9]{1,4}$ ]] || [[ "$SECONDS_PER_TARGET" -gt 2400 ]]; then
+            echo "::error::seconds must be a whole number of at most 2400 to fit the Fuzz step's timeout"
+            exit 1
+          fi
+
       - name: List fuzz targets
         id: list
-        run: |
-          targets="$(scripts/fuzz.sh --list)"
-          echo "targets=$targets" >> "$GITHUB_OUTPUT"
+        run: echo "targets=$(scripts/fuzz.sh --list)" >> "$GITHUB_OUTPUT"
 
-  fuzz:
-    needs: targets
-    name: fuzz / ${{ matrix.target }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 120
-    strategy:
-      fail-fast: false
-      matrix:
-        target: ${{ fromJSON(needs.targets.outputs.targets) }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install dependencies
-        timeout-minutes: 20
-        run: |
-          scripts/ci-apt-install.sh ninja-build glslc libvulkan1 clang libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols
-
-      - name: Restore dependency sources
-        uses: actions/cache/restore@v4
+      - name: Set up the build tools
+        timeout-minutes: 30
+        uses: ./.github/actions/setup-basalt
         with:
-          path: _deps
-          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'scripts/ci-fetch-deps.sh') }}
+          apt-packages: clang
 
-      # One target per job: saving from every job would store a near-identical copy of the CI fuzz cache per target.
+      # One build per night: saving would store a near-identical copy of the CI fuzz job's cache.
       - name: Compiler cache
         uses: hendrikmuhs/ccache-action@v1.2.24
         with:
@@ -67,6 +60,71 @@ jobs:
           max-size: 800M
           evict-old-files: 7d
           save: false
+
+      - name: Build
+        run: FUZZ_MODE=build scripts/fuzz.sh "$SECONDS_PER_TARGET"
+
+      - name: Check that the build uses the caches
+        run: scripts/ci-check-caches.sh build-fuzz
+
+      # Artifacts lose file modes, so the executables travel in a tarball. Debug builds with ASan, UBSan and coverage
+      # instrumentation are large; zstd shrinks them several times, and the artifact stores the tarball uncompressed.
+      - name: Pack the targets
+        env:
+          TARGETS: ${{ steps.list.outputs.targets }}
+        run: |
+          mapfile -t targets < <(jq -r '.[]' <<< "$TARGETS")
+          tar -C build-fuzz/bin -I 'zstd -T0 -3' -cf "$RUNNER_TEMP/fuzz-targets.tar.zst" "${targets[@]}"
+          ls -l "$RUNNER_TEMP/fuzz-targets.tar.zst"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-targets
+          path: ${{ runner.temp }}/fuzz-targets.tar.zst
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  fuzz:
+    needs: build
+    name: fuzz / ${{ matrix.target }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.build.outputs.targets) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: fuzz-targets
+          path: ${{ runner.temp }}
+
+      - name: Unpack the targets
+        run: |
+          mkdir -p build-fuzz/bin
+          tar -C build-fuzz/bin -I zstd -xf "$RUNNER_TEMP/fuzz-targets.tar.zst"
+
+      # The sanitizers print source locations only through llvm-symbolizer on PATH; without it a crash report is a list of
+      # raw addresses. The image ships it with a version suffix, if at all; otherwise apt installs LLVM.
+      - name: Find llvm-symbolizer
+        run: |
+          shopt -s nullglob
+          symbolizer="$(command -v llvm-symbolizer || true)"
+          versioned=(/usr/bin/llvm-symbolizer-*)
+          if [[ -z "$symbolizer" && ${#versioned[@]} -gt 0 ]]; then
+            symbolizer="$(printf '%s\n' "${versioned[@]}" | sort -V | tail -n 1)"
+          fi
+          if [[ -z "$symbolizer" ]]; then
+            scripts/ci-apt-install.sh llvm
+            symbolizer="$(command -v llvm-symbolizer)"
+          fi
+          mkdir -p "$RUNNER_TEMP/symbolizer"
+          ln -sf "$symbolizer" "$RUNNER_TEMP/symbolizer/llvm-symbolizer"
+          echo "$RUNNER_TEMP/symbolizer" >> "$GITHUB_PATH"
+          "$symbolizer" --version | head -n 2
 
       # Restored and saved separately so the corpus grown before a crash or a Fuzz step timeout is kept too
       # (actions/cache's own save is a post step that runs only when every earlier step succeeded).
@@ -79,16 +137,10 @@ jobs:
 
       # A step timeout fails the step instead of cancelling the job, so the corpus and crash steps below still run.
       - name: Fuzz
-        timeout-minutes: 80
+        timeout-minutes: 60
         env:
-          SECONDS_PER_TARGET: ${{ github.event.inputs.seconds || '1200' }}
           TARGET: ${{ matrix.target }}
-        run: |
-          if [[ ! "$SECONDS_PER_TARGET" =~ ^[0-9]{1,4}$ ]] || [[ "$SECONDS_PER_TARGET" -gt 2400 ]]; then
-            echo "seconds must be a whole number of at most 2400 to fit the step timeout" >&2
-            exit 1
-          fi
-          scripts/fuzz.sh "$SECONDS_PER_TARGET" "$TARGET"
+        run: FUZZ_MODE=run scripts/fuzz.sh "$SECONDS_PER_TARGET" "$TARGET"
 
       - name: Save corpus
         if: always()

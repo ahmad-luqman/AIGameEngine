@@ -14,15 +14,15 @@ concurrency:
   cancel-in-progress: true
 
 # Every build that compiles C++, including those in scripts/coverage.sh and scripts/fuzz.sh, compiles through ccache
-# (build-and-test uses sccache on Windows; the clang-tidy jobs compile only shaders and clear the launchers) and takes the
-# dependency sources from a cache shared by every job on an OS, and by the other workflows through main's entries (scripts/ci-fetch-deps.sh, cmake/DependencySources.cmake). A cache miss fetches them
-# into the same directory first, so cache hits and misses compile the same paths. The action sets ccache's
-# compiler_check to content only on macOS and Windows.
+# (build-and-test uses sccache on Windows; the clang-tidy jobs compile only shaders and clear the launchers). The ccache
+# action sets ccache's compiler_check to content only on macOS and Windows. Each job's build tools and dependency sources
+# come from .github/actions/setup-basalt: the sources from a cache shared by every job on an OS, and by the other
+# workflows through main's entries (scripts/ci-fetch-deps.sh, cmake/DependencySources.cmake). A cache miss fetches them
+# into the same directory first, so cache hits and misses compile the same paths.
 env:
   CMAKE_C_COMPILER_LAUNCHER: ccache
   CMAKE_CXX_COMPILER_LAUNCHER: ccache
   CCACHE_COMPILERCHECK: content
-  BASALT_DEPS_SOURCE_DIR: ${{ github.workspace }}/_deps
 
 jobs:
   # Formatting, checked alone so a style failure shows within a minute instead of after the builds; no job waits for it.
@@ -94,34 +94,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install dependencies (macOS)
-        timeout-minutes: 10
-        if: runner.os == 'macOS'
-        run: brew install ninja shaderc
-
-      - name: Install Vulkan SDK (Windows)
-        if: runner.os == 'Windows'
-        uses: jakoch/install-vulkan-sdk-action@v1
-        with:
-          vulkan_version: latest
-          install_runtime: true
-          cache: true
-          stripdown: true
-
-      - name: Set up MSVC (Windows)
-        if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
-
-      - name: Install Ninja (Windows)
-        if: runner.os == 'Windows'
-        run: choco install ninja -y
-
-      - name: Restore dependency sources
-        id: deps
-        uses: actions/cache/restore@v4
-        with:
-          path: _deps
-          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'scripts/ci-fetch-deps.sh') }}
+      - name: Set up the build tools
+        timeout-minutes: 30
+        uses: ./.github/actions/setup-basalt
 
       # Each compiler cache is capped (300M for Release, 1G for Windows Debug, 600M for macOS Debug). One generation of every
       # job's cache plus the dependency sources should fit the repository's 10 GB Actions cache; each run saves a new entry
@@ -134,20 +109,6 @@ jobs:
           variant: ${{ matrix.launcher || 'ccache' }}
           max-size: ${{ matrix.config == 'Release' && '300M' || matrix.launcher && '1G' || '600M' }}
           evict-old-files: 7d
-
-      - name: Fetch dependency sources
-        if: steps.deps.outputs.cache-hit != 'true'
-        shell: bash
-        run: scripts/ci-fetch-deps.sh _deps
-
-      # Saved right away (actions/cache saves only after a successful job), so a later failing step does not leave the
-      # next runs fetching again.
-      - name: Save dependency sources
-        if: steps.deps.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: _deps
-          key: ${{ steps.deps.outputs.cache-primary-key }}
 
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DBASALT_CHECK_FORMAT=OFF -DBASALT_BENCHMARK_TESTS=${{ matrix.config == 'Release' && 'ON' || 'OFF' }}
@@ -205,17 +166,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install dependencies
-        timeout-minutes: 20
-        run: |
-          scripts/ci-apt-install.sh ninja-build glslc libvulkan1 clang libdbus-1-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols
-
-      - name: Restore dependency sources
-        id: deps
-        uses: actions/cache/restore@v4
+      - name: Set up the build tools
+        timeout-minutes: 30
+        uses: ./.github/actions/setup-basalt
         with:
-          path: _deps
-          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'scripts/ci-fetch-deps.sh') }}
+          apt-packages: clang
 
       - name: Compiler cache
         uses: hendrikmuhs/ccache-action@v1.2.24
@@ -223,20 +178,6 @@ jobs:
           key: asan
           max-size: 800M
           evict-old-files: 7d
-
-      - name: Fetch dependency sources
-        if: steps.deps.outputs.cache-hit != 'true'
-        shell: bash
-        run: scripts/ci-fetch-deps.sh _deps
-
-      # Saved right away (actions/cache saves only after a successful job), so a later failing step does not leave the
-      # next runs fetching again.
-      - name: Save dependency sources
-        if: steps.deps.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: _deps
-          key: ${{ steps.deps.outputs.cache-primary-key }}
 
       - name: Configure
         run: |
@@ -286,31 +227,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install dependencies
-        timeout-minutes: 20
-        run: |
-          scripts/ci-apt-install.sh ninja-build glslc libvulkan1 clang clang-tidy libdbus-1-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols
-
-      - name: Restore dependency sources
-        id: deps
-        uses: actions/cache/restore@v4
+      - name: Set up the build tools
+        timeout-minutes: 30
+        uses: ./.github/actions/setup-basalt
         with:
-          path: _deps
-          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'scripts/ci-fetch-deps.sh') }}
-
-      - name: Fetch dependency sources
-        if: steps.deps.outputs.cache-hit != 'true'
-        shell: bash
-        run: scripts/ci-fetch-deps.sh _deps
-
-      # Saved right away (actions/cache saves only after a successful job), so a later failing step does not leave the
-      # next runs fetching again.
-      - name: Save dependency sources
-        if: steps.deps.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: _deps
-          key: ${{ steps.deps.outputs.cache-primary-key }}
+          apt-packages: clang clang-tidy
 
       # Clang's compile commands (clang-tidy does not know GCC-only flags). The GPU tests and fuzz targets add their
       # sources.
@@ -349,17 +270,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install dependencies
-        timeout-minutes: 20
-        run: |
-          scripts/ci-apt-install.sh ninja-build glslc libvulkan1 clang llvm libdbus-1-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols
-
-      - name: Restore dependency sources
-        id: deps
-        uses: actions/cache/restore@v4
+      - name: Set up the build tools
+        timeout-minutes: 30
+        uses: ./.github/actions/setup-basalt
         with:
-          path: _deps
-          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'scripts/ci-fetch-deps.sh') }}
+          apt-packages: clang llvm
 
       - name: Compiler cache
         uses: hendrikmuhs/ccache-action@v1.2.24
@@ -367,20 +282,6 @@ jobs:
           key: coverage
           max-size: 400M
           evict-old-files: 7d
-
-      - name: Fetch dependency sources
-        if: steps.deps.outputs.cache-hit != 'true'
-        shell: bash
-        run: scripts/ci-fetch-deps.sh _deps
-
-      # Saved right away (actions/cache saves only after a successful job), so a later failing step does not leave the
-      # next runs fetching again.
-      - name: Save dependency sources
-        if: steps.deps.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: _deps
-          key: ${{ steps.deps.outputs.cache-primary-key }}
 
       - name: Coverage
         run: scripts/coverage.sh
@@ -430,10 +331,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install dependencies
-        timeout-minutes: 20
-        run: |
-          scripts/ci-apt-install.sh ninja-build glslc libvulkan1 mesa-vulkan-drivers vulkan-validationlayers vulkan-tools xvfb xauth libdbus-1-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols
+      - name: Set up the build tools
+        timeout-minutes: 30
+        uses: ./.github/actions/setup-basalt
+        with:
+          apt-packages: mesa-vulkan-drivers vulkan-validationlayers vulkan-tools xvfb xauth
 
       # Load only lavapipe, so the run never depends on what else the runner image installs. The manifest's
       # file name differs between Mesa packages, so find it instead of hard-coding it.
@@ -449,13 +351,6 @@ jobs:
       - name: Vulkan device
         run: vulkaninfo --summary || true
 
-      - name: Restore dependency sources
-        id: deps
-        uses: actions/cache/restore@v4
-        with:
-          path: _deps
-          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'scripts/ci-fetch-deps.sh') }}
-
       # Both parts build the same tree; part 1 saves the cache for both.
       - name: Compiler cache
         uses: hendrikmuhs/ccache-action@v1.2.24
@@ -464,20 +359,6 @@ jobs:
           max-size: 300M
           evict-old-files: 7d
           save: ${{ matrix.part == 1 }}
-
-      - name: Fetch dependency sources
-        if: steps.deps.outputs.cache-hit != 'true'
-        shell: bash
-        run: scripts/ci-fetch-deps.sh _deps
-
-      # Saved right away (actions/cache saves only after a successful job), so a later failing step does not leave the
-      # next runs fetching again.
-      - name: Save dependency sources
-        if: steps.deps.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: _deps
-          key: ${{ steps.deps.outputs.cache-primary-key }}
 
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBASALT_GPU_TESTS=ON -DBASALT_GOLDEN_DRIVER=lavapipe -DBASALT_CHECK_FORMAT=OFF -DBASALT_BENCHMARK_TESTS=ON
@@ -558,17 +439,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install dependencies
-        timeout-minutes: 20
-        run: |
-          scripts/ci-apt-install.sh ninja-build glslc libvulkan1 clang libdbus-1-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols
-
-      - name: Restore dependency sources
-        id: deps
-        uses: actions/cache/restore@v4
+      - name: Set up the build tools
+        timeout-minutes: 30
+        uses: ./.github/actions/setup-basalt
         with:
-          path: _deps
-          key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'scripts/ci-fetch-deps.sh') }}
+          apt-packages: clang
 
       - name: Compiler cache
         uses: hendrikmuhs/ccache-action@v1.2.24
@@ -576,20 +451,6 @@ jobs:
           key: fuzz
           max-size: 800M
           evict-old-files: 7d
-
-      - name: Fetch dependency sources
-        if: steps.deps.outputs.cache-hit != 'true'
-        shell: bash
-        run: scripts/ci-fetch-deps.sh _deps
-
-      # Saved right away (actions/cache saves only after a successful job), so a later failing step does not leave the
-      # next runs fetching again.
-      - name: Save dependency sources
-        if: steps.deps.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: _deps
-          key: ${{ steps.deps.outputs.cache-primary-key }}
 
       - name: Fuzz (60 s per target)
         run: FUZZ_JOBS="$(nproc)" scripts/fuzz.sh 60

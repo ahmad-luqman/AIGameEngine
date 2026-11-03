@@ -4,6 +4,9 @@
 #        scripts/fuzz.sh --list   (prints the target names as a JSON array, for the nightly CI matrix)
 # FUZZ_JOBS=N runs N targets at a time (default 1; CI uses one per core); each prints a status line as it finishes, and
 # the summaries follow in target order.
+# FUZZ_MODE=build only builds the selected targets (the seconds are still checked), and FUZZ_MODE=run only runs them from
+# build-fuzz/bin without configuring or compiling anything; the nightly workflow builds once and runs each target on its
+# own runner. The default, build-and-run, does both.
 # Seeds come from Tests/Fuzz/Corpus/<Target>/; new interesting inputs collect in build-fuzz/corpus/ and
 # crashes in build-fuzz/crashes/ (add a regression test before fixing one). On macOS this needs Homebrew
 # LLVM (Apple's clang ships no libFuzzer).
@@ -37,6 +40,14 @@ if ! [[ "$jobs" =~ ^[1-9][0-9]*$ ]]; then
 	echo "FUZZ_JOBS must be a positive integer, not '$jobs'" >&2
 	exit 1
 fi
+mode="${FUZZ_MODE:-build-and-run}"
+case "$mode" in
+	build | run | build-and-run) ;;
+	*)
+		echo "FUZZ_MODE must be build, run or build-and-run, not '$mode'" >&2
+		exit 1
+		;;
+esac
 buildDir="build-fuzz"
 # An exact target name selects only that target (the nightly matrix passes one); otherwise the filter is a substring.
 selected=()
@@ -53,20 +64,36 @@ if [[ ${#selected[@]} -eq 0 ]]; then
 	exit 1
 fi
 
-compiler=(-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++)
-if [[ "$(uname)" == "Darwin" ]]; then
-	llvm="$(brew --prefix llvm 2>/dev/null || true)"
-	if [[ -z "$llvm" || ! -x "$llvm/bin/clang++" ]]; then
-		echo "Fuzzing on macOS needs Homebrew LLVM: brew install llvm" >&2
+if [[ "$mode" != run ]]; then
+	compiler=(-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++)
+	if [[ "$(uname)" == "Darwin" ]]; then
+		llvm="$(brew --prefix llvm 2>/dev/null || true)"
+		if [[ -z "$llvm" || ! -x "$llvm/bin/clang++" ]]; then
+			echo "Fuzzing on macOS needs Homebrew LLVM: brew install llvm" >&2
+			exit 1
+		fi
+		compiler=(-DCMAKE_C_COMPILER="$llvm/bin/clang" -DCMAKE_CXX_COMPILER="$llvm/bin/clang++")
+	fi
+
+	cmake -S . -B "$buildDir" -G Ninja -DCMAKE_BUILD_TYPE=Debug "${compiler[@]}" \
+		-DBASALT_FUZZ=ON -DBASALT_SANITIZE="address;undefined" \
+		-DBASALT_BUILD_EDITOR=OFF -DBASALT_BUILD_RUNTIME=OFF -DBASALT_BUILD_TESTS=OFF > /dev/null
+	cmake --build "$buildDir" --target "${selected[@]}"
+	if [[ "$mode" == build ]]; then
+		echo "Built ${#selected[@]} targets in $buildDir/bin"
+		exit 0
+	fi
+else
+	# Checked up front: a missing target would otherwise fail only after the others had fuzzed for their full time.
+	missing=()
+	for target in "${selected[@]}"; do
+		[[ -f "$buildDir/bin/$target" && -x "$buildDir/bin/$target" ]] || missing+=("$target")
+	done
+	if [[ ${#missing[@]} -gt 0 ]]; then
+		echo "FUZZ_MODE=run needs built targets, but $buildDir/bin lacks (or cannot execute) ${missing[*]}" >&2
 		exit 1
 	fi
-	compiler=(-DCMAKE_C_COMPILER="$llvm/bin/clang" -DCMAKE_CXX_COMPILER="$llvm/bin/clang++")
 fi
-
-cmake -S . -B "$buildDir" -G Ninja -DCMAKE_BUILD_TYPE=Debug "${compiler[@]}" \
-	-DBASALT_FUZZ=ON -DBASALT_SANITIZE="address;undefined" \
-	-DBASALT_BUILD_EDITOR=OFF -DBASALT_BUILD_RUNTIME=OFF -DBASALT_BUILD_TESTS=OFF > /dev/null
-cmake --build "$buildDir" --target "${selected[@]}"
 
 # Several targets share the machine's memory, so each gets a smaller limit, sized for one target per core on CI's
 # 4-core, 16 GB runners (each summary shows the target's peak RSS). An input that makes a target exceed it is an
