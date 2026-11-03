@@ -1477,6 +1477,7 @@ function BasaltScript:StopAllCoroutines() end
 ---@field LODDistance number
 ---@field LODInterval integer
 ---@field ClipLibraries AnimationClipLibrary[]
+---@field Preview boolean
 
 ---PropertyAnimation data as Entity:GetComponent returns it and SetComponent/AddComponent accept it.
 ---@class PropertyAnimationComponent
@@ -1501,6 +1502,10 @@ function BasaltScript:StopAllCoroutines() end
 ---@field RayHeight number
 ---@field RayDepth number
 ---@field Smoothing number
+---@field Target integer
+---@field LockSpeed number
+---@field LockHeight number
+---@field LockDistance number
 
 ---SpringBone data as Entity:GetComponent returns it and SetComponent/AddComponent accept it.
 ---@class SpringBoneComponent
@@ -1517,6 +1522,10 @@ function BasaltScript:StopAllCoroutines() end
 ---@field Layer string
 ---@field RecoveryTime number
 ---@field Bones RagdollBone[]
+---@field MotorStrength number
+---@field MotorFrequency number
+---@field MotorDamping number
+---@field MotorTorque number
 
 ---Material data as Entity:GetComponent returns it and SetComponent/AddComponent accept it.
 ---@class MaterialComponent
@@ -1923,6 +1932,7 @@ function BasaltScript:StopAllCoroutines() end
 ---@class AnimationLayer
 ---@field Name string
 ---@field Clip string
+---@field StateMachine string
 ---@field Blend "Override"|"Additive"
 ---@field Weight number
 ---@field Speed number
@@ -1930,6 +1940,7 @@ function BasaltScript:StopAllCoroutines() end
 ---@field ReferenceClip string
 ---@field ReferenceTime number
 ---@field Mask AnimationMaskJoint[]
+---@field MaskAsset string
 
 ---An element of a component list field.
 ---@class AnimationMaskJoint
@@ -1961,13 +1972,15 @@ function BasaltScript:StopAllCoroutines() end
 ---An element of a component list field.
 ---@class IKChain
 ---@field Name string
----@field Type "TwoBone"|"LookAt"
+---@field Type "TwoBone"|"LookAt"|"Fabrik"
 ---@field Joint string
 ---@field ChainLength integer
 ---@field Axis number[]
 ---@field MaxAngle number
 ---@field Pole number[]
 ---@field Ground boolean
+---@field FollowTarget boolean
+---@field FootLock boolean
 ---@field Weight number
 
 ---An element of a component list field.

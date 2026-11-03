@@ -908,7 +908,7 @@ TEST_SUITE("Serialization")
 				CHECK(info.EntityFields == std::vector<std::string>{ "BodyEntity", "ConnectedEntity" });
 				CHECK(info.RemapEntityReferences);
 			}
-			else if (info.Name == "UIButton" || info.Name == "UISlider" || info.Name == "UICheckbox" || info.Name == "UITextInput" || info.Name == "UIDropdown" || info.Name == "BoneAttachment")
+			else if (info.Name == "UIButton" || info.Name == "UISlider" || info.Name == "UICheckbox" || info.Name == "UITextInput" || info.Name == "UIDropdown" || info.Name == "BoneAttachment" || info.Name == "InverseKinematics")
 			{
 				CHECK(info.EntityFields == std::vector<std::string>{ "Target" });
 				CHECK(info.RemapEntityReferences);

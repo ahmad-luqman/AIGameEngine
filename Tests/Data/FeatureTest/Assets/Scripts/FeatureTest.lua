@@ -255,7 +255,7 @@ local function TestEntities(self)
 	Check("SetIKTarget missing", not ikRig:SetIKTarget("Missing", Vec3(0, 0, 0)))
 	ExpectError("SetIKTarget type", function() ikRig:SetIKTarget("Head", "up") end, "must be a Vec3 or an Entity")
 	ExpectError("SetIKTarget without component", function() rig:SetIKTarget("Head", Vec3(0, 0, 0)) end, "needs the InverseKinematics component")
-	ExpectError("IK chain validation", function() ikRig:SetComponent("InverseKinematics", { Chains = { { ChainLength = 0 } } }) end, "ChainLength 0 must be between 1 and 8")
+	ExpectError("IK chain validation", function() ikRig:SetComponent("InverseKinematics", { Chains = { { ChainLength = 0 } } }) end, "ChainLength 0 must be between 1 and 16")
 	Check("InverseKinematics lists", ikRig:GetComponent("InverseKinematics").Chains[3].Type == "LookAt")
 
 	-- Spring bones.

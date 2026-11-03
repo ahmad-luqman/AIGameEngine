@@ -28,7 +28,7 @@ Fields: `Mesh` (string), `MeshIndex` (integer), `CastShadows` (boolean), `LODDis
 
 ## Animator
 
-Fields: `Mesh` (string), `Clip` (string), `Speed` (number), `Looping` (boolean), `PlayOnStart` (boolean), `CastShadows` (boolean), `MatchVelocity` (boolean), `StateMachine` (string), `RootMotion` (boolean), `RootJoint` (string), `Events` (list of [AnimationEvent](#animationevent), at most 256), `BlendSpaces` (list of [AnimationBlendSpace](#animationblendspace), at most 32, unique `Name`), `Layers` (list of [AnimationLayer](#animationlayer), at most 16, unique `Name`), `LODDistance` (number), `LODInterval` (integer), `ClipLibraries` (list of [AnimationClipLibrary](#animationcliplibrary), at most 64)
+Fields: `Mesh` (string), `Clip` (string), `Speed` (number), `Looping` (boolean), `PlayOnStart` (boolean), `CastShadows` (boolean), `MatchVelocity` (boolean), `StateMachine` (string), `RootMotion` (boolean), `RootJoint` (string), `Events` (list of [AnimationEvent](#animationevent), at most 256), `BlendSpaces` (list of [AnimationBlendSpace](#animationblendspace), at most 32, unique `Name`), `Layers` (list of [AnimationLayer](#animationlayer), at most 16, unique `Name`), `LODDistance` (number), `LODInterval` (integer), `ClipLibraries` (list of [AnimationClipLibrary](#animationcliplibrary), at most 64), `Preview` (boolean)
 
 ## PropertyAnimation
 
@@ -40,7 +40,7 @@ Fields: `Target` (entity), `Joint` (string), `Translation` (number[3]), `Rotatio
 
 ## InverseKinematics
 
-Fields: `Chains` (list of [IKChain](#ikchain), at most 16, unique `Name`), `Pelvis` (string), `RayHeight` (number), `RayDepth` (number), `Smoothing` (number)
+Fields: `Chains` (list of [IKChain](#ikchain), at most 16, unique `Name`), `Pelvis` (string), `RayHeight` (number), `RayDepth` (number), `Smoothing` (number), `Target` (entity), `LockSpeed` (number), `LockHeight` (number), `LockDistance` (number)
 
 ## SpringBone
 
@@ -48,7 +48,7 @@ Fields: `Chains` (list of [SpringChain](#springchain), at most 16, unique `Name`
 
 ## Ragdoll
 
-Fields: `Enabled` (boolean), `RootJoint` (string), `Mass` (number), `RadiusRatio` (number), `Layer` (string), `RecoveryTime` (number), `Bones` (list of [RagdollBone](#ragdollbone), at most 128, unique `Joint`)
+Fields: `Enabled` (boolean), `RootJoint` (string), `Mass` (number), `RadiusRatio` (number), `Layer` (string), `RecoveryTime` (number), `Bones` (list of [RagdollBone](#ragdollbone), at most 128, unique `Joint`), `MotorStrength` (number), `MotorFrequency` (number), `MotorDamping` (number), `MotorTorque` (number)
 
 ## Material
 
@@ -190,7 +190,7 @@ Fields: `Clip` (string), `X` (number), `Y` (number), `Speed` (number)
 
 ### AnimationLayer
 
-Fields: `Name` (string), `Clip` (string), `Blend` (enum: Override, Additive), `Weight` (number), `Speed` (number), `Looping` (boolean), `ReferenceClip` (string), `ReferenceTime` (number), `Mask` (list of [AnimationMaskJoint](#animationmaskjoint), at most 64)
+Fields: `Name` (string), `Clip` (string), `StateMachine` (string), `Blend` (enum: Override, Additive), `Weight` (number), `Speed` (number), `Looping` (boolean), `ReferenceClip` (string), `ReferenceTime` (number), `Mask` (list of [AnimationMaskJoint](#animationmaskjoint), at most 64), `MaskAsset` (string)
 
 ### AnimationMaskJoint
 
@@ -214,7 +214,7 @@ Fields: `Time` (number), `Value` (number[4])
 
 ### IKChain
 
-Fields: `Name` (string), `Type` (enum: TwoBone, LookAt), `Joint` (string), `ChainLength` (integer), `Axis` (number[3]), `MaxAngle` (number), `Pole` (number[3]), `Ground` (boolean), `Weight` (number)
+Fields: `Name` (string), `Type` (enum: TwoBone, LookAt, Fabrik), `Joint` (string), `ChainLength` (integer), `Axis` (number[3]), `MaxAngle` (number), `Pole` (number[3]), `Ground` (boolean), `FollowTarget` (boolean), `FootLock` (boolean), `Weight` (number)
 
 ### SpringChain
 

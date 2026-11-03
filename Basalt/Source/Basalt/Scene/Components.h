@@ -202,8 +202,8 @@ namespace Basalt {
 		bool operator==(const AnimationClipLibrary&) const = default;
 	};
 
-	// A clip played on top of the Animator's base playback (clip, blend, blend space or state machine), in list
-	// order: e.g. an upper-body wave masked to the arms, or additive breathing.
+	// A clip or state machine played on top of the Animator's base playback (clip, blend, blend space or state machine),
+	// in list order: e.g. an upper-body wave masked to the arms, an upper-body graph, or additive breathing.
 	struct AnimationLayer
 	{
 		static constexpr const char* TypeName = "AnimationLayer";
@@ -214,18 +214,23 @@ namespace Basalt {
 		std::string Name = "Layer";
 		// Empty: the layer shows nothing until a script plays a clip on it.
 		std::string Clip;
+		// A project-relative .banimgraph the layer runs on its own (an upper-body graph), replacing Clip; empty plays Clip.
+		// Its parameters and triggers share the Animator's names: setting one reaches every graph that declares it.
+		std::string StateMachine;
 		AnimationLayerBlend Blend = AnimationLayerBlend::Override;
 		// 0..1. The starting weight of the layer; a changed value applies at once.
 		float Weight = 1.0f;
 		// 0..100; the layer's own clock, not scaled by Animator.Speed.
 		float Speed = 1.0f;
 		bool Looping = true;
-		// Additive only: the pose the clip is a difference from, ReferenceClip (empty: the layer's own clip) sampled at
-		// ReferenceTime seconds.
+		// Additive only: the pose the clip is a difference from, ReferenceClip (empty: the layer's own clip; required with
+		// a StateMachine) sampled at ReferenceTime seconds.
 		std::string ReferenceClip;
 		float ReferenceTime = 0.0f;
 		// Empty (or only entries without a Joint): every joint at weight 1. Otherwise joints under no entry take 0.
 		std::vector<AnimationMaskJoint> Mask;
+		// A project-relative .banimmask shared between Animators; when set, its joints replace Mask.
+		std::string MaskAsset;
 	};
 
 	// One normalized-time sample. Capture zeros unused lanes; sampling ignores unused lanes.
@@ -296,6 +301,9 @@ namespace Basalt {
 		// "prefix:" and "prefix|"), then as humanoid bones; both skeletons must share a rest pose style (both T-pose or
 		// both A-pose).
 		std::vector<AnimationClipLibrary> ClipLibraries;
+		// Edit mode only: plays the Animator in the scene view (its clip or state machine, layers and inverse kinematics)
+		// without moving the entity. Events, root-motion displacement, spring bones, ragdolls and attachments wait for Play.
+		bool Preview = false;
 	};
 
 	// Keeps the entity at a joint (any node) of an Animator's model while the scene plays or simulates: its
@@ -319,24 +327,29 @@ namespace Basalt {
 		// target rotation or the ground.
 		TwoBone = 0,
 		// Turns Joint and ChainLength - 1 of its ancestors so Joint's Axis points at the target (head, spine, aim).
-		LookAt // keep last: IKChainTypeCount
+		LookAt,
+		// Bends Joint's ChainLength ancestors (FABRIK) so Joint reaches the target (tails, tentacles, three-bone legs);
+		// Joint itself turns to a target rotation or the ground.
+		Fabrik // keep last: IKChainTypeCount
 	};
-	inline constexpr size_t IKChainTypeCount = 2;
+	inline constexpr size_t IKChainTypeCount = 3;
 
-	// One inverse kinematics chain of an InverseKinematics component. Targets come from scripts (SetIKTarget) or,
-	// for Ground chains, from the surface under the joint.
+	// One inverse kinematics chain of an InverseKinematics component. Targets come from scripts (SetIKTarget), then from
+	// the component's Target entity (FollowTarget chains), then for Ground chains from the surface under the joint.
 	struct IKChain
 	{
 		static constexpr const char* TypeName = "IKChain";
 		// Chains are found by name.
 		static constexpr const char* UniqueField = "Name";
-		static constexpr uint32_t MaxChainLength = 8;
+		static constexpr uint32_t MaxChainLength = 16;
 
 		std::string Name = "Chain";
 		IKChainType Type = IKChainType::TwoBone;
-		// TwoBone: the end of the chain (a foot or hand). LookAt: the joint that aims (a head, or a hand holding a gun).
+		// TwoBone, Fabrik: the end of the chain (a foot, hand or tail tip). LookAt: the joint that aims (a head, or a hand
+		// holding a gun).
 		std::string Joint;
-		// LookAt: how many joints share the turn, Joint first, then its ancestors (1..MaxChainLength).
+		// 1..MaxChainLength. LookAt: how many joints share the turn, Joint first, then its ancestors. Fabrik: how many
+		// ancestors of Joint bend (the chain's bones).
 		uint32_t ChainLength = 1;
 		// LookAt: the aiming direction in Joint's local space.
 		glm::vec3 Axis = { 0.0f, 0.0f, 1.0f };
@@ -345,8 +358,13 @@ namespace Basalt {
 		// TwoBone: the direction (not a point) the middle joint bends toward, in the entity's space; zero keeps the
 		// animated bend.
 		glm::vec3 Pole = { 0.0f, 0.0f, 0.0f };
-		// TwoBone: place Joint on the ground below it (foot placement) while no script target is set.
+		// TwoBone, Fabrik: place Joint on the ground below it (foot placement) while no other target is set.
 		bool Ground = false;
+		// Reach for (TwoBone, Fabrik) or aim at (LookAt) the component's Target entity while no script target is set.
+		bool FollowTarget = false;
+		// TwoBone, Fabrik: hold Joint where it was planted while its animation stands on it, so a planted foot does not
+		// slide (see InverseKinematicsComponent::LockSpeed).
+		bool FootLock = false;
 		// 0..1. The starting weight of the chain; a changed value applies at once.
 		float Weight = 1.0f;
 	};
@@ -367,8 +385,16 @@ namespace Basalt {
 		float RayHeight = 0.5f;
 		float RayDepth = 0.5f;
 		// Time constant (seconds, 0..100) of the exponential easing of foot offsets and ground normals (the pelvis
-		// follows the eased offsets); 0 snaps.
+		// follows the eased offsets) and of foot locks engaging and releasing; 0 snaps.
 		float Smoothing = 0.1f;
+		// The entity FollowTarget chains reach for or aim at (its position); 0: none.
+		UUID Target = 0;
+		// Foot locking (meters, 0..100, in world space): a FootLock chain's joint locks while its animated world speed is
+		// below LockSpeed (per second), and releases when the animation lifts it LockHeight above where it locked, or at
+		// once when the animation has carried it LockDistance away from the lock.
+		float LockSpeed = 0.5f;
+		float LockHeight = 0.05f;
+		float LockDistance = 0.3f;
 	};
 
 	// One chain of a SpringBone component: Joint and the joints below it swing behind the animated pose. Each turned
@@ -458,11 +484,15 @@ namespace Basalt {
 		bool operator==(const RagdollBone&) const = default;
 	};
 
-	// Passive skeleton physics for the Animator on this entity. Runtime bodies/poses belong to PhysicsWorld.
+	// Skeleton physics for the Animator on this entity: passive, or powered by motors that track the animated pose.
+	// Runtime bodies/poses belong to PhysicsWorld.
 	struct RagdollComponent
 	{
 		static constexpr uint32_t MaxBones = 128;
 		static constexpr float MaxRecoveryTime = 60.0f;
+		static constexpr float MaxMotorFrequency = 30.0f;
+		static constexpr float MaxMotorDamping = 10.0f;
+		static constexpr float MaxMotorTorque = 1000000.0f;
 		bool Enabled = false;
 		// Empty selects all skin joints; otherwise selects this skin joint and its descendants.
 		std::string RootJoint;
@@ -473,6 +503,16 @@ namespace Basalt {
 		// Seconds to blend the last physical pose back to animation when Enabled becomes false.
 		float RecoveryTime = 0.5f;
 		std::vector<RagdollBone> Bones;
+		// 0..1; 0 keeps the ragdoll passive. While active, each joint's motor turns it toward the animated pose (stumbles,
+		// hit reactions) with up to MotorTorque * MotorStrength. The starting strength: a changed value applies at once,
+		// and SetRagdollMotorStrength fades it. Motor settings never rebuild the ragdoll.
+		float MotorStrength = 0.0f;
+		// Hz (0.1..MaxMotorFrequency): how stiffly the motors spring toward the pose.
+		float MotorFrequency = 8.0f;
+		// 0..MaxMotorDamping: the motors' damping ratio (1 settles without overshoot).
+		float MotorDamping = 1.0f;
+		// N·m (0..MaxMotorTorque): the largest torque each joint's motor applies at strength 1.
+		float MotorTorque = 500.0f;
 		bool operator==(const RagdollComponent&) const = default;
 	};
 

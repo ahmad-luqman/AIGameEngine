@@ -41,6 +41,14 @@ namespace Basalt {
 			return fmt::format("RecoveryTime must be finite and in 0..{} seconds", RagdollComponent::MaxRecoveryTime);
 		if (c.Layer.empty())
 			return "Layer must not be empty";
+		if (!range(c.MotorStrength, 0, 1))
+			return "MotorStrength must be finite and in 0..1";
+		if (!range(c.MotorFrequency, 0.1f, RagdollComponent::MaxMotorFrequency))
+			return fmt::format("MotorFrequency must be finite and in 0.1..{} Hz", RagdollComponent::MaxMotorFrequency);
+		if (!range(c.MotorDamping, 0, RagdollComponent::MaxMotorDamping))
+			return fmt::format("MotorDamping must be finite and in 0..{}", RagdollComponent::MaxMotorDamping);
+		if (!range(c.MotorTorque, 0, RagdollComponent::MaxMotorTorque))
+			return fmt::format("MotorTorque must be finite and in 0..{} N·m", RagdollComponent::MaxMotorTorque);
 		if (c.Bones.size() > RagdollComponent::MaxBones)
 			return "Bones exceeds MaxBones (" + std::to_string(RagdollComponent::MaxBones) + ")";
 		std::unordered_set<std::string> joints;
