@@ -92,7 +92,9 @@ class TimingGateTests(unittest.TestCase):
                     output.write_text(json.dumps(dict(self.report, mode=mode)))
 
                 args = ["--binary", "native", "--mode", mode, "--output", str(output), "--thresholds", str(thresholds)]
-                with patch.object(Run.platform, "platform", return_value="test"), patch.object(Run.subprocess, "run", side_effect=native):
+                # platform.machine() too: on Windows, Python 3.15 asks `ver` for it through subprocess.run, which the
+                # native stand-in replaces.
+                with patch.object(Run.platform, "platform", return_value="test"), patch.object(Run.platform, "machine", return_value="test"), patch.object(Run.subprocess, "run", side_effect=native):
                     if mode == "gpu":
                         with self.assertRaises(SystemExit):
                             Run.main(args)
@@ -116,7 +118,7 @@ class TimingGateTests(unittest.TestCase):
                 def native(command, **kwargs):
                     output.write_text(json.dumps(dict(self.report, passed=True)))
 
-                with patch.object(Run.platform, "platform", return_value="test"), patch.object(Run.subprocess, "run", side_effect=native), self.assertRaises(SystemExit):
+                with patch.object(Run.platform, "platform", return_value="test"), patch.object(Run.platform, "machine", return_value="test"), patch.object(Run.subprocess, "run", side_effect=native), self.assertRaises(SystemExit):
                     Run.main(["--binary", "native", "--mode", "cpu", "--output", str(output), "--thresholds", str(thresholds)])
                 report = json.loads(output.read_text())
                 self.assertFalse(report["passed"])
@@ -147,7 +149,7 @@ class TimingGateTests(unittest.TestCase):
                     else:
                         output.write_text("bad json" if kind == "bad-json" else json.dumps(dict(self.report, version=2)))
 
-                with patch.object(Run.platform, "platform", return_value="test"), patch.object(Run.subprocess, "run", side_effect=native), self.assertRaises(SystemExit):
+                with patch.object(Run.platform, "platform", return_value="test"), patch.object(Run.platform, "machine", return_value="test"), patch.object(Run.subprocess, "run", side_effect=native), self.assertRaises(SystemExit):
                     args = ["--binary", "native", "--mode", "cpu", "--output", str(output)]
                     if kind == "missing-thresholds":
                         args += ["--thresholds", str(Path(temp, "missing.json"))]
