@@ -58,7 +58,7 @@ namespace Basalt {
 		return mask;
 	}
 
-	std::optional<AnimationMask> AnimationMask::FromText(const std::string& text, std::string& outError)
+	std::optional<AnimationMask> AnimationMask::FromText(std::string_view text, std::string& outError)
 	{
 		const nlohmann::json data = ParseJson(text, outError);
 		return data.is_discarded() ? std::nullopt : FromJson(data, outError);

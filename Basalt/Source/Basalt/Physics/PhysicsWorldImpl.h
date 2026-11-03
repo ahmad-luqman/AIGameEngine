@@ -105,8 +105,9 @@ namespace Basalt {
 			glm::mat4 World = glm::mat4(1);
 			float RecoveryLeft = 0;
 			float RecoveryDuration = 0;
-			// Whether this Doll's joint motors are on (DriveRagdollMotors). Never touched until strength * MotorTorque first
-			// exceeds 0, and back to false (motors off) when it drops to 0; cleared with each new or removed Doll.
+			// Whether this Doll's joint motors are on (DriveRagdollMotors). The motors stay untouched until strength *
+			// MotorTorque first exceeds 0, and are turned off (false) when it drops to 0 or no usable animated pose exists.
+			// Cleared with each new or removed Doll.
 			bool MotorsOn = false;
 			float Weight() const { return Doll ? 1.0f : (RecoveryDuration > 0 ? RecoveryLeft / RecoveryDuration : 0.0f); }
 		};
@@ -135,13 +136,21 @@ namespace Basalt {
 		PhysicsInternal::WarningLog MotorCallWarnings{ "ragdoll on", false };
 		// Motor strength per Ragdoll entity: gameplay state that survives activation, recovery and rebuilds and ends with the
 		// component (configured from MotorStrength, faded by SetRagdollMotorStrength).
-		std::map<UUID, FadingWeight> RagdollStrength;
+		// No default constructor, so RagdollStrength[id] cannot compile: a default FadingWeight is 1, full torque.
+		struct MotorStrength
+		{
+			explicit MotorStrength(float configured)
+				: Weight(configured)
+			{
+			}
+			FadingWeight Weight;
+		};
+		std::map<UUID, MotorStrength> RagdollStrength;
 		void SyncRagdolls(PhysicsWorld& world, float seconds);
 		// Advances motor strengths and turns every active rig's joint motors toward its animated pose (or off at strength 0).
 		void DriveRagdollMotors(float seconds);
 		void ApplyRagdollMotors(Entity entity, RagdollRecord& record, const RagdollComponent& component, float strength);
-		// The entity's motor strength, created from (and configured by) its MotorStrength. Never RagdollStrength[id]: a
-		// default FadingWeight is 1, full torque.
+		// The entity's motor strength, created from (and configured by) its MotorStrength.
 		FadingWeight& MotorStrengthFor(UUID uuid, const RagdollComponent& component);
 		bool BuildRagdoll(Entity entity, RagdollRecord& record, std::string& error, bool& cacheFailure);
 		bool ActivateRagdoll(PhysicsWorld& world, Entity entity, const glm::vec3& impulse, const std::vector<RagdollMotion>* motion = nullptr);

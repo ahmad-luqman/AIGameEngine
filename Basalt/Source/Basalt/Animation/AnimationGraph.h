@@ -4,6 +4,7 @@
 
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace Basalt {
@@ -78,6 +79,8 @@ namespace Basalt {
 		// Strict, bounded parser that resolves parameter and state indices and validates all references.
 		static std::optional<AnimationGraph> FromJson(const nlohmann::json& data, std::string& outError);
 		// ParseJson, then FromJson.
-		static std::optional<AnimationGraph> FromText(const std::string& text, std::string& outError);
+		static std::optional<AnimationGraph> FromText(std::string_view text, std::string& outError);
+		// Whether a project-relative path names a graph file (by its extension, in any letter case).
+		static bool IsGraphFile(const std::string& path);
 	};
 }

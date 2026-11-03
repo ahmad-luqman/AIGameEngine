@@ -1231,9 +1231,13 @@ TEST_SUITE("Ragdolls")
 		component.MotorFrequency = 8;
 		component.MotorStrength = std::numeric_limits<float>::quiet_NaN();
 		Simulate(scene, 3);
-		CHECK(CountLogMessages(since, "MotorStrength must be in 0..1; clamping") == 1);
+		CHECK(CountLogMessages(since, "MotorStrength must be finite; motors are off") == 1);
 		CHECK(physics.GetRagdollMotorStrength(rig) == 0.0f);
 		CHECK_FALSE(physics.GetRagdollPose(rig)->Powered);
+		component.MotorStrength = 1.5f;
+		Simulate(scene, 3);
+		CHECK(CountLogMessages(since, "MotorStrength must be in 0..1; clamping") == 1);
+		CHECK(physics.GetRagdollMotorStrength(rig) == 1.0f);
 		component.MotorStrength = 0.75f;
 		// The strength ends with the component.
 		rig.RemoveComponent<RagdollComponent>();

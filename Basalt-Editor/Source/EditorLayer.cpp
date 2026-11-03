@@ -7,6 +7,7 @@
 #include "Panels/PreviewImage.h"
 
 #include "Basalt/Animation/AnimatedModel.h"
+#include "Basalt/Animation/AnimationGraph.h"
 #include "Basalt/Animation/AnimationPose.h"
 #include "Basalt/Asset/AssetManager.h"
 #include "Basalt/Asset/MaterialAsset.h"
@@ -1168,7 +1169,7 @@ namespace Basalt {
 			ExecuteAndWarn("scene.open", { { "path", path } });
 			return;
 		}
-		if (FileSystem::GetLowercaseExtension(FileSystem::PathFromUtf8(path)) == ".banimgraph")
+		if (AnimationGraph::IsGraphFile(path))
 		{
 			std::string error;
 			if (!m_AnimationGraphPanel.Open(path, error))

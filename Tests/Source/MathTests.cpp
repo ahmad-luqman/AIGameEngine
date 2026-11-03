@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include <Basalt/Math/Math.h>
 #include <Basalt/Math/Random.h>
 
 #include <cstdint>
@@ -55,5 +56,26 @@ TEST_SUITE("Random")
 			counts[random.Int(0, 2)]++;
 		for (int count : counts)
 			CHECK((count > 9500 && count < 10500));
+	}
+}
+
+TEST_SUITE("Math")
+{
+	// Animation poses that drive physics (powered ragdoll motors) interpolate with Slerp, so it must round the same on
+	// every platform: these exact values come from Jolt's portable trigonometry.
+	TEST_CASE("Slerp takes the shortest arc, normalizes and returns its endpoints")
+	{
+		const glm::quat from(1, 0, 0, 0);
+		const glm::quat to = glm::angleAxis(glm::radians(90.0f), glm::vec3(0, 1, 0));
+		CHECK(Math::Slerp(from, to, 0) == from);
+		const glm::quat end = Math::Slerp(from, to, 1);
+		CHECK(glm::abs(glm::dot(end, to)) == doctest::Approx(1.0f));
+		const glm::quat third = Math::Slerp(from, to, 1.0f / 3.0f);
+		CHECK(glm::degrees(glm::angle(third)) == doctest::Approx(30.0f).epsilon(1e-4));
+		CHECK(glm::length(third) == doctest::Approx(1.0f));
+		// -to is the same rotation: the shortest arc still turns 30 degrees, not 150.
+		CHECK(glm::degrees(glm::angle(Math::Slerp(from, -to, 1.0f / 3.0f))) == doctest::Approx(30.0f).epsilon(1e-4));
+		// Unnormalized input comes out unit length.
+		CHECK(glm::length(Math::Slerp(from * 2.0f, to * 3.0f, 0.5f)) == doctest::Approx(1.0f));
 	}
 }

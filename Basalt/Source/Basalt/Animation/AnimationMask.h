@@ -6,6 +6,7 @@
 
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace Basalt {
@@ -23,7 +24,7 @@ namespace Basalt {
 		// AnimationLayer::MaxMaskJoints entries with unique, nonempty joint names and weights in 0..1 (Weight defaults to 1).
 		static std::optional<AnimationMask> FromJson(const nlohmann::json& data, std::string& outError);
 		// ParseJson, then FromJson.
-		static std::optional<AnimationMask> FromText(const std::string& text, std::string& outError);
+		static std::optional<AnimationMask> FromText(std::string_view text, std::string& outError);
 		nlohmann::json ToJson() const;
 		// Whether a project-relative path names a mask file (by its extension, in any letter case).
 		static bool IsMaskFile(const std::string& path);

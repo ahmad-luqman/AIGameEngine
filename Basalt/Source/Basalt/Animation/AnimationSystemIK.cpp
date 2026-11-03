@@ -48,9 +48,9 @@ namespace Basalt {
 				problems.push_back(fmt::format("Type {} is not a chain type; ignoring the chain", static_cast<int>(chain.Type)));
 			if (chain.Type != IKChainType::TwoBone && (chain.ChainLength < 1 || chain.ChainLength > IKChain::MaxChainLength))
 				problems.push_back(fmt::format("ChainLength must be between 1 and {}; clamping", IKChain::MaxChainLength));
-			if (chain.Type == IKChainType::LookAt && chain.Ground)
+			if (!IKChainReaches(chain.Type) && chain.Ground)
 				problems.emplace_back("Ground only applies to TwoBone and Fabrik chains; ignoring it");
-			if (chain.Type == IKChainType::LookAt && chain.FootLock)
+			if (!IKChainReaches(chain.Type) && chain.FootLock)
 				problems.emplace_back("FootLock only applies to TwoBone and Fabrik chains; ignoring it");
 			if (!Math::IsFinite(chain.Pole))
 				problems.emplace_back("Pole is not finite; keeping the animated bend");
@@ -88,14 +88,9 @@ namespace Basalt {
 				}
 			const auto& component = entity.GetComponent<InverseKinematicsComponent>();
 			IKState& state = SyncIK(entity, component);
-			// A frame that is not solved plants no foot: a lock resumes from where the foot is when solving does.
-			const auto releaseLocks = [&] {
-				for (IKChainState& chain : state.Chains)
-					chain.Lock = {};
-			};
 			if (m_Scene.GetPhysicsWorld() && m_Scene.GetPhysicsWorld()->HasRagdollPose(entity))
 			{
-				releaseLocks();
+				state.ReleaseFootLocks();
 				continue;
 			}
 			for (IKChainState& chain : state.Chains)
@@ -104,7 +99,7 @@ namespace Basalt {
 				SolveEntityIK(entity, *playback, component, state, seconds);
 			else
 			{
-				releaseLocks();
+				state.ReleaseFootLocks();
 				// Ensure already warns about an empty Mesh.
 				if (const auto* animator = entity.TryGetComponent<AnimatorComponent>(); !animator || !animator->Mesh.empty())
 					ReportProblem(state.Problem, "not solved: " + DescribeUnplayable(entity), entity, Owner);
@@ -125,8 +120,7 @@ namespace Basalt {
 		};
 		// The entity cannot be solved at all this frame: no foot stays planted.
 		const auto fail = [&] {
-			for (IKChainState& chain : state.Chains)
-				chain.Lock = {};
+			state.ReleaseFootLocks();
 			finish(false);
 		};
 
@@ -207,9 +201,14 @@ namespace Basalt {
 			std::vector<std::string> chainProblems;
 			CheckChainSettings(config, chainProblems);
 			ResolvedChain resolved{ .Config = &config, .Problem = &chain.Problem, .Weight = chain.Weight.Get() };
+			const bool followsTarget = config.FollowTarget && component.Target != 0;
+			// Only feet that follow their animation (or the ground) lock; any other target, or a chain that is not solved
+			// below, releases the lock at once.
+			const bool locksFoot = config.FootLock && IKChainReaches(config.Type) && std::holds_alternative<std::monostate>(chain.Target) && !followsTarget;
+			if (!locksFoot)
+				chain.Lock = {};
 			if (static_cast<size_t>(config.Type) >= IKChainTypeCount)
 			{
-				chain.Lock = {};
 				ReportProblem(chain.Problem, JoinProblems(chainProblems), entity, Owner, &config.Name);
 				continue;
 			}
@@ -220,7 +219,6 @@ namespace Basalt {
 				ReportProblem(chain.Problem, JoinProblems(chainProblems), entity, Owner, &config.Name);
 				continue;
 			}
-			const bool followsTarget = config.FollowTarget && component.Target != 0;
 			if (const auto* position = std::get_if<IKChainState::PositionTarget>(&chain.Target))
 			{
 				resolved.Target = position->Position;
@@ -295,8 +293,7 @@ namespace Basalt {
 				// Turns the animated foot from the entity's up axis to the ground normal.
 				resolved.Rotation = RotationBetween(up, ground.Normal) * GlobalRotation(world * globals[end]);
 			}
-			// Only feet that follow their animation (or the ground) lock; another target releases the lock at once.
-			if (config.FootLock && IKChainReaches(config.Type) && std::holds_alternative<std::monostate>(chain.Target) && !followsTarget)
+			if (locksFoot)
 			{
 				const glm::vec3 joint = glm::vec3(world * globals[resolved.Joints.back()][3]);
 				resolved.Target = UpdateFootLock(chain.Lock, resolved.Target.value_or(joint), glm::dot(joint - origin, up), up, airborne, seconds, blend, lockSettings);
@@ -306,8 +303,6 @@ namespace Basalt {
 					// No lock and no ground to reach for: the joint follows its animation.
 					resolved.Target.reset();
 			}
-			else
-				chain.Lock = {};
 			if (resolved.Rotation && config.Type == IKChainType::LookAt)
 			{
 				// The chain's Type changed after a rotation target was set.
@@ -473,6 +468,8 @@ namespace Basalt {
 		if (!problem.empty())
 			return false;
 		state->Target = IKChainState::PositionTarget{ position, rotation ? std::optional<glm::quat>(glm::normalize(*rotation)) : std::nullopt };
+		// A targeted chain plants no foot.
+		state->Lock = {};
 		return true;
 	}
 
@@ -491,6 +488,7 @@ namespace Basalt {
 		if (!problem.empty())
 			return false;
 		state->Target = IKChainState::EntityTarget{ target.GetUUID(), matchRotation };
+		state->Lock = {};
 		return true;
 	}
 

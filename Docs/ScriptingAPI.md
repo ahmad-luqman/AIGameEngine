@@ -1286,8 +1286,8 @@ or removing/re-adding Animator resets playback according to `PlayOnStart`. With 
 the selected clip is held at time 0 until played. Edit mode shows the authored rest pose, unless `Preview` is on.
 
 **Edit-mode preview.** With the Animator's `Preview` on, the editor plays it in the scene view while editing (regardless
-of `PlayOnStart`): its clip or state machine (at its parameters' defaults, so a blend space state at those parameters' values and a
-`Clip` naming a blend space at (0, 0)), layers (clips and graphs) and inverse kinematics
+of `PlayOnStart`): its clip or state machine (a state machine at its parameters' defaults, so its blend-space states
+sample at those values; a `Clip` naming a blend space plays it at (0, 0)), layers (clips and graphs) and inverse kinematics
 (script-free targets: `FollowTarget` chains follow `Target`; foot locks work, ground placement does not, as edit mode has
 no physics). The preview never changes the scene: root motion plays in place (the entity stays where it was
 authored), events are not delivered, and spring bones, ragdolls and bone attachments wait for Play. Component edits
@@ -1485,8 +1485,9 @@ the value (a wrong type, a stopped base graph) logs that once, and each graph co
 has no root motion and fires no events. An Override layer moves every channel a clip of any of its graph's states (and
 their blend spaces' samples) animates, so a state that leaves such a channel alone holds it at the model's rest pose; an
 Additive graph layer adds each state's difference from its `ReferenceClip` pose, so give the states and the reference the
-same channels. `PlayAnimationLayer(layer)` restarts the graph at its initial state, keeping its parameter values;
-`PlayAnimationLayer(layer, clip)` plays the clip instead until `PlayAnimationLayer(layer)`. A graph that cannot load, or
+same channels. `PlayAnimationLayer(layer)` restarts a running graph at its initial state, keeping its parameter values (latched
+triggers are dropped); `PlayAnimationLayer(layer, clip)` plays the clip instead until `PlayAnimationLayer(layer)`, which
+then starts the graph from its defaults (values set while the clip played do not reach it). A graph that cannot load, or
 whose initial state cannot play yet, shows nothing (and `PlayAnimationLayer` returns false).
 
 A layer changes only the channels (translation, rotation, scale, and morph weights of the mesh nodes it masks) its clip
@@ -1508,7 +1509,7 @@ reload).
 | `e:PlayAnimationLayer(layer, [clip])` | Restarts the layer at 0, on `clip` when given (until the configured `Clip` changes), otherwise on its configured `Clip` (or its `StateMachine`'s initial state). False, changing nothing, for an unknown layer, an unknown or empty clip name, or when the layer would show nothing (no clip, a missing reference clip, mask asset or graph, a graph whose initial state cannot play) |
 | `e:SetAnimationLayerWeight(layer, weight, [seconds])` | Fades the weight (0..1) linearly over `seconds` (default 0: at once). False for an unknown layer or an invalid weight or time |
 | `e:GetAnimationLayerWeight(layer)` | The current weight, or nil for an unknown layer |
-| `e:GetAnimationLayerState(layer)` | The current state of a `StateMachine` layer's graph; `""` for a clip layer, while a script clip plays instead, and while the layer shows no graph (one that cannot load or has no playable initial state, an unloadable mask, an Additive layer without a `ReferenceClip`); nil for an unknown layer |
+| `e:GetAnimationLayerState(layer)` | The current state of a `StateMachine` layer's graph; `""` for a clip layer, while a script clip plays instead, and while the layer shows no graph (one that cannot load or has no playable initial state, an unloadable mask, an Additive layer whose reference clip is missing); nil for an unknown layer |
 
 A failing call is logged once per entity, function and layer, whatever values it passes, until the same call
 succeeds; so a script repeating one every frame logs it once. A non-string clip or non-number seconds raise errors. Problems with a layer's configuration (missing clips, reference
@@ -1574,8 +1575,9 @@ entity's up axis: the animation cannot slide it, while its height still follows 
 that locks in the air still comes down). Once locked it stays locked, whatever its speed, until the animation lifts the
 joint `LockHeight` (default 0.05 m) above its height when it locked, the character leaves the ground, or (at once, without
 easing) the target gets `LockDistance` (default 0.3 m) away across the up axis (a teleport, or a stride the lock cannot
-follow). Locking and releasing ease with `Smoothing`. A script target, turning `FootLock` off and frames the chain is not
-solved (a ragdoll, an Animator that cannot play) release the lock. `IsIKFootLocked` reports the lock (footstep sounds).
+follow). Locking and releasing ease with `Smoothing`. A script target, turning `FootLock` off, and frames the entity's IK
+does not run (an active ragdoll, an Animator that cannot play, a zero scale, an unresolvable chain) release the lock at
+once, without easing. `IsIKFootLocked` reports the lock (footstep sounds).
 
 **Foot placement.** For each `Ground` chain a ray is cast down the entity's up axis under the animated joint, from
 `RayHeight` above the plane through the entity's origin to `RayDepth` below it (meters, defaults 0.5; their sum must be
@@ -1766,8 +1768,9 @@ reloads.
   or booleans raise an argument error.
 - `e:SetAnimationTrigger(name)` latches a `Trigger` (on every graph that declares it) until a successful transition
   using it consumes it; returns true on success, false for an unknown/wrong-type parameter or inactive machine.
-  Pausing preserves parameters and triggers; stopping disables the graph (setters return false and
-  GetAnimationState returns empty) and holds the rest pose until direct playback, `SetAnimationTime`,
+  Pausing preserves parameters and triggers; stopping disables the state machine (its setters fail and log, though a
+  StateMachine layer declaring the name still takes the value, so the call can return true; GetAnimationState returns
+  empty) and holds the rest pose until direct playback, `SetAnimationTime`,
   or a graph reload. Seeking leaves the stopped graph inactive.
 - `e:GetAnimationState()` returns the current state name, or `""` with no active graph.
 
