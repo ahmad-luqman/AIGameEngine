@@ -68,6 +68,26 @@ namespace Basalt {
 	// still left, outermost first, so the aim is exact within MaxAngleRadians.
 	[[nodiscard]] IKSolveResult SolveLookAtIK(const MeshSource& source, AnimationLocalPose& pose, std::vector<glm::mat4>& globals, const LookAtIKRequest& request);
 
+	// What SolveFabrikIK solves: a chain of joints and where its last one should go.
+	struct FabrikIKRequest
+	{
+		// The chain root first, each joint followed by its child, ending with the joint that reaches (at least two).
+		std::span<const uint32_t> Joints;
+		glm::vec3 Target = glm::vec3(0);
+		// The direction a straight chain starts bending toward when the target lies along it; nullopt or zero picks one
+		// (+Z, else X or Y). A bent chain keeps its animated bend.
+		std::optional<glm::vec3> Pole;
+		// The last joint's model-space rotation; nullopt keeps its local rotation.
+		std::optional<glm::quat> EndRotation;
+		float Weight = 1.0f;
+	};
+	// Iterations SolveFabrikIK runs at most, and how close (a fraction of the chain's length) ends them early.
+	inline constexpr uint32_t FabrikMaxIterations = 32;
+	inline constexpr float FabrikTolerance = 1e-4f;
+	// Bends every joint but the last (FABRIK, Aristidou and Lasenby 2011) so the last one reaches the target, starting
+	// from the animated pose; a target beyond the chain's reach leaves it straight toward the target. No joint limits.
+	[[nodiscard]] IKSolveResult SolveFabrikIK(const MeshSource& source, AnimationLocalPose& pose, std::vector<glm::mat4>& globals, const FabrikIKRequest& request);
+
 	// What SolveAimChainIK solves: a chain of joints, each turned so its child points at a target (spring bones).
 	struct AimChainIKRequest
 	{
@@ -82,8 +102,9 @@ namespace Basalt {
 	[[nodiscard]] IKSolveResult SolveAimChainIK(const MeshSource& source, AnimationLocalPose& pose, std::vector<glm::mat4>& globals, const AimChainIKRequest& request);
 
 	// Fills outJoints with the joints `chain` drives on `source` (TwoBone: upper, middle, end; LookAt: the aiming joint,
-	// then its ancestors; ChainLength clamped to 1..MaxChainLength) and returns empty, or returns why it cannot (an empty
-	// or unknown joint, too few ancestors, a fixed-matrix joint) and leaves outJoints empty.
+	// then its ancestors; Fabrik: the ChainLength-th ancestor first, down to the end joint; ChainLength clamped to
+	// 1..MaxChainLength) and returns empty, or returns why it cannot (an empty or unknown joint, too few ancestors, a
+	// fixed-matrix joint) and leaves outJoints empty.
 	[[nodiscard]] std::string ResolveIKChain(const MeshSource& source, const IKChain& chain, std::vector<uint32_t>& outJoints);
 
 	// The shortest rotation turning unit vector `from` onto unit vector `to`.

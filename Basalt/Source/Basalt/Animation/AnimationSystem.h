@@ -111,6 +111,9 @@ namespace Basalt {
 		bool ClearIKTarget(Entity entity, const std::string& chain);
 		bool SetIKWeight(Entity entity, const std::string& chain, float weight, float seconds);
 		std::optional<float> GetIKWeight(Entity entity, const std::string& chain);
+		// Whether a FootLock chain holds its joint where it was planted (nullopt for a missing component or chain, logged
+		// as ReportCallProblem describes); false for chains without FootLock.
+		std::optional<bool> IsIKFootLocked(Entity entity, const std::string& chain);
 		// Morph targets, found by name in every mesh node of the model with that target (a name shared by several meshes,
 		// such as a head and its teeth, sets them all). A script weight (0..1) replaces the animated one, fading over
 		// `seconds` from the weight shown, until ClearMorphWeight; it survives playback resets. False for an unknown
@@ -371,11 +374,24 @@ namespace Basalt {
 				glm::vec3 Normal = glm::vec3(0, 1, 0);
 				bool Placed = false;
 			};
+			// Foot locking (FootLock chains): where the joint was planted (world space), the animated joint's height above
+			// the entity's origin plane then, and the lock's eased share of the target (0..1, easing out after a release).
+			// Last is where the joint's target was at the last solve with time, to measure its speed. Reset while another
+			// target is set.
+			struct FootLockState
+			{
+				std::optional<glm::vec3> Last;
+				glm::vec3 Position = glm::vec3(0);
+				float Height = 0;
+				float Weight = 0;
+				bool Locked = false;
+			};
 			std::string Name;
 			FadingWeight Weight;
 			// monostate: no script target (ground placement for Ground chains, else idle).
 			std::variant<std::monostate, PositionTarget, EntityTarget> Target;
 			GroundContact Ground;
+			FootLockState Lock;
 			// The last problem solving this chain, logged when it changes.
 			std::string Problem;
 		};

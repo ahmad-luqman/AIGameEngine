@@ -179,7 +179,9 @@ namespace Basalt {
 		const int32_t end = FindNode(source, chain.Joint);
 		if (end < 0)
 			return fmt::format("joint '{}' not found in '{}'", chain.Joint, source.Key);
-		const size_t length = chain.Type == IKChainType::TwoBone ? 3 : std::clamp<uint32_t>(chain.ChainLength, 1, IKChain::MaxChainLength);
+		const uint32_t chainLength = std::clamp<uint32_t>(chain.ChainLength, 1, IKChain::MaxChainLength);
+		// Fabrik's ChainLength counts bones, so the end joint comes on top.
+		const size_t length = chain.Type == IKChainType::TwoBone ? 3 : (chain.Type == IKChainType::Fabrik ? chainLength + 1 : chainLength);
 		for (int32_t node = end; node >= 0 && outJoints.size() < length; node = source.Nodes[node].Parent)
 			outJoints.push_back(static_cast<uint32_t>(node));
 		std::string problem;
@@ -190,7 +192,7 @@ namespace Basalt {
 			problem = fmt::format("joint '{}' has a fixed matrix and cannot be turned", source.Nodes[*fixed].Name);
 		if (!problem.empty())
 			outJoints.clear();
-		else if (chain.Type == IKChainType::TwoBone)
+		else if (chain.Type != IKChainType::LookAt)
 			std::ranges::reverse(outJoints);
 		return problem;
 	}
@@ -311,6 +313,98 @@ namespace Basalt {
 			if (!ComposeOrRestore(source, pose, globals, saved))
 				return IKSolveResult::NonFinite;
 		}
+		return Finalize(source, pose, globals, saved, weight);
+	}
+
+	IKSolveResult SolveFabrikIK(const MeshSource& source, AnimationLocalPose& pose, std::vector<glm::mat4>& globals, const FabrikIKRequest& request)
+	{
+		const std::span<const uint32_t> joints = request.Joints;
+		BS_CORE_ASSERT(joints.size() >= 2 && pose.Nodes.size() == source.Nodes.size() && globals.size() == source.Nodes.size(), "FABRIK needs two joints, and a pose and globals of the model");
+		for (size_t i = 1; i < joints.size(); i++)
+			BS_CORE_ASSERT(source.Nodes[joints[i]].Parent == static_cast<int32_t>(joints[i - 1]), "FABRIK joints must form a parent-child chain");
+		const float weight = ClampWeight(request.Weight);
+		if (weight <= 0.0f)
+			return IKSolveResult::Unchanged;
+		const std::span<const uint32_t> turned = joints.first(joints.size() - 1);
+		if (HasFixedMatrix(source, turned) || (request.EndRotation && source.Nodes[joints.back()].HasMatrix))
+			return IKSolveResult::FixedMatrix;
+		if (!Math::IsFinite(request.Target) || (request.Pole && !Math::IsFinite(*request.Pole)) || (request.EndRotation && !Math::IsFinite(*request.EndRotation)))
+			return IKSolveResult::NonFinite;
+
+		const size_t bones = turned.size();
+		std::vector<glm::vec3> points(joints.size());
+		std::vector<float> lengths(bones);
+		for (size_t i = 0; i < joints.size(); i++)
+			points[i] = Position(globals, joints[i]);
+		float reach = 0;
+		for (size_t i = 0; i < bones; i++)
+			reach += lengths[i] = glm::length(points[i + 1] - points[i]);
+		if (reach < 1e-6f)
+			return IKSolveResult::Degenerate;
+		const glm::vec3 root = points.front();
+		const glm::vec3& target = request.Target;
+		// Where a bone lies after a pass; a bone that collapsed onto its neighbour keeps the direction it had.
+		const auto place = [](const glm::vec3& from, const glm::vec3& toward, const glm::vec3& fallback, float length) {
+			const glm::vec3 direction = toward - from;
+			const float distance = glm::length(direction);
+			return from + (distance > 1e-9f ? direction / distance : fallback) * length;
+		};
+		std::vector<glm::vec3> animated(bones);
+		for (size_t i = 0; i < bones; i++)
+			animated[i] = lengths[i] > 1e-9f ? (points[i + 1] - points[i]) / lengths[i] : glm::vec3(0, 1, 0);
+		if (glm::length(target - root) >= reach)
+		{
+			const glm::vec3 direction = glm::normalize(target - root);
+			for (size_t i = 0; i < bones; i++)
+				points[i + 1] = points[i] + direction * lengths[i];
+		}
+		else
+		{
+			// A straight chain stays straight under FABRIK's passes (it folds along its line), so a target along it first
+			// bends the inner joints slightly toward the pole.
+			const glm::vec3 line = points.back() - root;
+			bool straight = glm::length(line) > 1e-6f * reach;
+			for (size_t i = 1; straight && i < bones; i++)
+				straight = glm::length(glm::cross(points[i] - root, line)) <= 1e-4f * reach * glm::length(line);
+			if (straight)
+			{
+				const glm::vec3 direction = glm::normalize(line);
+				glm::vec3 hint = request.Pole && glm::length(*request.Pole) > 0.0f ? glm::normalize(*request.Pole) : glm::vec3(0, 0, 1);
+				if (std::abs(glm::dot(hint, direction)) > 0.999f)
+					hint = std::abs(direction.x) < 0.9f ? glm::vec3(1, 0, 0) : glm::vec3(0, 1, 0);
+				const glm::vec3 side = glm::normalize(hint - direction * glm::dot(hint, direction));
+				for (size_t i = 1; i < bones; i++)
+					points[i] += side * (0.01f * reach);
+			}
+			const float tolerance = FabrikTolerance * reach;
+			for (uint32_t iteration = 0; iteration < FabrikMaxIterations && glm::length(points.back() - target) > tolerance; iteration++)
+			{
+				points.back() = target;
+				for (size_t i = bones; i-- > 0;)
+					points[i] = place(points[i + 1], points[i], -animated[i], lengths[i]);
+				points.front() = root;
+				for (size_t i = 0; i < bones; i++)
+					points[i + 1] = place(points[i], points[i + 1], animated[i], lengths[i]);
+			}
+		}
+		if (!std::ranges::all_of(points, [](const glm::vec3& point) { return Math::IsFinite(point); }))
+			return IKSolveResult::NonFinite;
+
+		const SavedRotations saved(pose, joints);
+		for (size_t i = 0; i < bones; i++)
+		{
+			const glm::vec3 origin = Position(globals, joints[i]);
+			const glm::vec3 bone = Position(globals, joints[i + 1]) - origin;
+			const glm::vec3 aim = points[i + 1] - origin;
+			if (glm::length(bone) < 1e-6f * reach || glm::length(aim) < 1e-6f * reach)
+				continue;
+			RotateJoint(source, pose, globals, joints[i], RotationBetween(glm::normalize(bone), glm::normalize(aim)));
+			// The joints below aim from where this turn puts them.
+			if (!ComposeOrRestore(source, pose, globals, saved))
+				return IKSolveResult::NonFinite;
+		}
+		if (request.EndRotation)
+			pose.Nodes[joints.back()].Rotation = glm::normalize(LocalRotationFor(source, globals, joints.back(), glm::normalize(*request.EndRotation)));
 		return Finalize(source, pose, globals, saved, weight);
 	}
 
