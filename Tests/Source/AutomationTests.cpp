@@ -438,6 +438,54 @@ TEST_SUITE("Automation")
 		CHECK(RunError(registry, reopened, "render.screenshot", { { "path", "x.png" } }).find("GPU host") != std::string::npos);
 	}
 
+	// CJK names have no representation in Windows CI's ANSI code page (1252), so each step below fails there when UTF-8
+	// text reaches the file system as narrow text (std::filesystem::path(std::string), path::string(), fopen).
+	TEST_CASE("A project and assets named in CJK characters work through commands, scenes, prefabs and require")
+	{
+		// Deactivated (and removed) on scope exit; the commands create and open the project inside it.
+		BasaltTest::TempProject temp("Unicode-資産");
+		Project::SetActive(nullptr);
+		const std::filesystem::path directory = temp.GetDirectory() / FileSystem::PathFromUtf8("日本語");
+		CommandRegistry registry;
+		AutomationSession session;
+		const json created = Run(registry, session, "project.create", { { "path", FileSystem::PathToUtf8(directory) }, { "name", "日本語" } });
+		CHECK(std::filesystem::equivalent(FileSystem::PathFromUtf8(created["directory"].get<std::string>()), directory));
+
+		Run(registry, session, "asset.write", { { "path", "Assets/Scripts/道具.lua" }, { "content", "return { Value = 42 }" } });
+		Run(registry, session, "asset.write", { { "path", "Assets/Scripts/主役.lua" }, { "content", R"(
+			local Tool = require('Assets.Scripts.道具')
+			local Hero = {}
+			function Hero:OnCreate() self.Entity.Translation = Vec3(Tool.Value, 0, 0) end
+			return Hero
+		)" } });
+		CHECK(FileSystem::Exists(directory / FileSystem::PathFromUtf8("Assets/Scripts/道具.lua")));
+		Run(registry, session, "entity.create", { { "name", "Hero" }, { "components", { { "Script", { { "Script", "Assets/Scripts/主役.lua" } } } } } });
+		Run(registry, session, "prefab.create", { { "entity", "Hero" }, { "path", "Assets/Prefabs/箱.bprefab" } });
+		Run(registry, session, "prefab.instantiate", { { "path", "Assets/Prefabs/箱.bprefab" } });
+		Run(registry, session, "scene.save", { { "path", "Assets/Scenes/場面.bscene" } });
+		CHECK(Run(registry, session, "scene.info")["path"] == "Assets/Scenes/場面.bscene");
+		Run(registry, session, "project.set", { { "startScene", "Assets/Scenes/場面.bscene" } });
+
+		// Reopened from disk: the start scene's key comes back as the same UTF-8 text.
+		AutomationSession reopened;
+		const json opened = Run(registry, reopened, "project.open", { { "path", FileSystem::PathToUtf8(directory) } });
+		CHECK(opened["scene"] == "Assets/Scenes/場面.bscene");
+		CHECK(Run(registry, reopened, "entity.list", { { "nameContains", "Hero" } })["entities"].size() == 2);
+
+		Run(registry, reopened, "play.start");
+		const auto hero = [&]() { return Run(registry, reopened, "lua.exec", { { "code", "return Scene.FindEntityByName('Hero').Translation.x" } })["result"]; };
+		CHECK(hero() == "42.0");
+		CHECK(Run(registry, reopened, "lua.exec", { { "code", "return require('Assets.Scripts.道具').Value" } })["result"] == "42");
+		// Hot reload finds the changed module's file by its UTF-8 name, so require loads the new version.
+		Run(registry, reopened, "asset.write", { { "path", "Assets/Scripts/道具.lua" }, { "content", "return { Value = 7 }" } });
+		CHECK(Run(registry, reopened, "lua.exec", { { "code", "return require('Assets.Scripts.道具').Value" } })["result"] == "7");
+		Run(registry, reopened, "lua.exec", { { "code", "Scene.Load('Assets/Scenes/場面.bscene')" } });
+		const json step = Run(registry, reopened, "play.step");
+		CHECK(step["scenePath"] == "Assets/Scenes/場面.bscene");
+		CHECK(hero() == "7.0");
+		Run(registry, reopened, "play.stop");
+	}
+
 	TEST_CASE("play.step reports a scene switched by Lua, and stopping returns to the edit scene")
 	{
 		BasaltTest::TempProject temp("AutomationSceneSwitch");

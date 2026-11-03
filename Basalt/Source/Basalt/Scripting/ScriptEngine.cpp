@@ -78,7 +78,7 @@ namespace Basalt {
 			}
 		};
 
-		// What SearchMountedModules found for a module name. Loaded means its chunk was pushed on the Lua stack.
+		// What SearchModules found for a module name. Loaded means its chunk was pushed on the Lua stack.
 		enum class ModuleOutcome
 		{
 			NotFound,
@@ -97,58 +97,68 @@ namespace Basalt {
 			return source;
 		}
 
-		// The C++ half of SearchMountedModules, kept apart so no C++ object is alive when the searcher raises its error (Lua
-		// is built as C: lua_error unwinds with longjmp). outText receives the file name (Loaded), the "no file" lines
-		// (NotFound) or the error (LoadFailed).
-		ModuleOutcome FindMountedModule(lua_State* state, const char* name, const char* path, std::string& outText)
+		// The file require loads for a module name: the first of package.path's templates ('?' standing for the name, its
+		// dots made '/') that names a file on disk or in a mounted archive (an exported game's Assets.bpak). package.path is
+		// UTF-8 (OpenSafeLibraries) and read through FileSystem, where Lua's own searcher would fopen narrow text, which
+		// Windows reads in the ANSI code page. outNotFound, when given, gets require's "no file" line for each template that
+		// names nothing.
+		std::optional<std::string> FindModulePath(std::string_view name, std::string_view templates, std::string* outNotFound)
+		{
+			std::string module(name);
+			std::replace(module.begin(), module.end(), '.', '/');
+			for (size_t start = 0; start <= templates.size();)
+			{
+				const size_t end = std::min(templates.find(';', start), templates.size());
+				std::string candidate(templates.substr(start, end - start));
+				start = end + 1;
+				if (candidate.empty())
+					continue;
+				for (size_t mark = candidate.find('?'); mark != std::string::npos; mark = candidate.find('?', mark + module.size()))
+					candidate.replace(mark, 1, module);
+				const std::filesystem::path file = FileSystem::PathFromUtf8(candidate);
+				std::error_code error;
+				if (FileSystem::FindMounted(file) || std::filesystem::is_regular_file(file, error))
+					return candidate;
+				if (outNotFound)
+				{
+					// require puts "\n\t" before each searcher's message; the lines within one are joined the same way.
+					if (!outNotFound->empty())
+						*outNotFound += "\n\t";
+					*outNotFound += "no file '" + candidate + "'";
+				}
+			}
+			return std::nullopt;
+		}
+
+		// The C++ half of SearchModules, kept apart so no C++ object is alive when the searcher raises its error (Lua is built
+		// as C: lua_error unwinds with longjmp). outText receives the file name (Loaded), the "no file" lines (NotFound) or
+		// the error (LoadFailed).
+		ModuleOutcome FindModule(lua_State* state, const char* name, const char* path, std::string& outText)
 		{
 			try
 			{
-				std::string module = name;
-				std::replace(module.begin(), module.end(), '.', '/');
-				const std::string templates = path;
-				for (size_t start = 0; start <= templates.size();)
+				const std::optional<std::string> file = FindModulePath(name, path, &outText);
+				if (!file)
+					return ModuleOutcome::NotFound;
+				const auto failed = [&](std::string_view reason) {
+					outText = "error loading module '" + std::string(name) + "' from file '" + *file + "':\n\t" + std::string(reason);
+					return ModuleOutcome::LoadFailed;
+				};
+				std::string readError;
+				const auto source = FileSystem::ReadBinaryFile(FileSystem::PathFromUtf8(*file), &readError);
+				if (!source)
+					return failed(readError);
+				const std::string_view chunk = SkipFilePrefix(std::string_view(reinterpret_cast<const char*>(source->data()), source->size()));
+				const std::string chunkName = "@" + *file;
+				if (luaL_loadbuffer(state, chunk.data(), chunk.size(), chunkName.c_str()) != LUA_OK)
 				{
-					const size_t end = std::min(templates.find(';', start), templates.size());
-					std::string candidate = templates.substr(start, end - start);
-					start = end + 1;
-					if (candidate.empty())
-						continue;
-					for (size_t mark = candidate.find('?'); mark != std::string::npos; mark = candidate.find('?', mark + module.size()))
-						candidate.replace(mark, 1, module);
-					// package.path holds native narrow text (OpenSafeLibraries).
-					const FileSystem::MountedFile file = FileSystem::FindMounted(std::filesystem::path(candidate));
-					if (!file)
-					{
-						// require puts "\n\t" before each searcher's message; the lines within one are joined the same way.
-						if (!outText.empty())
-							outText += "\n\t";
-						outText += "no file '";
-						outText += candidate;
-						outText += '\'';
-						continue;
-					}
-					const auto failed = [&](std::string_view reason) {
-						outText = "error loading module '" + std::string(name) + "' from file '" + candidate + "':\n\t" + std::string(reason);
-						return ModuleOutcome::LoadFailed;
-					};
-					std::string readError;
-					const auto source = FileSystem::ReadMounted(file, &readError);
-					if (!source)
-						return failed(readError);
-					const std::string_view chunk = SkipFilePrefix(std::string_view(reinterpret_cast<const char*>(source->data()), source->size()));
-					const std::string chunkName = "@" + candidate;
-					if (luaL_loadbuffer(state, chunk.data(), chunk.size(), chunkName.c_str()) != LUA_OK)
-					{
-						const char* message = lua_tostring(state, -1);
-						const std::string reason = message ? message : "?";
-						lua_pop(state, 1);
-						return failed(reason);
-					}
-					outText = candidate;
-					return ModuleOutcome::Loaded;
+					const char* message = lua_tostring(state, -1);
+					const std::string reason = message ? message : "?";
+					lua_pop(state, 1);
+					return failed(reason);
 				}
-				return ModuleOutcome::NotFound;
+				outText = *file;
+				return ModuleOutcome::Loaded;
 			}
 			catch (const std::exception& exception)
 			{
@@ -157,7 +167,7 @@ namespace Basalt {
 			}
 		}
 
-		// Pushes the std::string its light userdata argument points to (called protected, see PushMountedModule).
+		// Pushes the std::string its light userdata argument points to (called protected, see PushModule).
 		int PushText(lua_State* state)
 		{
 			const auto* text = static_cast<const std::string*>(lua_touserdata(state, 1));
@@ -165,13 +175,13 @@ namespace Basalt {
 			return 1;
 		}
 
-		// Runs FindMountedModule and pushes its text: the file name or message, after the chunk when loaded. Never inlined:
-		// MSVC's longjmp runs C++ destructors as it unwinds, and with this inlined into SearchMountedModules, a Release
-		// build's unwind tables still counted text as alive at its lua_error, so text was destroyed a second time.
-		BS_NOINLINE ModuleOutcome PushMountedModule(lua_State* state, const char* name, const char* path)
+		// Runs FindModule and pushes its text: the file name or message, after the chunk when loaded. Never inlined: MSVC's
+		// longjmp runs C++ destructors as it unwinds, and with this inlined into SearchModules, a Release build's unwind
+		// tables still counted text as alive at its lua_error, so text was destroyed a second time.
+		BS_NOINLINE ModuleOutcome PushModule(lua_State* state, const char* name, const char* path)
 		{
 			std::string text;
-			ModuleOutcome outcome = FindMountedModule(state, name, path, text);
+			ModuleOutcome outcome = FindModule(state, name, path, text);
 			// Copied onto the Lua stack inside a protected call, so a memory error there cannot skip text's destructor.
 			lua_pushcfunction(state, &PushText);
 			lua_pushlightuserdata(state, &text);
@@ -181,18 +191,17 @@ namespace Basalt {
 			return outcome;
 		}
 
-		// A package.searchers entry ahead of Lua's file searcher, which only sees the disk: modules inside a mounted
-		// archive (an exported game's Assets.bpak), found through the same package.path templates. Upvalue 1 is the
-		// package table. OpenSafeLibraries installs it only when the archive is mounted before the scripts start, as the
-		// runtime does. It raises errors, so it must hold no C++ object (see PushMountedModule).
-		int SearchMountedModules(lua_State* state)
+		// The package.searchers entry in place of Lua's file searcher (FindModulePath: UTF-8 names on every platform, and
+		// modules inside a mounted archive). Upvalue 1 is the package table. It raises errors, so it must hold no C++ object
+		// (see PushModule).
+		int SearchModules(lua_State* state)
 		{
 			const char* name = luaL_checkstring(state, 1);
 			lua_getfield(state, lua_upvalueindex(1), "path");
 			const char* path = lua_tostring(state, -1);
 			if (!path)
 				return luaL_error(state, "'package.path' must be a string");
-			const ModuleOutcome outcome = PushMountedModule(state, name, path);
+			const ModuleOutcome outcome = PushModule(state, name, path);
 			if (outcome == ModuleOutcome::LoadFailed)
 				return lua_error(state);
 			return outcome == ModuleOutcome::Loaded ? 2 : 1;
@@ -207,25 +216,20 @@ namespace Basalt {
 			lua["dofile"] = sol::lua_nil;
 			lua["loadfile"] = sol::lua_nil;
 
-			const std::filesystem::path root = Project::ResolvePath(".");
-			const std::string base = root.lexically_normal().generic_string();
+			// UTF-8, which only SearchModules reads correctly on Windows (Lua's own package.searchpath, if a script calls it,
+			// does not find names outside the ANSI code page there).
+			const std::string base = FileSystem::PathToGenericUtf8(Project::ResolvePath(".").lexically_normal());
 			lua["package"]["path"] = base + "/?.lua;" + base + "/?/init.lua";
 			lua["package"]["cpath"] = "";
-			if (FileSystem::GetMountedArchive(root))
-			{
-				lua_State* state = lua.lua_state();
-				lua_getglobal(state, "table");
-				lua_getfield(state, -1, "insert");
-				lua_getglobal(state, "package");
-				lua_getfield(state, -1, "searchers");
-				lua_remove(state, -2);
-				lua_pushinteger(state, 2);
-				lua_getglobal(state, "package");
-				lua_pushcclosure(state, &SearchMountedModules, 1);
-				// table.insert(package.searchers, 2, searcher): after the preload searcher, before the file searcher.
-				lua_call(state, 3, 0);
-				lua_pop(state, 1);
-			}
+			// package.searchers[2] is Lua's file searcher (after the preload one, before the C ones, which an empty cpath
+			// leaves with nothing to find).
+			lua_State* state = lua.lua_state();
+			lua_getglobal(state, "package");
+			lua_getfield(state, -1, "searchers");
+			lua_pushvalue(state, -2);
+			lua_pushcclosure(state, &SearchModules, 1);
+			lua_rawseti(state, -2, 2);
+			lua_pop(state, 2);
 		}
 
 		// Loads a script file and returns its class table.
@@ -305,34 +309,31 @@ namespace Basalt {
 		struct PackageView
 		{
 			sol::table Loaded;
-			sol::protected_function SearchPath;
 			std::string Path;
 		};
 
 		// What require itself uses, kept in the registry when the engine was made (ScriptEngine's constructor), so a script
-		// replacing the global `package` (or its loaded and searchpath fields) hides no module from hot reload: Lua's own
-		// loaded-module table, the original searchpath, and the path of the original package table, which require reads.
-		// nullopt only when a script set that path to something other than text (require then fails too).
+		// replacing the global `package` (or its loaded field) hides no module from hot reload: Lua's own loaded-module table
+		// and the path of the original package table, which require reads. nullopt only when a script set that path to
+		// something other than text (require then fails too).
 		std::optional<PackageView> GetPackage(sol::state& lua)
 		{
 			const sol::table registry = lua.registry();
 			auto loaded = registry.get<sol::optional<sol::table>>(LUA_LOADED_TABLE);
-			auto searchPath = registry.get<sol::optional<sol::protected_function>>("Basalt.SearchPath");
 			const auto package = registry.get<sol::optional<sol::table>>("Basalt.Package");
 			auto path = package ? package->get<sol::optional<std::string>>("path") : sol::nullopt;
-			if (!loaded || !searchPath || !path)
+			if (!loaded || !path)
 				return std::nullopt;
-			return PackageView{ *loaded, *searchPath, *path };
+			return PackageView{ *loaded, *path };
 		}
 
 		// The file require would load for a module name now (nullopt for the standard libraries and missing modules).
-		// package.path holds native narrow text (OpenSafeLibraries), so the result decodes the same way.
 		std::optional<std::filesystem::path> FindModuleFile(const PackageView& package, const std::string& name)
 		{
-			const sol::protected_function_result found = package.SearchPath(name, package.Path);
-			if (!found.valid() || found.get_type() != sol::type::string)
+			const std::optional<std::string> found = FindModulePath(name, package.Path, nullptr);
+			if (!found)
 				return std::nullopt;
-			return std::filesystem::path(found.get<std::string>()).lexically_normal();
+			return FileSystem::PathFromUtf8(*found).lexically_normal();
 		}
 
 		// Equivalent, not only equal: "require 'util'" finds Util.lua on case-insensitive file systems.
@@ -734,19 +735,14 @@ namespace Basalt {
 				const auto file = FindModuleFile(*package, name);
 				return file && IsAnyOf(*file, files);
 			});
-			// A snapshot of the names first: the searchpath calls below run Lua, which must not change the table being
-			// traversed.
-			std::vector<std::string> names;
+			std::vector<std::string> forget;
 			for (const auto& [key, value] : package->Loaded)
 			{
-				if (key.is<std::string>())
-					names.push_back(key.as<std::string>());
-			}
-			std::vector<std::string> forget;
-			for (const std::string& name : names)
-			{
+				if (!key.is<std::string>())
+					continue;
+				std::string name = key.as<std::string>();
 				if (const auto file = FindModuleFile(*package, name); file && IsAnyOf(*file, files))
-					forget.push_back(name);
+					forget.push_back(std::move(name));
 			}
 			if (forget.empty())
 				return false;
@@ -880,7 +876,6 @@ namespace Basalt {
 		lua.registry()["Basalt.Require"] = lua["require"];
 		// Kept for hot reload (GetPackage), whatever scripts later do to the global package table.
 		lua.registry()["Basalt.Package"] = lua["package"];
-		lua.registry()["Basalt.SearchPath"] = lua["package"]["searchpath"];
 		lua.set_function("require", [this](sol::this_state state, const sol::object& name) { return ScriptClassLoader::Require(*this, state, name); });
 
 		entt::registry& registry = scene->GetRegistry();

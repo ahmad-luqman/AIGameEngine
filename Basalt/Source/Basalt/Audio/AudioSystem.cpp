@@ -6,6 +6,7 @@
 #include "Basalt/Audio/ReverbNode.h"
 #include "Basalt/Audio/SourceEffectsNode.h"
 #include "Basalt/Core/Assert.h"
+#include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Physics/PhysicsWorld.h"
 #include "Basalt/Project/Project.h"
@@ -427,7 +428,7 @@ namespace Basalt {
 			return nullptr;
 		}
 
-		const std::string path = Project::ResolvePath(clip).string();
+		const std::filesystem::path path = Project::ResolvePath(clip);
 		// A plain unique_ptr until init succeeds: SoundDeleter must only see initialized sounds.
 		auto sound = std::make_unique<ma_sound>();
 		// Streams decode a page at a time as they play (the resource manager keeps two one-second pages);
@@ -437,9 +438,15 @@ namespace Basalt {
 			flags |= MA_SOUND_FLAG_NO_SPATIALIZATION;
 		// Initialized on the endpoint (a null group) and then attached to output, because output may be the endpoint,
 		// which is not an ma_sound_group.
-		if (const ma_result result = ma_sound_init_from_file(engine, path.c_str(), flags, nullptr, nullptr, sound.get()); result != MA_SUCCESS)
+#if defined(BS_PLATFORM_WINDOWS)
+		// The wide entry point: miniaudio opens narrow paths with CreateFileA, which reads them in the ANSI code page.
+		const ma_result loaded = ma_sound_init_from_file_w(engine, path.c_str(), flags, nullptr, nullptr, sound.get());
+#else
+		const ma_result loaded = ma_sound_init_from_file(engine, path.c_str(), flags, nullptr, nullptr, sound.get());
+#endif
+		if (loaded != MA_SUCCESS)
 		{
-			BS_CORE_ERROR("Audio: cannot load clip '{}' ({}, {}): {}", clip, path, stream ? "streamed" : "decoded", ma_result_description(result));
+			BS_CORE_ERROR("Audio: cannot load clip '{}' ({}, {}): {}", clip, FileSystem::PathToUtf8(path), stream ? "streamed" : "decoded", ma_result_description(loaded));
 			return nullptr;
 		}
 		SoundHandle handle(sound.release());

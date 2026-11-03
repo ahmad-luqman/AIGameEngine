@@ -595,13 +595,13 @@ namespace Basalt {
 							  CommandPolicy::HistoryControl });
 
 		m_Commands.Register({ "editor.window_screenshot", "Captures the whole editor window (all panels) to a PNG at the end of the current frame.", EditorCommandSchemas::WindowScreenshot(), [](AutomationSession&, const nlohmann::json& params) {
-								 const std::filesystem::path path = params["path"].get<std::string>();
+								 const std::filesystem::path path = FileSystem::PathFromUtf8(params["path"].get<std::string>());
 								 Application::Get().GetGraphicsDevice()->RequestBackBufferCapture([path](const std::vector<uint8_t>& pixels, uint32_t width, uint32_t height) {
 									 std::string error;
 									 if (!WritePng(path, pixels, width, height, error))
 										 BS_CORE_ERROR("Window screenshot: {}", error);
 								 });
-								 return nlohmann::json{ { "path", path.string() }, { "note", "written at the end of the current frame" } };
+								 return nlohmann::json{ { "path", FileSystem::PathToUtf8(path) }, { "note", "written at the end of the current frame" } };
 							 } });
 
 		m_Commands.Register({ "editor.game_view", "Gets or changes the Game view: the resolution it renders at (the project's window size unless overridden for this session), focus, stats (session-only play overlay), and with path saves what it shows (primary camera at that resolution, game UI, never a debug view; exposure reset as for screenshots) to a PNG. Returns {stats, statsVisible, frameMs (mean host wall time or null before a completed frame), physicsBodies (null without a physics world), luaBytes (process), renderStats (Game renderer or null), imguiGpu (null without an initialized profiler; otherwise includes timers/stalled/disabledReason), visible, mode, status (rendered, notRendered, noCamera, rendererUnavailable, renderFailed: the last frame's), width, height, override, hasCamera, imageRect and panelRect (logical units, relative to the editor window, as last drawn), windowSize, renderWidth, renderHeight, cursorMode (what the game asks for: Normal, Hidden or Locked), cursorLocked (whether the window holds the cursor for the game now), cursorReleased (Escape gave the cursor back to the editor until the Game view is clicked)}.", GameViewSettings::Schema(), [this](AutomationSession& session, const nlohmann::json& params) {
@@ -615,7 +615,7 @@ namespace Basalt {
 								 {
 									 // Through the capture renderer, so the live view keeps its exposure and dynamic resolution.
 									 const glm::uvec2 size = GetGameResolution();
-									 if (!RenderToFile(path->get<std::string>(), size.x, size.y, CaptureView::GameView, error))
+									 if (!RenderToFile(FileSystem::PathFromUtf8(path->get<std::string>()), size.x, size.y, CaptureView::GameView, error))
 										 throw CommandError(error);
 									 result["path"] = *path;
 								 }
@@ -633,7 +633,7 @@ namespace Basalt {
 									 result["warnings"] = nlohmann::json::array({ "not cached: " + generated->CacheWarning });
 								 if (const auto output = params.find("output"); output != params.end())
 								 {
-									 if (!WritePng(output->get<std::string>(), generated->Image.Pixels, generated->Image.Width, generated->Image.Height, error))
+									 if (!WritePng(FileSystem::PathFromUtf8(output->get<std::string>()), generated->Image.Pixels, generated->Image.Width, generated->Image.Height, error))
 										 throw CommandError(error);
 									 result["output"] = *output;
 								 }
@@ -649,7 +649,7 @@ namespace Basalt {
 								 const auto image = m_Thumbnails->RenderMaterial(entity.GetComponent<MaterialComponent>(), error);
 								 if (!image)
 									 throw CommandError(error);
-								 if (!WritePng(params["output"].get<std::string>(), image->Pixels, image->Width, image->Height, error))
+								 if (!WritePng(FileSystem::PathFromUtf8(params["output"].get<std::string>()), image->Pixels, image->Width, image->Height, error))
 									 throw CommandError(error);
 								 return nlohmann::json{ { "output", params["output"] }, { "width", image->Width }, { "height", image->Height } };
 							 } });
@@ -733,7 +733,7 @@ namespace Basalt {
 								 const uint32_t width = params.value("width", 1280u);
 								 const uint32_t height = params.value("height", 720u);
 								 std::string error;
-								 if (!RenderToFile(params["path"].get<std::string>(), width, height, CaptureView::SceneView, error))
+								 if (!RenderToFile(FileSystem::PathFromUtf8(params["path"].get<std::string>()), width, height, CaptureView::SceneView, error))
 									 throw CommandError(error);
 								 return nlohmann::json{ { "path", params["path"] } };
 							 } });
@@ -1160,7 +1160,7 @@ namespace Basalt {
 
 	void EditorLayer::HandleAssetDrop(const std::string& path)
 	{
-		const std::string extension = std::filesystem::path(path).extension().string();
+		const std::string extension = FileSystem::PathToUtf8(FileSystem::PathFromUtf8(path).extension());
 		std::optional<nlohmann::json> result;
 		if (extension == ".bscene")
 		{

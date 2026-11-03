@@ -75,7 +75,7 @@ return %s
 		{
 			if (directory)
 				return "[DIR]";
-			const std::string extension = path.extension().string();
+			const std::string extension = FileSystem::PathToUtf8(path.extension());
 			if (extension == ".bscene")
 				return "[SCN]";
 			if (extension == ".bprefab")
@@ -185,7 +185,7 @@ return %s
 				switch (m_NewItem)
 				{
 					case NewItem::Script:
-						m_Context.Execute("asset.write", { { "path", Project::MakeRelative(m_CurrentDirectory / (m_NewItemName + ".lua")) }, { "content", MakeScript(m_NewItemName) } });
+						m_Context.Execute("asset.write", { { "path", Project::MakeRelative(m_CurrentDirectory / FileSystem::PathFromUtf8(m_NewItemName + ".lua")) }, { "content", MakeScript(m_NewItemName) } });
 						break;
 					case NewItem::Material:
 					{
@@ -195,7 +195,7 @@ return %s
 						break;
 					}
 					case NewItem::Folder:
-						std::filesystem::create_directories(m_CurrentDirectory / m_NewItemName, error);
+						std::filesystem::create_directories(m_CurrentDirectory / FileSystem::PathFromUtf8(m_NewItemName), error);
 						break;
 					case NewItem::None:
 						break;

@@ -14,8 +14,6 @@
 #include "Basalt/Scene/ComponentRegistry.h"
 #include "Basalt/Scene/Components.h"
 
-#include <cgltf.h>
-
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -133,20 +131,21 @@ namespace Basalt {
 		// not loaded.
 		void AddModelDependencies(const std::filesystem::path& projectDirectory, const std::string& model, std::set<std::string>& outDependencies)
 		{
-			cgltf_options options = {};
-			cgltf_data* data = nullptr;
-			const std::string path = FileSystem::PathToUtf8(projectDirectory / FileSystem::PathFromUtf8(model));
-			if (cgltf_parse_file(&options, path.c_str(), &data) != cgltf_result_success)
+			// An unreadable model has no dependencies to track: making its thumbnail fails and reports why.
+			std::string error;
+			const std::optional<MeshImporter::Contents> contents = MeshImporter::Inspect(projectDirectory / FileSystem::PathFromUtf8(model), error);
+			if (!contents)
 				return;
-			const auto add = [&](const char* uri) {
-				if (auto file = MeshImporter::GetExternalFileKey(model, uri))
-					outDependencies.insert(std::move(*file));
-			};
-			for (cgltf_size i = 0; i < data->buffers_count; i++)
-				add(data->buffers[i].uri);
-			for (cgltf_size i = 0; i < data->images_count; i++)
-				add(data->images[i].uri);
-			cgltf_free(data);
+			for (const std::vector<std::string>* uris : { &contents->BufferUris, &contents->ImageUris })
+			{
+				for (const std::string& uri : *uris)
+				{
+					if (uri.empty())
+						continue;
+					if (auto file = MeshImporter::GetExternalFileKey(model, uri.c_str()))
+						outDependencies.insert(std::move(*file));
+				}
+			}
 		}
 
 	}

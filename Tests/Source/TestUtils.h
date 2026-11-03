@@ -42,7 +42,7 @@ namespace BasaltTest {
 	// Whether a directory holds a leftover temporary file of FileSystem's atomic writes (*.tmp).
 	inline bool HasTempFiles(const std::filesystem::path& directory)
 	{
-		REQUIRE_MESSAGE(std::filesystem::is_directory(directory), "not a directory: ", directory.string());
+		REQUIRE_MESSAGE(std::filesystem::is_directory(directory), "not a directory: ", Basalt::FileSystem::PathToUtf8(directory));
 		std::error_code error;
 		for (const auto& entry : std::filesystem::directory_iterator(directory, error))
 		{
@@ -52,18 +52,18 @@ namespace BasaltTest {
 		return false;
 	}
 
-	// A fresh, empty temporary directory (<run directory>/<name>), removed on scope exit.
+	// A fresh, empty temporary directory (<run directory>/<name>, name UTF-8), removed on scope exit.
 	class TempDirectory
 	{
 	public:
 		explicit TempDirectory(const std::string& name)
-			: m_Path(GetRunDirectory() / name)
+			: m_Path(GetRunDirectory() / Basalt::FileSystem::PathFromUtf8(name))
 		{
 			std::error_code error;
 			std::filesystem::remove_all(m_Path, error);
-			REQUIRE_MESSAGE(!error, "cannot empty '", m_Path.string(), "': ", error.message());
+			REQUIRE_MESSAGE(!error, "cannot empty '", Basalt::FileSystem::PathToUtf8(m_Path), "': ", error.message());
 			std::filesystem::create_directories(m_Path, error);
-			REQUIRE_MESSAGE(!error, "cannot create '", m_Path.string(), "': ", error.message());
+			REQUIRE_MESSAGE(!error, "cannot create '", Basalt::FileSystem::PathToUtf8(m_Path), "': ", error.message());
 		}
 		~TempDirectory()
 		{
@@ -171,10 +171,10 @@ namespace BasaltTest {
 		TempProject(const TempProject&) = delete;
 		TempProject& operator=(const TempProject&) = delete;
 
-		// Writes a project-relative file and returns its project-relative path.
+		// Writes a project-relative file (a UTF-8 path) and returns its project-relative path.
 		std::string WriteFile(const std::string& relativePath, const std::string& contents) const
 		{
-			Basalt::FileSystem::WriteTextFile(m_Directory.GetPath() / relativePath, contents);
+			Basalt::FileSystem::WriteTextFile(m_Directory.GetPath() / Basalt::FileSystem::PathFromUtf8(relativePath), contents);
 			return relativePath;
 		}
 
@@ -196,7 +196,7 @@ namespace BasaltTest {
 #if defined(__APPLE__)
 			project.WriteFile("FakeVulkanSDK/lib/libvulkan.1.dylib", "stand-in");
 			project.WriteFile("FakeVulkanSDK/lib/libMoltenVK.dylib", "stand-in");
-			m_Variable.emplace("VULKAN_SDK", (project.GetDirectory() / "FakeVulkanSDK").string());
+			m_Variable.emplace("VULKAN_SDK", Basalt::FileSystem::PathToUtf8(project.GetDirectory() / "FakeVulkanSDK"));
 #else
 			(void)project;
 #endif

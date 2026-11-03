@@ -3,6 +3,7 @@
 
 #include <Basalt/Core/Base.h>
 #include <Basalt/Core/CrashReporter.h>
+#include <Basalt/Core/FileSystem.h>
 #include <Basalt/Core/Log.h>
 #include <Basalt/Core/Platform.h>
 
@@ -202,7 +203,7 @@ namespace {
 				i++;
 			}
 			else if (action == "cwd")
-				std::printf("%s\n", std::filesystem::current_path().string().c_str());
+				std::printf("%s\n", Basalt::FileSystem::PathToUtf8(std::filesystem::current_path()).c_str());
 			else if (action == "sleep")
 			{
 				std::fflush(stdout);
@@ -304,14 +305,18 @@ int main(int argc, char** argv)
 		return RunChild(list);
 	}
 	if (argc > 1 && std::string_view(argv[1]) == "--basalt-child")
-		return RunChild(std::vector<std::string>(argv + 2, argv + argc));
+	{
+		// UTF-8 like the arguments the RunProcess tests pass (argv is in the ANSI code page on Windows).
+		const std::vector<std::string> arguments = Basalt::Platform::GetProcessArguments(argc, argv);
+		return RunChild(arguments.size() > 2 ? std::vector<std::string>(arguments.begin() + 2, arguments.end()) : std::vector<std::string>());
+	}
 	Basalt::Log::Init();
 	// Keep test output readable: engine logs still reach LogHistory, but only warnings hit the console.
 	Basalt::Log::SetConsoleLevel(Basalt::LogLevel::Warn);
 	// Lua Storage writes save data under the user data directory; tests must never touch the real one.
 	// Inside this run's scratch directory, so test processes running at the same time never share it.
 	const std::filesystem::path userData = BasaltTest::GetRunDirectory() / "UserData";
-	if (!Basalt::Platform::SetEnvVar(Basalt::Platform::UserDataDirectoryVariable, userData.string()))
+	if (!Basalt::Platform::SetEnvVar(Basalt::Platform::UserDataDirectoryVariable, Basalt::FileSystem::PathToUtf8(userData)))
 	{
 		BS_CORE_CRITICAL("Tests: cannot set {}", Basalt::Platform::UserDataDirectoryVariable);
 		return 1;

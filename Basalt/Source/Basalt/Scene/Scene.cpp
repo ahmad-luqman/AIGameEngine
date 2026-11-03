@@ -4,6 +4,7 @@
 #include "Basalt/Animation/PropertyAnimation.h"
 #include "Basalt/Audio/AudioSystem.h"
 #include "Basalt/Core/Assert.h"
+#include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/Input.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Core/Profiler.h"
@@ -801,7 +802,7 @@ namespace Basalt {
 
 		// Only scenes inside the project (stricter than Scene.Instantiate): a scene switch replaces the whole
 		// game, so it must not come from outside it.
-		const std::filesystem::path relative = std::filesystem::path(path).lexically_normal();
+		const std::filesystem::path relative = FileSystem::PathFromUtf8(path).lexically_normal();
 		if (relative.empty() || relative.has_root_name() || relative.has_root_directory() || *relative.begin() == "..")
 		{
 			outError = "'" + path + "' must be a project-relative path inside the project";
@@ -821,12 +822,12 @@ namespace Basalt {
 		Scene scratch;
 		if (!SceneSerializer::DeserializeScene(scratch, *data, outError))
 		{
-			outError = relative.filename().string() + ": " + outError;
+			outError = FileSystem::PathToUtf8(relative.filename()) + ": " + outError;
 			return false;
 		}
 
 		if (m_PendingLoad)
-			BS_CORE_WARN("Scene.Load: '{}' replaces the load of '{}' requested earlier this frame", relative.generic_string(), m_PendingLoad->Path);
+			BS_CORE_WARN("Scene.Load: '{}' replaces the load of '{}' requested earlier this frame", FileSystem::PathToGenericUtf8(relative), m_PendingLoad->Path);
 		m_PendingLoad = CreateScope<PendingLoad>(PendingLoad{ SceneSerializer::ScenePathOf(Project::ResolvePath(relative)), std::move(*data) });
 		return true;
 	}
@@ -962,7 +963,7 @@ namespace Basalt {
 		BumpRenderRevision();
 		m_RendererSettings.DebugView = debugView;
 		m_PhysicsSettings = PhysicsSettings{};
-		m_Name = std::filesystem::path(load->Path).stem().string();
+		m_Name = FileSystem::PathToUtf8(FileSystem::PathFromUtf8(load->Path).stem());
 		m_Path = load->Path;
 
 		std::unordered_set<UUID> existing;

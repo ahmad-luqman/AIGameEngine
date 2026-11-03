@@ -24,6 +24,7 @@
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/JsonUtils.h"
 #include "Basalt/Core/Log.h"
+#include "Basalt/Core/Platform.h"
 
 #include <iostream>
 #include <string>
@@ -84,7 +85,8 @@ namespace {
 int main(int argc, char** argv)
 {
 	Log::Init();
-	const CommandLine commandLine(argc, argv, { "project", "scene" });
+	// UTF-8 on every platform, like the JSON the values are passed on in.
+	const CommandLine commandLine(Platform::GetProcessArguments(argc, argv), { "project", "scene" });
 	Log::SetConsoleLevel(commandLine.HasFlag("verbose") ? LogLevel::Info : LogLevel::Warn);
 	CrashReporter::Install({ "basalt" });
 	for (const std::string& error : commandLine.GetErrors())
@@ -169,7 +171,7 @@ int main(int argc, char** argv)
 		std::string text;
 		if (positional[1] == "-")
 			text.assign(std::istreambuf_iterator<char>(std::cin), std::istreambuf_iterator<char>());
-		else if (auto file = FileSystem::ReadTextFile(positional[1]))
+		else if (auto file = FileSystem::ReadTextFile(FileSystem::PathFromUtf8(positional[1])))
 			text = *file;
 		else
 		{

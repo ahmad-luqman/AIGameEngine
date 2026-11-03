@@ -272,6 +272,10 @@ Other rules:
 - `#pragma once` in every header. Include order: own header first (in .cpp), then `Basalt/...`
   headers, then third-party, then standard library, separated by blank lines.
 - Engine includes use the full path from `Basalt/Source`: `#include "Basalt/Core/Log.h"`.
+- Text is UTF-8 everywhere (asset keys, JSON, Lua, command-line arguments through `Platform::GetProcessArguments`).
+  Convert between text and paths only with `FileSystem::PathFromUtf8`/`PathToUtf8`/`PathToGenericUtf8`: on Windows
+  `std::filesystem::path(std::string)` reads the ANSI code page, `path::string()` throws outside it, and narrow C APIs
+  (`fopen`, `LoadLibraryA`, miniaudio's `ma_*_init_from_file`) cannot open such names (use the wide variants).
 - Ownership: `Scope<T>` (unique) / `Ref<T>` (shared) from `Basalt/Core/Base.h`; raw pointers are
   non-owning. GPU objects use nvrhi handles (`nvrhi::TextureHandle`, ...).
 - No exceptions across module boundaries. Fallible operations return `bool`/`std::optional`/a result

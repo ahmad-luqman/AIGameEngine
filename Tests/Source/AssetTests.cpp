@@ -468,6 +468,43 @@ TEST_SUITE("Assets")
 		CHECK_FALSE(gltfRoot.HasComponent<MeshComponent>());
 	}
 
+	// CJK names have no representation in Windows CI's ANSI code page (1252): they load only when UTF-8 keys and URIs reach
+	// the file system as UTF-8.
+	TEST_CASE("Models, their external files and textures named in CJK characters load")
+	{
+		BasaltTest::TempProject project("GltfImport-資産");
+		const std::string buffer = MakeQuadBuffer();
+		project.WriteFile("Assets/Models/四角 資料.bin", buffer);
+		project.WriteFile("Assets/Models/模様.png", MakePng(0xFF0000FF));
+		project.WriteFile("Assets/Textures/法線.png", MakePng(0x0000FFFF));
+		// URIs as exporters write them: percent-encoded UTF-8, or the characters themselves.
+		const nlohmann::json gltf = MakeGltfJson({ { "uri", "%E5%9B%9B%E8%A7%92%20%E8%B3%87%E6%96%99.bin" }, { "byteLength", buffer.size() } }, { { { "uri", "模様.png" } }, { { "uri", "../Textures/法線.png" } } });
+		const std::string model = project.WriteFile("Assets/Models/四角.gltf", gltf.dump());
+
+		AssetManager::Clear();
+		const Ref<MeshSource> mesh = AssetManager::GetMesh(model);
+		REQUIRE_MESSAGE(mesh, AssetManager::GetError(model));
+		CHECK(mesh->Vertices.size() == 4);
+		REQUIRE(mesh->Materials.size() == 2);
+		CHECK(mesh->Materials[0].AlbedoMap == "Assets/Models/模様.png");
+		CHECK(mesh->Materials[0].NormalMap == "Assets/Textures/法線.png");
+		const Ref<TextureSource> albedo = AssetManager::GetTexture(mesh->Materials[0].AlbedoMap);
+		REQUIRE_MESSAGE(albedo, AssetManager::GetError(mesh->Materials[0].AlbedoMap));
+		CHECK(albedo->Pixels[0] == 255);
+		const Ref<TextureSource> normal = AssetManager::GetTexture(mesh->Materials[0].NormalMap);
+		REQUIRE_MESSAGE(normal, AssetManager::GetError(mesh->Materials[0].NormalMap));
+		CHECK(normal->Pixels[2] == 255);
+
+		std::string error;
+		const auto contents = MeshImporter::Inspect(Project::ResolvePath(model), error);
+		REQUIRE_MESSAGE(contents, error);
+		CHECK(contents->BufferUris == std::vector<std::string>{ "%E5%9B%9B%E8%A7%92%20%E8%B3%87%E6%96%99.bin" });
+		// Thumbnails read the same files, so their keys change with them.
+		const ThumbnailCache cache(project.GetDirectory());
+		CHECK(cache.GetDependencies(model) == std::vector<std::string>{ "Assets/Models/四角 資料.bin", "Assets/Models/模様.png", "Assets/Textures/法線.png" });
+		AssetManager::Clear();
+	}
+
 	TEST_CASE("Binary glTF (.glb) with an image in a buffer view")
 	{
 		BasaltTest::TempProject project("GlbImport");

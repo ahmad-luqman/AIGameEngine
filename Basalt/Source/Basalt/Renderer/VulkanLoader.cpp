@@ -28,10 +28,12 @@ namespace Basalt {
 		void* s_Library = nullptr;
 		PFN_vkGetInstanceProcAddr s_GetInstanceProcAddr = nullptr;
 
-		void* OpenLibrary(const std::string& path)
+		// A path, not text: LoadLibraryA would read it in the ANSI code page, and a game installed in a folder named outside
+		// it would not start.
+		void* OpenLibrary(const std::filesystem::path& path)
 		{
 #if defined(BS_PLATFORM_WINDOWS)
-			return reinterpret_cast<void*>(LoadLibraryA(path.c_str()));
+			return reinterpret_cast<void*>(LoadLibraryW(path.c_str()));
 #else
 			return dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
 #endif
@@ -55,24 +57,24 @@ namespace Basalt {
 #endif
 		}
 
-		std::vector<std::string> GetCandidatePaths()
+		std::vector<std::filesystem::path> GetCandidatePaths()
 		{
 			const std::filesystem::path exeDir = FileSystem::GetExecutableDirectory();
-			std::vector<std::string> candidates;
+			std::vector<std::filesystem::path> candidates;
 
 #if defined(BS_PLATFORM_WINDOWS)
-			candidates.push_back((exeDir / "vulkan-1.dll").string());
+			candidates.push_back(exeDir / "vulkan-1.dll");
 			candidates.emplace_back("vulkan-1.dll");
 #elif defined(BS_PLATFORM_MACOS)
-			candidates.push_back((exeDir / "libvulkan.1.dylib").string());
-			candidates.push_back((exeDir / "../Frameworks/libvulkan.1.dylib").string());
+			candidates.push_back(exeDir / "libvulkan.1.dylib");
+			candidates.push_back(exeDir / "../Frameworks/libvulkan.1.dylib");
 			candidates.emplace_back("libvulkan.1.dylib");
 			if (const auto sdk = Platform::GetEnvVar("VULKAN_SDK"))
-				candidates.push_back((std::filesystem::path(*sdk) / "lib/libvulkan.1.dylib").string());
+				candidates.push_back(FileSystem::PathFromUtf8(*sdk) / "lib/libvulkan.1.dylib");
 			candidates.emplace_back("/opt/homebrew/lib/libvulkan.1.dylib");
 			candidates.emplace_back("/usr/local/lib/libvulkan.1.dylib");
 #else
-			candidates.push_back((exeDir / "libvulkan.so.1").string());
+			candidates.push_back(exeDir / "libvulkan.so.1");
 			candidates.emplace_back("libvulkan.so.1");
 			candidates.emplace_back("libvulkan.so");
 #endif
@@ -90,7 +92,7 @@ namespace Basalt {
 				const std::filesystem::path manifest = base / "vulkan" / "icd.d" / "MoltenVK_icd.json";
 				if (FileSystem::Exists(manifest))
 				{
-					Platform::SetEnvVarIfUnset("VK_DRIVER_FILES", manifest.string());
+					Platform::SetEnvVarIfUnset("VK_DRIVER_FILES", FileSystem::PathToUtf8(manifest));
 					return;
 				}
 			}
@@ -105,7 +107,7 @@ namespace Basalt {
 
 		RegisterBundledDrivers();
 
-		for (const std::string& candidate : GetCandidatePaths())
+		for (const std::filesystem::path& candidate : GetCandidatePaths())
 		{
 			void* library = OpenLibrary(candidate);
 			if (!library)
@@ -122,7 +124,7 @@ namespace Basalt {
 			s_GetInstanceProcAddr = getInstanceProcAddr;
 			VULKAN_HPP_DEFAULT_DISPATCHER.init(s_GetInstanceProcAddr);
 			glfwInitVulkanLoader(s_GetInstanceProcAddr);
-			BS_CORE_INFO("Vulkan loader: {}", candidate);
+			BS_CORE_INFO("Vulkan loader: {}", FileSystem::PathToUtf8(candidate));
 			return true;
 		}
 

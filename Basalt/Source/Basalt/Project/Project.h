@@ -115,7 +115,13 @@ namespace Basalt {
 		// Resolves a project-relative path against the active project directory, or the working directory
 		// when no project is active. Absolute paths are returned unchanged.
 		static std::filesystem::path ResolvePath(const std::filesystem::path& relativePath);
-		// Converts an absolute path inside the active project into a project-relative generic path.
+		// Text is UTF-8 (asset keys, scene paths, JSON and Lua strings), read with FileSystem::PathFromUtf8: the implicit
+		// std::filesystem::path conversion would read it in the ANSI code page on Windows. The const char* overload keeps
+		// literals unambiguous; convert a std::string_view to std::string first (it would pick the path overload).
+		static std::filesystem::path ResolvePath(const std::string& relativePath);
+		static std::filesystem::path ResolvePath(const char* relativePath);
+		// Converts an absolute path inside the active project into a project-relative generic UTF-8 path (the form of
+		// asset keys); paths outside it come back absolute, also generic UTF-8.
 		static std::string MakeRelative(const std::filesystem::path& absolutePath);
 
 		AssetRegistry& GetAssets() { return m_Assets; }

@@ -1,6 +1,7 @@
 #include "RuntimeLayer.h"
 
 #include "Basalt/Core/Application.h"
+#include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/Input.h"
 #include "Basalt/Core/Window.h"
 #include "Basalt/ImGui/ImGuiLayer.h"
@@ -207,7 +208,7 @@ namespace Basalt {
 				const std::string path = m_Options.ScreenshotPath;
 				device->RequestBackBufferCapture([path](const std::vector<uint8_t>& pixels, uint32_t captureWidth, uint32_t captureHeight) {
 					std::string error;
-					if (WritePng(path, pixels, captureWidth, captureHeight, error))
+					if (WritePng(FileSystem::PathFromUtf8(path), pixels, captureWidth, captureHeight, error))
 					{
 						BS_CORE_INFO("Runtime: screenshot saved to '{}'", path);
 					}

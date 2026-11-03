@@ -302,6 +302,33 @@ TEST_SUITE("Audio")
 		scene.OnRuntimeStop();
 	}
 
+	// miniaudio opens narrow paths with CreateFileA on Windows, which reads them in the ANSI code page (1252 on CI): CJK
+	// names load there only through the wide entry point.
+	TEST_CASE("Clips named in CJK characters play, decoded and streamed")
+	{
+		BasaltTest::TempProject project("Audio-資産");
+		project.WriteFile("Assets/Audio/音.wav", MakeWav(0.25f));
+		HeadlessAudio engine;
+
+		Scene scene;
+		Entity decoded = scene.CreateEntity("Decoded");
+		decoded.AddComponent<AudioSourceComponent>().Clip = "Assets/Audio/音.wav";
+		Entity streamed = scene.CreateEntity("Streamed");
+		auto& stream = streamed.AddComponent<AudioSourceComponent>();
+		stream.Clip = "Assets/Audio/音.wav";
+		stream.Stream = true;
+		scene.CreateEntity("Listener").AddComponent<AudioListenerComponent>();
+		scene.OnRuntimeStart();
+		REQUIRE(scene.GetAudioSystem());
+		AudioSystem& audio = *scene.GetAudioSystem();
+		const uint64_t since = Log::GetHistory().GetTotalCount();
+		CHECK(audio.Play(decoded));
+		CHECK(audio.Play(streamed));
+		CHECK(BasaltTest::CountLogMessages(since, "cannot load clip") == 0);
+		CHECK(Rms(Mix(0.05f)) > 0.01f);
+		scene.OnRuntimeStop();
+	}
+
 	TEST_CASE("AudioSource Bus and Stream fields round-trip through the component registry")
 	{
 		Scene scene;
