@@ -27,7 +27,19 @@ namespace Basalt {
 
 	glm::quat BlendRagdollRotation(const glm::quat& animated, const glm::quat& physical, float weight)
 	{
-		return PhysicsInternal::FromJolt(PhysicsInternal::ToJolt(animated).SLERP(PhysicsInternal::ToJolt(physical), weight));
+		return Math::Slerp(animated, physical, weight);
+	}
+
+	bool RagdollNeedsRebuild(const RagdollComponent& built, const RagdollComponent& current)
+	{
+		RagdollComponent structural = current;
+		structural.Enabled = built.Enabled;
+		structural.RecoveryTime = built.RecoveryTime;
+		structural.MotorStrength = built.MotorStrength;
+		structural.MotorFrequency = built.MotorFrequency;
+		structural.MotorDamping = built.MotorDamping;
+		structural.MotorTorque = built.MotorTorque;
+		return structural != built;
 	}
 
 	std::string ValidateRagdoll(const RagdollComponent& c)

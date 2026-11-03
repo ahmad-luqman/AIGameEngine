@@ -3876,7 +3876,7 @@ TEST_SUITE("Animation")
 		auto walker = GraphAnimator(scene, project, graph);
 		auto& animator = walker.GetComponent<AnimatorComponent>();
 		animator.Preview = true;
-		// A preview plays whatever PlayOnStart says.
+		// A preview plays regardless of PlayOnStart.
 		animator.PlayOnStart = false;
 		animator.Events = { { "Step", 0.25f, "Footstep" } };
 		auto marker = scene.CreateEntity("Marker");
@@ -3928,5 +3928,39 @@ TEST_SUITE("Animation")
 		REQUIRE(scene.GetPoseAnimationSystem());
 		scene.ResetAnimationPreview();
 		CHECK(scene.GetPoseAnimationSystem() == nullptr);
+	}
+
+	TEST_CASE("StateMachine layers leave root motion to the base")
+	{
+		TempProject project("LayerGraphRootMotion");
+		ClearAssetCache cacheGuard;
+		json graph = StateGraph();
+		graph["InitialState"] = "Walk";
+		// The layer's own graph plays Step, which moves the root, in a state that asks for root motion.
+		const json layerGraph = { { "InitialState", "Run" }, { "States", json::array({ { { "Name", "Run" }, { "Clip", "Step" }, { "RootMotion", true } } }) } };
+		const std::string layerPath = project.WriteFile("Assets/Animations/Layer.banimgraph", layerGraph.dump());
+		const auto walk = [&](bool layered) {
+			Scene scene;
+			auto rig = GraphAnimator(scene, project, graph);
+			if (layered)
+			{
+				AnimationLayer layer;
+				layer.Name = "Upper";
+				layer.StateMachine = layerPath;
+				rig.GetComponent<AnimatorComponent>().Layers = { layer };
+			}
+			scene.OnRuntimeStart();
+			for (int i = 0; i < 30; i++)
+				scene.GetAnimationSystem()->Update(Step);
+			const float x = RootX(rig);
+			scene.OnRuntimeStop();
+			return x;
+		};
+		const float alone = walk(false);
+		CHECK(alone > 0.0f);
+		const auto since = Log::GetHistory().GetTotalCount();
+		// The entity moves by the base's root motion alone, and the layer is told off for animating the root joint.
+		CHECK(walk(true) == doctest::Approx(alone));
+		CHECK(CountLogMessages(since, "layer 'Upper': state machine 'Assets/Animations/Layer.banimgraph' animates the root-motion joint 'RootJoint'") == 1);
 	}
 }

@@ -2,14 +2,11 @@
 #include "FuzzCommon.h"
 
 #include <Basalt/Animation/AnimationMask.h>
-#include <Basalt/Core/JsonUtils.h>
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 {
 	BasaltFuzz::Init();
 	std::string error;
-	const auto parsed = Basalt::ParseJson(BasaltFuzz::AsText(data, size), error);
-	if (!parsed.is_discarded())
-		Basalt::AnimationMask::FromJson(parsed, error);
+	Basalt::AnimationMask::FromText(BasaltFuzz::AsText(data, size), error);
 	return 0;
 }

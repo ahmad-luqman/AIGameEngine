@@ -199,7 +199,7 @@ namespace Basalt {
 		// Fades the motor strength (0..1, scaling MotorTorque) linearly over seconds (0: at once); a changed MotorStrength
 		// applies at once and ends a fade. False with a diagnostic for a missing Ragdoll component or invalid values.
 		bool SetRagdollMotorStrength(Entity entity, float strength, float seconds);
-		// The current motor strength; nullopt without a Ragdoll component.
+		// The current motor strength; nullopt without a Ragdoll component (or for an entity of another scene).
 		std::optional<float> GetRagdollMotorStrength(Entity entity) const;
 		uint32_t GetRagdollBodyCount(Entity entity) const;
 		// Construction attempts, including rejections; useful for diagnosing automatic activation retries.

@@ -222,6 +222,7 @@ namespace Basalt {
 		float Weight = 1.0f;
 		// 0..100; the layer's own clock, not scaled by Animator.Speed.
 		float Speed = 1.0f;
+		// Clip layers only: a StateMachine's states loop as each of them says.
 		bool Looping = true;
 		// Additive only: the pose the clip is a difference from, ReferenceClip (empty: the layer's own clip; required with
 		// a StateMachine) sampled at ReferenceTime seconds.
@@ -229,7 +230,8 @@ namespace Basalt {
 		float ReferenceTime = 0.0f;
 		// Empty (or only entries without a Joint): every joint at weight 1. Otherwise joints under no entry take 0.
 		std::vector<AnimationMaskJoint> Mask;
-		// A project-relative .banimmask shared between Animators; when set, its joints replace Mask.
+		// A project-relative .banimmask shared between Animators; when set, its joints replace Mask, and one that cannot load
+		// hides the layer (rather than showing it on the whole body, as an empty Mask would).
 		std::string MaskAsset;
 	};
 
@@ -302,7 +304,7 @@ namespace Basalt {
 		// both A-pose).
 		std::vector<AnimationClipLibrary> ClipLibraries;
 		// Edit mode only: plays the Animator in the scene view (its clip or state machine, layers and inverse kinematics),
-		// whatever PlayOnStart says, without moving the entity. Events, root-motion displacement, spring bones, ragdolls and
+		// regardless of PlayOnStart, without moving the entity. Events, root-motion displacement, spring bones, ragdolls and
 		// attachments wait for Play.
 		bool Preview = false;
 	};
@@ -334,6 +336,11 @@ namespace Basalt {
 		Fabrik // keep last: IKChainTypeCount
 	};
 	inline constexpr size_t IKChainTypeCount = 3;
+	// TwoBone and Fabrik chains reach a target with Joint (and can stand on the ground or lock a foot); LookAt chains aim.
+	inline constexpr bool IKChainReaches(IKChainType type)
+	{
+		return type == IKChainType::TwoBone || type == IKChainType::Fabrik;
+	}
 
 	// One inverse kinematics chain of an InverseKinematics component. Targets come from scripts (SetIKTarget), then from
 	// the component's Target entity (FollowTarget chains), then for Ground chains from the surface under the joint.
@@ -357,7 +364,7 @@ namespace Basalt {
 		// LookAt: the largest turn, in degrees (0..180), away from the animated aim.
 		float MaxAngle = 60.0f;
 		// TwoBone: the direction (not a point) the middle joint bends toward, in the entity's space; zero keeps the
-		// animated bend.
+		// animated bend. Fabrik: the side a straight chain is nudged toward before solving (zero: +Z).
 		glm::vec3 Pole = { 0.0f, 0.0f, 0.0f };
 		// TwoBone, Fabrik: place Joint on the ground below it (foot placement) while no other target is set.
 		bool Ground = false;
@@ -371,8 +378,9 @@ namespace Basalt {
 	};
 
 	// Inverse kinematics applied to the Animator on the same entity after physics and OnLateUpdate, before
-	// attachments and drawing. Foot placement casts a ray under each Ground chain's joint, lowers Pelvis by the
-	// largest downward offset, and aligns the feet to the surface.
+	// attachments and drawing. Chains reach for script targets, the Target entity (FollowTarget chains) or the ground:
+	// foot placement casts a ray under each Ground chain's joint, lowers Pelvis by the largest downward offset, and
+	// aligns the feet to the surface. FootLock chains hold planted feet in place.
 	struct InverseKinematicsComponent
 	{
 		static constexpr uint32_t MaxChains = 16;
@@ -390,9 +398,10 @@ namespace Basalt {
 		float Smoothing = 0.1f;
 		// The entity FollowTarget chains reach for or aim at (its position); 0: none.
 		UUID Target = 0;
-		// Foot locking (meters, 0..100, in world space): a FootLock chain's joint locks while its animated world speed is
-		// below LockSpeed (per second), and releases when the animation lifts it LockHeight above where it locked, or at
-		// once when the animation has carried it LockDistance away from the lock.
+		// Foot locking (meters, 0..100, in world space): a FootLock chain's joint locks once its target (the animated joint,
+		// or its ground point) moves slower than LockSpeed (per second), and holds its position across the entity's up axis
+		// (its height follows the animation and the ground) until the animation lifts it LockHeight above its height when
+		// locked, the character leaves the ground, or (at once) its target is LockDistance away across the up axis.
 		float LockSpeed = 0.5f;
 		float LockHeight = 0.05f;
 		float LockDistance = 0.3f;

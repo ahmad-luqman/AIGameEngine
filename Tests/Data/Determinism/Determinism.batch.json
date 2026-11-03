@@ -21,9 +21,9 @@
 	{"id": "spawn-ended", "command": "play.step", "params": {"frames": 2, "assertNoErrors": true, "expectHash": "21963c2d244ed607"}},
 	{"id": "check-spawn-ends", "command": "lua.exec", "params": {"code": "assert(ReplayExits == 5, 'rebuilt and destroyed contacts must end')"}},
 	{ "id": "ragdoll-recover", "command": "lua.exec", "params": { "code": "local e = Scene.FindEntityByName('Ragdoll') assert(e:IsRagdollActive()) e.Translation = Vec3(e.Translation.x, 0, e.Translation.z) assert(e:RecoverRagdoll('', 0.5)) assert(not e:IsRagdollActive()) local p = Scene.FindEntityByName('PoweredRagdoll') assert(p:ActivateRagdoll()) assert(p:SetRagdollMotorStrength(0.25, 0.5))" } },
-	{ "id": "ragdoll-frozen", "command": "scene.hash", "params": { "expectHash": "bbe50ed2bcc62011" } },
-	{ "id": "ragdoll-mid-recovery", "command": "play.step", "params": { "frames": 15, "assertNoErrors": true, "expectHash": "2daae372cc75debc" } },
-	{ "id": "ragdoll-recovered", "command": "play.step", "params": { "frames": 30, "assertNoErrors": true, "expectHash": "065816421fef28b8" } },
+	{ "id": "ragdoll-frozen", "command": "scene.hash", "params": { "expectHash": "9158af06ce035a15" } },
+	{ "id": "ragdoll-mid-recovery", "command": "play.step", "params": { "frames": 15, "assertNoErrors": true, "expectHash": "bca1884b8204c314" } },
+	{ "id": "ragdoll-recovered", "command": "play.step", "params": { "frames": 30, "assertNoErrors": true, "expectHash": "ee373b82fbcd19a5" } },
 
 	{ "id": "stop", "command": "play.stop" }
 ]

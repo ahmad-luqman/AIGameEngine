@@ -2,6 +2,11 @@
 
 #include <glm/gtc/matrix_transform.hpp>
 
+// Jolt.h must precede every other Jolt header.
+#include <Jolt/Jolt.h>
+
+#include <Jolt/Math/Quat.h>
+
 #include <cmath>
 
 namespace Basalt::Math {
@@ -139,6 +144,12 @@ namespace Basalt::Math {
 	glm::vec3 EulerFromQuat(const glm::quat& rotation)
 	{
 		return glm::eulerAngles(rotation);
+	}
+
+	glm::quat Slerp(const glm::quat& from, const glm::quat& to, float weight)
+	{
+		const JPH::Quat result = JPH::Quat(from.x, from.y, from.z, from.w).SLERP(JPH::Quat(to.x, to.y, to.z, to.w), weight);
+		return glm::quat(result.GetW(), result.GetX(), result.GetY(), result.GetZ());
 	}
 
 }

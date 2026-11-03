@@ -58,12 +58,25 @@ namespace Basalt {
 		return mask;
 	}
 
+	std::optional<AnimationMask> AnimationMask::FromText(const std::string& text, std::string& outError)
+	{
+		const nlohmann::json data = ParseJson(text, outError);
+		return data.is_discarded() ? std::nullopt : FromJson(data, outError);
+	}
+
 	nlohmann::json AnimationMask::ToJson() const
 	{
 		nlohmann::json joints = nlohmann::json::array();
 		for (const AnimationMaskJoint& joint : Joints)
 			joints.push_back({ { "Joint", joint.Joint }, { "Weight", joint.Weight } });
 		return { { "Joints", std::move(joints) } };
+	}
+
+	const std::vector<AnimationMaskJoint>* SelectLayerMask(const AnimationLayer& layer, const AnimationMask* asset)
+	{
+		if (layer.MaskAsset.empty())
+			return &layer.Mask;
+		return asset ? &asset->Joints : nullptr;
 	}
 
 	bool AnimationMask::IsMaskFile(const std::string& path)
