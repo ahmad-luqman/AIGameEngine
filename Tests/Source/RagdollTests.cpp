@@ -97,7 +97,7 @@ TEST_SUITE("Ragdolls")
 		const json valid = { { "Enabled", true }, { "Bones", { { { "Joint", "Tip" }, { "Radius", 0.1 }, { "Length", 0.4 }, { "SwingAngle", 20 }, { "TwistMin", -10 } } } } };
 		REQUIRE(info->Deserialize(entity, valid, error));
 		const auto before = info->Serialize(entity);
-		for (const json& invalid : { json{ { "Mass", 0 } }, json{ { "RadiusRatio", 1 } }, json{ { "RecoveryTime", -1 } }, json{ { "Layer", "" } }, json{ { "Bones", { { { "Joint", "Tip" }, { "Radius", -1 } } } } }, json{ { "Bones", { { { "Joint", "Tip" }, { "SwingAngle", 181 } } } } }, json{ { "Bones", { { { "Joint", "Tip" }, { "TwistMin", 1 } } } } }, json{ { "Bones", { { { "Joint", "Tip" } }, { { "Joint", "Tip" } } } } } })
+		for (const json& invalid : { json{ { "Mass", 0 } }, json{ { "RadiusRatio", 1 } }, json{ { "RecoveryTime", -1 } }, json{ { "Layer", "" } }, json{ { "Bones", { { { "Joint", "Tip" }, { "Radius", -1 } } } } }, json{ { "Bones", { { { "Joint", "Tip" }, { "SwingAngle", 181 } } } } }, json{ { "Bones", { { { "Joint", "Tip" }, { "TwistMin", 1 } } } } }, json{ { "Bones", { { { "Joint", "Tip" } }, { { "Joint", "Tip" } } } } }, json{ { "MotorStrength", 1.5 } }, json{ { "MotorStrength", -0.1 } }, json{ { "MotorFrequency", 0 } }, json{ { "MotorFrequency", 31 } }, json{ { "MotorDamping", -1 } }, json{ { "MotorDamping", 11 } }, json{ { "MotorTorque", -1 } }, json{ { "MotorTorque", 2000000 } } })
 		{
 			CHECK_FALSE(info->Deserialize(entity, invalid, error));
 			CHECK_FALSE(error.empty());
@@ -112,6 +112,9 @@ TEST_SUITE("Ragdolls")
 		component.Mass = std::numeric_limits<float>::quiet_NaN();
 		CHECK_FALSE(ValidateRagdoll(component).empty());
 		component.Mass = 70;
+		component.MotorTorque = std::numeric_limits<float>::infinity();
+		CHECK_FALSE(ValidateRagdoll(component).empty());
+		component.MotorTorque = 500;
 		component.Bones.resize(RagdollComponent::MaxBones + 1);
 		CHECK_FALSE(ValidateRagdoll(component).empty());
 	}
@@ -762,7 +765,7 @@ TEST_SUITE("Ragdolls")
 		CHECK(Eval(scene, "return Scene.FindEntityByName('Ragdoll'):IsRagdollActive()") == "false");
 		const auto* info = ComponentRegistry::Find("Ragdoll");
 		REQUIRE(info);
-		CHECK(info->Serialize(rig).size() == 7);
+		CHECK(info->Serialize(rig).size() == 11);
 		CHECK(Eval(scene, "return pcall(function() Scene.FindEntityByName('Ragdoll'):ActivateRagdoll('bad') end)").starts_with("false"));
 		scene.CreateEntity("Plain");
 		CHECK(Eval(scene, "return pcall(function() Scene.FindEntityByName('Plain'):ActivateRagdoll() end)").starts_with("false"));

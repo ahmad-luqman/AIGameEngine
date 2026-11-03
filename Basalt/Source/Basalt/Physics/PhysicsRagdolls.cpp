@@ -647,9 +647,14 @@ namespace Basalt {
 					record.FrozenWorld = std::move(matrices);
 				record.World = currentWorld;
 			}
+			// Control and motor settings apply live; only structural edits rebuild.
 			auto settings = *component;
 			settings.Enabled = record.Settings.Enabled;
 			settings.RecoveryTime = record.Settings.RecoveryTime;
+			settings.MotorStrength = record.Settings.MotorStrength;
+			settings.MotorFrequency = record.Settings.MotorFrequency;
+			settings.MotorDamping = record.Settings.MotorDamping;
+			settings.MotorTorque = record.Settings.MotorTorque;
 			auto* animations = ScenePtr->GetAnimationSystem();
 			const auto view = animations ? animations->GetPoseView(entity) : std::nullopt;
 			const bool sourceChanged = !view || view->Source != record.Source;

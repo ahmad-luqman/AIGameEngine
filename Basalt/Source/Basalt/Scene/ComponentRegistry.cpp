@@ -499,7 +499,7 @@ namespace Basalt {
 		constexpr const char* s_UIVerticalAlignNames[] = { "Top", "Middle", "Bottom" };
 		constexpr const char* s_BlendSpaceTypeNames[] = { "1D", "2D" };
 		constexpr const char* s_LayerBlendNames[] = { "Override", "Additive" };
-		constexpr const char* s_IKChainTypeNames[] = { "TwoBone", "LookAt" };
+		constexpr const char* s_IKChainTypeNames[] = { "TwoBone", "LookAt", "Fabrik" };
 		// Names are indexed by enum value; a new enum value needs a name here.
 		static_assert(std::size(s_RigidBodyTypeNames) == static_cast<size_t>(RigidBodyType::Kinematic) + 1);
 		static_assert(std::size(s_ProjectionTypeNames) == static_cast<size_t>(SceneCamera::ProjectionType::Orthographic) + 1);
@@ -621,6 +621,7 @@ namespace Basalt {
 		{
 			r.Field("Name", c.Name);
 			r.Field("Clip", c.Clip);
+			r.AssetField("StateMachine", c.StateMachine);
 			r.EnumField("Blend", c.Blend, s_LayerBlendNames);
 			r.Field("Weight", c.Weight);
 			r.Field("Speed", c.Speed);
@@ -628,6 +629,7 @@ namespace Basalt {
 			r.Field("ReferenceClip", c.ReferenceClip);
 			r.Field("ReferenceTime", c.ReferenceTime);
 			r.ListField("Mask", c.Mask, AnimationLayer::MaxMaskJoints);
+			r.AssetField("MaskAsset", c.MaskAsset);
 		}
 
 		void Fields(FieldReader& r, AnimationClipLibrary& c)
@@ -660,6 +662,7 @@ namespace Basalt {
 			r.Field("LODDistance", c.LODDistance);
 			r.Field("LODInterval", c.LODInterval);
 			r.ListField("ClipLibraries", c.ClipLibraries, AnimatorComponent::MaxClipLibraries);
+			r.Field("Preview", c.Preview);
 		}
 
 		void Fields(FieldReader& r, BoneAttachmentComponent& c)
@@ -681,6 +684,8 @@ namespace Basalt {
 			r.Field("MaxAngle", c.MaxAngle);
 			r.Field("Pole", c.Pole);
 			r.Field("Ground", c.Ground);
+			r.Field("FollowTarget", c.FollowTarget);
+			r.Field("FootLock", c.FootLock);
 			r.Field("Weight", c.Weight);
 		}
 
@@ -691,6 +696,10 @@ namespace Basalt {
 			r.Field("RayHeight", c.RayHeight);
 			r.Field("RayDepth", c.RayDepth);
 			r.Field("Smoothing", c.Smoothing);
+			r.Field("Target", c.Target);
+			r.Field("LockSpeed", c.LockSpeed);
+			r.Field("LockHeight", c.LockHeight);
+			r.Field("LockDistance", c.LockDistance);
 		}
 
 		void Fields(FieldReader& r, SpringChain& c)
@@ -739,6 +748,10 @@ namespace Basalt {
 			r.Field("Layer", c.Layer);
 			r.Field("RecoveryTime", c.RecoveryTime);
 			r.ListField("Bones", c.Bones, RagdollComponent::MaxBones);
+			r.Field("MotorStrength", c.MotorStrength);
+			r.Field("MotorFrequency", c.MotorFrequency);
+			r.Field("MotorDamping", c.MotorDamping);
+			r.Field("MotorTorque", c.MotorTorque);
 		}
 
 		void Fields(FieldReader& r, MaterialComponent& c)
@@ -1270,6 +1283,7 @@ namespace Basalt {
 				{ "LODDistance", c.LODDistance },
 				{ "LODInterval", c.LODInterval },
 				{ "ClipLibraries", ListToJson(c.ClipLibraries) },
+				{ "Preview", c.Preview },
 			};
 		}
 
@@ -1293,6 +1307,7 @@ namespace Basalt {
 			return {
 				{ "Name", c.Name },
 				{ "Clip", c.Clip },
+				{ "StateMachine", c.StateMachine },
 				{ "Blend", EnumName(s_LayerBlendNames, c.Blend) },
 				{ "Weight", c.Weight },
 				{ "Speed", c.Speed },
@@ -1300,6 +1315,7 @@ namespace Basalt {
 				{ "ReferenceClip", c.ReferenceClip },
 				{ "ReferenceTime", c.ReferenceTime },
 				{ "Mask", ListToJson(c.Mask) },
+				{ "MaskAsset", c.MaskAsset },
 			};
 		}
 
@@ -1314,13 +1330,25 @@ namespace Basalt {
 				{ "MaxAngle", c.MaxAngle },
 				{ "Pole", ToJson(c.Pole) },
 				{ "Ground", c.Ground },
+				{ "FollowTarget", c.FollowTarget },
+				{ "FootLock", c.FootLock },
 				{ "Weight", c.Weight },
 			};
 		}
 
 		json Write(const InverseKinematicsComponent& c)
 		{
-			return { { "Chains", ListToJson(c.Chains) }, { "Pelvis", c.Pelvis }, { "RayHeight", c.RayHeight }, { "RayDepth", c.RayDepth }, { "Smoothing", c.Smoothing } };
+			return {
+				{ "Chains", ListToJson(c.Chains) },
+				{ "Pelvis", c.Pelvis },
+				{ "RayHeight", c.RayHeight },
+				{ "RayDepth", c.RayDepth },
+				{ "Smoothing", c.Smoothing },
+				{ "Target", static_cast<uint64_t>(c.Target) },
+				{ "LockSpeed", c.LockSpeed },
+				{ "LockHeight", c.LockHeight },
+				{ "LockDistance", c.LockDistance },
+			};
 		}
 
 		json Write(const SpringChain& c)
@@ -1358,7 +1386,7 @@ namespace Basalt {
 		}
 		json Write(const RagdollComponent& c)
 		{
-			return { { "Enabled", c.Enabled }, { "RootJoint", c.RootJoint }, { "Mass", c.Mass }, { "RadiusRatio", c.RadiusRatio }, { "Layer", c.Layer }, { "RecoveryTime", c.RecoveryTime }, { "Bones", ListToJson(c.Bones) } };
+			return { { "Enabled", c.Enabled }, { "RootJoint", c.RootJoint }, { "Mass", c.Mass }, { "RadiusRatio", c.RadiusRatio }, { "Layer", c.Layer }, { "RecoveryTime", c.RecoveryTime }, { "Bones", ListToJson(c.Bones) }, { "MotorStrength", c.MotorStrength }, { "MotorFrequency", c.MotorFrequency }, { "MotorDamping", c.MotorDamping }, { "MotorTorque", c.MotorTorque } };
 		}
 
 		json Write(const MaterialComponent& c)
@@ -1946,7 +1974,7 @@ namespace Basalt {
 		{
 			if (c.Chains.size() > InverseKinematicsComponent::MaxChains)
 				return fmt::format("InverseKinematics holds at most {} chains", InverseKinematicsComponent::MaxChains);
-			for (const auto& [name, value] : { std::pair<const char*, float>{ "RayHeight", c.RayHeight }, { "RayDepth", c.RayDepth }, { "Smoothing", c.Smoothing } })
+			for (const auto& [name, value] : { std::pair<const char*, float>{ "RayHeight", c.RayHeight }, { "RayDepth", c.RayDepth }, { "Smoothing", c.Smoothing }, { "LockSpeed", c.LockSpeed }, { "LockHeight", c.LockHeight }, { "LockDistance", c.LockDistance } })
 			{
 				if (!std::isfinite(value) || value < 0.0f || value > 100.0f)
 					return fmt::format("{} {} must be between 0 and 100", name, value);
@@ -1971,8 +1999,10 @@ namespace Basalt {
 					return fmt::format("Chains[{}].MaxAngle {} must be between 0 and 180 degrees", i, chain.MaxAngle);
 				if (!std::isfinite(chain.Weight) || chain.Weight < 0.0f || chain.Weight > 1.0f)
 					return fmt::format("Chains[{}].Weight {} must be between 0 and 1", i, chain.Weight);
-				if (chain.Ground && chain.Type != IKChainType::TwoBone)
-					return fmt::format("Chains[{}]: only TwoBone chains can be Ground chains", i);
+				if (chain.Ground && chain.Type == IKChainType::LookAt)
+					return fmt::format("Chains[{}]: only TwoBone and Fabrik chains can be Ground chains", i);
+				if (chain.FootLock && chain.Type == IKChainType::LookAt)
+					return fmt::format("Chains[{}]: only TwoBone and Fabrik chains can lock their feet", i);
 			}
 			if (c.RayHeight + c.RayDepth <= 0.0f && std::ranges::any_of(c.Chains, &IKChain::Ground))
 				return "RayHeight + RayDepth must be positive for Ground chains";
