@@ -397,8 +397,8 @@ TEST_CASE("GPU morph weights past one draw record and past the per-draw limit ma
 	const auto fixture = std::filesystem::path(BASALT_ANIMATION_DATA_DIR) / "ManyMorphs.gltf";
 	const auto referencePath = std::filesystem::path(BASALT_ANIMATION_OUTPUT_DIR) / "ManyMorphsReference.gltf";
 	// Sparse and Crowded read the same accessors, so the drawn model shares one submesh's geometry between them
-	// (MeshSource::ShareSubmesh). The reference bakes each node's weights into its own vertices, so its Crowded reads
-	// POSITION through an accessor of its own.
+	// (MeshSource::ShareSubmesh). The reference writes each node's morphed pose into its submesh's vertices in place, which
+	// a shared submesh would overwrite, so its Crowded reads POSITION through an accessor of its own.
 	auto referenceJson = nlohmann::json::parse(*FileSystem::ReadTextFile(fixture));
 	referenceJson["accessors"].push_back(referenceJson["accessors"][0]);
 	referenceJson["meshes"][1]["primitives"][0]["attributes"]["POSITION"] = referenceJson["accessors"].size() - 1;

@@ -1100,13 +1100,33 @@ TEST_SUITE("Assets")
 		CHECK(mesh->Submeshes[0].LODs.empty());
 		CHECK(BasaltTest::CountLogMessages(since, "Valence.gltf: mesh 'QuadMesh' primitive 0: the squares of its vertices' triangle counts sum past " + std::to_string(MeshOptimizer::MaxValenceCostPerIndex) + " per index") == 1);
 
-		// Primitives share the model's allowance: two whose busy vertex fits it alone, but not twice, over the same indices
+		// A primitive that repeats its accessors shares its geometry, which keeps its triangle order and gets no LODs, and
+		// says so in its own warning.
+		nlohmann::json repeated = gltf;
+		// Each use counts against MaxZeroFilledElements, so two must fit.
+		repeated["accessors"][2]["count"] = 30000;
+		repeated["materials"].push_back({ { "name", "Other" } });
+		repeated["meshes"][0]["primitives"].push_back(repeated["meshes"][0]["primitives"][0]);
+		repeated["meshes"][0]["primitives"][1]["material"] = 1;
+		project.WriteFile("Assets/Models/Repeated.gltf", repeated.dump());
+		AssetManager::Clear();
+		const auto repeatedSince = Log::GetHistory().GetTotalCount();
+		const auto repeatedMesh = AssetManager::GetMesh("Assets/Models/Repeated.gltf");
+		REQUIRE_MESSAGE(repeatedMesh, AssetManager::GetError("Assets/Models/Repeated.gltf"));
+		REQUIRE(repeatedMesh->Submeshes.size() == 2);
+		CHECK(repeatedMesh->Submeshes[1].BaseVertex == repeatedMesh->Submeshes[0].BaseVertex);
+		CHECK(repeatedMesh->Submeshes[1].LODs.empty());
+		CHECK(BasaltTest::CountLogMessages(repeatedSince, "Repeated.gltf: mesh 'QuadMesh' primitive 0: the squares") == 1);
+		CHECK(BasaltTest::CountLogMessages(repeatedSince, "Repeated.gltf: mesh 'QuadMesh' primitive 1: the squares") == 0);
+		CHECK(BasaltTest::CountLogMessages(repeatedSince, "Repeated.gltf: mesh 'QuadMesh' primitive 1: it shares mesh 'QuadMesh' primitive 0's geometry, which keeps its triangle order and gets no LODs (its vertices are in too many triangles)") == 1);
+
+		// Primitives draw on the model's allowance: two whose busy vertex fits it alone, but not twice, over the same indices
 		// (eight such primitives took 12 s in the fuzz build before). The second reads them through an accessor of its own:
 		// one that repeats the first's accessors would share its geometry instead of being optimized again.
 		gltf["accessors"][2]["count"] = 1800;
 		gltf["accessors"].push_back(gltf["accessors"][2]);
 		gltf["meshes"][0]["primitives"].push_back(gltf["meshes"][0]["primitives"][0]);
-		gltf["meshes"][0]["primitives"][1]["indices"] = 3;
+		gltf["meshes"][0]["primitives"][1]["indices"] = gltf["accessors"].size() - 1;
 		project.WriteFile("Assets/Models/Shared.gltf", gltf.dump());
 		AssetManager::Clear();
 		const auto sharedSince = Log::GetHistory().GetTotalCount();
@@ -1118,8 +1138,8 @@ TEST_SUITE("Assets")
 	}
 
 	// Regression (review of the FuzzGltf fixes): each primitive was imported again even when it read the same accessors as
-	// an earlier one (multi-material exports repeat them), and 250 primitives sharing one 16x16 grid took 2.4 s in the fuzz
-	// build. Later ones now draw the first one's ranges with their own material.
+	// an earlier one (multi-material exports repeat them), and 250 primitives repeating one 16x16-vertex grid's accessors took
+	// 2.4 s in the fuzz build. Later ones now draw the first one's ranges with their own material.
 	TEST_CASE("glTF primitives that read the same accessors share one submesh's geometry")
 	{
 		BasaltTest::TempDirectory directory("GltfSharedPrimitives");
@@ -1139,8 +1159,8 @@ TEST_SUITE("Assets")
 		primitives.push_back(with("material", 1)); // 1: shares 0's geometry
 		primitives.push_back(with("material", 2)); // 2: blended, so its triangles keep their order: its own
 		gltf["accessors"].push_back(gltf["accessors"][4]);
-		primitives.push_back(with("indices", 5));        // 3: the same indices through another accessor: its own
-		primitives.push_back(with("material", nullptr)); // 4: the default material, sharing 0's geometry
+		primitives.push_back(with("indices", gltf["accessors"].size() - 1)); // 3: the same indices through another accessor: its own
+		primitives.push_back(with("material", nullptr));                     // 4: the default material, sharing 0's geometry
 		// Meshes share accessors too.
 		gltf["meshes"].push_back({ { "name", "Copy" }, { "primitives", { with("material", 1) } } });
 		gltf["nodes"].push_back({ { "mesh", 1 } });
@@ -1175,7 +1195,7 @@ TEST_SUITE("Assets")
 		sharesBase(submesh(0, 1));
 		sharesBase(submesh(0, 4));
 		sharesBase(submesh(1, 0));
-		CHECK(submesh(0, 0).MaterialIndex == 0);
+		CHECK(base.MaterialIndex == 0);
 		CHECK(submesh(0, 1).MaterialIndex == 1);
 		CHECK(submesh(0, 4).MaterialIndex == source->Materials.size() - 1); // the default material
 		CHECK(submesh(1, 0).MaterialIndex == 1);
@@ -1190,6 +1210,32 @@ TEST_SUITE("Assets")
 		CHECK(ownIndices.LODs.size() == base.LODs.size());
 		// Three copies of the sphere's vertices: the first primitive's, the blended one's and the one with its own indices.
 		CHECK(source->Vertices.size() == base.VertexCount + blended.VertexCount + ownIndices.VertexCount);
+
+		// Every attribute the importer reads is part of what decides sharing: a second primitive that reads one of them
+		// through another accessor over the same bytes, or adds one, imports on its own.
+		for (const char* attribute : { "POSITION", "NORMAL", "TANGENT", "TEXCOORD_0", "TEXCOORD_1" })
+		{
+			INFO(attribute);
+			nlohmann::json variant = gltf;
+			variant["meshes"].erase(1);
+			variant["nodes"].erase(1);
+			variant["scenes"][0]["nodes"] = { 0 };
+			nlohmann::json& attributes = variant["meshes"][0]["primitives"][1]["attributes"];
+			if (attributes.contains(attribute))
+			{
+				variant["accessors"].push_back(variant["accessors"][attributes[attribute].get<size_t>()]);
+				attributes[attribute] = variant["accessors"].size() - 1;
+			}
+			else
+				attributes[attribute] = attributes["TEXCOORD_0"]; // an added TEXCOORD_1
+			const auto variantPath = directory.GetPath() / "Variant.gltf";
+			REQUIRE(FileSystem::WriteTextFile(variantPath, variant.dump()));
+			const auto separate = MeshImporter::LoadGltf(variantPath, "Variant.gltf", error);
+			REQUIRE_MESSAGE(separate, error);
+			const auto& own = separate->Submeshes[separate->Meshes[0].Submeshes[1]];
+			CHECK(own.BaseVertex != separate->Submeshes[separate->Meshes[0].Submeshes[0]].BaseVertex);
+			CHECK(separate->Submeshes[separate->Meshes[0].Submeshes[4]].BaseVertex == separate->Submeshes[separate->Meshes[0].Submeshes[0]].BaseVertex);
+		}
 	}
 
 	// What the first of the primitives reading the same accessors met, the others meet too, in the same order.
@@ -1204,13 +1250,23 @@ TEST_SUITE("Assets")
 		gltf["meshes"][0]["primitives"][1]["material"] = 1;
 		std::string error;
 		const auto load = [&](const char* name, const nlohmann::json& model) {
-			project.WriteFile(std::string("Assets/") + name, model.dump());
-			return MeshImporter::LoadGltf(project.GetDirectory() / "Assets" / name, std::string("Assets/") + name, error);
+			const std::string asset = std::string("Assets/") + name;
+			project.WriteFile(asset, model.dump());
+			return MeshImporter::LoadGltf(project.GetDirectory() / asset, asset, error);
 		};
 
 		// The material check still runs for a primitive that shares the first one's geometry.
 		CHECK_FALSE(load("Uv1.gltf", gltf));
 		CHECK_MESSAGE(error.find("material 'SecondUV' uses TEXCOORD_1 but mesh 'QuadMesh' has no TEXCOORD_1") != std::string::npos, error);
+		// It passes when the geometry they share has one.
+		nlohmann::json withUv1 = gltf;
+		for (auto& primitive : withUv1["meshes"][0]["primitives"])
+			primitive["attributes"]["TEXCOORD_1"] = 1;
+		const auto shared = load("WithUv1.gltf", withUv1);
+		REQUIRE_MESSAGE(shared, error);
+		REQUIRE(shared->Submeshes.size() == 2);
+		CHECK(shared->Submeshes[1].BaseVertex == shared->Submeshes[0].BaseVertex);
+		CHECK(shared->Submeshes[1].MaterialIndex == 1);
 
 		// A skip after the vertices are read follows that check, and repeats the first primitive's reason.
 		nlohmann::json invalid = gltf;
@@ -1233,6 +1289,66 @@ TEST_SUITE("Assets")
 		CHECK_MESSAGE(error.find("contains no triangle geometry") != std::string::npos, error);
 		for (const char* primitive : { "0", "1" })
 			CHECK(BasaltTest::CountLogMessages(since, std::string("Assets/Unreadable.gltf: mesh 'QuadMesh' primitive ") + primitive + ": skipped, its positions are unreadable") == 1);
+	}
+
+	TEST_CASE("ShareSubmesh copies everything a submesh draws with, apart from its material")
+	{
+		MeshSource source;
+		source.Materials = { MaterialData{ .Name = "First" }, MaterialData{ .Name = "Second" } };
+		std::vector<Vertex> vertices(3);
+		vertices[1].Position = { 1, 0, 0 };
+		vertices[2].Position = { 0, 1, 0 };
+		vertices[0].Joints = { 1, 0, 0, 0 };
+		vertices[0].Weights = { 1, 0, 0, 0 };
+		vertices[1].Joints = { 2, 0, 0, 0 };
+		vertices[1].Weights = { 0.5f, 0, 0, 0 }; // vertices[2] has no weights
+		std::vector<MorphDelta> deltas(2 * vertices.size());
+		deltas[1].Position = { 0, 0, 2 };
+		deltas[5].Position = { 0, -1, 0 };
+		const uint32_t first = source.AddSubmesh(vertices, { 0, 1, 2 }, 0, deltas, 2);
+		source.Submeshes[first].LODs.push_back({ .BaseIndex = 0, .IndexCount = 3, .Error = 0.5f });
+		// At capacity, so adding the copy reallocates the vector the original lives in.
+		source.Submeshes.shrink_to_fit();
+		const uint32_t shared = source.ShareSubmesh(first, 1);
+
+		REQUIRE(source.Submeshes.size() == 2);
+		const Submesh& a = source.Submeshes[first];
+		const Submesh& b = source.Submeshes[shared];
+		CHECK(a.MaterialIndex == 0);
+		CHECK(b.MaterialIndex == 1);
+		CHECK(b.BaseVertex == a.BaseVertex);
+		CHECK(b.VertexCount == a.VertexCount);
+		CHECK(b.BaseIndex == a.BaseIndex);
+		CHECK(b.IndexCount == a.IndexCount);
+		CHECK(b.Bounds.Min == a.Bounds.Min);
+		CHECK(b.Bounds.Max == a.Bounds.Max);
+		REQUIRE(b.LODs.size() == 1);
+		CHECK(b.LODs[0].IndexCount == 3);
+		CHECK(b.LODs[0].Error == 0.5f);
+		CHECK(a.HasUnweightedVertices);
+		CHECK(b.HasUnweightedVertices);
+		REQUIRE(a.JointBounds.size() == 2);
+		REQUIRE(b.JointBounds.size() == a.JointBounds.size());
+		for (size_t i = 0; i < a.JointBounds.size(); i++)
+		{
+			CHECK(b.JointBounds[i].Joint == a.JointBounds[i].Joint);
+			CHECK(b.JointBounds[i].Positions.Min == a.JointBounds[i].Positions.Min);
+			CHECK(b.JointBounds[i].Positions.Max == a.JointBounds[i].Positions.Max);
+			CHECK(b.JointBounds[i].MinWeightSum == a.JointBounds[i].MinWeightSum);
+			CHECK(b.JointBounds[i].MaxWeightSum == a.JointBounds[i].MaxWeightSum);
+		}
+		CHECK(b.MorphTargetCount == 2);
+		CHECK(b.MorphDeltaOffset == a.MorphDeltaOffset);
+		REQUIRE(b.MorphBounds.size() == 2);
+		for (size_t target = 0; target < 2; target++)
+		{
+			CHECK(b.MorphBounds[target].Min == a.MorphBounds[target].Min);
+			CHECK(b.MorphBounds[target].Max == a.MorphBounds[target].Max);
+		}
+		// Nothing is stored twice.
+		CHECK(source.Vertices.size() == 3);
+		CHECK(source.Indices.size() == 3);
+		CHECK(source.MorphDeltas.size() == 6);
 	}
 
 	TEST_CASE("glTF primitives with non-finite positions or empty indices are reported")
