@@ -516,11 +516,14 @@ TEST_SUITE("Assets")
 
 		AssetManager::Clear();
 		CHECK_FALSE(AssetManager::GetMesh(broken));
-		CHECK_MESSAGE(AssetManager::GetError(broken).find("壊れ.gltf") != std::string::npos, AssetManager::GetError(broken));
+		const std::string brokenError = AssetManager::GetError(broken);
+		CHECK_MESSAGE(brokenError.find("壊れ.gltf") != std::string::npos, brokenError);
 		CHECK_FALSE(AssetManager::GetMesh(empty));
-		CHECK_MESSAGE(AssetManager::GetError(empty).find("空.gltf: contains no triangle geometry") != std::string::npos, AssetManager::GetError(empty));
+		const std::string emptyError = AssetManager::GetError(empty);
+		CHECK_MESSAGE(emptyError.find("空.gltf: contains no triangle geometry") != std::string::npos, emptyError);
 		CHECK_FALSE(AssetManager::GetTexture(texture));
-		CHECK_MESSAGE(AssetManager::GetError(texture).find("壊れ.png: ") != std::string::npos, AssetManager::GetError(texture));
+		const std::string textureError = AssetManager::GetError(texture);
+		CHECK_MESSAGE(textureError.find("壊れ.png: ") != std::string::npos, textureError);
 		AssetManager::Clear();
 	}
 

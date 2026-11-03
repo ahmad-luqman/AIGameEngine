@@ -17,6 +17,8 @@ import subprocess
 import sys
 import tempfile
 
+PLAYING = "Runtime: playing 'Assets/Scenes/場面.bscene'"
+
 
 def fail(message):
     print(f"FAIL: {message}")
@@ -73,7 +75,7 @@ def main():
 
         if runtime:
             log = run([runtime, "--project", project, "--scene", "Assets/Scenes/場面.bscene", "--headless", "--frames", "3", "--fail-on-script-errors"], env)[1]
-            if "Runtime: playing 'Assets/Scenes/場面.bscene'" not in log:
+            if PLAYING not in log:
                 fail(f"the runtime did not play the scene:\n{log}")
             if sys.platform == "darwin":
                 # Export bundles the Vulkan loader and MoltenVK; headless runs never load them, so stand-ins do.
@@ -87,9 +89,9 @@ def main():
                 exported = response(run([cli, "--project", project, "--no-save", "project.export", json.dumps({"output": str(output), "archive": archive}, ensure_ascii=False)], env)[0])
                 if not exported.get("ok") or archive != (output / "Assets.bpak").is_file():
                     fail(f"exporting to {output}: {exported}")
-                # Found through the executable's own (CJK) folder: no --project.
+                # Found through the executable's own (CJK) folder, not the working directory: no --project.
                 log = run([exported["result"]["executable"], "--headless", "--frames", "3", "--fail-on-script-errors"], env, cwd=output)[1]
-                if "Runtime: playing 'Assets/Scenes/場面.bscene'" not in log:
+                if PLAYING not in log:
                     fail(f"the {form} export did not play its start scene:\n{log}")
     print("PASS")
 

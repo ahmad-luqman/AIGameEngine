@@ -71,7 +71,8 @@ return Player
 - Destroying entities from any callback is safe: destruction is deferred until the current update ends.
 - `require("Assets.Scripts.Lib.Util")` loads project modules; module names may use any UTF-8 characters on every
   platform. `package.searchpath` is Lua's own and does not follow the engine's rules: it misses modules inside an
-  exported game's archive and, on Windows, names outside the system code page. `io`, `os`, `dofile` and `loadfile` are
+  exported game's archive and, on Windows, any module whose path (the project folder included) is outside the ANSI code
+  page. `io`, `os`, `dofile` and `loadfile` are
   not available (scripts cannot touch the file system).
 
 ### Hot reload
@@ -89,7 +90,9 @@ with `asset.write` or `asset.refresh` (which also reloads models and textures ch
   again so they pick up the new version; other modules keep their state. A module whose new version does not load
   keeps its previous one (cached, and what its top level started keeps running). Saving a module whose `require`
   failed retries the scripts that failed because of it. Replacing the global `package` table does not hide modules
-  from hot reload.
+  from hot reload. When changed modules cannot all be identified (a `package.path` that is not text, a folder that
+  cannot be read), the problem is reported once and every script loads again; a module whose file could not be checked
+  loads again too, and the others keep their cached versions.
 - A version that does not load (a syntax error, an error in its top-level code, no class table) is reported and a
   script that was running **keeps its previous version**; fix it (or the module that broke it) and save again. An
   instance that a runtime error disabled runs again after a successful reload of its script, and entities whose

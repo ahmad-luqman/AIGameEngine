@@ -27,19 +27,21 @@ namespace Basalt::Platform {
 	// The process's arguments as UTF-8 text, program name first. Elsewhere main's argv, passed through unchanged (UTF-8 in
 	// practice). On Windows argv is in the ANSI code page and loses every character outside it (a Japanese "--project"
 	// path on a Western-locale system, say), so the wide command line is read instead and argc/argv are only the fallback
-	// should it be unavailable (converted from the ANSI code page, with a warning). CommandLineToArgvW splits it like the C
-	// runtime except for "" inside a quoted argument, which neither Basalt's own child processes nor Python ever write.
+	// should it be unavailable (converted from the ANSI code page, with a warning). CommandLineToArgvW splits it like the
+	// UCRT except for "" inside a quoted argument and quotes within the program name, which neither Basalt's own child
+	// processes nor Python ever write.
 	std::vector<std::string> GetProcessArguments(int argc, const char* const* argv);
 
 #if defined(BS_PLATFORM_WINDOWS)
 	// UTF-8 to and from the UTF-16 of Windows' wide APIs. Utf8ToWide is nullopt for text that is not valid UTF-8 (or longer
 	// than the API takes); Utf8ToWideReplacing turns invalid sequences into U+FFFD instead, for paths, which must never
-	// throw. WideToUtf8 turns unpaired surrogates into U+FFFD and is empty only for empty or overlong text.
+	// throw (and is empty for overlong text). WideToUtf8 turns unpaired surrogates into U+FFFD and is empty only for empty
+	// or overlong text.
 	std::optional<std::wstring> Utf8ToWide(std::string_view text);
 	std::wstring Utf8ToWideReplacing(std::string_view text);
 	std::string WideToUtf8(std::wstring_view text);
-	// The system's message for a Win32 error code (GetLastError) as UTF-8, without the trailing line break; empty when
-	// the system has none. FormatMessageA would give it in the ANSI code page.
+	// The system's message for a Win32 error code (GetLastError) as UTF-8, without trailing whitespace; empty when the
+	// system has none. FormatMessageA (and MSVC's std::error_code::message) give it in the ANSI code page.
 	std::string GetErrorMessage(uint32_t code);
 #endif
 

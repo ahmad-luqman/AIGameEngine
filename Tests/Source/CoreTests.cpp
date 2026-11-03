@@ -1224,7 +1224,7 @@ TEST_SUITE("Core")
 	}
 
 	// Lua strings and percent-decoded URIs need not be UTF-8: converting them must not throw (MSVC's std::filesystem
-	// does), only name no file.
+	// does), and on Windows they then name no file.
 	TEST_CASE("Paths convert to and from UTF-8 without throwing, whatever the text")
 	{
 		CHECK(FileSystem::PathToUtf8(FileSystem::PathFromUtf8("Assets/資産.png")) == "Assets/資産.png");
@@ -1233,19 +1233,24 @@ TEST_SUITE("Core")
 		CHECK_NOTHROW(invalid = FileSystem::PathFromUtf8("Caf\xE9.lua"));
 		CHECK_NOTHROW(FileSystem::PathToUtf8(invalid));
 		CHECK_FALSE(FileSystem::Exists(invalid));
+		CHECK_FALSE(FileSystem::DescribeError(std::make_error_code(std::errc::no_such_file_or_directory)).empty());
 #if defined(_WIN32)
+		CHECK(FileSystem::DescribeError(std::error_code(2, std::system_category())) == Platform::GetErrorMessage(2));
 		// Invalid sequences and unpaired surrogates (NTFS names may hold them) become U+FFFD.
+		const std::string replacement = "\xEF\xBF\xBD";
 		CHECK(invalid.native() == std::wstring(L"Caf\uFFFD.lua"));
-		CHECK(FileSystem::PathToUtf8(std::filesystem::path(std::wstring{ L'a', wchar_t(0xD800), L'b' })) == "a\xEF\xBF\xBD"
-																											"b");
-		CHECK(Platform::WideToUtf8(std::wstring{ wchar_t(0xD800) }) == "\xEF\xBF\xBD");
+		CHECK(FileSystem::PathToUtf8(std::filesystem::path(std::wstring{ L'a', wchar_t(0xD800), L'b' })) == "a" + replacement + "b");
+		CHECK(Platform::WideToUtf8(std::wstring{ wchar_t(0xD800) }) == replacement);
 		CHECK(Platform::WideToUtf8(L"") == "");
 		CHECK(Platform::Utf8ToWide("資産") == std::optional<std::wstring>(L"\u8CC7\u7523"));
 		CHECK_FALSE(Platform::Utf8ToWide("\xFF").has_value());
 		CHECK(Platform::Utf8ToWideReplacing("\xFF") == std::wstring(L"\uFFFD"));
 		CHECK(Platform::WideToUtf8(*Platform::Utf8ToWide("日本語 名前")) == "日本語 名前");
-		CHECK(Platform::GetErrorMessage(2 /* ERROR_FILE_NOT_FOUND */).find('\n') == std::string::npos);
-		CHECK_FALSE(Platform::GetErrorMessage(2).empty());
+		const std::string message = Platform::GetErrorMessage(2 /* ERROR_FILE_NOT_FOUND */);
+		CHECK_FALSE(message.empty());
+		CHECK(message.find('\n') == std::string::npos);
+		// The CJK path tests tell a fix from narrow conversions only while the ANSI code page is not UTF-8 itself (as on CI).
+		WARN_MESSAGE(std::filesystem::path(std::string("資産")) != FileSystem::PathFromUtf8("資産"), "the ANSI code page is UTF-8: the CJK path tests cannot catch narrow conversions on this machine");
 #endif
 	}
 

@@ -40,16 +40,25 @@ namespace Basalt {
 #endif
 		}
 
-		// Why OpenLibrary just failed.
-		std::string LastLibraryError()
+		// Why OpenLibrary just failed, or nothing when the library is simply not there: a file named by path that does not
+		// exist, or on Windows a name the search finds nowhere (ERROR_MOD_NOT_FOUND, which a library missing a dependency
+		// also reports; then it was named by path, and the file check keeps it). POSIX's dlerror does not tell a bare name
+		// that is not installed from one that failed, so bare names report nothing there.
+		std::string WhyNotLoaded(const std::filesystem::path& candidate)
 		{
 #if defined(BS_PLATFORM_WINDOWS)
+			// Read first: checking the file would replace the error code.
 			const DWORD code = GetLastError();
+			if (candidate.has_parent_path() ? !FileSystem::Exists(candidate) : code == ERROR_MOD_NOT_FOUND)
+				return {};
 			const std::string message = Platform::GetErrorMessage(code);
 			return message.empty() ? "error " + std::to_string(code) : message;
 #else
 			const char* message = dlerror();
-			return message ? message : "unknown error";
+			std::string reason = message ? message : "unknown error";
+			if (!candidate.has_parent_path() || !FileSystem::Exists(candidate))
+				return {};
+			return reason;
 #endif
 		}
 
@@ -128,9 +137,7 @@ namespace Basalt {
 			void* library = OpenLibrary(candidate);
 			if (!library)
 			{
-				// Read first: checking the file would replace the error code.
-				const std::string reason = LastLibraryError();
-				if (candidate.has_parent_path() && FileSystem::Exists(candidate))
+				if (const std::string reason = WhyNotLoaded(candidate); !reason.empty())
 					problems += fmt::format("\n  '{}': {}", FileSystem::PathToUtf8(candidate), reason);
 				continue;
 			}
@@ -148,6 +155,9 @@ namespace Basalt {
 			VULKAN_HPP_DEFAULT_DISPATCHER.init(s_GetInstanceProcAddr);
 			glfwInitVulkanLoader(s_GetInstanceProcAddr);
 			BS_CORE_INFO("Vulkan loader: {}", FileSystem::PathToUtf8(candidate));
+			// A bundled loader that failed while another works would break the game where only it is installed.
+			if (!problems.empty())
+				BS_CORE_WARN("Vulkan loader: earlier candidates failed:{}", problems);
 			return true;
 		}
 

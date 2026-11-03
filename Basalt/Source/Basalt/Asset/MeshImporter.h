@@ -34,10 +34,11 @@ namespace Basalt {
 		// Materials, "#image/<n>" an image stored in the file (an empty ImageUris entry: a buffer view or data: URI).
 		struct Contents
 		{
-			// Per image: empty when embedded, else the external file's URI (which loads as its own texture).
+			// Per image: empty when embedded, else the external file's URI as written (possibly percent-encoded;
+			// GetExternalFileKey decodes it), which loads as its own texture.
 			std::vector<std::string> ImageUris;
-			// Per buffer: empty when embedded (a GLB's binary chunk or a data: URI), else the URI as written (percent-encoded;
-			// GetExternalFileKey decodes it).
+			// Per buffer: empty when embedded (a GLB's binary chunk or a data: URI), else the URI as written (possibly
+			// percent-encoded).
 			std::vector<std::string> BufferUris;
 			size_t Materials = 0;
 		};

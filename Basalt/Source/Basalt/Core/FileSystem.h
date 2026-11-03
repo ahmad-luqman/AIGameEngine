@@ -10,6 +10,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 namespace Basalt {
@@ -36,9 +37,9 @@ namespace Basalt {
 		// ReadTextFile, ReadBinaryFile, Exists and GetRegularFileSize then answer for the files under root that the archive
 		// holds, and disk answers for the rest. Readers that bypass them look the mount up directly: cgltf's file callbacks,
 		// miniaudio's VFS and font stamps through FindMounted, and AssetRegistry::Refresh through GetMountedArchive (the
-		// whole index). Lua's require searcher reads through ReadBinaryFile and asks FindMounted only whether a module exists. Writes are never redirected: a file written
-		// under root that the archive also holds is still read from the archive. One mount at a time (mounting again
-		// replaces it). Thread-safe.
+		// whole index). Lua's require searcher reads through ReadBinaryFile and asks FindMounted only whether a module
+		// exists. Writes are never redirected: a file written under root that the archive also holds is still read from
+		// the archive. One mount at a time (mounting again replaces it). Thread-safe.
 		static void Mount(const std::filesystem::path& root, Ref<PackArchive> archive);
 		static void Unmount();
 		// A file of the mounted archive. Holds the archive, so the entry stays valid even if it is unmounted meanwhile.
@@ -106,15 +107,20 @@ namespace Basalt {
 		static std::filesystem::path GetExecutablePath();
 		static std::filesystem::path GetExecutableDirectory();
 		// Text and paths convert only through these three (AGENTS.md): on Windows std::filesystem::path(std::string) reads
-		// the ANSI code page and path::string() throws for names outside it. None of them throws: on Windows text that is
-		// not valid UTF-8 (a Lua string, a percent-decoded URI) and names with unpaired surrogates (NTFS allows them) get
-		// U+FFFD, so such a path names no file and fails like a missing one. Elsewhere paths are their UTF-8 bytes.
+		// the ANSI code page and path::string() throws for names outside it. None of them throws (but std::bad_alloc). On
+		// Windows, text that is not valid UTF-8 (a Lua string, a percent-decoded URI) becomes a path with U+FFFD, which
+		// reads as missing unless a file really has that name (and a write creates one by that name); a name with unpaired
+		// surrogates (NTFS allows them) becomes text with U+FFFD, which no longer leads back to that file. Automation and
+		// scene JSON is valid UTF-8 already (the parser rejects the rest). Elsewhere the bytes are copied unchecked.
 		// The path as UTF-8 text, for messages and keys.
 		static std::string PathToUtf8(const std::filesystem::path& path);
 		// The path as '/'-separated UTF-8 text on every platform: the form of asset keys ("Assets/Models/Ship.gltf").
 		static std::string PathToGenericUtf8(const std::filesystem::path& path);
 		// A path from UTF-8 text (asset references, JSON, Lua, command-line arguments).
 		static std::filesystem::path PathFromUtf8(std::string_view text);
+		// What an error code says, as UTF-8: MSVC's std::error_code::message() is in the ANSI code page for system errors
+		// (the Win32 codes std::filesystem reports), so those come from Platform::GetErrorMessage there.
+		static std::string DescribeError(const std::error_code& error);
 		// The extension in lower case (".png" for "Wall.PNG"), for matching file types.
 		static std::string GetLowercaseExtension(const std::filesystem::path& path);
 		// A-Z folded to a-z, other bytes (UTF-8 included) unchanged, whatever the C locale: for case-insensitive file

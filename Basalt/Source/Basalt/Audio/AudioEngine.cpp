@@ -119,7 +119,7 @@ namespace Basalt {
 			}
 			catch (const std::exception& exception)
 			{
-				// Naming the file converts its path again, which may be what threw.
+				// Formatting can still run out of memory; the conversions themselves never throw.
 				try
 				{
 					BS_CORE_ERROR("AudioEngine: cannot open '{}': {}", FileSystem::PathToUtf8(VfsPath(pathText)), exception.what());
