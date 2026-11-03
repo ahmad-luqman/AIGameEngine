@@ -1542,6 +1542,15 @@ TEST_SUITE("Animation")
 		ik.Chains[0].Joint = "RightHand";
 		system.Update(Step);
 		system.Update(Step);
+		// A chain faded to zero weight has no influence and plants nothing; restoring the weight starts afresh.
+		REQUIRE(Locked(system, biped, "RightHand"));
+		REQUIRE(system.SetIKWeight(biped, "RightHand", 0, 0));
+		system.Update(Step);
+		CHECK(!Locked(system, biped, "RightHand"));
+		REQUIRE(system.SetIKWeight(biped, "RightHand", 1, 0));
+		system.Update(Step);
+		system.Update(Step);
+		CHECK(Locked(system, biped, "RightHand"));
 		// Turning FootLock off releases it too, and turning it back on starts afresh where the hand stands.
 		ik.Chains[0].FootLock = false;
 		system.Update(Step);

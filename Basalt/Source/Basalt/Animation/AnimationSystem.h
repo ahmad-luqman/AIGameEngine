@@ -431,7 +431,7 @@ namespace Basalt {
 			// up axis holds), the animated joint's height above the entity's origin plane then, and the lock's eased share of
 			// the target (0..1; Position still applies while it eases out after a release). Last is where the joint's target
 			// was at the last solve with time, to measure its speed. Reset whenever the chain does not lock its foot: another
-			// target, FootLock off, or a frame the entity's IK does not run.
+			// target, FootLock off, zero weight, or a frame the entity's IK does not run.
 			struct FootLockState
 			{
 				std::optional<glm::vec3> Last;
