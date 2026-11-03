@@ -17,10 +17,10 @@ namespace Basalt {
 		// MaxValenceCostPerIndex per index, which keeps the squared work (vertex cache order, three simplifier passes and
 		// their orders) a small part of the linear import work; ordinary meshes cost about 6 per index (a closed grid
 		// exactly 6; seams lower it, poles raise it a little) and never touch the allowance. Costs past that draw on one
-		// ValenceCostAllowance per model, since primitives can repeat their indices through separate accessors or pair them
-		// with other attributes (eight such primitives took 12 s; found by review; exact repeats share one submesh). The allowance fits a vertex named by about 2,000 triangle corners, and such a primitive imports,
-		// LODs included, in a few tenths of a second in the fuzz build. 64-bit, since they scale index counts up to
-		// MaxModelIndices.
+		// ValenceCostAllowance per model, since primitives can reread the same indices, through separate accessors or with
+		// other attributes (eight such primitives took 12 s; found by review). Exact repeats share one submesh. The
+		// allowance fits a vertex named by about 2,000 triangle corners, and such a primitive imports, LODs included, in a
+		// few tenths of a second in the fuzz build. 64-bit, since they scale index counts up to MaxModelIndices.
 		inline constexpr uint64_t MaxValenceCostPerIndex = 16;
 		inline constexpr uint64_t ValenceCostAllowance = uint64_t{ 1 } << 22;
 

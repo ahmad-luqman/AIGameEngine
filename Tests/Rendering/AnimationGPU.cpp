@@ -397,8 +397,8 @@ TEST_CASE("GPU morph weights past one draw record and past the per-draw limit ma
 	const auto fixture = std::filesystem::path(BASALT_ANIMATION_DATA_DIR) / "ManyMorphs.gltf";
 	const auto referencePath = std::filesystem::path(BASALT_ANIMATION_OUTPUT_DIR) / "ManyMorphsReference.gltf";
 	// Sparse and Crowded read the same accessors, so the drawn model shares one submesh's geometry between them
-	// (MeshSource::ShareSubmesh). The reference writes each node's morphed pose into its submesh's vertices in place, which
-	// a shared submesh would overwrite, so its Crowded reads POSITION through an accessor of its own.
+	// (MeshSource::ShareSubmesh). The reference writes each node's morphed pose into its submesh's vertices in place,
+	// which a shared submesh would overwrite, so its Crowded reads POSITION through an accessor of its own.
 	auto referenceJson = nlohmann::json::parse(*FileSystem::ReadTextFile(fixture));
 	referenceJson["accessors"].push_back(referenceJson["accessors"][0]);
 	referenceJson["meshes"][1]["primitives"][0]["attributes"]["POSITION"] = referenceJson["accessors"].size() - 1;
@@ -412,6 +412,12 @@ TEST_CASE("GPU morph weights past one draw record and past the per-draw limit ma
 	const auto reference = AssetManager::GetMesh(referencePath.string());
 	REQUIRE(source);
 	REQUIRE(reference);
+	// The drawn model shares the range, so this renders one geometry with two nodes' weights; the reference does not.
+	REQUIRE(source->Submeshes.size() == 2);
+	REQUIRE(reference->Submeshes.size() == 2);
+	CHECK(source->Submeshes[1].BaseVertex == source->Submeshes[0].BaseVertex);
+	CHECK(source->Submeshes[1].MorphDeltaOffset == source->Submeshes[0].MorphDeltaOffset);
+	CHECK(reference->Submeshes[1].BaseVertex != reference->Submeshes[0].BaseVertex);
 	// Bake what the renderer draws: Sparse's 20 weights, and Crowded's 32 strongest of 36.
 	std::vector<uint32_t> selected;
 	for (const MeshNode& node : reference->Nodes)
