@@ -9,6 +9,7 @@
 #include <Basalt/Asset/Thumbnails.h>
 #include <Basalt/Scene/Scene.h>
 
+#include "MeshTestUtils.h"
 #include "TestUtils.h"
 
 #include <stb_image_write.h>
@@ -1099,10 +1100,13 @@ TEST_SUITE("Assets")
 		CHECK(mesh->Submeshes[0].LODs.empty());
 		CHECK(BasaltTest::CountLogMessages(since, "Valence.gltf: mesh 'QuadMesh' primitive 0: the squares of its vertices' triangle counts sum past " + std::to_string(MeshOptimizer::MaxValenceCostPerIndex) + " per index") == 1);
 
-		// Primitives share the model's allowance: two whose busy vertex fits it alone, but not twice, sharing one index
-		// accessor (eight such primitives took 12 s in the fuzz build before).
+		// Primitives share the model's allowance: two whose busy vertex fits it alone, but not twice, over the same indices
+		// (eight such primitives took 12 s in the fuzz build before). The second reads them through an accessor of its own:
+		// one that repeats the first's accessors would share its geometry instead of being optimized again.
 		gltf["accessors"][2]["count"] = 1800;
+		gltf["accessors"].push_back(gltf["accessors"][2]);
 		gltf["meshes"][0]["primitives"].push_back(gltf["meshes"][0]["primitives"][0]);
+		gltf["meshes"][0]["primitives"][1]["indices"] = 3;
 		project.WriteFile("Assets/Models/Shared.gltf", gltf.dump());
 		AssetManager::Clear();
 		const auto sharedSince = Log::GetHistory().GetTotalCount();
@@ -1111,6 +1115,124 @@ TEST_SUITE("Assets")
 		CHECK(BasaltTest::CountLogMessages(sharedSince, "Shared.gltf: mesh 'QuadMesh' primitive 0: the squares") == 0);
 		CHECK(BasaltTest::CountLogMessages(sharedSince, "Shared.gltf: mesh 'QuadMesh' primitive 1: the squares") == 1);
 		AssetManager::Clear();
+	}
+
+	// Regression (review of the FuzzGltf fixes): each primitive was imported again even when it read the same accessors as
+	// an earlier one (multi-material exports repeat them), and 250 primitives sharing one 16x16 grid took 2.4 s in the fuzz
+	// build. Later ones now draw the first one's ranges with their own material.
+	TEST_CASE("glTF primitives that read the same accessors share one submesh's geometry")
+	{
+		BasaltTest::TempDirectory directory("GltfSharedPrimitives");
+		const auto spherePath = BasaltTest::WriteSphereGltf(directory.GetPath());
+		nlohmann::json gltf = nlohmann::json::parse(*FileSystem::ReadTextFile(spherePath));
+		gltf["materials"] = { { { "name", "First" } }, { { "name", "Second" } }, { { "name", "Glass" }, { "alphaMode", "BLEND" } } };
+		nlohmann::json& primitives = gltf["meshes"][0]["primitives"];
+		const nlohmann::json first = primitives[0];
+		const auto with = [&](const char* field, const nlohmann::json& value) {
+			nlohmann::json primitive = first;
+			if (value.is_null())
+				primitive.erase(field);
+			else
+				primitive[field] = value;
+			return primitive;
+		};
+		primitives.push_back(with("material", 1)); // 1: shares 0's geometry
+		primitives.push_back(with("material", 2)); // 2: blended, so its triangles keep their order: its own
+		gltf["accessors"].push_back(gltf["accessors"][4]);
+		primitives.push_back(with("indices", 5));        // 3: the same indices through another accessor: its own
+		primitives.push_back(with("material", nullptr)); // 4: the default material, sharing 0's geometry
+		// Meshes share accessors too.
+		gltf["meshes"].push_back({ { "name", "Copy" }, { "primitives", { with("material", 1) } } });
+		gltf["nodes"].push_back({ { "mesh", 1 } });
+		gltf["scenes"][0]["nodes"].push_back(1);
+		const auto path = directory.GetPath() / "Shared.gltf";
+		REQUIRE(FileSystem::WriteTextFile(path, gltf.dump()));
+		std::string error;
+		const auto source = MeshImporter::LoadGltf(path, "Shared.gltf", error);
+		REQUIRE_MESSAGE(source, error);
+
+		REQUIRE(source->Meshes.size() == 2);
+		REQUIRE(source->Meshes[0].Submeshes.size() == 5);
+		REQUIRE(source->Meshes[1].Submeshes.size() == 1);
+		REQUIRE(source->Submeshes.size() == 6);
+		const auto submesh = [&](size_t mesh, size_t index) -> const Submesh& { return source->Submeshes[source->Meshes[mesh].Submeshes[index]]; };
+		const Submesh& base = submesh(0, 0);
+		REQUIRE_FALSE(base.LODs.empty());
+		const auto sharesBase = [&](const Submesh& other) {
+			CHECK(other.BaseVertex == base.BaseVertex);
+			CHECK(other.VertexCount == base.VertexCount);
+			CHECK(other.BaseIndex == base.BaseIndex);
+			CHECK(other.IndexCount == base.IndexCount);
+			REQUIRE(other.LODs.size() == base.LODs.size());
+			for (size_t level = 0; level < base.LODs.size(); level++)
+			{
+				CHECK(other.LODs[level].BaseIndex == base.LODs[level].BaseIndex);
+				CHECK(other.LODs[level].IndexCount == base.LODs[level].IndexCount);
+			}
+			CHECK(other.Bounds.Min == base.Bounds.Min);
+			CHECK(other.Bounds.Max == base.Bounds.Max);
+		};
+		sharesBase(submesh(0, 1));
+		sharesBase(submesh(0, 4));
+		sharesBase(submesh(1, 0));
+		CHECK(submesh(0, 0).MaterialIndex == 0);
+		CHECK(submesh(0, 1).MaterialIndex == 1);
+		CHECK(submesh(0, 4).MaterialIndex == source->Materials.size() - 1); // the default material
+		CHECK(submesh(1, 0).MaterialIndex == 1);
+
+		const Submesh& blended = submesh(0, 2);
+		CHECK(blended.MaterialIndex == 2);
+		CHECK(blended.BaseVertex != base.BaseVertex);
+		CHECK(blended.LODs.empty());
+		const Submesh& ownIndices = submesh(0, 3);
+		CHECK(ownIndices.BaseVertex != base.BaseVertex);
+		CHECK(ownIndices.BaseVertex != blended.BaseVertex);
+		CHECK(ownIndices.LODs.size() == base.LODs.size());
+		// Three copies of the sphere's vertices: the first primitive's, the blended one's and the one with its own indices.
+		CHECK(source->Vertices.size() == base.VertexCount + blended.VertexCount + ownIndices.VertexCount);
+	}
+
+	// What the first of the primitives reading the same accessors met, the others meet too, in the same order.
+	TEST_CASE("glTF primitives that read the same accessors are skipped and checked like the first")
+	{
+		BasaltTest::TempProject project("GltfSharedPrimitiveChecks");
+		nlohmann::json gltf = MakeUntexturedGltfJson(EmbeddedBufferJson(MakeQuadBuffer()));
+		gltf["materials"].push_back({ { "name", "SecondUV" }, { "pbrMetallicRoughness", { { "baseColorTexture", { { "index", 0 }, { "texCoord", 1 } } } } } });
+		gltf["textures"] = { { { "source", 0 } } };
+		gltf["images"] = { { { "uri", "missing.png" } } };
+		gltf["meshes"][0]["primitives"].push_back(gltf["meshes"][0]["primitives"][0]);
+		gltf["meshes"][0]["primitives"][1]["material"] = 1;
+		std::string error;
+		const auto load = [&](const char* name, const nlohmann::json& model) {
+			project.WriteFile(std::string("Assets/") + name, model.dump());
+			return MeshImporter::LoadGltf(project.GetDirectory() / "Assets" / name, std::string("Assets/") + name, error);
+		};
+
+		// The material check still runs for a primitive that shares the first one's geometry.
+		CHECK_FALSE(load("Uv1.gltf", gltf));
+		CHECK_MESSAGE(error.find("material 'SecondUV' uses TEXCOORD_1 but mesh 'QuadMesh' has no TEXCOORD_1") != std::string::npos, error);
+
+		// A skip after the vertices are read follows that check, and repeats the first primitive's reason.
+		nlohmann::json invalid = gltf;
+		invalid["accessors"][2]["count"] = 5;
+		CHECK_FALSE(load("InvalidUv1.gltf", invalid));
+		CHECK_MESSAGE(error.find("uses TEXCOORD_1") != std::string::npos, error);
+		invalid["meshes"][0]["primitives"][1]["material"] = 0;
+		auto since = Log::GetHistory().GetTotalCount();
+		CHECK_FALSE(load("Invalid.gltf", invalid));
+		for (const char* primitive : { "0", "1" })
+			CHECK(BasaltTest::CountLogMessages(since, std::string("Assets/Invalid.gltf: mesh 'QuadMesh' primitive ") + primitive + ": skipped, its index data is invalid (not whole triangles, or an index past its vertices)") == 1);
+
+		// A skip before them (unreadable positions) comes first, so the material is never checked.
+		nlohmann::json unreadable = gltf;
+		unreadable["accessors"][0]["type"] = "VEC2";
+		unreadable["accessors"][0].erase("min");
+		unreadable["accessors"][0].erase("max");
+		since = Log::GetHistory().GetTotalCount();
+		CHECK_FALSE(load("Unreadable.gltf", unreadable));
+		CHECK_MESSAGE(error.find("contains no triangle geometry") != std::string::npos, error);
+		for (const char* primitive : { "0", "1" })
+			CHECK(BasaltTest::CountLogMessages(since, std::string("Assets/Unreadable.gltf: mesh 'QuadMesh' primitive ") + primitive + ": skipped, its positions are unreadable") == 1);
 	}
 
 	TEST_CASE("glTF primitives with non-finite positions or empty indices are reported")

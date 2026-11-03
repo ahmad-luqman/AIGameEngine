@@ -15,6 +15,7 @@
 #include <Basalt/Scene/Scene.h>
 
 #include <glm/gtc/matrix_transform.hpp>
+#include <nlohmann/json.hpp>
 
 #include <cmath>
 #include <filesystem>
@@ -395,8 +396,13 @@ TEST_CASE("GPU morph weights past one draw record and past the per-draw limit ma
 	auto graphics = CreateTestGraphics();
 	const auto fixture = std::filesystem::path(BASALT_ANIMATION_DATA_DIR) / "ManyMorphs.gltf";
 	const auto referencePath = std::filesystem::path(BASALT_ANIMATION_OUTPUT_DIR) / "ManyMorphsReference.gltf";
-	std::filesystem::create_directories(referencePath.parent_path());
-	std::filesystem::copy_file(fixture, referencePath, std::filesystem::copy_options::overwrite_existing);
+	// Sparse and Crowded read the same accessors, so the drawn model shares one submesh's geometry between them
+	// (MeshSource::ShareSubmesh). The reference bakes each node's weights into its own vertices, so its Crowded reads
+	// POSITION through an accessor of its own.
+	auto referenceJson = nlohmann::json::parse(*FileSystem::ReadTextFile(fixture));
+	referenceJson["accessors"].push_back(referenceJson["accessors"][0]);
+	referenceJson["meshes"][1]["primitives"][0]["attributes"]["POSITION"] = referenceJson["accessors"].size() - 1;
+	REQUIRE(FileSystem::WriteTextFile(referencePath, referenceJson.dump()));
 	Scene gpuScene, cpuScene;
 	Populate(gpuScene);
 	Populate(cpuScene);
