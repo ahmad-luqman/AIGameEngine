@@ -1119,7 +1119,7 @@ TEST_SUITE("Animation")
 		REQUIRE(system.SetIKTarget(biped, "Arm", glm::vec3(4.4f, 1.3f, 4.3f), std::nullopt));
 		for (int i = 0; i < 3; i++)
 			system.Update(Step);
-		CHECK(CountLogMessages(since, "chain 'Look': Ground only applies to TwoBone chains") == 1);
+		CHECK(CountLogMessages(since, "chain 'Look': Ground only applies to TwoBone and Fabrik chains") == 1);
 		CHECK(CountLogMessages(since, "chain 'Arm': Pole is not finite") == 1);
 		CHECK(CountLogMessages(since, "RayHeight must be between 0 and 100; clamping") == 1);
 		CHECK(CountLogMessages(since, "chain 'Arm' Weight must be between 0 and 1; clamping") == 1);
@@ -1474,5 +1474,51 @@ TEST_SUITE("Animation")
 		CHECK(glm::length(lifted - planted) > glm::length(easing - planted));
 		CHECK(lifted.y - planted.y > ik.LockHeight);
 		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("The edit preview solves IK toward the Target entity and layers, without springs")
+	{
+		ClearAssetCache cacheGuard;
+		Scene scene;
+		auto biped = scene.CreateEntity("Biped");
+		auto& animator = biped.AddComponent<AnimatorComponent>();
+		animator.Mesh = BipedPath().string();
+		animator.Clip = "Walk";
+		animator.Preview = true;
+		AnimationLayer wave;
+		wave.Name = "Wave";
+		wave.Clip = "Wave";
+		animator.Layers = { wave };
+		IKChain arm;
+		arm.Name = "LeftArm";
+		arm.Joint = "LeftHand";
+		arm.FollowTarget = true;
+		auto& ik = biped.AddComponent<InverseKinematicsComponent>();
+		ik.Chains = { arm };
+		auto ball = scene.CreateEntity("Ball");
+		ball.GetTransform().Translation = { 0.3f, 1.2f, 0.3f };
+		ik.Target = ball.GetUUID();
+		SpringChain hair;
+		hair.Joint = "RightUpperArm";
+		biped.AddComponent<SpringBoneComponent>().Chains = { hair };
+		scene.UpdateAnimationPreview(Step);
+		AnimationSystem& preview = *scene.GetPoseAnimationSystem();
+		const auto source = AssetManager::GetMesh(animator.Mesh);
+		glm::mat4 hand;
+		std::string error;
+		REQUIRE(preview.GetBoneTransform(biped, "LeftHand", hand, error));
+		CHECK(glm::length(glm::vec3(scene.GetWorldTransform(biped) * hand[3]) - glm::vec3(0.3f, 1.2f, 0.3f)) < 1e-3f);
+		// Dragging the target in the editor moves the hand at the next preview update.
+		ball.GetTransform().Translation = { 0.35f, 1.2f, 0.2f };
+		scene.UpdateAnimationPreview(Step);
+		REQUIRE(preview.GetBoneTransform(biped, "LeftHand", hand, error));
+		CHECK(glm::length(glm::vec3(hand[3]) - glm::vec3(0.35f, 1.2f, 0.2f)) < 1e-3f);
+		// The layer plays (Wave raises the right arm, -90 degrees half a second in); spring bones wait for Play.
+		scene.UpdateAnimationPreview(0.5f - 2 * Step);
+		const auto& pose = *preview.GetPose(biped);
+		const uint32_t upper = Node(*source, "RightUpperArm");
+		const glm::quat local = glm::quat_cast(glm::mat3(glm::inverse(pose[source->Nodes[upper].Parent]) * pose[upper]));
+		// Exactly the clip's: a spring chain on the arm would swing it behind.
+		CHECK(NearRotation(local, glm::angleAxis(glm::radians(-90.0f), glm::vec3(0, 0, 1)), 1e-3f));
 	}
 }

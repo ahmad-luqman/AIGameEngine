@@ -230,6 +230,12 @@ namespace Basalt {
 		AudioSystem* GetAudioSystem() const { return m_AudioSystem.get(); }
 		// Null in Edit mode; owned by the current Play/Simulate session.
 		AnimationSystem* GetAnimationSystem() const { return m_AnimationSystem.get(); }
+		// What poses are drawn from: the session's system, or the isolated edit preview created by UpdateAnimationPreview.
+		AnimationSystem* GetPoseAnimationSystem() const { return m_AnimationSystem ? m_AnimationSystem.get() : m_AnimationPreview.get(); }
+		// Advances only Animators marked Preview (clips, state machines, layers and IK) without changing the scene.
+		void UpdateAnimationPreview(Timestep ts);
+		// Drops the preview's playback; the next UpdateAnimationPreview starts every previewed Animator afresh.
+		void ResetAnimationPreview();
 		// Null in Edit; clocks belong to the current Play/Simulate session.
 		PropertyAnimationSystem* GetPropertyAnimationSystem() const { return m_PropertyAnimationSystem.get(); }
 		// Session particles, or the isolated edit preview created by UpdateParticlePreview.
@@ -360,6 +366,7 @@ namespace Basalt {
 		Scope<AudioSystem> m_AudioSystem;
 		Scope<ParticleSystem> m_ParticleSystem;
 		Scope<ParticleSystem> m_ParticlePreview;
+		Scope<AnimationSystem> m_AnimationPreview;
 		Scope<AnimationSystem> m_AnimationSystem;
 		Scope<PropertyAnimationSystem> m_PropertyAnimationSystem;
 		Scope<UIInteraction> m_UIInteraction;

@@ -301,8 +301,9 @@ namespace Basalt {
 		// "prefix:" and "prefix|"), then as humanoid bones; both skeletons must share a rest pose style (both T-pose or
 		// both A-pose).
 		std::vector<AnimationClipLibrary> ClipLibraries;
-		// Edit mode only: plays the Animator in the scene view (its clip or state machine, layers and inverse kinematics)
-		// without moving the entity. Events, root-motion displacement, spring bones, ragdolls and attachments wait for Play.
+		// Edit mode only: plays the Animator in the scene view (its clip or state machine, layers and inverse kinematics),
+		// whatever PlayOnStart says, without moving the entity. Events, root-motion displacement, spring bones, ragdolls and
+		// attachments wait for Play.
 		bool Preview = false;
 	};
 

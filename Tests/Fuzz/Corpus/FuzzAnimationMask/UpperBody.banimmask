@@ -1,0 +1,1 @@
+{ "Joints": [ { "Joint": "Spine", "Weight": 1 }, { "Joint": "Head", "Weight": 0.5 }, { "Joint": "LeftHand" } ] }

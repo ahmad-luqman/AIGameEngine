@@ -3862,3 +3862,71 @@ TEST_SUITE("AnimationThroughput")
 		CHECK(system.GetTime(rig) == doctest::Approx(.4f));
 	}
 }
+
+TEST_SUITE("Animation")
+{
+	TEST_CASE("The edit preview animates only Preview Animators and never changes the scene")
+	{
+		TempProject project("AnimationPreview");
+		ClearAssetCache cacheGuard;
+		Scene scene;
+		// A root-motion graph that walks (Step) at once, with an event and an attachment that would move in Play.
+		json graph = StateGraph();
+		graph["InitialState"] = "Walk";
+		auto walker = GraphAnimator(scene, project, graph);
+		auto& animator = walker.GetComponent<AnimatorComponent>();
+		animator.Preview = true;
+		// A preview plays whatever PlayOnStart says.
+		animator.PlayOnStart = false;
+		animator.Events = { { "Step", 0.25f, "Footstep" } };
+		auto marker = scene.CreateEntity("Marker");
+		auto& attachment = marker.AddComponent<BoneAttachmentComponent>();
+		attachment.Target = walker.GetUUID();
+		attachment.Joint = "Tip";
+		auto still = AddAnimator(scene, "Still");
+		still.GetComponent<AnimatorComponent>().Clip = "Bend";
+		const json before = SceneSerializer::SerializeScene(scene);
+
+		REQUIRE(scene.GetPoseAnimationSystem() == nullptr);
+		scene.UpdateAnimationPreview(0.5f);
+		AnimationSystem* preview = scene.GetPoseAnimationSystem();
+		REQUIRE(preview);
+		CHECK(scene.GetAnimationSystem() == nullptr);
+		scene.UpdateAnimationPreview(0.5f);
+		// The previewed Animator plays (its pose leaves the rest pose) while the other keeps drawing its rest pose.
+		const auto source = AssetManager::GetMesh(animator.Mesh);
+		std::vector<glm::mat4> rest;
+		REQUIRE(EvaluateAnimation(*source, nullptr, 0, rest));
+		REQUIRE(preview->GetPose(walker));
+		CHECK_FALSE(NearPose(*preview->GetPose(walker), rest));
+		CHECK(preview->GetState(walker) == "Walk");
+		CHECK(preview->GetTime(walker) == doctest::Approx(1.0f));
+		CHECK(preview->GetPose(still) == nullptr);
+		CHECK_FALSE(preview->GetPoseView(still).has_value());
+		// No root motion displacement, events or attachment moves: the scene stays as authored.
+		CHECK(preview->TakeEvents().empty());
+		CHECK(RootX(walker) == 0.0f);
+		CHECK(SceneSerializer::SerializeScene(scene) == before);
+
+		// Turning Preview off returns the Animator to its rest pose; on again starts it afresh.
+		animator.Preview = false;
+		scene.UpdateAnimationPreview(Step);
+		CHECK(preview->GetPose(walker) == nullptr);
+		animator.Preview = true;
+		scene.UpdateAnimationPreview(0);
+		REQUIRE(preview->GetPose(walker));
+		CHECK(preview->GetTime(walker) == 0.0f);
+
+		// Starting a session replaces the preview with the session's own system.
+		scene.OnRuntimeStart();
+		CHECK(scene.GetPoseAnimationSystem() == scene.GetAnimationSystem());
+		scene.UpdateAnimationPreview(Step);
+		CHECK(scene.GetPoseAnimationSystem() == scene.GetAnimationSystem());
+		scene.OnRuntimeStop();
+		CHECK(scene.GetPoseAnimationSystem() == nullptr);
+		scene.UpdateAnimationPreview(Step);
+		REQUIRE(scene.GetPoseAnimationSystem());
+		scene.ResetAnimationPreview();
+		CHECK(scene.GetPoseAnimationSystem() == nullptr);
+	}
+}

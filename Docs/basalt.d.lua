@@ -513,9 +513,15 @@ function Entity:SetAnimationLayerWeight(layer, weight, seconds) end
 ---@return number?
 function Entity:GetAnimationLayerWeight(layer) end
 
+---The current state of a StateMachine layer's graph; "" for a clip layer, while a script clip plays instead, or while
+---the graph cannot load; nil for an unknown layer.
+---@param layer string
+---@return string?
+function Entity:GetAnimationLayerState(layer) end
+
 ---Sets an InverseKinematics chain's target until ClearIKTarget: a world position (with an optional world rotation
 ---for a TwoBone chain's end joint), or an entity followed every frame (matchRotation also takes its rotation for a
----TwoBone chain). Replaces ground placement. False (logged once until the call succeeds) for an unknown chain, a
+---TwoBone or Fabrik chain). Replaces FollowTarget and ground placement. False (logged once until the call succeeds) for an unknown chain, a
 ---non-finite position, a zero rotation or a rotation for a LookAt chain. Errors without an InverseKinematics component
 ---or with an entity that was destroyed.
 ---@param chain string
@@ -541,6 +547,12 @@ function Entity:SetIKWeight(chain, weight, seconds) end
 ---@param chain string
 ---@return number?
 function Entity:GetIKWeight(chain) end
+
+---Whether a FootLock chain holds its joint where it was planted (false for chains without FootLock); nil for an
+---unknown chain. Useful for footstep sounds and decals.
+---@param chain string
+---@return boolean?
+function Entity:IsIKFootLocked(chain) end
 
 ---Holds every mesh node's morph target of this name at weight (0..1), fading linearly over seconds (default 0) from the
 ---weight shown, until ClearMorphWeight. False for an unknown target or an invalid weight or time.

@@ -21,8 +21,8 @@ namespace Basalt {
 		if (!animator)
 			return;
 		auto& scene = *entity.GetScene();
-		// A running scene draws the playback's own model, so the pose and weights always fit it.
-		AnimationSystem* system = scene.GetAnimationSystem();
+		// A running scene (or an edit preview) draws the playback's own model, so the pose and weights always fit it.
+		AnimationSystem* system = scene.GetPoseAnimationSystem();
 		const auto view = system ? system->GetPoseView(entity) : std::nullopt;
 		const auto source = view ? view->Source : AssetManager::GetMesh(animator->Mesh);
 		if (!source || source->AnimationUnsupported)
