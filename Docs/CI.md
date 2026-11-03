@@ -8,7 +8,7 @@ this page is the overview and the list of gaps to keep in mind when a change dep
 | Workflow | Runs on | Jobs |
 |----------|---------|------|
 | `ci.yml` | Every pull request and push to `main`; manual runs (`gh workflow run ci.yml --ref <branch>`) | `format`; Windows and macOS × Debug/Release; Linux ASan+UBSan (Clang Debug, with Tracy); clang-tidy in three shards; Linux Release with GCC in two lavapipe parts (part 1: the headless tests, the benchmarks and the GPU tests named in `GPU_PART_1`; part 2: every other GPU test); fuzz (60 s per target); coverage (pushes to `main` and manual runs only) |
-| `fuzz-nightly.yml` | 03:17 UTC every night; manual runs (`-f seconds=N`) | One job builds every fuzz target, then one job per target fuzzes it (1200 s by default), keeping each target's grown corpus in a cache. Crashes upload `fuzz-crashes-<Target>` |
+| `fuzz-nightly.yml` | 03:17 UTC every night; manual runs (`-f seconds=N`) | One job builds every fuzz target, then one job per target fuzzes it (1200 s by default), keeping each target's grown corpus in a cache. A failing target uploads `fuzz-crashes-<Target>` (crash inputs and the fuzzer log) |
 | `release.yml` | `v*` tags (publishes a GitHub release); pull requests that change its inputs (listed in the file) and manual runs build and package without publishing | One packaging job per OS (Dist build, `scripts/package_release.py`), then `publish` for tags |
 
 Every job that builds Basalt sets up its runner through `.github/actions/setup-basalt` (the Linux package list, the
@@ -28,9 +28,9 @@ protection, so renaming or removing jobs blocks nothing; check `gh api repos/ahm
   jobs compile only shaders, and `release.yml`'s Dist builds run without a compiler cache.
 - **Dependency sources.** One entry per OS, shared by every job and workflow, holds the pinned third-party sources
   (`scripts/ci-fetch-deps.sh`, used through `BASALT_DEPS_SOURCE_DIR` by `cmake/DependencySources.cmake`). Its key hashes
-  `cmake/Dependencies.cmake` and `scripts/ci-fetch-deps.sh`, so a change to either makes every job of the first run on a
-  branch fetch the sources again (about 1.5-2 minutes each). That run saves the entry for its branch; other branches miss
-  until `main` saves one.
+  `cmake/Dependencies.cmake` and `scripts/ci-fetch-deps.sh`, so a change to either makes every job of the first run of a
+  pull request fetch the sources again (about 1.5-2 minutes each). That run saves an entry that only the pull request's
+  later runs can read (manual runs on its branch save their own); other refs miss until `main` saves one.
 - `scripts/ci-check-caches.sh` fails a job whose build downloaded a dependency or does not compile through its compiler
   cache, which would otherwise only show as a slower run.
 - The repository's Actions caches share 10 GB; GitHub evicts the least recently used entries beyond that.

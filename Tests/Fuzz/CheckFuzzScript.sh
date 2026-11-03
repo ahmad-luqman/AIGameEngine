@@ -10,32 +10,29 @@ fail()
 	exit 1
 }
 
+# The only check on the real tree: it lists without building anything.
 list="$(bash "$script" --list)"
 [[ "$list" == \[*'"FuzzGltf"'*\] ]] || fail "--list printed '$list'"
-
-for seconds in 0 abc -5 1.5 2s; do
-	if output="$(bash "$script" "$seconds" FuzzGltf 2>&1)"; then
-		fail "seconds '$seconds' was accepted"
-	fi
-	[[ "$output" == *"must be a positive integer"* ]] || fail "seconds '$seconds' printed '$output'"
-done
-
-if output="$(bash "$script" 10 NoSuchTarget 2>&1)"; then
-	fail "an unknown target was accepted"
-fi
-[[ "$output" == *"No fuzz target matches 'NoSuchTarget'"* ]] || fail "an unknown target printed '$output'"
 
 # The rest runs a copy of the script with stand-ins for cmake, brew and the fuzz targets, so nothing is built or fuzzed
 # here even if a check regresses. FuzzAlpha and FuzzBeta each wait for the other to start, so they pass only when they
 # run at the same time, and FuzzAlpha finishes after FuzzBeta, against the target order. FAKE_CRASH, FAKE_KILL,
-# FAKE_KILLSHELL and FAKE_NODONE make the named target misbehave; FAKE_BUILD_FAIL fails the build. cmake.calls logs every
-# cmake command.
+# FAKE_KILLSHELL and FAKE_NODONE make the named target misbehave; FAKE_CONFIGURE_FAIL and FAKE_BUILD_FAIL fail cmake.
+# cmake.calls logs every cmake command.
 unset FUZZ_JOBS
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/scripts" "$work/Tests/Fuzz/Corpus/FuzzAlpha" "$work/tools" "$work/llvm/bin" "$work/build-fuzz/bin"
 cp "$script" "$work/scripts/fuzz.sh"
-printf '#!/bin/sh\necho "$*" >> "$FAKE_STATE/cmake.calls"\ncase "$*" in *--build*) [ -n "${FAKE_BUILD_FAIL:-}" ] && exit 1 ;; esac\nexit 0\n' > "$work/tools/cmake"
+cat > "$work/tools/cmake" << 'EOF_CMAKE'
+#!/bin/sh
+echo "$*" >> "$FAKE_STATE/cmake.calls"
+case "$*" in
+	-S*) [ -n "${FAKE_CONFIGURE_FAIL:-}" ] && exit 1 ;;
+	*--build*) [ -n "${FAKE_BUILD_FAIL:-}" ] && exit 1 ;;
+esac
+exit 0
+EOF_CMAKE
 printf '#!/bin/sh\necho "%s"\n' "$work/llvm" > "$work/tools/brew"
 printf '#!/bin/sh\nexit 0\n' > "$work/llvm/bin/clang++"
 cat > "$work/fake-fuzzer" << 'EOF_FUZZER'
@@ -82,10 +79,16 @@ for target in FuzzAlpha FuzzBeta FuzzGamma; do
 done
 chmod +x "$work/tools/"* "$work/llvm/bin/clang++" "$work/build-fuzz/bin/"*
 export FAKE_STATE="$work"
-fuzz()
+# Runs the copy with the given arguments (EXTRA_PATH comes first on PATH); fuzz adds 5 seconds per target and two at a
+# time (JOBS overrides).
+run_fuzz()
 {
 	rm -f "$work"/*.started "$work"/*.done "$work/cmake.calls"
-	(cd "$work" && PATH="$work/tools:$PATH" FUZZ_JOBS="${JOBS:-2}" "${SHELL_UNDER_TEST:-bash}" scripts/fuzz.sh 5 "$@" 2>&1)
+	(cd "$work" && PATH="${EXTRA_PATH:+$EXTRA_PATH:}$work/tools:$PATH" "${SHELL_UNDER_TEST:-bash}" scripts/fuzz.sh "$@" 2>&1)
+}
+fuzz()
+{
+	FUZZ_JOBS="${JOBS:-2}" run_fuzz 5 "$@"
 }
 # Each summary block is whole and they come in target order: every DONE line names the target of the block it is in.
 check_blocks()
@@ -94,6 +97,30 @@ check_blocks()
 	blocks="$(awk '/^=== /{ name = $2; order = order " " name } /\tDONE/{ if ($NF != name) bad = 1 } END { print (bad ? "mixed" : order) }' <<< "$1")"
 	[[ "$blocks" == " FuzzAlpha FuzzBeta FuzzGamma" ]] || fail "summaries are not whole blocks in target order ($blocks): $1"
 }
+
+# More than two arguments, or an empty one (which would mean the default), or --list with anything else; nothing is
+# built or run.
+rejected()
+{
+	local expected="$1" output
+	shift
+	if output="$(run_fuzz "$@")"; then
+		fail "arguments '$*' were accepted"
+	fi
+	[[ "$output" == *"$expected"* ]] || fail "arguments '$*' printed '$output'"
+	[[ ! -e "$work/cmake.calls" ]] || fail "arguments '$*' ran cmake"
+	compgen -G "$work/*.started" > /dev/null && fail "arguments '$*' ran targets"
+	return 0
+}
+rejected "Usage: scripts/fuzz.sh" 5 FuzzGamma extra
+rejected "Usage: scripts/fuzz.sh" "" FuzzGamma
+rejected "Usage: scripts/fuzz.sh" 5 ""
+rejected "--list takes no other arguments" --list extra
+for seconds in 0 abc -5 1.5 2s; do
+	rejected "must be a positive integer" "$seconds" FuzzGamma
+done
+rejected "No fuzz target matches 'NoSuchTarget'" 10 NoSuchTarget
+[[ "$(run_fuzz --list)" == '["FuzzAlpha","FuzzBeta","FuzzGamma"]' ]] || fail "--list printed '$(run_fuzz --list)'"
 
 for jobs in 0 abc -2 1.5; do
 	if output="$(JOBS="$jobs" fuzz FuzzGamma)"; then
@@ -123,7 +150,7 @@ log="$(cat "$work/build-fuzz/logs/FuzzBeta.log")"
 	fail "FuzzBeta did not get exactly its corpus and options: $log"
 
 # One target at a time by default (the nightly runs), with the full memory limit.
-output="$(cd "$work" && PATH="$work/tools:$PATH" bash scripts/fuzz.sh 5 FuzzGamma 2>&1)" || fail "a single target failed: $output"
+output="$(run_fuzz 5 FuzzGamma)" || fail "a single target failed: $output"
 [[ "$output" == *"1 at a time"* && "$output" == *"limit 4096"* ]] || fail "one target at a time did not get 4096 MB: $output"
 
 # A target failing first does not stop or hide the others.
@@ -166,7 +193,7 @@ compgen -G "$work/*.started" > /dev/null && fail "targets ran after a failed bui
 
 # FUZZ_MODE: build only builds (the nightly's build job), run only runs what is in build-fuzz/bin (its per-target jobs).
 # FuzzGamma is the stand-in that runs alone (the other two wait for each other).
-for mode in Build all build-only; do
+for mode in Build all build-only dry-run; do
 	if output="$(FUZZ_MODE="$mode" fuzz FuzzGamma)"; then
 		fail "FUZZ_MODE '$mode' was accepted"
 	fi
@@ -177,9 +204,11 @@ for mode in "" build-and-run build; do
 	output="$(FUZZ_MODE="$mode" fuzz FuzzGamma)" || fail "FUZZ_MODE '$mode' failed: $output"
 	configure="$(grep -- "^-S \. -B build-fuzz " "$work/cmake.calls")" ||
 		fail "FUZZ_MODE '$mode' did not configure: $(cat "$work/cmake.calls")"
-	for flag in -DCMAKE_BUILD_TYPE=Debug -DBASALT_FUZZ=ON "-DBASALT_SANITIZE=address;undefined"; do
+	for flag in "-G Ninja" -DCMAKE_BUILD_TYPE=Debug -DBASALT_FUZZ=ON "-DBASALT_SANITIZE=address;undefined" \
+		-DBASALT_BUILD_EDITOR=OFF -DBASALT_BUILD_RUNTIME=OFF -DBASALT_BUILD_TESTS=OFF; do
 		[[ " $configure " == *" $flag "* ]] || fail "FUZZ_MODE '$mode' configured without $flag: $configure"
 	done
+	[[ "$configure" == *"-DCMAKE_CXX_COMPILER="*"clang++ "* ]] || fail "FUZZ_MODE '$mode' configured without Clang: $configure"
 	grep -qx -- "--build build-fuzz --target FuzzGamma" "$work/cmake.calls" ||
 		fail "FUZZ_MODE '$mode' did not build exactly the selected target: $(cat "$work/cmake.calls")"
 	if [[ "$mode" == build ]]; then
@@ -195,20 +224,38 @@ grep -qx -- "--build build-fuzz --target FuzzAlpha FuzzBeta FuzzGamma" "$work/cm
 if output="$(FUZZ_MODE=build FAKE_BUILD_FAIL=1 fuzz)"; then
 	fail "FUZZ_MODE=build passed a failed build: $output"
 fi
-# Every mode checks the arguments before building anything (the nightly's own input check accepts what fuzz.sh does).
-for mode in build run; do
-	rm -f "$work/cmake.calls"
-	for arguments in "0" "5 FuzzGamma extra"; do
-		# shellcheck disable=SC2086 # Each case is a list of arguments.
-		if output="$(cd "$work" && PATH="$work/tools:$PATH" FUZZ_MODE="$mode" bash scripts/fuzz.sh $arguments 2>&1)"; then
-			fail "FUZZ_MODE=$mode accepted '$arguments': $output"
-		fi
-	done
-	[[ ! -e "$work/cmake.calls" ]] || fail "FUZZ_MODE=$mode ran cmake before rejecting its arguments"
+# A failed configure builds nothing (an existing tree would otherwise build with its old configuration).
+for mode in build build-and-run; do
+	if output="$(FUZZ_MODE="$mode" FAKE_CONFIGURE_FAIL=1 fuzz)"; then
+		fail "FUZZ_MODE '$mode' passed a failed configure: $output"
+	fi
+	! grep -q -- "--build" "$work/cmake.calls" || fail "FUZZ_MODE '$mode' built after a failed configure"
+	compgen -G "$work/*.started" > /dev/null && fail "FUZZ_MODE '$mode' ran targets after a failed configure"
 done
-if output="$(cd "$work" && bash scripts/fuzz.sh --list extra 2>&1)"; then
-	fail "--list accepted another argument: $output"
+# Every mode checks the arguments before building or running anything (everything the nightly's input check accepts,
+# fuzz.sh accepts too).
+for mode in build-and-run build run; do
+	FUZZ_MODE="$mode" rejected "must be a positive integer" 0 FuzzGamma
+	FUZZ_MODE="$mode" rejected "Usage: scripts/fuzz.sh" 5 FuzzGamma extra
+	FUZZ_MODE="$mode" rejected "No fuzz target matches 'NoSuchTarget'" 5 NoSuchTarget
+	FUZZ_MODE="$mode" FUZZ_JOBS=0 rejected "FUZZ_JOBS must be a positive integer" 5 FuzzGamma
+done
+# An exact name selects only that target (the nightly's per-target jobs); otherwise the filter matches substrings.
+touch "$work/Tests/Fuzz/FuzzGammaRay.cpp"
+FUZZ_MODE=build run_fuzz 5 FuzzGamma > /dev/null || fail "an exact name did not build"
+grep -qx -- "--build build-fuzz --target FuzzGamma" "$work/cmake.calls" ||
+	fail "an exact name did not select only its target: $(cat "$work/cmake.calls")"
+FUZZ_MODE=build run_fuzz 5 Gamma > /dev/null || fail "a substring did not build"
+grep -qx -- "--build build-fuzz --target FuzzGamma FuzzGammaRay" "$work/cmake.calls" ||
+	fail "a substring did not select every match: $(cat "$work/cmake.calls")"
+rm "$work/Tests/Fuzz/FuzzGammaRay.cpp"
+# Names go into the nightly's JSON, cache keys and artifact names.
+touch "$work/Tests/Fuzz/Fuzz-Bad.cpp"
+if output="$(run_fuzz --list)"; then
+	fail "a target name with a dash was accepted: $output"
 fi
+[[ "$output" == *"not 'Fuzz-Bad'"* ]] || fail "the bad target name was not reported: $output"
+rm "$work/Tests/Fuzz/Fuzz-Bad.cpp"
 
 output="$(FUZZ_MODE=run fuzz)" || fail "FUZZ_MODE=run failed: $output"
 [[ ! -e "$work/cmake.calls" ]] || fail "FUZZ_MODE=run ran cmake: $(cat "$work/cmake.calls")"
@@ -223,6 +270,13 @@ fi
 [[ "$output" == *"FuzzGamma: FAILED (exited with 1)"*"AddressSanitizer: planted"* ]] ||
 	fail "FUZZ_MODE=run did not report the crash: $output"
 rm -f "$work/build-fuzz/crashes/FuzzGamma/"*
+# Run mode needs no compiler, so not even macOS's Homebrew LLVM, which building does need.
+mkdir -p "$work/mac"
+printf '#!/bin/sh\necho Darwin\n' > "$work/mac/uname"
+printf '#!/bin/sh\nexit 1\n' > "$work/mac/brew"
+chmod +x "$work/mac/"*
+output="$(EXTRA_PATH="$work/mac" FUZZ_MODE=run run_fuzz 5 FuzzGamma)" || fail "FUZZ_MODE=run needed Homebrew LLVM: $output"
+EXTRA_PATH="$work/mac" FUZZ_MODE=build rejected "needs Homebrew LLVM" 5 FuzzGamma
 # Every selected target must be there and executable before any of them fuzzes; unselected ones may be missing.
 chmod -x "$work/build-fuzz/bin/FuzzGamma"
 if output="$(FUZZ_MODE=run fuzz)"; then

@@ -13,10 +13,17 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# Every Tests/Fuzz/Fuzz*.cpp is a target; Tests/Fuzz/CMakeLists.txt globs the same files.
+# Every Tests/Fuzz/Fuzz*.cpp is a target; Tests/Fuzz/CMakeLists.txt globs the same files. The nightly workflow puts the
+# names into JSON, cache keys (matched by prefix) and artifact names, so they are letters and digits only.
 targets=()
 for source in Tests/Fuzz/Fuzz*.cpp; do
-	[[ -f "$source" ]] && targets+=("$(basename "$source" .cpp)")
+	[[ -f "$source" ]] || continue
+	target="$(basename "$source" .cpp)"
+	if ! [[ "$target" =~ ^Fuzz[A-Za-z0-9]+$ ]]; then
+		echo "Fuzz target names are Fuzz followed by letters and digits, not '$target' ($source)" >&2
+		exit 1
+	fi
+	targets+=("$target")
 done
 if [[ ${#targets[@]} -eq 0 ]]; then
 	echo "No fuzz targets in Tests/Fuzz/" >&2
@@ -32,8 +39,9 @@ if [[ "${1:-}" == "--list" ]]; then
 	exit 0
 fi
 
-if [[ $# -gt 2 ]]; then
-	echo "Usage: scripts/fuzz.sh [seconds per target] [target name filter] (one filter at most)" >&2
+# An empty argument would otherwise mean the default (60 seconds, every target).
+if [[ $# -gt 2 ]] || [[ $# -ge 1 && -z "$1" ]] || [[ $# -eq 2 && -z "$2" ]]; then
+	echo "Usage: scripts/fuzz.sh [seconds per target] [target name filter] (one filter at most, neither empty)" >&2
 	exit 1
 fi
 seconds="${1:-60}"

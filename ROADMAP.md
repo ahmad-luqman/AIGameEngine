@@ -41,13 +41,14 @@ add an on-demand self-hosted GPU runner later.
 Primitives may share accessors (multi-material exports do), and the importer processes everything each primitive uses
 again, at about 7 µs per index in the fuzz build (Debug with ASan, UBSan and libFuzzer's coverage instrumentation;
 Release is many times faster). Hand-built GLBs of 14–15 KB whose 100–250 primitives share one 16×16 grid's indices take
-2.7–5 s per run there; when libFuzzer runs an input a second time (it does when allocations outnumber frees, to look for
-leaks) on a slower runner, that can reach the 10 s per-input limit (`-timeout=10` in `scripts/fuzz.sh`, every run). Such
-inputs are just above what the fuzzer generates today: `scripts/fuzz.sh` sets no `-max_len`, so libFuzzer takes it from
-the largest seed or corpus file (12.6 KB in recent nightly runs); a larger seed raises the risk. Fixes: give primitives
-that use the same accessors the earlier submesh's ranges with their own material, or compact each primitive to the
-vertices its indices use before generating normals and tangents. Not seen on CI yet; see `Docs/CI.md` for what CI
-fuzzes.
+2.7–5 s per execution there; on a runner two to three times slower, one execution can reach the 10 s per-input limit
+(`-timeout=10` in `scripts/fuzz.sh`, which libFuzzer applies to each execution). libFuzzer runs an input a second time
+when its allocations outnumber its frees (a leak check), which doubles the "Executed in" time when reproducing one by
+hand; pass `-detect_leaks=0` to time a single execution. Such inputs are just above what the fuzzer generates today:
+`scripts/fuzz.sh` sets no `-max_len`, so libFuzzer takes it from the largest seed or corpus file (today the
+`MixamoRig.gltf` seed, 12.6 kB); a larger seed raises the risk. Fixes: give primitives that use the same accessors the
+earlier submesh's ranges with their own material, or compact each primitive to the vertices its indices use before
+generating normals and tangents. Not seen on CI yet; see `Docs/CI.md` for what CI fuzzes.
 
 ---
 

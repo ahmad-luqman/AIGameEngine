@@ -54,8 +54,8 @@ jobs:
         shell: bash
         run: python scripts/package_release.py --check-tag "$GITHUB_REF_NAME"
 
-      # Build tools and dependency sources, plus the Vulkan loader and MoltenVK on macOS: the exported .app bundles them,
-      # and so does the macOS tools archive.
+      # Build tools and dependency sources; on macOS also the Vulkan loader and MoltenVK, which the exported .app and the
+      # macOS tools archive bundle.
       - name: Set up the build tools
         timeout-minutes: 30
         uses: ./.github/actions/setup-basalt

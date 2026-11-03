@@ -131,7 +131,7 @@ configure(EmptyTree "${WORK_DIR}/Empty")
 expect_overrides(Empty "")
 expect_output(Empty "CMake Warning.*holds no dependency sources")
 
-# A cache miss in a workflow that does not fetch: the directory does not exist, which is not worth a warning.
+# BASALT_DEPS_SOURCE_DIR names a directory nothing was fetched into yet: not worth a warning.
 configure(MissingTree "${WORK_DIR}/Missing")
 expect_overrides(Missing "")
 if(lastOutput MATCHES "Warning")
