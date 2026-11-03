@@ -8,7 +8,10 @@ The scene is busy on purpose: towers of boxes, falling spheres and capsules, a c
 a velocity-driven six-DOF limb held back by its own torque cap, a slider piston, kinematic pushers, a dynamic body
 parented to another, a sled whose runner collider has its own friction, and a walking character that pushes
 another one. A passive two-joint ragdoll falls into the pile; the hashes include its physical joints directly,
-and bone-attachment markers additionally check the displayed pose (the Animator stays on its rest pose). Between checkpoints the batch teleports and moves bodies, rebuilds colliders, rescales a body,
+and bone-attachment markers additionally check the displayed pose (the Animator stays on its rest pose). A powered
+two-joint ragdoll away from the pile activates at the recovery checkpoint (after the scripted section, so the replay
+bodies keep their Jolt body IDs) and falls while its motors track a playing clip and its strength fades, so motor
+targets (built with the portable ragdoll decomposition) and Jolt's motors are hashed too. Between checkpoints the batch teleports and moves bodies, rebuilds colliders, rescales a body,
 destroys bodies and spawns new ones (whose physics is added in a different order than they were created, so
 the rebuild order shows in the hash), changes a joint's axis and a character's collider.
 

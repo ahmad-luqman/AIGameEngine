@@ -595,6 +595,17 @@ function Entity:RecoverRagdoll(clip, seconds) end
 ---@return boolean
 function Entity:IsRagdollActive() end
 
+---Fades the Ragdoll's motor strength (0..1, scaling MotorTorque; 0 is passive) linearly over seconds (default 0).
+---False (logged once) for an invalid strength or time. Raises without a Ragdoll component.
+---@param strength number
+---@param seconds? number
+---@return boolean
+function Entity:SetRagdollMotorStrength(strength, seconds) end
+
+---The Ragdoll's current motor strength (0..1). Raises without a Ragdoll component.
+---@return number
+function Entity:GetRagdollMotorStrength() end
+
 ---Restarts every SpringBone chain on the animated pose, at rest, on the next update (after a cut the automatic teleport
 ---detection misses). Errors without a SpringBone component.
 function Entity:ResetSpringBones() end

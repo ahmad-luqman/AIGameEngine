@@ -1199,6 +1199,7 @@
 		},
 		{"ID": 10001, "Name": "Ragdoll", "Components": {"Transform": {"Translation": [0, 5, 0]}, "Animator": {"Mesh": "Assets/Models/TwoJoint.gltf", "PlayOnStart": false}, "Ragdoll": {"Enabled": true}}},
 		{"ID": 10002, "Name": "RagdollRootMarker", "Components": {"BoneAttachment": {"Target": 10001, "Joint": "RootJoint"}}},
-		{"ID": 10003, "Name": "RagdollTipMarker", "Components": {"BoneAttachment": {"Target": 10001, "Joint": "Tip"}}}
+		{"ID": 10003, "Name": "RagdollTipMarker", "Components": {"BoneAttachment": {"Target": 10001, "Joint": "Tip"}}},
+		{"ID": 10004, "Name": "PoweredRagdoll", "Components": {"Transform": {"Translation": [-20, 5, -20]}, "Animator": {"Mesh": "Assets/Models/TwoJoint.gltf", "Clip": "Bend"}, "Ragdoll": {"MotorStrength": 1, "MotorFrequency": 6, "MotorTorque": 300}}}
 	]
 }

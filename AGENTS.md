@@ -21,7 +21,7 @@ changing code. Task-specific procedures live in `.claude/skills/*/SKILL.md`.
 Engine modules (`Basalt/Source/Basalt/<Module>/`): `Core` (application, window, input incl. gamepads, log, file
 system, `.bpak` archives and file watching, command line, crash reports), `Events`, `Math`, `Renderer` (device, scene renderer, IBL, debug lines), `ImGui`, `Scene`
 (EnTT scene, components, component registry, serialization, prefab instances and overrides), `Asset` (glTF, images, primitives, material
-files, asset cache), `Physics` (Jolt), `Audio` (miniaudio: buses, per-source low-pass and Doppler, reverb sends into per-bus reverbs), `Particles` (CPU particle simulation), `Animation` (glTF TRS sampling, blends, crossfades, 1D/2D blend spaces with phase sync and velocity matching, animation events, bone transforms and attachments, data-driven state machines and per-state root motion, layers with joint masks and additive clips, two-bone/look-at IK and foot placement, spring bones, morph targets, retargeted clip libraries, per-entity playback), `UI` (game UI: UI
+files, asset cache), `Physics` (Jolt), `Audio` (miniaudio: buses, per-source low-pass and Doppler, reverb sends into per-bus reverbs), `Particles` (CPU particle simulation), `Animation` (glTF TRS sampling, blends, crossfades, 1D/2D blend spaces with phase sync and velocity matching, animation events, bone transforms and attachments, data-driven state machines and per-state root motion, layers with joint masks, shared mask assets, additive clips and their own state machines, two-bone/look-at/FABRIK IK with foot placement and foot locking, spring bones, morph targets, retargeted clip libraries, per-entity playback), `UI` (game UI: UI
 component layout, widgets and their mouse/keyboard/gamepad interaction, immediate-mode `UI.*`, TrueType fonts;
 drawn through ImGui after the scene), `Scripting` (Lua 5.4 + sol2; timers, coroutines, events), `Project`
 (project files, exporter and platform packages, save data), `Automation` (command API, session, TCP server, editor history and selection).
@@ -39,8 +39,9 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   automation commands and the editor inspector. Adding a component = one registry entry (see the
   `basalt-add-component` skill).
 - **Runtime state lives in systems.** `PhysicsWorld`, `ScriptEngine`, `AudioSystem`, `AnimationSystem` and `ParticleSystem` exist
-  only while a scene plays (physics, animation and particles also while it simulates; particles additionally
-  have an isolated edit-mode Preview system) and key their state by entity
+  only while a scene plays (physics, animation and particles also while it simulates; particles and animation additionally
+  have isolated edit-mode Preview systems, `Scene::UpdateParticlePreview`/`UpdateAnimationPreview`, which never write the
+  edit scene) and key their state by entity
   UUID; they react to EnTT component signals. `UIInteraction` (widget hover, hold and focus) exists only in Play
   and re-reads the widgets every frame. Gameplay random streams (Lua's random numbers, particle
   emitters and runtime entity UUIDs) are seeded from the session's seed, `Scene::GetRandomSeed` (the project's `RandomSeed`).
@@ -61,12 +62,18 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   logs/suspends failed timelines until edited or explicitly repaired. `animation.key/sample/control` share these paths;
   Lua uses `ControlPropertyAnimation` and `GetPropertyAnimationStatus`. See `Docs/ScriptingAPI.md`.
 - **Layers, IK and spring bones.** A pose is built in stages: the base playback (`Playback::Local`, which fades, snapshots and root
-  stripping use), then `Animator.Layers` in order (`Pose`; each layer's clip, mask and reference pose are resolved again
-  only when its clip, blend, reference or mask changes, and the root-motion exclusion when the root-motion joint
-  does), then the IK and spring bone overlays, composed into `Globals`. `InverseKinematicsComponent` chains solve in
+  stripping use), then `Animator.Layers` in order (`Pose`; each layer's clip or graph, mask and reference pose are resolved
+  again only when its clip, graph, blend, reference, mask or loaded `.banimgraph`/`.banimmask` (by identity, resolved once
+  per update) changes, and the root-motion exclusion when the root-motion joint does), then the IK and spring bone
+  overlays, composed into `Globals`. A `StateMachine` layer runs a nested `Playback` (`IsLayer`: no root motion, events or
+  overlays) in `LayerState::Graph`: transitions and clocks advance in `AdvanceLayers` on the main thread, and `Finish`
+  only samples it (`SampleBase`), so pose jobs stay disjoint; parameters and triggers reach every graph declaring the
+  name. `InverseKinematicsComponent` chains solve in
   `AnimationSystem::LateUpdate` (after physics and OnLateUpdate, before attachments) from `Pose`, never from the last
   solution; the solved joints' local transforms are kept as an overlay so a pose evaluated again that frame (Play in a
-  callback) keeps the IK. Foot rays use `PhysicsWorld::RaycastAll` and skip the entity, its descendants and its
+  callback) keeps the IK. Targets apply as script target, then the component's `Target` (FollowTarget chains), then
+  ground; FootLock chains hold a world position while the animated joint is slower than `LockSpeed`. Foot rays use
+  `PhysicsWorld::RaycastAll` and skip the entity, its descendants and its
   character controller's entity and descendants. IK targets and weights live in the system keyed by entity (they
   survive playback resets); layer state belongs to the playback. Solvers (`Animation/InverseKinematics.h`) are
   stateless free functions that handle mirrored (negative-determinant) parents. `SpringBoneComponent` chains swing right
@@ -77,7 +84,10 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   joints and frozen recovery pose. Capsules and swing-twist frames derive from the rest skeleton, and activation starts
   on the current pose. Active ragdolls suspend the entity's body/controller and inherit the body's linear/angular motion (a controller's linear motion); live rebuilds preserve
   physical placement and joint motion. Animation keeps
-  ticking, but root motion, IK and springs yield to the physical overlay, applied last before attachments. Recovery
+  ticking, but root motion, IK and springs yield to the physical overlay, applied last before attachments. Powered rigs
+  (`MotorStrength` > 0, a per-entity `FadingWeight` in `PhysicsWorld` that survives rebuilds) set swing-twist position
+  motors toward the layered animation once per physics frame (`DriveRagdollMotors`, targets from the portable
+  decomposition); a rig never powered never touches its motors, and motor settings never rebuild. Recovery
   removes the bodies, optionally starts a get-up clip, and blends local transforms from the frozen pose; gameplay
   supplies the height when recovering onto a different ground level. Positive uniform transforms are required.
   `scene.hash` includes physical joints and recovery weight; saves/copies contain configuration only. Ragdoll TRS

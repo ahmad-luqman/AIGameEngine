@@ -3,7 +3,7 @@
 The `ROADMAP.md` items grouped into single-session milestones, sorted in order of implementation, with completed
 sessions retained for reference. The order follows the roadmap's priorities (P1 → P2 → P3) and is adjusted so that
 work a later session depends on comes first.
-Updated in October 2026 through Shipping II (session 16), the last numbered session.
+Updated in November 2026 through Character animation I (session 17), the last numbered session.
 
 Size estimates: **S** = a day or less, **M** = a few days, **L** = a week or more.
 
@@ -25,6 +25,7 @@ Size estimates: **S** = a day or less, **M** = a few days, **L** = a week or mor
 | 14 | **Prefabs** ✅ | Prefab editing and per-instance overrides (L); native file dialogs (S) | Shipped in [PR #50](https://github.com/ahmad-luqman/AIGameEngine/pull/50): isolated prefab editing, three-way merges that keep per-instance overrides (`prefab.overrides/apply/revert/refresh`), merges on prefab writes and scene open, and nativefiledialog-extended pickers. Nested prefabs and variants remain a follow-up. |
 | 15 | **Shipping I** ✅ | Project icon, version and company (S); platform packaging for `.app`, `.exe` and AppImage (M); tag-triggered release pipeline (S) | Shipped in [PR #52](https://github.com/ahmad-luqman/AIGameEngine/pull/52): `Version`/`Company`/`Icon` project settings, `project.export {"package": true}` (.app with signing and notarization script, Windows icon and version resources, AppImage), and `release.yml` publishing Dist tools and packaged samples on `v*` tags. Windows code signing, signed macOS tools and universal binaries remain follow-ups. |
 | 16 | **Shipping II** ✅ | Packed `.bpak` archive (M); crash reporting (M) | Shipped in [PR #53](https://github.com/ahmad-luqman/AIGameEngine/pull/53): `project.export {"archive": true}` packs Assets into a zstd `Assets.bpak` whose index carries the asset UUIDs (sessions 7 and 8), mounted by the runtime under every runtime asset reader; crash reports with stack traces, the last log lines and Windows minidumps in the user data directory, plus a message box in the windowed runtime. |
+| 17 | **Character animation I** ✅ | Powered ragdolls that follow the animated pose with motors (M); IK and layer follow-ups: multi-joint chains, edit-mode preview, reusable masks, state-driven layers, foot locking (S) | Shipped: ragdoll motor strength, frequency, damping and torque with scripted fades; Fabrik chains, FollowTarget targets and FootLock; `.banimmask` mask assets; StateMachine layers sharing the Animator's parameters; and an edit-mode Animator preview. |
 
 ## Later (L, one session each)
 

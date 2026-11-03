@@ -503,9 +503,9 @@ TEST_SUITE("Animation")
 		CHECK(has("InverseKinematics chain 'Look': joint 'Head' has fewer than 5 joints above it"));
 		CHECK(has("InverseKinematics Pelvis joint 'Pelvis' not found"));
 		CHECK(has("InverseKinematics Pelvis has no effect: no chain is a Ground chain"));
-		CHECK(has("InverseKinematics chain 'PoleLook': Pole only applies to TwoBone chains"));
+		CHECK(has("InverseKinematics chain 'PoleLook': Pole only applies to TwoBone and Fabrik chains"));
 		CHECK(has("InverseKinematics chain 'PoleLook': MaxAngle 0 never turns the chain"));
-		CHECK(has("InverseKinematics chain 'Arm2': ChainLength only applies to LookAt chains"));
+		CHECK(has("InverseKinematics chain 'Arm2': ChainLength only applies to LookAt and Fabrik chains"));
 		CHECK(has("InverseKinematics chains 'Arm' and 'PoleLook' both drive joint 'LeftHand'"));
 		CHECK(has("InverseKinematics chains 'Arm' and 'Arm2' both drive joint 'LeftHand'"));
 		CHECK(warnings.size() == 16);
@@ -1214,6 +1214,13 @@ namespace {
 	{
 		return { Node(source, "Chest"), Node(source, "LeftUpperArm"), Node(source, "LeftForeArm"), Node(source, "LeftHand") };
 	}
+	// The FootLock state of a chain that exists.
+	bool Locked(AnimationSystem& system, Entity entity, const std::string& chain)
+	{
+		bool locked = false;
+		REQUIRE(system.GetIKFootLock(entity, chain, locked));
+		return locked;
+	}
 	std::vector<float> BoneLengths(const std::vector<glm::mat4>& globals, const std::vector<uint32_t>& joints)
 	{
 		std::vector<float> lengths;
@@ -1404,9 +1411,9 @@ TEST_SUITE("Animation")
 		auto& system = *scene.GetAnimationSystem();
 		// The first solve has no speed yet; standing still then locks the foot where it stands.
 		system.Update(Step);
-		CHECK(system.IsIKFootLocked(biped, "LeftFoot") == false);
+		CHECK(!Locked(system, biped, "LeftFoot"));
 		system.Update(Step);
-		REQUIRE(system.IsIKFootLocked(biped, "LeftFoot") == true);
+		REQUIRE(Locked(system, biped, "LeftFoot"));
 		const glm::vec3 planted = BoneWorld(scene, biped, "LeftFoot");
 
 		// Lowering the character (the legs bend) keeps the foot planted in the world...
@@ -1416,28 +1423,30 @@ TEST_SUITE("Animation")
 			system.Update(Step);
 			CHECK(Near(BoneWorld(scene, biped, "LeftFoot"), planted, 1e-3f));
 		}
-		CHECK(system.IsIKFootLocked(biped, "LeftFoot") == true);
+		CHECK(Locked(system, biped, "LeftFoot"));
 		// ...until the animated foot is LockDistance away: then it lets go at once, and while the foot moves faster than
 		// LockSpeed (1.2 m/s here) it does not lock again.
 		biped.GetTransform().Translation.y = -0.32f;
 		system.Update(Step);
-		CHECK(system.IsIKFootLocked(biped, "LeftFoot") == false);
+		CHECK(!Locked(system, biped, "LeftFoot"));
 		CHECK(BoneWorld(scene, biped, "LeftFoot").y == doctest::Approx(planted.y - 0.32f).epsilon(1e-3));
 		// Standing still locks it again, where it now stands.
 		system.Update(Step);
-		CHECK(system.IsIKFootLocked(biped, "LeftFoot") == true);
+		CHECK(Locked(system, biped, "LeftFoot"));
 
 		// A script target releases the lock; the lock only engages again once the target is cleared.
 		REQUIRE(system.SetIKTarget(biped, "LeftFoot", glm::vec3(0.1f, -0.1f, 0.2f), std::nullopt));
 		system.Update(Step);
-		CHECK(system.IsIKFootLocked(biped, "LeftFoot") == false);
+		CHECK(!Locked(system, biped, "LeftFoot"));
 		REQUIRE(system.ClearIKTarget(biped, "LeftFoot"));
 		system.Update(Step);
 		system.Update(Step);
-		CHECK(system.IsIKFootLocked(biped, "LeftFoot") == true);
+		CHECK(Locked(system, biped, "LeftFoot"));
 
 		// Chains without FootLock report false; unknown chains nothing.
-		CHECK_FALSE(system.IsIKFootLocked(biped, "Missing").has_value());
+		bool missing = true;
+		CHECK_FALSE(system.GetIKFootLock(biped, "Missing", missing));
+		CHECK(missing);
 		scene.OnRuntimeStop();
 	}
 
@@ -1460,13 +1469,13 @@ TEST_SUITE("Animation")
 		// Locking eases in over Smoothing, and a held pose keeps the hand where it locked.
 		for (int i = 0; i < 60; i++)
 			system.Update(Step);
-		REQUIRE(system.IsIKFootLocked(biped, "RightHand") == true);
+		REQUIRE(Locked(system, biped, "RightHand"));
 		const glm::vec3 planted = BoneWorld(scene, biped, "RightHand");
 
 		// Seeking 0.1 s into the wave lifts the hand about 7 cm: past LockHeight, so the lock releases and eases out.
 		REQUIRE(system.Seek(biped, 0.1f));
 		system.Update(Step);
-		CHECK(system.IsIKFootLocked(biped, "RightHand") == false);
+		CHECK(!Locked(system, biped, "RightHand"));
 		const glm::vec3 easing = BoneWorld(scene, biped, "RightHand");
 		CHECK(glm::length(easing - planted) > 1e-3f);
 		system.Update(1.0f);
@@ -1520,5 +1529,63 @@ TEST_SUITE("Animation")
 		const glm::quat local = glm::quat_cast(glm::mat3(glm::inverse(pose[source->Nodes[upper].Parent]) * pose[upper]));
 		// Exactly the clip's: a spring chain on the arm would swing it behind.
 		CHECK(NearRotation(local, glm::angleAxis(glm::radians(-90.0f), glm::vec3(0, 0, 1)), 1e-3f));
+	}
+}
+
+TEST_SUITE("Animation")
+{
+	TEST_CASE("Authoring warnings cover layer graphs mask assets and IK targets and foot locks")
+	{
+		ClearAssetCache clear;
+		TempProject project("FollowUpWarnings");
+		Scene scene;
+		const std::string graph = project.WriteFile("Assets/Animations/Upper.banimgraph", json{ { "InitialState", "A" }, { "States", json::array({ { { "Name", "A" }, { "Clip", "Gone" } }, { { "Name", "B" }, { "BlendSpace", "Nowhere" } } }) } }.dump());
+		const std::string mask = project.WriteFile("Assets/Masks/Upper.banimmask", R"({ "Joints": [ { "Joint": "Chest" }, { "Joint": "Wing" } ] })");
+		const std::string broken = project.WriteFile("Assets/Masks/Broken.banimmask", "{}");
+		auto follow = Chain("Look", IKChainType::LookAt, "Head");
+		follow.FollowTarget = true;
+		auto lock = Chain("Foot", IKChainType::Fabrik, "LeftFoot");
+		lock.ChainLength = 2;
+		lock.FootLock = true;
+		auto twoBone = Chain("Foot2", IKChainType::TwoBone, "LeftFoot");
+		auto biped = AddBiped(scene, { follow, lock, twoBone });
+		auto& ik = biped.GetComponent<InverseKinematicsComponent>();
+		ik.LockSpeed = 0;
+		AnimationLayer upper;
+		upper.Name = "Upper";
+		upper.Clip = "Wave";
+		upper.StateMachine = graph;
+		upper.Blend = AnimationLayerBlend::Additive;
+		upper.Mask = { { "Chest", 1.0f } };
+		upper.MaskAsset = mask;
+		AnimationLayer missing;
+		missing.Name = "Missing";
+		missing.StateMachine = "Assets/Animations/Missing.banimgraph";
+		missing.MaskAsset = broken;
+		biped.GetComponent<AnimatorComponent>().Layers = { upper, missing };
+		const auto warnings = GetAnimationWarnings(biped);
+		const auto has = [&](const std::string& text) { return std::ranges::any_of(warnings, [&](const std::string& warning) { return warning.starts_with(text); }); };
+		CAPTURE(warnings);
+		CHECK(has("Animator layer 'Upper': Clip is unused; the StateMachine replaces it"));
+		CHECK(has("Animator layer 'Upper': an Additive layer with a StateMachine needs a ReferenceClip"));
+		CHECK(has("Animator layer 'Upper' state 'A': clip 'Gone' not found"));
+		CHECK(has("Animator layer 'Upper' state 'B': blend space 'Nowhere' not found"));
+		CHECK(has("Animator layer 'Upper': Mask is unused; the MaskAsset replaces it"));
+		CHECK(has("Animator layer 'Upper': mask joint 'Wing' not found"));
+		CHECK(has("Animator layer 'Missing': state machine could not be loaded"));
+		CHECK(has("Animator layer 'Missing': mask could not be loaded, so the layer shows nothing"));
+		CHECK(has("InverseKinematics chain 'Look': FollowTarget has no effect: the component has no Target"));
+		CHECK(has("InverseKinematics chain 'Foot': FootLock never locks: LockSpeed is 0"));
+		// A Fabrik chain drives its end joint like a TwoBone one.
+		CHECK(has("InverseKinematics chains 'Foot' and 'Foot2' both drive joint 'LeftFoot'"));
+		CHECK(warnings.size() == 11);
+
+		// A Target is reported when it is gone or nothing follows it.
+		auto ball = scene.CreateEntity("Ball");
+		ik.Target = ball.GetUUID();
+		ik.Chains = { twoBone };
+		CHECK(std::ranges::count(GetAnimationWarnings(biped), std::string("InverseKinematics Target has no effect: no chain has FollowTarget")) == 1);
+		scene.DestroyEntity(ball);
+		CHECK(std::ranges::count(GetAnimationWarnings(biped), std::string("InverseKinematics Target entity not found")) == 1);
 	}
 }
