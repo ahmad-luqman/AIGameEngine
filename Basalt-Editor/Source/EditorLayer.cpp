@@ -1245,7 +1245,10 @@ namespace Basalt {
 			}
 		}
 		if (!m_Session.IsPlaying())
+		{
 			m_Session.GetScene()->UpdateParticlePreview(ts);
+			m_Session.GetScene()->UpdateAnimationPreview(ts);
+		}
 		UpdateWindowTitle();
 	}
 

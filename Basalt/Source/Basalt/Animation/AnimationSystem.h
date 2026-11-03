@@ -27,6 +27,7 @@ namespace Basalt {
 
 	class Entity;
 	class Scene;
+	struct AnimationMask;
 
 	// An AnimationEvent marker that playback crossed, waiting to be delivered.
 	struct AnimationEventRecord
@@ -42,13 +43,16 @@ namespace Basalt {
 	// Each Update advances every Animator, samples due poses (optionally distance-throttled), and collects the events
 	// playback crossed (TakeEvents). The scene runs LateUpdate (inverse kinematics, spring bones, ragdoll physics, then attachments) after
 	// physics and OnLateUpdate; standalone callers get it at the end of Update by default.
+	// A preview system (Scene::UpdateAnimationPreview) animates only Animators with Preview in an edit scene: clips, state
+	// machines, layers and inverse kinematics, never writing the scene (no root-motion displacement, events, spring bones,
+	// ragdolls or attachments).
 	class AnimationSystem
 	{
 	public:
 		// Most events one Animator delivers per frame; the rest are dropped (warned once per playback started).
 		static constexpr size_t MaxEventsPerFrame = 64;
 
-		explicit AnimationSystem(Scene& scene);
+		explicit AnimationSystem(Scene& scene, bool preview = false);
 		~AnimationSystem();
 		// runLateUpdate: also run LateUpdate at the end; the scene passes false and calls LateUpdate after physics.
 		void Update(Timestep timestep, bool runLateUpdate = true);
@@ -99,9 +103,14 @@ namespace Basalt {
 		// configured Clip changes), otherwise on its configured Clip (dropping an earlier script clip); false when the
 		// layer would show nothing (the call then changes nothing). SetLayerWeight fades linearly over `seconds` (0: at
 		// once). False for an unknown layer or clip or an invalid value, logged as ReportCallProblem describes.
+		// A StateMachine layer restarts its graph at the initial state; `clip` plays instead of the graph until PlayLayer
+		// without one.
 		bool PlayLayer(Entity entity, const std::string& layer, const std::optional<std::string>& clip);
 		bool SetLayerWeight(Entity entity, const std::string& layer, float weight, float seconds);
 		std::optional<float> GetLayerWeight(Entity entity, const std::string& layer);
+		// The current state of a StateMachine layer's graph; empty for clip layers, while a script clip plays instead, or
+		// while the graph cannot load. Nullopt for an unknown layer (logged as ReportCallProblem describes).
+		std::optional<std::string> GetLayerState(Entity entity, const std::string& layer);
 		// Inverse kinematics chains (InverseKinematics.Chains, found by name). A target is a world position (with an
 		// optional world rotation for a TwoBone chain's end joint) or an entity followed every frame; it replaces
 		// ground placement until ClearIKTarget. False for a missing component or chain, an invalid value, or a rotation
@@ -210,24 +219,40 @@ namespace Basalt {
 			// Retained across good frames: each clip/node failure is reported once per playback/cache bind.
 			std::string Problem;
 		};
+		// The assets a layer reads, resolved once per update (see ResolveLayerAssets): its StateMachine graph (null while a
+		// script clip plays instead, or when it cannot load) and its MaskAsset (null when unset or unloadable).
+		struct LayerAssets
+		{
+			Ref<const AnimationGraph> Graph;
+			Ref<const AnimationMask> Mask;
+		};
 		// What a layer's resolution depends on: it is resolved again only when this changes.
 		struct LayerKey
 		{
 			std::string Clip;
+			// Empty while the layer plays a clip (none configured, or a script clip replacing it).
+			std::string StateMachine;
 			AnimationLayerBlend Blend = AnimationLayerBlend::Override;
 			std::string ReferenceClip;
 			float ReferenceTime = 0;
 			std::vector<AnimationMaskJoint> Mask;
+			std::string MaskAsset;
+			// The loaded assets by identity, so a reloaded file resolves again.
+			LayerAssets Assets;
 			// Compares without copying the configuration; NaN values written by C++ compare equal to themselves, so they
 			// cannot force a resolution every update.
-			bool Matches(const AnimationLayer& config, const std::string& clip) const;
+			bool Matches(const AnimationLayer& config, const std::string& clip, const std::string& stateMachine, const LayerAssets& assets) const;
 		};
-		// A layer's clip, mask and reference pose, resolved against the model.
+		// A layer's clip or graph, mask and reference pose, resolved against the model.
 		struct LayerResolution
 		{
 			LayerKey Key;
-			// -1 shows nothing: no clip, or a missing clip or reference clip.
+			// -1 shows nothing (unless Graph): no clip, or a missing clip or reference clip.
 			int32_t Clip = -1;
+			// The layer shows its StateMachine graph (Key.Assets.Graph), which picks its clips; Mask.Channels then holds
+			// every channel a clip of the graph's states animates.
+			bool Graph = false;
+			bool Shows() const { return Clip >= 0 || Graph; }
 			AnimationLayerMask Mask;
 			// Additive layers only.
 			AnimationLocalPose Reference;
@@ -249,6 +274,7 @@ namespace Basalt {
 			FadingWeight Weight;
 			std::vector<uint32_t> Slots;
 		};
+		struct Playback;
 		// Runtime playback of one Animator layer, matched to its configuration by name every update. It belongs to
 		// the playback and resets with it.
 		struct LayerState
@@ -262,6 +288,10 @@ namespace Basalt {
 			double Time = 0;
 			// Cached by ResolveLayer; nullopt until the first resolution.
 			std::optional<LayerResolution> Resolved;
+			// A StateMachine layer's own graph playback (IsLayer; its parameters, state, clocks and fades), rebuilt when the
+			// graph, model or clip set changes: one element, or none for clip layers. (A vector, since Playback is not yet
+			// complete here and the layer must stay copyable.)
+			std::vector<Playback> Graph;
 			// The last resolution, configuration and root-motion problems, each logged when it changes. The root-motion one
 			// is kept while root motion is off, so states switching it on and off do not repeat it.
 			std::string Problem;
@@ -271,6 +301,9 @@ namespace Basalt {
 		struct Playback
 		{
 			entt::entity Handle = entt::null;
+			// A StateMachine layer's graph (LayerState::Graph): no root motion, events or overlays; Evaluate only samples
+			// Local, which the owning playback's Finish blends in.
+			bool IsLayer = false;
 			Ref<MeshSource> Source;
 			// Source's clips and the Animator's retargeted library clips; every clip index refers to it.
 			Ref<const AnimationClipSet> Clips;
@@ -484,6 +517,8 @@ namespace Basalt {
 		// Re-resolves the running space and logs a new problem; false when it cannot play.
 		bool ResolveSpace(Playback& playback, SpaceState& state, const AnimatorComponent& component);
 		static void Evaluate(Playback& playback);
+		// Evaluate's first half: samples Local from the base clip, blend or blend space and the fade.
+		static void SampleBase(Playback& playback);
 		// Builds Pose from Local and the layers, then composes Globals from Pose with IK, spring and ragdoll overlays on top. Layers
 		// leave out the root-motion joint and the nodes above it while root motion applies (also while it fades out).
 		static void Finish(Playback& playback);
@@ -500,9 +535,18 @@ namespace Basalt {
 		// Rewrites those buffers in place, so queued-job recovery needs no pose allocation.
 		static void RestoreRestPose(Playback& playback);
 		// Matches layer states to the configuration (by name), resolves them and advances their clocks and fades.
-		static void AdvanceLayers(Playback& playback, const AnimatorComponent& component, double seconds);
-		// Re-resolves the layer's clip, mask and reference pose when what they depend on changed; returns them.
-		static const LayerResolution& ResolveLayer(Playback& playback, const AnimationLayer& config, LayerState& state);
+		// `transitions`: StateMachine layers also take their transitions (Update, unless the Animator is paused; never a
+		// script call's sync).
+		void AdvanceLayers(Playback& playback, const AnimatorComponent& component, double seconds, bool transitions);
+		// Re-resolves the layer's clip or graph, mask and reference pose when what they depend on changed; returns them.
+		const LayerResolution& ResolveLayer(Playback& playback, const AnimationLayer& config, LayerState& state, const AnimatorComponent& component);
+		// The layer's graph and mask assets, from the update's cache while Update runs.
+		LayerAssets ResolveLayerAssets(const AnimationLayer& config, const LayerState& state);
+		// Builds (or with `restart`, rebuilds) a StateMachine layer's graph playback when its graph or model changed, entering
+		// the initial state; false when the layer shows no graph.
+		bool SyncLayerGraph(const Playback& playback, const AnimationLayer& config, LayerState& state, const AnimatorComponent& component, bool restart);
+		// Takes a layer graph's transitions (`transitions`) and advances its clocks and fade by `seconds` at `speed`.
+		void AdvanceLayerGraph(Playback& graph, const AnimatorComponent& component, double seconds, double speed, bool transitions);
 		// The layer named `layer` after syncing, or null (reported for `operation`).
 		LayerState* FindLayer(Entity entity, Playback& playback, const std::string& layer, const char* operation);
 		// Moves BoneAttachment entities to their joints once the rigs are placed (part of LateUpdate).
@@ -599,6 +643,13 @@ namespace Basalt {
 		void ApplyRootMotion(Entity entity, Playback& playback, const RootMotionFrame& motion, float seconds);
 		void OnDestroy(entt::registry& registry, entt::entity handle);
 		Scene& m_Scene;
+		// An edit-mode preview (see the class comment).
+		bool m_Preview = false;
+		// Layer graph and mask assets by key, resolved once per update while m_CacheLayerAssets (Update) and afresh
+		// otherwise.
+		bool m_CacheLayerAssets = false;
+		std::unordered_map<std::string, Ref<const AnimationGraph>> m_LayerGraphs;
+		std::unordered_map<std::string, Ref<const AnimationMask>> m_LayerMasks;
 		std::unordered_map<UUID, Playback> m_Playback;
 		std::unordered_map<entt::entity, bool> m_EmptyMeshes;
 		// Built clip sets, found again by model and loaded libraries (see ResolveClips); dropped once no playback uses them.

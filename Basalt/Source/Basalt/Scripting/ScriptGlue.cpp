@@ -747,6 +747,9 @@ namespace Basalt {
 			entityType["GetAnimationLayerWeight"] = [&context](const ScriptEntity& self, const std::string& layer) {
 				return RequireAnimations(context).GetLayerWeight(RequireAnimator(self, "GetAnimationLayerWeight"), layer);
 			};
+			entityType["GetAnimationLayerState"] = [&context](const ScriptEntity& self, const std::string& layer) {
+				return RequireAnimations(context).GetLayerState(RequireAnimator(self, "GetAnimationLayerState"), layer);
+			};
 			entityType["SetIKTarget"] = [&context](const ScriptEntity& self, const std::string& chain, const sol::object& target, const sol::object& extra) {
 				Entity entity = RequireInverseKinematics(self, "SetIKTarget");
 				AnimationSystem& animations = RequireAnimations(context);
@@ -772,6 +775,9 @@ namespace Basalt {
 			};
 			entityType["GetIKWeight"] = [&context](const ScriptEntity& self, const std::string& chain) {
 				return RequireAnimations(context).GetIKWeight(RequireInverseKinematics(self, "GetIKWeight"), chain);
+			};
+			entityType["IsIKFootLocked"] = [&context](const ScriptEntity& self, const std::string& chain) {
+				return RequireAnimations(context).IsIKFootLocked(RequireInverseKinematics(self, "IsIKFootLocked"), chain);
 			};
 			entityType["SetMorphWeight"] = [&context](const ScriptEntity& self, const std::string& target, float weight, const sol::object& seconds) {
 				Entity entity = RequireAnimator(self, "SetMorphWeight");

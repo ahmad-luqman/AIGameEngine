@@ -796,7 +796,7 @@ Resolves an asset UUID (decimal string) to its current project-relative path. Re
 
 ### `asset.write`
 
-Writes a text asset (script, prefab, scene, animation graph, material...) to a project-relative path and reloads it. A .banimgraph or .bmaterial is validated before replacing the file; a material's texture problems (missing, wrong letter case, unresolved, not a texture, outside Assets/, an embedded image the model lacks) are reported in 'warnings', as project.validate reports them. A script written while the game runs (Play, not Simulate) is hot reloaded (see 'scripts'). A .bprefab merges into the edit scene's instances ('prefabInstances'; instances that cannot merge are 'warnings').
+Writes a text asset (script, prefab, scene, animation graph or mask, material...) to a project-relative path and reloads it. A .banimgraph, .banimmask or .bmaterial is validated before replacing the file; a material's texture problems (missing, wrong letter case, unresolved, not a texture, outside Assets/, an embedded image the model lacks) are reported in 'warnings', as project.validate reports them. A script written while the game runs (Play, not Simulate) is hot reloaded (see 'scripts'). A .bprefab merges into the edit scene's instances ('prefabInstances'; instances that cannot merge are 'warnings').
 
 | Parameter | Type / description |
 |-----------|--------------------|

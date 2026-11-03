@@ -12,6 +12,7 @@ namespace Basalt {
 
 	class Scene;
 	struct AnimationGraph;
+	struct AnimationMask;
 
 	// Loads and caches CPU-side assets by key. Keys are project-relative paths ("Assets/Models/Ship.glb"),
 	// built-in meshes ("builtin://Cube"), embedded glTF images ("Assets/Models/Ship.glb#image/0") or imported glTF
@@ -23,6 +24,8 @@ namespace Basalt {
 	{
 	public:
 		static Ref<const AnimationGraph> GetAnimationGraph(const std::string& key);
+		// A layer mask file (.banimmask, AnimationMask::FromJson); failures are cached and logged once.
+		static Ref<const AnimationMask> GetAnimationMask(const std::string& key);
 		// A material file (.bmaterial, parsed on the main thread) or a model's imported material ("<model>#material/<n>",
 		// n below the model's glTF material count; it shares the model's lifetime). GetMaterial loads the model if needed;
 		// RequestMaterial returns null while the model streams in and caches nothing until it is published. Failures are
@@ -49,7 +52,7 @@ namespace Basalt {
 
 		// Drops a cached asset so the next Get or Request reloads it from disk.
 		static void Reload(const std::string& key);
-		// Drops what a change to these project-relative files affects (including animation graphs and materials): the files' own cache entries
+		// Drops what a change to these project-relative files affects (including animation graphs, masks and materials): the files' own cache entries
 		// (with a model's embedded images and imported materials), models that read one of them (external buffers and images; also for a model that failed
 		// to load once its glTF parsed, so a buffer that appears retries it), and material files whose textures (or their
 		// sidecars) changed or, for a reference that did not resolve, whenever metadata changed. Failed loads count, so a fixed file is tried
@@ -81,6 +84,7 @@ namespace Basalt {
 			std::vector<std::string> m_Meshes;
 			std::vector<std::string> m_Textures;
 			std::vector<std::string> m_Graphs;
+			std::vector<std::string> m_Masks;
 			std::vector<std::string> m_Materials;
 		};
 

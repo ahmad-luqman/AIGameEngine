@@ -188,8 +188,8 @@ Entity handles store an ID and stay safe to hold: using a destroyed entity raise
 | `e:GetAnimationClips()`, `e:GetAnimationTime()`, `e:GetAnimationDuration()`, `e:IsAnimationPlaying()` | Animator queries |
 | `e:PlayBlendSpace(space, x, [y], [fadeSeconds])`, `e:SetBlendSpaceParameter(x, [y])`, `e:GetBlendSpaceWeights()` | Animator blend spaces; see Blend spaces |
 | `e:GetBoneTransform(joint)` | World position (Vec3), rotation (Quat) and scale (Vec3) of a joint of the Animator's current pose, or nil; see Bones |
-| `e:PlayAnimationLayer(layer, [clip])`, `e:SetAnimationLayerWeight(layer, weight, [seconds])`, `e:GetAnimationLayerWeight(layer)` | Animator layers; see Animation layers |
-| `e:SetIKTarget(chain, position, [rotation])`, `e:SetIKTarget(chain, entity, [matchRotation])`, `e:ClearIKTarget(chain)`, `e:SetIKWeight(chain, weight, [seconds])`, `e:GetIKWeight(chain)` | InverseKinematics chains; see Inverse kinematics |
+| `e:PlayAnimationLayer(layer, [clip])`, `e:SetAnimationLayerWeight(layer, weight, [seconds])`, `e:GetAnimationLayerWeight(layer)`, `e:GetAnimationLayerState(layer)` | Animator layers; see Animation layers |
+| `e:SetIKTarget(chain, position, [rotation])`, `e:SetIKTarget(chain, entity, [matchRotation])`, `e:ClearIKTarget(chain)`, `e:SetIKWeight(chain, weight, [seconds])`, `e:GetIKWeight(chain)`, `e:IsIKFootLocked(chain)` | InverseKinematics chains; see Inverse kinematics |
 | `e:SetMorphWeight(target, weight, [seconds])`, `e:GetMorphWeight(target)`, `e:ClearMorphWeight([target])`, `e:GetMorphTargets()` | Animator morph targets (blend shapes); see Morph targets |
 | `e:ResetSpringBones()` | Puts the SpringBone chains back on the animated pose, at rest, on the next update; see Spring bones |
 | `e:GetScript()` | The entity's script instance (call its functions, read its fields) |
@@ -1283,7 +1283,15 @@ call PlayAnimation. Play, CrossFade, Blend and PlayBlendSpace unpause playback. 
 clip in Play, CrossFade and Blend. Crossfade duration is scene time, independent of Speed.
 `Speed` and `Looping` updates apply immediately; changing `Mesh` or the configured `Clip`, asset reload,
 or removing/re-adding Animator resets playback according to `PlayOnStart`. With PlayOnStart false,
-the selected clip is held at time 0 until played. Edit mode shows the authored rest pose.
+the selected clip is held at time 0 until played. Edit mode shows the authored rest pose, unless `Preview` is on.
+
+**Edit-mode preview.** With the Animator's `Preview` on, the editor plays it in the scene view while editing (whatever
+`PlayOnStart` says): its clip or
+state machine (at its parameters' defaults), blend spaces at (0, 0), layers (clips and graphs) and inverse kinematics
+(script-free targets: `FollowTarget` chains follow `Target`; foot locks work, ground placement does not, as edit mode has
+no physics). The preview never changes the scene: root motion plays in place (the entity stays where it was
+authored), events are not delivered, and spring bones, ragdolls and bone attachments wait for Play. Component edits
+apply at the next frame; turning `Preview` off returns the rest pose, and Play starts every Animator afresh.
 
 `LODDistance` (default 0, disabled) and `LODInterval` (1–60 updates, default 1) opt into
 pose LOD beyond that world-space distance from the primary scene camera. Without a primary camera,
@@ -1439,25 +1447,44 @@ logged once and leave the entity where it is.
 
 ### Animation layers
 
-`Animator.Layers` plays clips on top of the base playback (a clip, blend, blend space or state machine), in list order:
+`Animator.Layers` plays clips or state machines on top of the base playback (a clip, blend, blend space or state
+machine), in list order:
 
 ```lua
 actor:SetComponent("Animator", { Layers = {
     { Name = "Wave", Clip = "Wave", Mask = { { Joint = "RightUpperArm" } } },
     { Name = "Breathe", Clip = "Breathe", Blend = "Additive", Weight = 0.5 },
+    { Name = "Upper", StateMachine = "Assets/Animations/UpperBody.banimgraph", MaskAsset = "Assets/Masks/UpperBody.banimmask" },
 } })
 actor:SetAnimationLayerWeight("Wave", 0, 0.3) -- fade the wave out over 0.3 s
+actor:SetAnimatorParameter("Aiming", true)  -- reaches every graph declaring "Aiming", the layer's too
 ```
 
 | Field | Meaning |
 |---|---|
 | `Name` | Unique; scripts address the layer by it |
 | `Clip` | The clip the layer plays; empty plays nothing until `PlayAnimationLayer` names one |
+| `StateMachine` | A `.banimgraph` the layer runs on its own instead of `Clip` (an upper-body graph); see below |
 | `Blend` | `"Override"` moves the pose below toward the clip by the weight; `"Additive"` adds the clip's difference from its reference pose |
 | `Weight` | 0..1, the starting weight; a changed value applies at once (and ends a fade) |
 | `Speed`, `Looping` | The layer's own clock: `Speed` 0..100 (not scaled by `Animator.Speed`); a non-looping layer holds its last frame |
-| `ReferenceClip`, `ReferenceTime` | Additive only: the pose the clip is a difference from, `ReferenceClip` (empty: the layer's own clip) at `ReferenceTime` seconds (clamped to the clip) |
+| `ReferenceClip`, `ReferenceTime` | Additive only: the pose the clip is a difference from, `ReferenceClip` (empty: the layer's own clip; required with a `StateMachine`) at `ReferenceTime` seconds (clamped to the clip) |
 | `Mask` | `{ Joint, Weight }` entries (each joint at most once): each joint and its subtree take `Weight` (0..1) unless a deeper entry names one of its descendants; joints under no entry take 0; entries without a `Joint` are ignored. Empty (or only entries without a `Joint`): the whole model at 1 |
+| `MaskAsset` | A `.banimmask` file shared between Animators; when set, its entries replace `Mask`. One that cannot load hides the layer (logged once) |
+
+A mask file holds the same entries as `Mask`: `{ "Joints": [ { "Joint": "Spine", "Weight": 1 }, { "Joint": "LeftHand",
+"Weight": 0.5 } ] }` (at most 64 entries, unique joints, `Weight` 0..1, default 1). Author it with `asset.write`, which
+validates it, as `project.validate` does; edits apply to every layer naming it once the file reloads.
+
+**State machine layers.** A layer with a `StateMachine` plays its own instance of the graph: states (clips or the
+Animator's blend spaces), transitions with exit times, conditions and crossfades, at the layer's `Speed`, under its
+mask and weight. Its parameters and triggers share the Animator's names: `SetAnimatorParameter`/`SetAnimationTrigger`
+reach every graph that declares the name (the base's and each layer's), and succeed when one takes the value (an
+Animator without its own `StateMachine` can drive layer graphs alone); each graph consumes its own triggers. A layer
+graph has no root motion and fires no events. An Override layer moves every channel a clip of any of its graph's states
+animates, so a state that leaves such a channel alone holds it at that clip's rest. `PlayAnimationLayer(layer)` restarts
+the graph at its initial state; `PlayAnimationLayer(layer, clip)` plays the clip instead until `PlayAnimationLayer(layer)`.
+A graph that cannot load, or whose initial state cannot play yet, shows nothing.
 
 A layer changes only the channels (translation, rotation, scale, and morph weights of the mesh nodes it masks) its clip
 animates, on joints its mask weights.
@@ -1475,9 +1502,10 @@ reload).
 
 | Function | Behavior |
 |---|---|
-| `e:PlayAnimationLayer(layer, [clip])` | Restarts the layer at 0, on `clip` when given (until the configured `Clip` changes), otherwise on its configured `Clip`. False, changing nothing, for an unknown layer, an unknown or empty clip name, or when the layer would show nothing (no clip, a missing reference clip) |
+| `e:PlayAnimationLayer(layer, [clip])` | Restarts the layer at 0, on `clip` when given (until the configured `Clip` changes), otherwise on its configured `Clip` (or its `StateMachine`'s initial state). False, changing nothing, for an unknown layer, an unknown or empty clip name, or when the layer would show nothing (no clip, a missing reference clip, mask asset or graph) |
 | `e:SetAnimationLayerWeight(layer, weight, [seconds])` | Fades the weight (0..1) linearly over `seconds` (default 0: at once). False for an unknown layer or an invalid weight or time |
 | `e:GetAnimationLayerWeight(layer)` | The current weight, or nil for an unknown layer |
+| `e:GetAnimationLayerState(layer)` | The current state of a `StateMachine` layer's graph; `""` for a clip layer, while a script clip plays instead, or while the graph cannot load; nil for an unknown layer |
 
 A failing call is logged once per entity, function and layer, whatever values it passes, until the same call
 succeeds; so a script repeating one every frame logs it once. A non-string clip or non-number seconds raise errors. Problems with a layer's configuration (missing clips, reference
@@ -1487,8 +1515,8 @@ clips or mask joints) are logged once when they appear. The inspector and `scene
 
 An `InverseKinematics` component on an Animator's entity bends the animated pose toward targets every frame the scene
 plays or simulates, after physics and `OnLateUpdate` and before attachments and drawing (so attachments follow solved
-hands). Edit mode shows the authored rest pose, without layers or IK. IK weight fades keep running while the Animator is
-paused.
+hands). Edit mode shows the authored rest pose, unless the Animator's `Preview` is on (see Edit-mode preview). IK weight
+fades keep running while the Animator is paused.
 
 ```lua
 actor:AddComponent("InverseKinematics", {
@@ -1498,7 +1526,9 @@ actor:AddComponent("InverseKinematics", {
         { Name = "RightFoot", Joint = "RightFoot", Ground = true },
         { Name = "Head", Type = "LookAt", Joint = "Head", ChainLength = 3, MaxAngle = 70 },
         { Name = "RightHand", Joint = "RightHand", Weight = 0 },
+        { Name = "Tail", Type = "Fabrik", Joint = "TailTip", ChainLength = 6, FollowTarget = true },
     },
+    Target = Scene.FindEntityByName("Bone"):GetID(), -- what FollowTarget chains reach for
 })
 actor:SetIKTarget("Head", Scene.FindEntityByName("Camera")) -- follow an entity
 actor:SetIKTarget("RightHand", lever.WorldPosition, lever.Rotation) -- lever has no parent here
@@ -1508,21 +1538,39 @@ actor:SetIKWeight("RightHand", 1, 0.25)
 | Chain field | Meaning |
 |---|---|
 | `Name` | Unique; scripts address the chain by it |
-| `Type` | `"TwoBone"`: `Joint` is the end of a three-joint chain (foot, hand): its parent bends and its grandparent turns so it reaches the target (and `Joint` turns to a target rotation or the ground). `"LookAt"`: `Joint` and `ChainLength - 1` ancestors turn so `Joint`'s `Axis` points at the target |
-| `Joint` | The end joint (TwoBone) or the aiming joint (LookAt) |
-| `ChainLength` | LookAt: 1..8 joints share the turn, the outermost first, each an equal part of what remains |
+| `Type` | `"TwoBone"`: `Joint` is the end of a three-joint chain (foot, hand): its parent bends and its grandparent turns so it reaches the target (and `Joint` turns to a target rotation or the ground). `"LookAt"`: `Joint` and `ChainLength - 1` ancestors turn so `Joint`'s `Axis` points at the target. `"Fabrik"`: `Joint`'s `ChainLength` ancestors bend (FABRIK) so `Joint` reaches the target (tails, tentacles, three-bone legs), and `Joint` turns to a target rotation or the ground |
+| `Joint` | The end joint (TwoBone, Fabrik) or the aiming joint (LookAt) |
+| `ChainLength` | 1..16. LookAt: joints that share the turn, the outermost first, each an equal part of what remains. Fabrik: the ancestors of `Joint` that bend (the chain's bones) |
 | `Axis` | LookAt: the aiming direction in `Joint`'s local space (default +Z) |
 | `MaxAngle` | LookAt: the largest turn (degrees, 0..180) away from the animated aim; targets beyond it are followed up to it |
-| `Pole` | TwoBone: the direction (in the entity's space) the middle joint bends toward; zero keeps the animated bend (a straight chain then bends toward +Z) |
-| `Ground` | TwoBone (rejected on LookAt): foot placement while no script target is set |
+| `Pole` | TwoBone: the direction (in the entity's space) the middle joint bends toward; zero keeps the animated bend (a straight chain then bends toward +Z). Fabrik: only the side a straight chain starts bending toward |
+| `Ground` | TwoBone, Fabrik (rejected on LookAt): foot placement while no other target is set |
+| `FollowTarget` | Reach for (aim at) the component's `Target` entity's position while no script target is set |
+| `FootLock` | TwoBone, Fabrik (rejected on LookAt): hold the joint where it was planted (see Foot locking) |
 | `Weight` | 0..1, the starting weight; a changed value applies at once |
 
-A TwoBone chain reaches targets within its reach (between the difference and the sum of its bone lengths) and stretches
+| Component field | Meaning |
+|---|---|
+| `Target` | The entity `FollowTarget` chains follow (its world position, every frame); 0 for none. A destroyed one idles them (logged once) |
+| `LockSpeed`, `LockHeight`, `LockDistance` | Foot locking thresholds in meters (and meters per second), 0..100; see Foot locking |
+
+Targets apply in this order: a script target, then `Target` for `FollowTarget` chains, then the ground for `Ground`
+chains. A TwoBone chain reaches targets within its reach (between the difference and the sum of its bone lengths) and stretches
 (or folds) toward others. Without a target rotation the end joint keeps its animated local rotation, so it turns with
 the lower bone. Rotations blend from the animated pose by the chain's weight, and chains solve in list order (a hand
 after a spine look-at reaches from the turned spine). Every frame solves from the animated pose (layers included),
 never from the last solution. Parent joints are treated as rigid: under a non-uniformly scaled parent the result is
-approximate.
+approximate. A Fabrik chain starts from the animated pose (so it keeps the animated bend, and a straight chain bends
+toward `Pole`, else +Z), iterates up to 32 times until its end is within 0.01% of the chain's length of the target,
+and stretches straight toward targets beyond its reach. It has no joint limits.
+
+**Foot locking.** A `FootLock` chain whose joint follows its animation (or the ground: no script or `FollowTarget`
+target) locks while the animated joint's world speed is below `LockSpeed` (default 0.5 m/s), as a planted foot stands
+still in the world while the character moves over it, and holds the joint at that world position: the animation
+cannot slide it. It releases when the animation lifts the joint `LockHeight` (default 0.05 m) above its height when it
+locked, while the character is not grounded, or at once when the animated joint gets `LockDistance` (default 0.3 m)
+away (a teleport, or a stride the lock cannot follow). Locking and releasing ease with `Smoothing`. A script target
+releases the lock until it is cleared. `IsIKFootLocked` reports the lock (footstep sounds).
 
 **Foot placement.** For each `Ground` chain a ray is cast down the entity's up axis under the animated joint, from
 `RayHeight` above the plane through the entity's origin to `RayDepth` below it (meters, defaults 0.5; their sum must be
@@ -1544,6 +1592,7 @@ are not ground either. While that CharacterController is not grounded, feet ease
 | `e:ClearIKTarget(chain)` | Removes the target: the chain idles, or a Ground chain places its foot again (snapping to the ground) |
 | `e:SetIKWeight(chain, weight, [seconds])` | Fades the weight (0..1) linearly over `seconds` (default 0) |
 | `e:GetIKWeight(chain)` | The current weight, or nil for an unknown chain |
+| `e:IsIKFootLocked(chain)` | Whether a `FootLock` chain holds its joint (false for other chains), or nil for an unknown chain |
 
 The functions raise errors on an entity without an InverseKinematics component and for wrongly typed arguments. An
 unknown chain or an invalid value returns false, logged once per entity, function and chain, whatever values it passes,

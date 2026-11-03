@@ -1,6 +1,7 @@
 #include "Basalt/Animation/AnimationSystem.h"
 
 #include "Basalt/Animation/AnimatedModel.h"
+#include "Basalt/Animation/AnimationMask.h"
 #include "Basalt/Animation/AnimationPose.h"
 #include "Basalt/Animation/BlendSpace.h"
 #include "Basalt/Animation/InverseKinematics.h"
@@ -145,8 +146,9 @@ namespace Basalt {
 		}
 	}
 
-	AnimationSystem::AnimationSystem(Scene& scene)
+	AnimationSystem::AnimationSystem(Scene& scene, bool preview)
 		: m_Scene(scene)
+		, m_Preview(preview)
 	{
 		m_Scene.GetRegistry().on_destroy<AnimatorComponent>().connect<&AnimationSystem::OnDestroy>(*this);
 		m_Scene.GetRegistry().on_destroy<InverseKinematicsComponent>().connect<&AnimationSystem::OnIKDestroy>(*this);
@@ -285,6 +287,12 @@ namespace Basalt {
 		const auto* component = entity ? entity.TryGetComponent<AnimatorComponent>() : nullptr;
 		if (!component)
 			return nullptr;
+		// A preview leaves Animators without Preview on their rest pose (the edit scene draws them itself).
+		if (m_Preview && !component->Preview)
+		{
+			DropPlayback(entity.GetUUID());
+			return nullptr;
+		}
 		if (component->Mesh.empty())
 		{
 			if (m_EmptyMeshes.emplace(entity, true).second)
@@ -354,7 +362,9 @@ namespace Basalt {
 					playback.PendingStart = component->Clip;
 				}
 			}
-			playback.Playing = component->PlayOnStart && (playback.Clip >= 0 || playback.Space);
+			// A preview plays whatever PlayOnStart says, like a particle preview.
+			const bool playOnStart = component->PlayOnStart || m_Preview;
+			playback.Playing = playOnStart && (playback.Clip >= 0 || playback.Space);
 			if (!component->StateMachine.empty())
 			{
 				playback.Playing = false;
@@ -373,8 +383,8 @@ namespace Basalt {
 					playback.StateProblems.resize(graph->States.size());
 					playback.Control = GraphControl::Active;
 					EnterState(playback, graph->InitialStateIndex, *component, 0);
-					playback.Paused = !component->PlayOnStart;
-					playback.Playing = playback.Playing && component->PlayOnStart;
+					playback.Paused = !playOnStart;
+					playback.Playing = playback.Playing && playOnStart;
 				}
 			}
 			Evaluate(playback);
@@ -504,6 +514,14 @@ namespace Basalt {
 
 	void AnimationSystem::Evaluate(Playback& playback)
 	{
+		SampleBase(playback);
+		// A layer graph's owner blends its Local in (Finish) and composes the pose.
+		if (!playback.IsLayer)
+			Finish(playback);
+	}
+
+	void AnimationSystem::SampleBase(Playback& playback)
+	{
 		if (playback.Space && !playback.Rest)
 		{
 			// Every clip at the same phase of its own duration, weighted by the sample weights.
@@ -542,7 +560,6 @@ namespace Basalt {
 			}
 			BlendAnimationPose(playback.Local, from, playback.BlendWeight);
 		}
-		Finish(playback);
 	}
 
 	void AnimationSystem::Finish(Playback& playback)
@@ -554,7 +571,10 @@ namespace Basalt {
 		for (LayerState& layer : playback.Layers)
 		{
 			const float weight = layer.Weight.Get();
-			if (!layer.Resolved || layer.Resolved->Clip < 0 || weight <= 0)
+			if (!layer.Resolved || !layer.Resolved->Shows() || weight <= 0)
+				continue;
+			// A graph whose initial state cannot play yet shows nothing (rather than its rest pose).
+			if (layer.Resolved->Graph && (layer.Graph.empty() || !layer.Graph.front().StateIndex))
 				continue;
 			LayerResolution& resolved = *layer.Resolved;
 			if (rootNode >= 0 && resolved.RootMaskNode != rootNode)
@@ -576,11 +596,21 @@ namespace Basalt {
 				layer.RootProblem = std::move(problem);
 			}
 			const AnimationLayerMask& mask = rootNode >= 0 ? resolved.RootMask : resolved.Mask;
-			const AnimationLocalPose sample = SampleAnimation(source, &(*playback.Clips)[resolved.Clip], static_cast<float>(layer.Time));
-			if (resolved.Key.Blend == AnimationLayerBlend::Additive)
-				AddAnimationPose(playback.Pose, sample, resolved.Reference, mask, weight);
+			AnimationLocalPose clipSample;
+			const AnimationLocalPose* sample = &clipSample;
+			if (resolved.Graph)
+			{
+				// The graph belongs to this playback alone, so sampling it here stays within this pose job.
+				Playback& graph = layer.Graph.front();
+				SampleBase(graph);
+				sample = &graph.Local;
+			}
 			else
-				OverrideAnimationPose(playback.Pose, sample, mask, weight);
+				clipSample = SampleAnimation(source, &(*playback.Clips)[resolved.Clip], static_cast<float>(layer.Time));
+			if (resolved.Key.Blend == AnimationLayerBlend::Additive)
+				AddAnimationPose(playback.Pose, *sample, resolved.Reference, mask, weight);
+			else
+				OverrideAnimationPose(playback.Pose, *sample, mask, weight);
 		}
 		const auto composes = [&](const AnimationLocalPose& pose) { return ComposeAnimationPose(source, pose, playback.Globals) && SkinPalettesFinite(source, playback.Globals); };
 		bool valid;
@@ -674,6 +704,26 @@ namespace Basalt {
 
 		m_PoseJobs.clear();
 		m_LibrarySources.clear();
+		// Layer assets resolve once per update, like the Animators' models and graphs; script calls between updates see edits
+		// and reloads at once.
+		struct LayerAssetCache
+		{
+			explicit LayerAssetCache(AnimationSystem& system)
+				: System(system)
+			{
+				System.m_CacheLayerAssets = true;
+			}
+			~LayerAssetCache()
+			{
+				System.m_CacheLayerAssets = false;
+				System.m_LayerGraphs.clear();
+				System.m_LayerMasks.clear();
+			}
+			LayerAssetCache(const LayerAssetCache&) = delete;
+			LayerAssetCache& operator=(const LayerAssetCache&) = delete;
+			AnimationSystem& System;
+		};
+		std::optional<LayerAssetCache> layerAssets(std::in_place, *this);
 		// Sets no playback uses any more (their Animators changed or went away).
 		std::erase_if(m_ClipSets, [](const Ref<const AnimationClipSet>& clips) { return clips.use_count() == 1; });
 		std::optional<glm::vec3> cameraPosition;
@@ -687,6 +737,12 @@ namespace Basalt {
 		{
 			Entity entity(handle, &m_Scene);
 			const auto& component = entity.GetComponent<AnimatorComponent>();
+			// Before resolving assets: a preview skips every Animator that does not ask for one.
+			if (m_Preview && !component.Preview)
+			{
+				DropPlayback(entity.GetUUID());
+				continue;
+			}
 			auto [source, firstSource] = sources.try_emplace(component.Mesh);
 			if (firstSource && !component.Mesh.empty())
 				source->second = AssetManager::GetMesh(component.Mesh);
@@ -739,7 +795,7 @@ namespace Basalt {
 				if (FindSpace(component, playback->PendingStart))
 				{
 					ResolveSpace(*playback, playback->Space.emplace(SpaceState{ .Name = playback->PendingStart }), component);
-					playback->Playing = component.PlayOnStart;
+					playback->Playing = component.PlayOnStart || m_Preview;
 					playback->PendingStart.clear();
 				}
 			}
@@ -748,7 +804,7 @@ namespace Basalt {
 			// Layers play on while the base holds its pose.
 			const bool layered = !component.Layers.empty() || !playback->Layers.empty();
 			if (layered)
-				AdvanceLayers(*playback, component, playback->Paused ? 0.0 : static_cast<double>(seconds));
+				AdvanceLayers(*playback, component, playback->Paused ? 0.0 : static_cast<double>(seconds), !playback->Paused);
 			// Script morph weights fade like IK weights, also while the Animator is paused or stopped.
 			bool morphFading = false;
 			for (MorphOverride& entry : playback->MorphOverrides)
@@ -834,7 +890,8 @@ namespace Basalt {
 			const double cycleDuration = CycleDuration(*playback);
 			if (cycleDuration > 0)
 				playback->StatePhase += advance / cycleDuration;
-			if (motion)
+			// A preview keeps the entity where it was authored: the extracted root motion goes nowhere.
+			if (motion && !m_Preview)
 				ApplyRootMotion(entity, *playback, *motion, seconds);
 			const bool finished = playback->Space ? playback->Space->Phase >= 1 : playback->Time >= (*playback->Clips)[playback->Clip].Duration;
 			// Time clamps exactly to Duration; summed phase fractions can finish just below 1.
@@ -846,6 +903,7 @@ namespace Basalt {
 			if (evaluatePose || !playback->Playing)
 				m_PoseJobs.push_back({ playback, true });
 		}
+		layerAssets.reset();
 		const auto evaluate = [&](uint32_t begin, uint32_t end) {
 			for (uint32_t i = begin; i < end; ++i)
 			{
@@ -897,8 +955,12 @@ namespace Basalt {
 		if (std::isfinite(seconds) && seconds >= 0)
 		{
 			SolveIK(seconds);
-			SolveSprings(seconds);
+			// Spring bones, ragdolls and attachments wait for Play in a preview (attachments would move edit entities).
+			if (!m_Preview)
+				SolveSprings(seconds);
 		}
+		if (m_Preview)
+			return;
 		ApplyRagdolls();
 		UpdateAttachments();
 	}
@@ -922,7 +984,8 @@ namespace Basalt {
 
 	void AnimationSystem::CollectEvents(Playback& playback, const AnimatorComponent& component, int32_t clip, double from, double advance, UUID id, size_t& budget, bool looping)
 	{
-		if (advance <= 0 || component.Events.empty())
+		// A preview runs no scripts to receive events.
+		if (advance <= 0 || component.Events.empty() || m_Preview)
 			return;
 		const AnimationClip& animation = (*playback.Clips)[clip];
 		const double duration = animation.Duration;
@@ -1135,6 +1198,12 @@ namespace Basalt {
 
 	bool AnimationSystem::ResolveRootNode(Playback& playback, const AnimatorComponent& component)
 	{
+		// Layers leave root motion to the base playback.
+		if (playback.IsLayer)
+		{
+			playback.RootMotion = false;
+			return false;
+		}
 		const bool oldEnabled = playback.RootMotion;
 		const auto* state = playback.Control == GraphControl::Active && playback.StateIndex ? &playback.Graph->States[*playback.StateIndex] : nullptr;
 		playback.RootMotion = component.RootMotion && (playback.Control != GraphControl::Active || (state && state->RootMotion));
@@ -1398,6 +1467,31 @@ namespace Basalt {
 		if (!playback)
 			return false;
 		const size_t typeIndex = static_cast<size_t>(type);
+		// StateMachine layers share the Animator's parameter names: the value reaches every graph that declares it.
+		AdvanceLayers(*playback, entity.GetComponent<AnimatorComponent>(), 0, false);
+		bool layerSet = false;
+		std::string layerMismatch;
+		std::vector<std::string> layerNames;
+		if (std::isfinite(value))
+			for (LayerState& layer : playback->Layers)
+			{
+				if (layer.Graph.empty())
+					continue;
+				Playback& graph = layer.Graph.front();
+				const auto& parameters = graph.Graph->Parameters;
+				const auto it = std::ranges::find(parameters, name, &AnimationParameter::Name);
+				for (const auto& parameter : parameters)
+					layerNames.push_back(parameter.Name);
+				if (it == parameters.end())
+					continue;
+				if (it->Type != type)
+					layerMismatch = fmt::format("type mismatch in layer '{}': expected {}, got {}", layer.Name, ParameterTypeName(it->Type), ParameterTypeName(type));
+				else
+				{
+					graph.Parameters[static_cast<size_t>(it - parameters.begin())] = value;
+					layerSet = true;
+				}
+			}
 		std::optional<size_t> index;
 		if (playback->Graph)
 		{
@@ -1407,14 +1501,28 @@ namespace Basalt {
 				index = static_cast<size_t>(it - parameters.begin());
 		}
 		std::string problem;
-		if (playback->ConfiguredGraph.empty())
-			problem = "Animator has no StateMachine";
+		if (!std::isfinite(value))
+			problem = "value must be finite";
+		else if (playback->ConfiguredGraph.empty())
+		{
+			if (!layerSet)
+			{
+				if (!layerMismatch.empty())
+					problem = layerMismatch;
+				else if (layerNames.empty())
+					problem = "Animator has no StateMachine";
+				else
+				{
+					problem = "unknown name; declared parameters:";
+					for (const auto& declared : layerNames)
+						problem += " " + declared;
+				}
+			}
+		}
 		else if (!playback->Graph)
 			problem = "state machine is not loaded: " + AssetManager::GetError(playback->ConfiguredGraph);
 		else if (playback->Control != GraphControl::Active)
 			problem = playback->Control == GraphControl::Stopped ? "state machine was stopped" : "direct playback took control of the state machine";
-		else if (!std::isfinite(value))
-			problem = "value must be finite";
 		else
 		{
 			const auto& parameters = playback->Graph->Parameters;
@@ -1423,6 +1531,8 @@ namespace Basalt {
 				problem = "unknown name; declared parameters:";
 				for (const auto& parameter : parameters)
 					problem += " " + parameter.Name;
+				for (const auto& declared : layerNames)
+					problem += " " + declared;
 			}
 			else if (parameters[*index].Type != type)
 				problem = fmt::format("type mismatch: expected {}, got {}", ParameterTypeName(parameters[*index].Type), ParameterTypeName(type));
@@ -1432,6 +1542,15 @@ namespace Basalt {
 				playback->ParameterProblems[*index][typeIndex].clear();
 				return true;
 			}
+		}
+		// A layer graph took the value: the base graph not declaring it (or not running) is no problem.
+		if (layerSet)
+		{
+			if (index)
+				playback->ParameterProblems[*index][typeIndex].clear();
+			else
+				playback->UnknownParameterProblems[typeIndex].clear();
+			return true;
 		}
 		auto& reported = index ? playback->ParameterProblems[*index][typeIndex] : playback->UnknownParameterProblems[typeIndex];
 		const std::string diagnostic = index ? problem : name + ": " + problem;
@@ -1927,42 +2046,114 @@ namespace Basalt {
 		return std::clamp(value, low, high);
 	}
 
-	bool AnimationSystem::LayerKey::Matches(const AnimationLayer& config, const std::string& clip) const
+	bool AnimationSystem::LayerKey::Matches(const AnimationLayer& config, const std::string& clip, const std::string& stateMachine, const LayerAssets& assets) const
 	{
 		const auto same = [](float a, float b) { return a == b || (std::isnan(a) && std::isnan(b)); };
-		return Clip == clip && Blend == config.Blend && ReferenceClip == config.ReferenceClip && same(ReferenceTime, config.ReferenceTime) &&
+		return Clip == clip && StateMachine == stateMachine && Blend == config.Blend && ReferenceClip == config.ReferenceClip && same(ReferenceTime, config.ReferenceTime) &&
+			   MaskAsset == config.MaskAsset && Assets.Graph == assets.Graph && Assets.Mask == assets.Mask &&
 			   std::ranges::equal(Mask, config.Mask, [&](const AnimationMaskJoint& a, const AnimationMaskJoint& b) { return a.Joint == b.Joint && same(a.Weight, b.Weight); });
 	}
 
-	const AnimationSystem::LayerResolution& AnimationSystem::ResolveLayer(Playback& playback, const AnimationLayer& config, LayerState& state)
+	AnimationSystem::LayerAssets AnimationSystem::ResolveLayerAssets(const AnimationLayer& config, const LayerState& state)
+	{
+		LayerAssets assets;
+		const auto resolve = [&](auto& cache, const std::string& key, auto load) {
+			if (!m_CacheLayerAssets)
+				return load(key);
+			auto [entry, added] = cache.try_emplace(key);
+			if (added)
+				entry->second = load(key);
+			return entry->second;
+		};
+		// A script clip replaces the graph, which then stays unloaded.
+		if (!config.StateMachine.empty() && !state.ScriptClip)
+			assets.Graph = resolve(m_LayerGraphs, config.StateMachine, [](const std::string& key) { return AssetManager::GetAnimationGraph(key); });
+		if (!config.MaskAsset.empty())
+			assets.Mask = resolve(m_LayerMasks, config.MaskAsset, [](const std::string& key) { return AssetManager::GetAnimationMask(key); });
+		return assets;
+	}
+
+	const AnimationSystem::LayerResolution& AnimationSystem::ResolveLayer(Playback& playback, const AnimationLayer& config, LayerState& state, const AnimatorComponent& component)
 	{
 		const std::string& clip = state.ScriptClip ? *state.ScriptClip : config.Clip;
-		if (state.Resolved && state.Resolved->Key.Matches(config, clip))
+		const std::string& stateMachine = state.ScriptClip ? std::string() : config.StateMachine;
+		const LayerAssets assets = ResolveLayerAssets(config, state);
+		if (state.Resolved && state.Resolved->Key.Matches(config, clip, stateMachine, assets))
 			return *state.Resolved;
 		const MeshSource& source = *playback.Source;
 		// Built as a value and moved in: Clang with libstdc++ rejects optional::emplace() for a nested struct with default
 		// member initializers.
-		LayerResolution resolved{ .Key = { clip, config.Blend, config.ReferenceClip, config.ReferenceTime, config.Mask } };
+		LayerResolution resolved{ .Key = { clip, stateMachine, config.Blend, config.ReferenceClip, config.ReferenceTime, config.Mask, config.MaskAsset, assets } };
 		std::vector<std::string> problems;
 		if (static_cast<size_t>(config.Blend) >= AnimationLayerBlendCount)
 			problems.push_back(fmt::format("Blend {} is not a blend mode; using Override", static_cast<int>(config.Blend)));
-		// Unlike the base Clip, an empty layer Clip plays nothing.
-		resolved.Clip = clip.empty() ? -1 : FindClip(*playback.Clips, clip);
-		if (!clip.empty() && resolved.Clip < 0)
-			problems.push_back(fmt::format("clip '{}' not found in {}", clip, DescribeClipSources(playback)));
+		std::vector<uint8_t> channels(source.Nodes.size(), 0);
+		if (!stateMachine.empty())
+		{
+			// The graph replaces Clip.
+			if (!assets.Graph)
+				problems.push_back(fmt::format("cannot load state machine '{}': {}", stateMachine, AssetManager::GetError(stateMachine)));
+			else
+			{
+				resolved.Graph = true;
+				// Every clip a state can play: the layer moves those channels, whichever state shows.
+				const auto addChannels = [&](int32_t index) {
+					if (index < 0)
+						return;
+					const std::vector<uint8_t> animated = AnimatedChannels(source, (*playback.Clips)[index]);
+					for (size_t node = 0; node < channels.size(); node++)
+						channels[node] |= animated[node];
+				};
+				for (const AnimationState& graphState : assets.Graph->States)
+				{
+					if (graphState.BlendSpace.empty())
+						addChannels(FindClip(*playback.Clips, graphState.Clip));
+					else if (const AnimationBlendSpace* space = FindSpace(component, graphState.BlendSpace))
+						for (const AnimationBlendSample& sample : space->Samples)
+							addChannels(FindClip(*playback.Clips, sample.Clip));
+				}
+			}
+		}
+		else
+		{
+			// Unlike the base Clip, an empty layer Clip plays nothing.
+			resolved.Clip = clip.empty() ? -1 : FindClip(*playback.Clips, clip);
+			if (!clip.empty() && resolved.Clip < 0)
+				problems.push_back(fmt::format("clip '{}' not found in {}", clip, DescribeClipSources(playback)));
+			if (resolved.Clip >= 0)
+				channels = AnimatedChannels(source, (*playback.Clips)[resolved.Clip]);
+		}
+		// A mask asset replaces the inline mask; one that cannot load hides the layer rather than showing it everywhere.
+		const std::vector<AnimationMaskJoint>* mask = &config.Mask;
+		if (!config.MaskAsset.empty())
+		{
+			if (assets.Mask)
+				mask = &assets.Mask->Joints;
+			else
+			{
+				problems.push_back(fmt::format("cannot load mask '{}': {}", config.MaskAsset, AssetManager::GetError(config.MaskAsset)));
+				resolved.Clip = -1;
+				resolved.Graph = false;
+			}
+		}
 		std::vector<std::string> missing;
-		resolved.Mask.Weights = AnimationMaskWeights(source, config.Mask, missing);
+		resolved.Mask.Weights = AnimationMaskWeights(source, *mask, missing);
 		if (!missing.empty())
 			problems.push_back(fmt::format("mask joint{} {} not found in '{}'", missing.size() > 1 ? "s" : "", fmt::join(missing, ", "), source.Key));
-		resolved.Mask.Channels = resolved.Clip >= 0 ? AnimatedChannels(source, (*playback.Clips)[resolved.Clip]) : std::vector<uint8_t>(source.Nodes.size(), 0);
+		resolved.Mask.Channels = std::move(channels);
 		MorphMaskWeights(source, resolved.Mask);
-		if (config.Blend == AnimationLayerBlend::Additive && resolved.Clip >= 0)
+		if (config.Blend == AnimationLayerBlend::Additive && resolved.Shows())
 		{
 			const int32_t reference = config.ReferenceClip.empty() ? resolved.Clip : FindClip(*playback.Clips, config.ReferenceClip);
 			if (reference < 0)
 			{
-				problems.push_back(fmt::format("reference clip '{}' not found in {}", config.ReferenceClip, DescribeClipSources(playback)));
+				// A graph has no single clip of its own to be a difference from.
+				if (resolved.Graph && config.ReferenceClip.empty())
+					problems.emplace_back("an Additive layer with a StateMachine needs a ReferenceClip");
+				else
+					problems.push_back(fmt::format("reference clip '{}' not found in {}", config.ReferenceClip, DescribeClipSources(playback)));
 				resolved.Clip = -1;
+				resolved.Graph = false;
 			}
 			else
 			{
@@ -1989,7 +2180,79 @@ namespace Basalt {
 		return *state.Resolved;
 	}
 
-	void AnimationSystem::AdvanceLayers(Playback& playback, const AnimatorComponent& component, double seconds)
+	bool AnimationSystem::SyncLayerGraph(const Playback& playback, const AnimationLayer& config, LayerState& state, const AnimatorComponent& component, bool restart)
+	{
+		if (!state.Resolved || !state.Resolved->Graph)
+		{
+			state.Graph.clear();
+			return false;
+		}
+		const Ref<const AnimationGraph>& graph = state.Resolved->Key.Assets.Graph;
+		if (!restart && !state.Graph.empty())
+		{
+			const Playback& current = state.Graph.front();
+			if (current.Graph == graph && current.Source == playback.Source && current.Clips == playback.Clips)
+				return true;
+		}
+		state.Graph.clear();
+		Playback& nested = state.Graph.emplace_back();
+		nested.IsLayer = true;
+		nested.Handle = playback.Handle;
+		// Messages read "Animator '<entity>' layer '<layer>': ...".
+		nested.EntityName = fmt::format("{}' layer '{}", playback.EntityName, config.Name);
+		nested.Source = playback.Source;
+		nested.Clips = playback.Clips;
+		nested.Graph = graph;
+		nested.ConfiguredGraph = config.StateMachine;
+		for (const AnimationParameter& parameter : graph->Parameters)
+		{
+			nested.Parameters.push_back(parameter.Default);
+			nested.ParameterProblems.emplace_back();
+		}
+		nested.StateProblems.resize(graph->States.size());
+		nested.Control = GraphControl::Active;
+		EnterState(nested, graph->InitialStateIndex, component, 0);
+		return true;
+	}
+
+	void AnimationSystem::AdvanceLayerGraph(Playback& graph, const AnimatorComponent& component, double seconds, double speed, bool transitions)
+	{
+		// UpdateGraph also retries an initial state that could not play.
+		if (transitions)
+			UpdateGraph(graph, component);
+		if (!graph.StateIndex || seconds <= 0)
+			return;
+		const double advance = seconds * speed;
+		if (graph.Space)
+		{
+			SpaceState& space = *graph.Space;
+			if (space.Resolved && space.Duration > 0)
+				space.Phase = WrapClock(space.Phase + advance / space.Duration, 1.0, graph.Looping);
+			else if (space.Resolved && !graph.Looping && advance > 0)
+				space.Phase = 1;
+			graph.Time = space.Phase * space.Duration;
+		}
+		else if (graph.Clip >= 0)
+			graph.Time = WrapClock(graph.Time + advance, (*graph.Clips)[graph.Clip].Duration, graph.Looping);
+		if (graph.Outgoing.Clip >= 0)
+			graph.Outgoing.Time = WrapClock(graph.Outgoing.Time + advance, (*graph.Clips)[graph.Outgoing.Clip].Duration, graph.Outgoing.Looping);
+		if (graph.FadeDuration > 0)
+		{
+			graph.FadeTime += seconds;
+			graph.BlendWeight = static_cast<float>(std::min(graph.FadeTime / graph.FadeDuration, 1.0));
+			if (graph.BlendWeight >= 1)
+				ClearTransition(graph);
+		}
+		const double cycleDuration = CycleDuration(graph);
+		if (cycleDuration > 0)
+			graph.StatePhase += advance / cycleDuration;
+		const bool finished = graph.Space ? graph.Space->Phase >= 1 : (graph.Clip >= 0 && graph.Time >= (*graph.Clips)[graph.Clip].Duration);
+		// As for the base: exit times see a finished non-looping state as complete.
+		if (!graph.Looping && finished && cycleDuration > 0)
+			graph.StatePhase = std::max(graph.StatePhase, 1.0);
+	}
+
+	void AnimationSystem::AdvanceLayers(Playback& playback, const AnimatorComponent& component, double seconds, bool transitions)
 	{
 		std::vector<LayerState> layers;
 		layers.reserve(component.Layers.size());
@@ -2025,9 +2288,11 @@ namespace Basalt {
 				state.ScriptClip.reset();
 				state.Time = 0;
 			}
-			const int32_t clip = ResolveLayer(playback, config, state).Clip;
-			if (clip >= 0 && seconds > 0)
-				state.Time = WrapClock(state.Time + seconds * speed, (*playback.Clips)[clip].Duration, config.Looping);
+			const LayerResolution& resolved = ResolveLayer(playback, config, state, component);
+			if (SyncLayerGraph(playback, config, state, component, false))
+				AdvanceLayerGraph(state.Graph.front(), component, seconds, speed, transitions);
+			else if (resolved.Clip >= 0 && seconds > 0)
+				state.Time = WrapClock(state.Time + seconds * speed, (*playback.Clips)[resolved.Clip].Duration, config.Looping);
 			state.Weight.Advance(static_cast<float>(seconds));
 			layers.push_back(std::move(state));
 		}
@@ -2036,7 +2301,7 @@ namespace Basalt {
 
 	AnimationSystem::LayerState* AnimationSystem::FindLayer(Entity entity, Playback& playback, const std::string& layer, const char* operation)
 	{
-		AdvanceLayers(playback, entity.GetComponent<AnimatorComponent>(), 0);
+		AdvanceLayers(playback, entity.GetComponent<AnimatorComponent>(), 0, false);
 		if (auto found = std::ranges::find(playback.Layers, layer, &LayerState::Name); found != playback.Layers.end())
 			return &*found;
 		// Unknown names share one slot per operation (see ReportCallProblem).
@@ -2069,10 +2334,20 @@ namespace Basalt {
 		LayerState previous = *state;
 		state->ScriptClip = clip;
 		state->Time = 0;
-		if (ResolveLayer(*playback, config, *state).Clip < 0)
+		const bool shows = ResolveLayer(*playback, config, *state, component).Shows();
+		// Without a clip a StateMachine layer starts its graph over.
+		if (shows)
+			SyncLayerGraph(*playback, config, *state, component, true);
+		if (!shows || (state->Resolved->Graph && !state->Graph.front().StateIndex))
 		{
-			// The configuration problem itself was logged when the layer resolved.
-			std::string problem = state->Problem.empty() ? fmt::format("layer '{}' has no Clip; pass one to PlayAnimationLayer", layer) : fmt::format("layer '{}' shows nothing with this clip (see its configuration warning)", layer);
+			// The configuration (or graph state) problem itself was logged when the layer resolved (or entered the state).
+			std::string problem;
+			if (shows)
+				problem = fmt::format("layer '{}': its state machine's initial state cannot play (see its warning)", layer);
+			else if (state->Problem.empty())
+				problem = fmt::format("layer '{}' has no Clip; pass one to PlayAnimationLayer", layer);
+			else
+				problem = fmt::format("layer '{}' shows nothing with this clip (see its configuration warning)", layer);
 			*state = std::move(previous);
 			ReportLayerCall(entity, operation, layer, problem);
 			return false;
@@ -2112,6 +2387,20 @@ namespace Basalt {
 			return std::nullopt;
 		ReportLayerCall(entity, operation, {}, {});
 		return state->Weight.Get();
+	}
+
+	std::optional<std::string> AnimationSystem::GetLayerState(Entity entity, const std::string& layer)
+	{
+		constexpr const char* operation = "GetAnimationLayerState";
+		auto* playback = EnsurePlayable(entity);
+		LayerState* state = playback ? FindLayer(entity, *playback, layer, operation) : nullptr;
+		if (!state)
+			return std::nullopt;
+		ReportLayerCall(entity, operation, {}, {});
+		if (state->Graph.empty() || !state->Graph.front().StateIndex)
+			return std::string();
+		const Playback& graph = state->Graph.front();
+		return graph.Graph->States[*graph.StateIndex].Name;
 	}
 
 	std::vector<AnimationEventRecord> AnimationSystem::TakeEvents()

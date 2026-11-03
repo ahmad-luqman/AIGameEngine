@@ -3,6 +3,7 @@
 #include "AnimationTestUtils.h"
 #include "TestUtils.h"
 
+#include <Basalt/Animation/AnimationMask.h>
 #include <Basalt/Animation/AnimationPose.h>
 #include <Basalt/Animation/FadingWeight.h>
 #include <Basalt/Animation/AnimationSystem.h>
@@ -660,5 +661,221 @@ TEST_SUITE("Animation")
 		CHECK(hips[1] == doctest::Approx(hips[0]));
 		// After the fade nothing extracts root motion and the layer moves the hips.
 		CHECK(settled[1] != doctest::Approx(settled[0]));
+	}
+}
+
+namespace {
+	// An upper-body graph: Lean until Waving, then Wave (instant transitions unless `fade`), with a Nod trigger back.
+	json UpperBodyGraph(float fade = 0)
+	{
+		return {
+			{ "InitialState", "Lean" },
+			{ "Parameters", json::array({ { { "Name", "Waving" }, { "Type", "Bool" } }, { { "Name", "Nod" }, { "Type", "Trigger" } } }) },
+			{ "States", json::array({ { { "Name", "Lean" }, { "Clip", "Lean" } }, { { "Name", "Wave" }, { "Clip", "Wave" } } }) },
+			{ "Transitions", json::array({ { { "From", "Lean" }, { "To", "Wave" }, { "Duration", fade }, { "Conditions", json::array({ { { "Parameter", "Waving" }, { "Value", true } } }) } },
+										   { { "From", "Wave" }, { "To", "Lean" }, { "Duration", 0 }, { "Conditions", json::array({ { { "Parameter", "Nod" } } }) } } }) },
+		};
+	}
+	AnimationLayer GraphLayer(const std::string& name, const std::string& graph)
+	{
+		AnimationLayer layer = Layer(name, "");
+		layer.StateMachine = graph;
+		return layer;
+	}
+}
+
+TEST_SUITE("Animation")
+{
+	TEST_CASE("Animation mask files parse strictly and round-trip")
+	{
+		std::string error;
+		const auto mask = AnimationMask::FromJson(json::parse(R"({ "Joints": [ { "Joint": "Spine" }, { "Joint": "Head", "Weight": 0.25 } ] })"), error);
+		REQUIRE_MESSAGE(mask, error);
+		CHECK(mask->Joints == std::vector<AnimationMaskJoint>{ { "Spine", 1.0f }, { "Head", 0.25f } });
+		const auto again = AnimationMask::FromJson(mask->ToJson(), error);
+		REQUIRE(again);
+		CHECK(again->Joints == mask->Joints);
+		CHECK(AnimationMask::IsMaskFile("Assets/Masks/Upper.BANIMMASK"));
+		CHECK_FALSE(AnimationMask::IsMaskFile("Assets/Masks/Upper.banimgraph"));
+
+		json tooMany = { { "Joints", json::array() } };
+		for (uint32_t i = 0; i <= AnimationLayer::MaxMaskJoints; i++)
+			tooMany["Joints"].push_back({ { "Joint", "J" + std::to_string(i) } });
+		const std::pair<json, const char*> invalid[] = {
+			{ json::array(), "must be an object" },
+			{ { { "Joints", json::array() }, { "Extra", 1 } }, "unknown key 'Extra'" },
+			{ json::object(), "Joints must be an array" },
+			{ tooMany, "at most 64 entries" },
+			{ { { "Joints", { { { "Weight", 1 } } } } }, "Joints[0].Joint must be a nonempty string" },
+			{ { { "Joints", { { { "Joint", "" } } } } }, "Joints[0].Joint must be a nonempty string" },
+			{ { { "Joints", { { { "Joint", "A" } }, { { "Joint", "A" } } } } }, "Joints[1].Joint 'A' is listed twice" },
+			{ { { "Joints", { { { "Joint", "A" }, { "Weight", 1.5 } } } } }, "Joints[0].Weight must be a number between 0 and 1" },
+			{ { { "Joints", { { { "Joint", "A" }, { "Weight", "1" } } } } }, "Joints[0].Weight must be a number between 0 and 1" },
+			{ { { "Joints", { { { "Joint", "A" }, { "Side", "L" } } } } }, "Joints[0]: unknown key 'Side'" },
+			{ { { "Joints", { 3 } } }, "Joints[0] must be an object" },
+		};
+		for (const auto& [data, message] : invalid)
+		{
+			INFO(data.dump());
+			CHECK_FALSE(AnimationMask::FromJson(data, error));
+			CHECK(error.find(message) != std::string::npos);
+		}
+	}
+
+	TEST_CASE("Mask assets replace the inline mask, reload with their file and hide layers they cannot load")
+	{
+		ClearAssetCache clear;
+		TempProject project("MaskAssets");
+		const auto source = LoadBiped();
+		const std::string maskPath = project.WriteFile("Assets/Masks/Forearm.banimmask", R"({ "Joints": [ { "Joint": "RightForeArm" } ] })");
+		Scene scene;
+		auto biped = AddBiped(scene);
+		// The inline mask names the upper arm; the asset (only the forearm) replaces it.
+		AnimationLayer wave = Layer("Wave", "Wave", AnimationLayerBlend::Override, { { "RightUpperArm", 1.0f } });
+		wave.MaskAsset = maskPath;
+		biped.GetComponent<AnimatorComponent>().Layers = { wave };
+		scene.OnRuntimeStart();
+		auto& system = *scene.GetAnimationSystem();
+		system.Update(0.5f);
+		CHECK(NearRotation(LocalRotation(system, biped, *source, "RightForeArm"), AxisAngle(Z, -30)));
+		CHECK(NearRotation(LocalRotation(system, biped, *source, "RightUpperArm"), glm::quat(1, 0, 0, 0)));
+
+		// Another Animator shares the asset.
+		auto second = AddBiped(scene);
+		second.GetComponent<AnimatorComponent>().Layers = { wave };
+		system.Update(0);
+		CHECK(NearRotation(LocalRotation(system, second, *source, "RightForeArm"), glm::quat(1, 0, 0, 0)));
+		system.Update(0.5f);
+		CHECK(NearRotation(LocalRotation(system, second, *source, "RightForeArm"), AxisAngle(Z, -30)));
+
+		// A changed file applies once reloaded, without touching the components.
+		project.WriteFile(maskPath, R"({ "Joints": [ { "Joint": "RightUpperArm" } ] })");
+		AssetManager::Reload(maskPath);
+		system.Update(0);
+		CHECK(NearRotation(LocalRotation(system, biped, *source, "RightUpperArm"), AxisAngle(Z, -45)));
+		CHECK(NearRotation(LocalRotation(system, biped, *source, "RightForeArm"), glm::quat(1, 0, 0, 0)));
+
+		// One that cannot load hides the layer (rather than showing it on the whole body), said once.
+		const auto since = Log::GetHistory().GetTotalCount();
+		project.WriteFile(maskPath, R"({ "Joints": [ { "Joint": "A", "Weight": 2 } ] })");
+		AssetManager::Reload(maskPath);
+		system.Update(0);
+		system.Update(0);
+		CHECK(NearRotation(LocalRotation(system, biped, *source, "RightUpperArm"), glm::quat(1, 0, 0, 0)));
+		CHECK(CountLogMessages(since, "layer 'Wave': cannot load mask 'Assets/Masks/Forearm.banimmask'") == 2);
+		CHECK_FALSE(system.PlayLayer(biped, "Wave", std::nullopt));
+		// Clearing MaskAsset returns to the inline mask.
+		biped.GetComponent<AnimatorComponent>().Layers[0].MaskAsset.clear();
+		system.Update(0);
+		CHECK(NearRotation(LocalRotation(system, biped, *source, "RightUpperArm"), AxisAngle(Z, -45)));
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("StateMachine layers run their own graph on the masked joints over the base")
+	{
+		ClearAssetCache clear;
+		TempProject project("LayerGraphs");
+		const auto source = LoadBiped();
+		const std::string graphPath = project.WriteFile("Assets/Animations/Upper.banimgraph", UpperBodyGraph().dump());
+		Scene scene;
+		auto biped = AddBiped(scene);
+		biped.GetComponent<AnimatorComponent>().Layers = { GraphLayer("Upper", graphPath) };
+		biped.GetComponent<AnimatorComponent>().Layers[0].Mask = { { "Spine", 1.0f } };
+		scene.OnRuntimeStart();
+		auto& system = *scene.GetAnimationSystem();
+
+		// The initial state (Lean) shows over the base Walk, which keeps the legs.
+		CHECK(system.GetLayerState(biped, "Upper") == "Lean");
+		CHECK(NearRotation(LocalRotation(system, biped, *source, "Spine"), AxisAngle(Z, 20)));
+		CHECK(NearRotation(LocalRotation(system, biped, *source, "LeftUpperLeg"), AxisAngle(X, 20)));
+		// The Animator has no StateMachine of its own: parameters reach the layer's graph.
+		REQUIRE(system.SetParameter(biped, "Waving", true));
+		system.Update(0.5f);
+		CHECK(system.GetLayerState(biped, "Upper") == "Wave");
+		CHECK(NearRotation(LocalRotation(system, biped, *source, "RightUpperArm"), AxisAngle(Z, -90)));
+		// Wave does not animate the spine, but Lean (a state of the same graph) does: the layer holds it at Wave's rest.
+		CHECK(NearRotation(LocalRotation(system, biped, *source, "Spine"), glm::quat(1, 0, 0, 0)));
+		CHECK(NearRotation(LocalRotation(system, biped, *source, "LeftUpperLeg"), AxisAngle(X, -20)));
+		// Triggers are consumed by the transition that takes them.
+		REQUIRE(system.SetParameter(biped, "Waving", false));
+		REQUIRE(system.SetTrigger(biped, "Nod"));
+		system.Update(Step);
+		CHECK(system.GetLayerState(biped, "Upper") == "Lean");
+		REQUIRE(system.SetParameter(biped, "Waving", true));
+		system.Update(Step);
+		CHECK(system.GetLayerState(biped, "Upper") == "Wave");
+
+		// Unknown names and wrong types fail and are logged once.
+		const auto since = Log::GetHistory().GetTotalCount();
+		CHECK_FALSE(system.SetParameter(biped, "Missing", 1.0f));
+		CHECK_FALSE(system.SetParameter(biped, "Missing", 1.0f));
+		CHECK_FALSE(system.SetParameter(biped, "Waving", 1.0f));
+		CHECK(CountLogMessages(since, "unknown name; declared parameters: Waving Nod") == 1);
+		CHECK(CountLogMessages(since, "type mismatch in layer 'Upper': expected Bool, got Float") == 1);
+
+		// A script clip plays instead of the graph; PlayAnimationLayer without one restarts the graph.
+		REQUIRE(system.PlayLayer(biped, "Upper", std::string("Breathe")));
+		CHECK(system.GetLayerState(biped, "Upper") == "");
+		CHECK(NearRotation(LocalRotation(system, biped, *source, "Chest"), AxisAngle(X, 5)));
+		REQUIRE(system.PlayLayer(biped, "Upper", std::nullopt));
+		CHECK(system.GetLayerState(biped, "Upper") == "Lean");
+		CHECK(NearRotation(LocalRotation(system, biped, *source, "Spine"), AxisAngle(Z, 20)));
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("StateMachine layers fade between states share parameters with the base graph and report bad graphs")
+	{
+		ClearAssetCache clear;
+		TempProject project("LayerGraphFades");
+		const auto source = LoadBiped();
+		const std::string upper = project.WriteFile("Assets/Animations/Upper.banimgraph", UpperBodyGraph(1.0f).dump());
+		// The base graph walks while Waving (a name both graphs declare).
+		const json base = {
+			{ "InitialState", "Idle" },
+			{ "Parameters", json::array({ { { "Name", "Waving" }, { "Type", "Bool" } } }) },
+			{ "States", json::array({ { { "Name", "Idle" }, { "Clip", "Breathe" } }, { { "Name", "Walk" }, { "Clip", "Walk" } } }) },
+			{ "Transitions", json::array({ { { "From", "Idle" }, { "To", "Walk" }, { "Duration", 0 }, { "Conditions", json::array({ { { "Parameter", "Waving" }, { "Value", true } } }) } } }) },
+		};
+		Scene scene;
+		auto biped = AddBiped(scene, "");
+		auto& animator = biped.GetComponent<AnimatorComponent>();
+		animator.StateMachine = project.WriteFile("Assets/Animations/Base.banimgraph", base.dump());
+		animator.Layers = { GraphLayer("Upper", upper) };
+		animator.Layers[0].Mask = { { "Chest", 1.0f } };
+		scene.OnRuntimeStart();
+		auto& system = *scene.GetAnimationSystem();
+		REQUIRE(system.SetParameter(biped, "Waving", true));
+		system.Update(Step);
+		CHECK(system.GetState(biped) == "Walk");
+		CHECK(system.GetLayerState(biped, "Upper") == "Wave");
+		// Half way through the layer's one-second fade, the arm is between Lean's rest and Wave's -45 + 22.5 degrees.
+		system.Update(0.5f - Step);
+		const float angle = glm::degrees(glm::angle(LocalRotation(system, biped, *source, "RightUpperArm")));
+		CHECK(angle > 20.0f);
+		CHECK(angle < 50.0f);
+		system.Update(1.0f);
+		CHECK(NearRotation(LocalRotation(system, biped, *source, "RightUpperArm"), AxisAngle(Z, -90), 1e-3f));
+
+		// The layer never moves the entity: root motion belongs to the base.
+		CHECK(biped.GetTransform().Translation == glm::vec3(0));
+
+		// A graph that cannot load hides the layer and is said once; an Additive graph layer needs a ReferenceClip.
+		const auto since = Log::GetHistory().GetTotalCount();
+		animator.Layers[0].StateMachine = "Assets/Animations/Missing.banimgraph";
+		system.Update(Step);
+		system.Update(Step);
+		CHECK(CountLogMessages(since, "layer 'Upper': cannot load state machine 'Assets/Animations/Missing.banimgraph'") == 1);
+		CHECK(system.GetLayerState(biped, "Upper") == "");
+		CHECK(NearRotation(LocalRotation(system, biped, *source, "RightUpperArm"), glm::quat(1, 0, 0, 0)));
+		animator.Layers[0].StateMachine = upper;
+		animator.Layers[0].Blend = AnimationLayerBlend::Additive;
+		system.Update(Step);
+		CHECK(CountLogMessages(since, "an Additive layer with a StateMachine needs a ReferenceClip") == 1);
+		CHECK(NearRotation(LocalRotation(system, biped, *source, "RightUpperArm"), glm::quat(1, 0, 0, 0)));
+		animator.Layers[0].ReferenceClip = "Lean";
+		system.Update(Step);
+		CHECK(system.GetLayerState(biped, "Upper") == "Lean");
+		CHECK_FALSE(system.GetLayerState(biped, "Missing").has_value());
+		scene.OnRuntimeStop();
 	}
 }

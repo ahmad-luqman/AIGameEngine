@@ -10,6 +10,7 @@
 #include "Basalt/Automation/AutomationEvents.h"
 #include "Basalt/Automation/AutomationSession.h"
 #include "Basalt/Animation/AnimationGraph.h"
+#include "Basalt/Animation/AnimationMask.h"
 #include "Basalt/Animation/PropertyAnimation.h"
 #include "Basalt/Automation/CommandRegistry.h"
 #include "Basalt/Automation/CommandSchema.h"
@@ -1840,7 +1841,7 @@ namespace Basalt {
 				return result;
 			});
 
-			Add(registry, "asset.write", "Writes a text asset (script, prefab, scene, animation graph, material...) to a project-relative path and reloads it. A .banimgraph or .bmaterial is validated before replacing the file; a material's texture problems (missing, wrong letter case, unresolved, not a texture, outside Assets/, an embedded image the model lacks) are reported in 'warnings', as project.validate reports them. A script written while the game runs (Play, not Simulate) is hot reloaded (see 'scripts'). A .bprefab merges into the edit scene's instances ('prefabInstances'; instances that cannot merge are 'warnings').", Schema::Object({ { "path", Schema::String("string", true) }, { "content", Schema::String("string") } }, { "path", "content" }), [](AutomationSession& session, const json& params) {
+			Add(registry, "asset.write", "Writes a text asset (script, prefab, scene, animation graph or mask, material...) to a project-relative path and reloads it. A .banimgraph, .banimmask or .bmaterial is validated before replacing the file; a material's texture problems (missing, wrong letter case, unresolved, not a texture, outside Assets/, an embedded image the model lacks) are reported in 'warnings', as project.validate reports them. A script written while the game runs (Play, not Simulate) is hot reloaded (see 'scripts'). A .bprefab merges into the edit scene's instances ('prefabInstances'; instances that cannot merge are 'warnings').", Schema::Object({ { "path", Schema::String("string", true) }, { "content", Schema::String("string") } }, { "path", "content" }), [](AutomationSession& session, const json& params) {
 				RequireProject();
 				const std::string path = ProjectRelative(RequireString(params, "path"));
 				const json& content = Require(params, "content");
@@ -1852,6 +1853,13 @@ namespace Basalt {
 					const auto graph = ParseJson(content.get_ref<const std::string&>(), error);
 					if (graph.is_discarded() || !AnimationGraph::FromJson(graph, error))
 						throw CommandError("invalid animation graph: " + error);
+				}
+				if (AnimationMask::IsMaskFile(path))
+				{
+					std::string error;
+					const auto mask = ParseJson(content.get_ref<const std::string&>(), error);
+					if (mask.is_discarded() || !AnimationMask::FromJson(mask, error))
+						throw CommandError("invalid animation mask: " + error);
 				}
 				std::vector<std::string> warnings;
 				if (MaterialAsset::IsMaterialFile(path))

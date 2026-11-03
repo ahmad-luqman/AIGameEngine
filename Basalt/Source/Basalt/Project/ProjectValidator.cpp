@@ -1,4 +1,5 @@
 #include "Basalt/Animation/AnimationGraph.h"
+#include "Basalt/Animation/AnimationMask.h"
 
 #include "Basalt/Asset/AssetKey.h"
 #include "Basalt/Asset/AssetManager.h"
@@ -32,7 +33,7 @@ namespace Basalt {
 	namespace {
 
 		// File types components reference by path. A string ending in one of these is treated as an asset path.
-		const std::set<std::string> s_AssetExtensions = { ".gltf", ".glb", ".ktx2", ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".hdr", ".wav", ".mp3", ".ogg", ".flac", ".ttf", ".otf", ".lua", ".bscene", ".bprefab", ".banimgraph", ".bmaterial" };
+		const std::set<std::string> s_AssetExtensions = { ".gltf", ".glb", ".ktx2", ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".hdr", ".wav", ".mp3", ".ogg", ".flac", ".ttf", ".otf", ".lua", ".bscene", ".bprefab", ".banimgraph", ".banimmask", ".bmaterial" };
 
 		bool HasAssetExtension(const std::string& value)
 		{
@@ -88,8 +89,8 @@ namespace Basalt {
 				CheckInputFile();
 				CheckStartScene();
 				CheckIcon();
-				std::vector<std::filesystem::path> scenes, prefabs, scripts, graphs, materials;
-				ListAssets(scenes, prefabs, scripts, graphs, materials);
+				std::vector<std::filesystem::path> scenes, prefabs, scripts, graphs, masks, materials;
+				ListAssets(scenes, prefabs, scripts, graphs, masks, materials);
 				for (const auto& path : scenes)
 					CheckScene(path);
 				for (const auto& path : prefabs)
@@ -98,6 +99,8 @@ namespace Basalt {
 					CheckScriptSyntax(path);
 				for (const auto& path : graphs)
 					CheckAnimationGraph(path);
+				for (const auto& path : masks)
+					CheckAnimationMask(path);
 				for (const auto& path : materials)
 					CheckMaterial(path);
 				for (const auto& [script, file] : m_ReferencedScripts)
@@ -200,7 +203,7 @@ namespace Basalt {
 					m_Report.Add(ValidationSeverity::Warning, Project::FileName, fmt::format("the Icon '{}' is {} x {} pixels; packaged icons look blurry below {} pixels (512 or more is best)", icon, image->Width, image->Height, RecommendedIconSize));
 			}
 
-			void ListAssets(std::vector<std::filesystem::path>& scenes, std::vector<std::filesystem::path>& prefabs, std::vector<std::filesystem::path>& scripts, std::vector<std::filesystem::path>& graphs, std::vector<std::filesystem::path>& materials)
+			void ListAssets(std::vector<std::filesystem::path>& scenes, std::vector<std::filesystem::path>& prefabs, std::vector<std::filesystem::path>& scripts, std::vector<std::filesystem::path>& graphs, std::vector<std::filesystem::path>& masks, std::vector<std::filesystem::path>& materials)
 			{
 				std::error_code error;
 				const std::filesystem::path assets = m_Project.GetAssetDirectory();
@@ -228,6 +231,8 @@ namespace Basalt {
 						prefabs.push_back(it->path());
 					else if (extension == ".banimgraph")
 						graphs.push_back(it->path());
+					else if (extension == AnimationMask::Extension)
+						masks.push_back(it->path());
 					else if (extension == MaterialAsset::Extension)
 						materials.push_back(it->path());
 					else if (extension == ".lua")
@@ -236,7 +241,7 @@ namespace Basalt {
 				if (error)
 					m_Report.Add(ValidationSeverity::Error, Project::AssetDirectoryName, "cannot list all the assets (the walk stopped with: " + error.message() + "); the remaining files were not checked");
 				// Directory order differs between platforms; reports should not.
-				for (auto* list : { &scenes, &prefabs, &scripts, &graphs, &materials })
+				for (auto* list : { &scenes, &prefabs, &scripts, &graphs, &masks, &materials })
 					std::sort(list->begin(), list->end());
 			}
 
@@ -408,6 +413,15 @@ namespace Basalt {
 				const auto graph = text ? ParseJson(*text, error) : nlohmann::json();
 				if (!text || graph.is_discarded() || !AnimationGraph::FromJson(graph, error))
 					m_Report.Add(ValidationSeverity::Error, Relative(path), "invalid animation graph: " + (text ? error : "cannot read file"));
+			}
+
+			void CheckAnimationMask(const std::filesystem::path& path)
+			{
+				std::string error;
+				const auto text = FileSystem::ReadTextFile(path);
+				const auto mask = text ? ParseJson(*text, error) : nlohmann::json();
+				if (!text || mask.is_discarded() || !AnimationMask::FromJson(mask, error))
+					m_Report.Add(ValidationSeverity::Error, Relative(path), "invalid animation mask: " + (text ? error : "cannot read file"));
 			}
 
 			// A material must parse (its UUIDs through this project's registry), and every texture it names must be a texture
