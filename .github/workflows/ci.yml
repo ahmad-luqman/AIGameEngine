@@ -15,10 +15,8 @@ concurrency:
 
 # Every build that compiles C++, including those in scripts/coverage.sh and scripts/fuzz.sh, compiles through ccache
 # (build-and-test uses sccache on Windows; the clang-tidy jobs compile only shaders and clear the launchers). The ccache
-# action sets ccache's compiler_check to content only on macOS and Windows. Each job's build tools and dependency sources
-# come from .github/actions/setup-basalt: the sources from a cache shared by every job on an OS, and by the other
-# workflows through main's entries (scripts/ci-fetch-deps.sh, cmake/DependencySources.cmake). A cache miss fetches them
-# into the same directory first, so cache hits and misses compile the same paths.
+# action sets ccache's compiler_check to content only on macOS and Windows. Every job that builds Basalt takes its build
+# tools and dependency sources from .github/actions/setup-basalt.
 env:
   CMAKE_C_COMPILER_LAUNCHER: ccache
   CMAKE_CXX_COMPILER_LAUNCHER: ccache

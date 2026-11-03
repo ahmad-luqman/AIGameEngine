@@ -40,7 +40,7 @@ Extra checks (each one is also a CI job; run locally when touching memory handli
   regression test, then fix. New file formats or entry points get a target (`Tests/Fuzz/Fuzz<Name>.cpp`; CMake and
   the nightly workflow pick it up) and seed files in `Tests/Fuzz/Corpus/`. The nightly workflow builds every target once
   (`FUZZ_MODE=build`), runs each in a job of its own (`scripts/fuzz.sh --list`, `FUZZ_MODE=run`) and uploads
-  `fuzz-crashes-<Target>` when libFuzzer writes crash, timeout or out-of-memory inputs.
+  `fuzz-crashes-<Target>` (crash inputs and the fuzzer log) when a target's job fails.
 - Coverage: `scripts/coverage.sh` (Clang) prints a per-file summary and writes
   `build-coverage/coverage/html/index.html`. Use it to find untested code; it is not a gate (CI runs it on pushes to
   `main` and manual runs).

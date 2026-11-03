@@ -4,9 +4,9 @@
 #        scripts/fuzz.sh --list   (prints the target names as a JSON array, for the nightly CI matrix)
 # FUZZ_JOBS=N runs N targets at a time (default 1; CI uses one per core); each prints a status line as it finishes, and
 # the summaries follow in target order.
-# FUZZ_MODE=build only builds the selected targets (the seconds are still checked), and FUZZ_MODE=run only runs them from
-# build-fuzz/bin without configuring or compiling anything; the nightly workflow builds once and runs each target on its
-# own runner. The default, build-and-run, does both.
+# FUZZ_MODE=build only builds the selected targets, and FUZZ_MODE=run only runs them from build-fuzz/bin without
+# configuring or compiling anything (stale binaries are not rebuilt); the nightly workflow builds once and runs each
+# target on its own runner. The default, build-and-run, does both. Every argument is checked in every mode.
 # Seeds come from Tests/Fuzz/Corpus/<Target>/; new interesting inputs collect in build-fuzz/corpus/ and
 # crashes in build-fuzz/crashes/ (add a regression test before fixing one). On macOS this needs Homebrew
 # LLVM (Apple's clang ships no libFuzzer).
@@ -23,11 +23,19 @@ if [[ ${#targets[@]} -eq 0 ]]; then
 	exit 1
 fi
 if [[ "${1:-}" == "--list" ]]; then
+	if [[ $# -ne 1 ]]; then
+		echo "--list takes no other arguments" >&2
+		exit 1
+	fi
 	list="$(printf '"%s",' "${targets[@]}")"
 	echo "[${list%,}]"
 	exit 0
 fi
 
+if [[ $# -gt 2 ]]; then
+	echo "Usage: scripts/fuzz.sh [seconds per target] [target name filter] (one filter at most)" >&2
+	exit 1
+fi
 seconds="${1:-60}"
 filter="${2:-}"
 # libFuzzer keeps only a value's leading digits (so 'abc' reads as 0) and runs without a time limit for 0.
@@ -41,13 +49,10 @@ if ! [[ "$jobs" =~ ^[1-9][0-9]*$ ]]; then
 	exit 1
 fi
 mode="${FUZZ_MODE:-build-and-run}"
-case "$mode" in
-	build | run | build-and-run) ;;
-	*)
-		echo "FUZZ_MODE must be build, run or build-and-run, not '$mode'" >&2
-		exit 1
-		;;
-esac
+if ! [[ "$mode" =~ ^(build|run|build-and-run)$ ]]; then
+	echo "FUZZ_MODE must be build, run or build-and-run, not '$mode'" >&2
+	exit 1
+fi
 buildDir="build-fuzz"
 # An exact target name selects only that target (the nightly matrix passes one); otherwise the filter is a substring.
 selected=()
@@ -64,7 +69,17 @@ if [[ ${#selected[@]} -eq 0 ]]; then
 	exit 1
 fi
 
-if [[ "$mode" != run ]]; then
+if [[ "$mode" == run ]]; then
+	# Checked up front: a missing target would otherwise fail only after the others had fuzzed for their full time.
+	missing=()
+	for target in "${selected[@]}"; do
+		[[ -f "$buildDir/bin/$target" && -x "$buildDir/bin/$target" ]] || missing+=("$target")
+	done
+	if [[ ${#missing[@]} -gt 0 ]]; then
+		echo "FUZZ_MODE=run needs built targets, but $buildDir/bin lacks (or cannot execute) ${missing[*]}" >&2
+		exit 1
+	fi
+else
 	compiler=(-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++)
 	if [[ "$(uname)" == "Darwin" ]]; then
 		llvm="$(brew --prefix llvm 2>/dev/null || true)"
@@ -82,16 +97,6 @@ if [[ "$mode" != run ]]; then
 	if [[ "$mode" == build ]]; then
 		echo "Built ${#selected[@]} targets in $buildDir/bin"
 		exit 0
-	fi
-else
-	# Checked up front: a missing target would otherwise fail only after the others had fuzzed for their full time.
-	missing=()
-	for target in "${selected[@]}"; do
-		[[ -f "$buildDir/bin/$target" && -x "$buildDir/bin/$target" ]] || missing+=("$target")
-	done
-	if [[ ${#missing[@]} -gt 0 ]]; then
-		echo "FUZZ_MODE=run needs built targets, but $buildDir/bin lacks (or cannot execute) ${missing[*]}" >&2
-		exit 1
 	fi
 fi
 

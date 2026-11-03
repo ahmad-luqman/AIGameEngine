@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Checks scripts/fuzz.sh (ctest FuzzScript): the target list the nightly workflow's matrix reads, the rejections that
-# keep a bad input from fuzzing forever, and how it runs targets side by side (FUZZ_JOBS) with stand-in targets.
+# keep a bad input from fuzzing forever, its build-only and run-only modes (FUZZ_MODE), and how it runs targets side by
+# side (FUZZ_JOBS) with stand-in targets.
 set -euo pipefail
 script="$1/scripts/fuzz.sh"
 fail()
@@ -164,27 +165,64 @@ fi
 compgen -G "$work/*.started" > /dev/null && fail "targets ran after a failed build: $output"
 
 # FUZZ_MODE: build only builds (the nightly's build job), run only runs what is in build-fuzz/bin (its per-target jobs).
-for mode in "" Build all build-only; do
+# FuzzGamma is the stand-in that runs alone (the other two wait for each other).
+for mode in Build all build-only; do
 	if output="$(FUZZ_MODE="$mode" fuzz FuzzGamma)"; then
-		[[ -z "$mode" ]] && continue
 		fail "FUZZ_MODE '$mode' was accepted"
 	fi
 	[[ "$output" == *"FUZZ_MODE must be build, run or build-and-run, not '$mode'"* ]] || fail "FUZZ_MODE '$mode' printed '$output'"
 done
+# An empty FUZZ_MODE is the default. Building configures the sanitized fuzz build and builds exactly the selection.
+for mode in "" build-and-run build; do
+	output="$(FUZZ_MODE="$mode" fuzz FuzzGamma)" || fail "FUZZ_MODE '$mode' failed: $output"
+	configure="$(grep -- "^-S \. -B build-fuzz " "$work/cmake.calls")" ||
+		fail "FUZZ_MODE '$mode' did not configure: $(cat "$work/cmake.calls")"
+	for flag in -DCMAKE_BUILD_TYPE=Debug -DBASALT_FUZZ=ON "-DBASALT_SANITIZE=address;undefined"; do
+		[[ " $configure " == *" $flag "* ]] || fail "FUZZ_MODE '$mode' configured without $flag: $configure"
+	done
+	grep -qx -- "--build build-fuzz --target FuzzGamma" "$work/cmake.calls" ||
+		fail "FUZZ_MODE '$mode' did not build exactly the selected target: $(cat "$work/cmake.calls")"
+	if [[ "$mode" == build ]]; then
+		[[ "$output" == *"Built 1 targets in build-fuzz/bin"* ]] || fail "FUZZ_MODE=build did not report the build: $output"
+		compgen -G "$work/*.started" > /dev/null && fail "FUZZ_MODE=build ran targets: $output"
+	else
+		[[ "$output" == *"FuzzGamma: passed"* ]] || fail "FUZZ_MODE '$mode' did not run the target: $output"
+	fi
+done
 output="$(FUZZ_MODE=build fuzz)" || fail "FUZZ_MODE=build failed: $output"
-[[ "$output" == *"Built 3 targets in build-fuzz/bin"* ]] || fail "FUZZ_MODE=build did not report the build: $output"
-grep -q -- "--build build-fuzz --target FuzzAlpha FuzzBeta FuzzGamma" "$work/cmake.calls" ||
+grep -qx -- "--build build-fuzz --target FuzzAlpha FuzzBeta FuzzGamma" "$work/cmake.calls" ||
 	fail "FUZZ_MODE=build did not build every target: $(cat "$work/cmake.calls")"
-compgen -G "$work/*.started" > /dev/null && fail "FUZZ_MODE=build ran targets: $output"
 if output="$(FUZZ_MODE=build FAKE_BUILD_FAIL=1 fuzz)"; then
 	fail "FUZZ_MODE=build passed a failed build: $output"
 fi
+# Every mode checks the arguments before building anything (the nightly's own input check accepts what fuzz.sh does).
+for mode in build run; do
+	rm -f "$work/cmake.calls"
+	for arguments in "0" "5 FuzzGamma extra"; do
+		# shellcheck disable=SC2086 # Each case is a list of arguments.
+		if output="$(cd "$work" && PATH="$work/tools:$PATH" FUZZ_MODE="$mode" bash scripts/fuzz.sh $arguments 2>&1)"; then
+			fail "FUZZ_MODE=$mode accepted '$arguments': $output"
+		fi
+	done
+	[[ ! -e "$work/cmake.calls" ]] || fail "FUZZ_MODE=$mode ran cmake before rejecting its arguments"
+done
+if output="$(cd "$work" && bash scripts/fuzz.sh --list extra 2>&1)"; then
+	fail "--list accepted another argument: $output"
+fi
+
 output="$(FUZZ_MODE=run fuzz)" || fail "FUZZ_MODE=run failed: $output"
 [[ ! -e "$work/cmake.calls" ]] || fail "FUZZ_MODE=run ran cmake: $(cat "$work/cmake.calls")"
 for target in FuzzAlpha FuzzBeta FuzzGamma; do
 	[[ "$output" == *"$target: passed"* ]] || fail "$target did not pass with FUZZ_MODE=run: $output"
 done
 check_blocks "$output"
+# A prebuilt target fails the run like a freshly built one.
+if output="$(FUZZ_MODE=run FAKE_CRASH=FuzzGamma fuzz FuzzGamma)"; then
+	fail "FUZZ_MODE=run passed a crashing target: $output"
+fi
+[[ "$output" == *"FuzzGamma: FAILED (exited with 1)"*"AddressSanitizer: planted"* ]] ||
+	fail "FUZZ_MODE=run did not report the crash: $output"
+rm -f "$work/build-fuzz/crashes/FuzzGamma/"*
 # Every selected target must be there and executable before any of them fuzzes; unselected ones may be missing.
 chmod -x "$work/build-fuzz/bin/FuzzGamma"
 if output="$(FUZZ_MODE=run fuzz)"; then
@@ -192,14 +230,11 @@ if output="$(FUZZ_MODE=run fuzz)"; then
 fi
 [[ "$output" == *"build-fuzz/bin lacks (or cannot execute) FuzzGamma"* ]] || fail "the unusable target was not reported: $output"
 compgen -G "$work/*.started" > /dev/null && fail "targets ran although one could not: $output"
-mv "$work/build-fuzz/bin/FuzzGamma" "$work/FuzzGamma.moved"
+chmod +x "$work/build-fuzz/bin/FuzzGamma"
+rm "$work/build-fuzz/bin/FuzzAlpha"
 if output="$(FUZZ_MODE=run fuzz)"; then
 	fail "FUZZ_MODE=run passed without a target: $output"
 fi
-[[ "$output" == *"build-fuzz/bin lacks (or cannot execute) FuzzGamma"* ]] || fail "the missing target was not reported: $output"
-# FuzzGamma is the stand-in that runs alone (the other two wait for each other).
-mv "$work/FuzzGamma.moved" "$work/build-fuzz/bin/FuzzGamma"
-chmod +x "$work/build-fuzz/bin/FuzzGamma"
-rm "$work/build-fuzz/bin/FuzzAlpha"
+[[ "$output" == *"build-fuzz/bin lacks (or cannot execute) FuzzAlpha"* ]] || fail "the missing target was not reported: $output"
 output="$(FUZZ_MODE=run fuzz FuzzGamma)" || fail "FUZZ_MODE=run needed a target it did not select: $output"
 echo "fuzz.sh checks passed"
