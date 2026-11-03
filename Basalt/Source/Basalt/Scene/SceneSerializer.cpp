@@ -580,7 +580,7 @@ namespace Basalt {
 	{
 		std::error_code error;
 		const std::filesystem::path absolute = std::filesystem::absolute(path, error);
-		return FileSystem::PathToGenericUtf8(FileSystem::PathFromUtf8(Project::MakeRelative(error ? path : absolute)).lexically_normal());
+		return FileSystem::NormalizeGeneric(Project::MakeRelative(error ? path : absolute));
 	}
 
 	Ref<Scene> SceneSerializer::LoadScene(const std::filesystem::path& path, std::string& outError)

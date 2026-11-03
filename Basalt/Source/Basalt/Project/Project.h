@@ -10,6 +10,7 @@
 #include "Basalt/Renderer/GraphicsSettings.h"
 
 #include <array>
+#include <concepts>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -113,13 +114,17 @@ namespace Basalt {
 		static float GetActiveFixedTimestep() { return s_ActiveProject ? s_ActiveProject->m_Config.FixedTimestep : DefaultFixedTimestep; }
 
 		// Resolves a project-relative path against the active project directory, or the working directory
-		// when no project is active. Absolute paths are returned unchanged.
-		static std::filesystem::path ResolvePath(const std::filesystem::path& relativePath);
+		// when no project is active. Absolute paths are returned unchanged. Takes a std::filesystem::path only (a
+		// template, so nothing converts to it implicitly): text goes to the overload below.
+		template<std::same_as<std::filesystem::path> Path>
+		static std::filesystem::path ResolvePath(const Path& relativePath)
+		{
+			return ResolveNativePath(relativePath);
+		}
 		// Text is UTF-8 (asset keys, scene paths, JSON and Lua strings), read with FileSystem::PathFromUtf8: the implicit
-		// std::filesystem::path conversion would read it in the ANSI code page on Windows. The const char* overload keeps
-		// literals unambiguous; convert a std::string_view to std::string first (it would pick the path overload).
-		static std::filesystem::path ResolvePath(const std::string& relativePath);
-		static std::filesystem::path ResolvePath(const char* relativePath);
+		// std::filesystem::path conversion would read it in the ANSI code page on Windows. Strings, literals and views all
+		// land here.
+		static std::filesystem::path ResolvePath(std::string_view relativePath);
 		// Converts an absolute path inside the active project into a project-relative generic UTF-8 path (the form of
 		// asset keys); paths outside it come back absolute, also generic UTF-8.
 		static std::string MakeRelative(const std::filesystem::path& absolutePath);
@@ -145,6 +150,8 @@ namespace Basalt {
 		}
 
 	private:
+		static std::filesystem::path ResolveNativePath(const std::filesystem::path& relativePath);
+
 		AssetRegistry m_Assets;
 		nlohmann::json m_UnresolvedStartScene;
 		std::string m_StartSceneError;

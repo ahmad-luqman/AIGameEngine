@@ -1,6 +1,5 @@
 #include "Basalt/Core/Platform.h"
 
-#include "Basalt/Core/Base.h"
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/Log.h"
 
@@ -20,19 +19,34 @@
 namespace Basalt::Platform {
 
 #if defined(BS_PLATFORM_WINDOWS)
+	namespace {
+
+		// Narrow text in codePage to UTF-16; flags MB_ERR_INVALID_CHARS makes invalid input fail instead of becoming U+FFFD.
+		std::optional<std::wstring> Widen(std::string_view text, UINT codePage, DWORD flags)
+		{
+			if (text.empty())
+				return std::wstring();
+			if (text.size() > static_cast<size_t>(INT_MAX))
+				return std::nullopt;
+			const int size = MultiByteToWideChar(codePage, flags, text.data(), static_cast<int>(text.size()), nullptr, 0);
+			if (size <= 0)
+				return std::nullopt;
+			std::wstring wide(static_cast<size_t>(size), L'\0');
+			if (MultiByteToWideChar(codePage, flags, text.data(), static_cast<int>(text.size()), wide.data(), size) != size)
+				return std::nullopt;
+			return wide;
+		}
+
+	}
+
 	std::optional<std::wstring> Utf8ToWide(std::string_view text)
 	{
-		if (text.empty())
-			return std::wstring();
-		if (text.size() > static_cast<size_t>(INT_MAX))
-			return std::nullopt;
-		const int size = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()), nullptr, 0);
-		if (size <= 0)
-			return std::nullopt;
-		std::wstring wide(static_cast<size_t>(size), L'\0');
-		if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()), wide.data(), size) != size)
-			return std::nullopt;
-		return wide;
+		return Widen(text, CP_UTF8, MB_ERR_INVALID_CHARS);
+	}
+
+	std::wstring Utf8ToWideReplacing(std::string_view text)
+	{
+		return Widen(text, CP_UTF8, 0).value_or(std::wstring());
 	}
 
 	std::string WideToUtf8(std::wstring_view text)
@@ -43,8 +57,21 @@ namespace Basalt::Platform {
 		if (size <= 0)
 			return std::string();
 		std::string narrow(static_cast<size_t>(size), '\0');
-		WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), narrow.data(), size, nullptr, nullptr);
+		if (WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), narrow.data(), size, nullptr, nullptr) != size)
+			return std::string();
 		return narrow;
+	}
+
+	std::string GetErrorMessage(uint32_t code)
+	{
+		wchar_t* buffer = nullptr;
+		const DWORD length = FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, nullptr, static_cast<DWORD>(code), 0, reinterpret_cast<wchar_t*>(&buffer), 0, nullptr);
+		std::string message = length != 0 && buffer ? WideToUtf8(std::wstring_view(buffer, length)) : std::string();
+		if (buffer)
+			LocalFree(buffer);
+		while (!message.empty() && (message.back() == '\n' || message.back() == '\r' || message.back() == ' '))
+			message.pop_back();
+		return message;
 	}
 #endif
 
@@ -59,23 +86,31 @@ namespace Basalt::Platform {
 
 	std::vector<std::string> GetProcessArguments(int argc, const char* const* argv)
 	{
+		std::vector<std::string> arguments;
+		arguments.reserve(argc > 0 ? static_cast<size_t>(argc) : 0);
 #if defined(BS_PLATFORM_WINDOWS)
 		int count = 0;
 		if (wchar_t** wide = CommandLineToArgvW(GetCommandLineW(), &count))
 		{
-			std::vector<std::string> arguments;
-			arguments.reserve(static_cast<size_t>(count));
 			for (int i = 0; i < count; i++)
 				arguments.push_back(WideToUtf8(wide[i]));
 			LocalFree(wide);
+			// Callers that look at argv first (a test child's marker argument) would then read the wrong entries.
+			if (argv && count != argc)
+				BS_CORE_WARN("The wide command line splits into {} arguments, the C runtime's argv into {}", count, argc);
 			return arguments;
 		}
 		BS_CORE_WARN("Cannot read the wide command line (error {}): arguments outside the ANSI code page are lost", GetLastError());
-#endif
-		std::vector<std::string> arguments;
-		arguments.reserve(argc > 0 ? static_cast<size_t>(argc) : 0);
+		// argv is ANSI text: converted, so non-ASCII characters inside the code page still arrive as UTF-8.
+		for (int i = 0; i < argc; i++)
+		{
+			const std::optional<std::wstring> wide = Widen(argv[i] ? argv[i] : "", CP_ACP, 0);
+			arguments.push_back(wide ? WideToUtf8(*wide) : std::string());
+		}
+#else
 		for (int i = 0; i < argc; i++)
 			arguments.emplace_back(argv[i] ? argv[i] : "");
+#endif
 		return arguments;
 	}
 
@@ -130,21 +165,20 @@ namespace Basalt::Platform {
 	namespace {
 
 		// The variable as a path, read as wide text on Windows so user names outside the ANSI code page survive.
-		// Names are ASCII constants, so widening them byte by byte is exact.
 		std::optional<std::filesystem::path> GetPathVar(const char* name)
 		{
 #if defined(BS_PLATFORM_WINDOWS)
-			const std::wstring wideName(name, name + std::strlen(name));
+			const std::optional<std::wstring> wideName = Utf8ToWide(name);
 			wchar_t* buffer = nullptr;
 			size_t length = 0;
-			if (_wdupenv_s(&buffer, &length, wideName.c_str()) != 0 || !buffer)
+			if (!wideName || _wdupenv_s(&buffer, &length, wideName->c_str()) != 0 || !buffer)
 				return std::nullopt;
 			std::filesystem::path value(buffer);
 			std::free(buffer);
 			return value;
 #else
 			if (auto value = GetEnvVar(name))
-				return std::filesystem::path(*value);
+				return FileSystem::PathFromUtf8(*value);
 			return std::nullopt;
 #endif
 		}

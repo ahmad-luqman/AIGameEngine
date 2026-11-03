@@ -482,7 +482,12 @@ TEST_SUITE("Automation")
 		Run(registry, reopened, "lua.exec", { { "code", "Scene.Load('Assets/Scenes/場面.bscene')" } });
 		const json step = Run(registry, reopened, "play.step");
 		CHECK(step["scenePath"] == "Assets/Scenes/場面.bscene");
+		CHECK(Run(registry, reopened, "lua.exec", { { "code", "return Scene.GetPath()" } })["result"] == "Assets/Scenes/場面.bscene");
 		CHECK(hero() == "7.0");
+		// Written outside the session, then refreshed by its UTF-8 path.
+		REQUIRE(FileSystem::WriteTextFile(directory / FileSystem::PathFromUtf8("Assets/Scripts/道具.lua"), "return { Value = 9 }"));
+		Run(registry, reopened, "asset.refresh", { { "paths", json::array({ "Assets/Scripts/道具.lua" }) } });
+		CHECK(Run(registry, reopened, "lua.exec", { { "code", "return require('Assets.Scripts.道具').Value" } })["result"] == "9");
 		Run(registry, reopened, "play.stop");
 	}
 

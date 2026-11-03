@@ -358,21 +358,34 @@ namespace Basalt {
 		return !outError;
 	}
 
+	// On Windows through Platform's conversions, which replace what does not convert: the standard library's throw.
 	std::string FileSystem::PathToUtf8(const std::filesystem::path& path)
 	{
+#if defined(BS_PLATFORM_WINDOWS)
+		return Platform::WideToUtf8(path.native());
+#else
 		const std::u8string text = path.u8string();
 		return std::string(text.begin(), text.end());
+#endif
 	}
 
 	std::string FileSystem::PathToGenericUtf8(const std::filesystem::path& path)
 	{
+#if defined(BS_PLATFORM_WINDOWS)
+		return Platform::WideToUtf8(path.generic_wstring());
+#else
 		const std::u8string text = path.generic_u8string();
 		return std::string(text.begin(), text.end());
+#endif
 	}
 
-	std::filesystem::path FileSystem::PathFromUtf8(const std::string& text)
+	std::filesystem::path FileSystem::PathFromUtf8(std::string_view text)
 	{
+#if defined(BS_PLATFORM_WINDOWS)
+		return std::filesystem::path(Platform::Utf8ToWideReplacing(text));
+#else
 		return std::filesystem::path(std::u8string(text.begin(), text.end()));
+#endif
 	}
 
 	std::string FileSystem::GetLowercaseExtension(const std::filesystem::path& path)

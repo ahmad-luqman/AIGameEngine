@@ -468,8 +468,8 @@ TEST_SUITE("Assets")
 		CHECK_FALSE(gltfRoot.HasComponent<MeshComponent>());
 	}
 
-	// CJK names have no representation in Windows CI's ANSI code page (1252): they load only when UTF-8 keys and URIs reach
-	// the file system as UTF-8.
+	// CJK names have no representation in Windows CI's ANSI code page (1252): they load only when UTF-8 keys and URIs are
+	// converted with FileSystem::PathFromUtf8, never through the ANSI code page.
 	TEST_CASE("Models, their external files and textures named in CJK characters load")
 	{
 		BasaltTest::TempProject project("GltfImport-資産");
@@ -499,9 +499,28 @@ TEST_SUITE("Assets")
 		const auto contents = MeshImporter::Inspect(Project::ResolvePath(model), error);
 		REQUIRE_MESSAGE(contents, error);
 		CHECK(contents->BufferUris == std::vector<std::string>{ "%E5%9B%9B%E8%A7%92%20%E8%B3%87%E6%96%99.bin" });
-		// Thumbnails read the same files, so their keys change with them.
+		// The thumbnail cache tracks the same external files (through MeshImporter::Inspect), so changing one makes the
+		// model's preview again.
 		const ThumbnailCache cache(project.GetDirectory());
 		CHECK(cache.GetDependencies(model) == std::vector<std::string>{ "Assets/Models/四角 資料.bin", "Assets/Models/模様.png", "Assets/Textures/法線.png" });
+		AssetManager::Clear();
+	}
+
+	// The messages name the files: path::string() would throw on Windows for these names, turning the report into a crash.
+	TEST_CASE("Load errors name models and textures in CJK characters as UTF-8")
+	{
+		BasaltTest::TempProject project("LoadErrors-資産");
+		const std::string broken = project.WriteFile("Assets/Models/壊れ.gltf", "{");
+		const std::string empty = project.WriteFile("Assets/Models/空.gltf", R"({"asset": {"version": "2.0"}, "scenes": [{"nodes": []}], "scene": 0})");
+		const std::string texture = project.WriteFile("Assets/Textures/壊れ.png", "not a png");
+
+		AssetManager::Clear();
+		CHECK_FALSE(AssetManager::GetMesh(broken));
+		CHECK_MESSAGE(AssetManager::GetError(broken).find("壊れ.gltf") != std::string::npos, AssetManager::GetError(broken));
+		CHECK_FALSE(AssetManager::GetMesh(empty));
+		CHECK_MESSAGE(AssetManager::GetError(empty).find("空.gltf: contains no triangle geometry") != std::string::npos, AssetManager::GetError(empty));
+		CHECK_FALSE(AssetManager::GetTexture(texture));
+		CHECK_MESSAGE(AssetManager::GetError(texture).find("壊れ.png: ") != std::string::npos, AssetManager::GetError(texture));
 		AssetManager::Clear();
 	}
 

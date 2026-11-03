@@ -580,6 +580,25 @@ TEST_SUITE("Project")
 		CHECK(mixed.GetOmittedCount() == 12);
 	}
 
+	// The messages name the files: path::string() would throw on Windows for these names, turning the report into a crash.
+	TEST_CASE("Project and scene load errors name files in CJK characters as UTF-8")
+	{
+		BasaltTest::TempDirectory directory("LoadErrors-日本語");
+		std::string error;
+		REQUIRE(FileSystem::WriteTextFile(directory.GetPath() / Project::FileName, "[1"));
+		CHECK_FALSE(Project::Load(directory.GetPath(), error));
+		CHECK_MESSAGE(error.find(FileSystem::PathToUtf8(directory.GetPath() / Project::FileName) + "' is not valid JSON") != std::string::npos, error);
+		REQUIRE(FileSystem::WriteTextFile(directory.GetPath() / Project::FileName, R"({"Format": "BasaltProject", "Name": "x", "RandomSeed": -1})"));
+		CHECK_FALSE(Project::Load(directory.GetPath(), error));
+		CHECK_MESSAGE(error.find("日本語") != std::string::npos, error);
+		CHECK_MESSAGE(error.find("RandomSeed") != std::string::npos, error);
+
+		const std::filesystem::path scene = directory.GetPath() / FileSystem::PathFromUtf8("壊れ.bscene");
+		REQUIRE(FileSystem::WriteTextFile(scene, R"({"Entities": [{"ID": 1, "Components": 5}]})"));
+		CHECK_FALSE(SceneSerializer::LoadScene(scene, error));
+		CHECK_MESSAGE(error.starts_with("壊れ.bscene: "), error);
+	}
+
 	TEST_CASE("Project validation reports project file problems")
 	{
 		BasaltTest::TempProject temp("ValidateProjectFile");

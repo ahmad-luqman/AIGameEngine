@@ -35,8 +35,8 @@ namespace Basalt {
 		// A read-only archive over a directory: the runtime mounts an exported game's Assets.bpak over its project folder.
 		// ReadTextFile, ReadBinaryFile, Exists and GetRegularFileSize then answer for the files under root that the archive
 		// holds, and disk answers for the rest. Readers that bypass them look the mount up directly: cgltf's file callbacks,
-		// miniaudio's VFS, Lua's require searcher and font stamps through FindMounted, and AssetRegistry::Refresh through
-		// GetMountedArchive (the whole index). Writes are never redirected: a file written
+		// miniaudio's VFS and font stamps through FindMounted, and AssetRegistry::Refresh through GetMountedArchive (the
+		// whole index). Lua's require searcher reads through ReadBinaryFile and asks FindMounted only whether a module exists. Writes are never redirected: a file written
 		// under root that the archive also holds is still read from the archive. One mount at a time (mounting again
 		// replaces it). Thread-safe.
 		static void Mount(const std::filesystem::path& root, Ref<PackArchive> archive);
@@ -105,13 +105,16 @@ namespace Basalt {
 		// The running executable (links resolved on macOS); <current folder>/Unknown, logged, when it cannot be found.
 		static std::filesystem::path GetExecutablePath();
 		static std::filesystem::path GetExecutableDirectory();
-		// The path as UTF-8 text, for messages (path::string() throws on Windows for names outside the ANSI code page).
+		// Text and paths convert only through these three (AGENTS.md): on Windows std::filesystem::path(std::string) reads
+		// the ANSI code page and path::string() throws for names outside it. None of them throws: on Windows text that is
+		// not valid UTF-8 (a Lua string, a percent-decoded URI) and names with unpaired surrogates (NTFS allows them) get
+		// U+FFFD, so such a path names no file and fails like a missing one. Elsewhere paths are their UTF-8 bytes.
+		// The path as UTF-8 text, for messages and keys.
 		static std::string PathToUtf8(const std::filesystem::path& path);
 		// The path as '/'-separated UTF-8 text on every platform: the form of asset keys ("Assets/Models/Ship.gltf").
 		static std::string PathToGenericUtf8(const std::filesystem::path& path);
-		// A path from UTF-8 text (asset references, JSON); std::filesystem::path(std::string) would read the ANSI
-		// code page on Windows.
-		static std::filesystem::path PathFromUtf8(const std::string& text);
+		// A path from UTF-8 text (asset references, JSON, Lua, command-line arguments).
+		static std::filesystem::path PathFromUtf8(std::string_view text);
 		// The extension in lower case (".png" for "Wall.PNG"), for matching file types.
 		static std::string GetLowercaseExtension(const std::filesystem::path& path);
 		// A-Z folded to a-z, other bytes (UTF-8 included) unchanged, whatever the C locale: for case-insensitive file

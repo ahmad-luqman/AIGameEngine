@@ -80,8 +80,8 @@ namespace Basalt {
 			return &reinterpret_cast<ArchiveVfs*>(vfs)->Disk;
 		}
 
-		// Narrow paths are UTF-8 (AudioSystem passes PathToUtf8 where it does not use the wide entry point); wide ones are
-		// native.
+		// Narrow paths are UTF-8: AudioSystem passes path.c_str() only off Windows, where native narrow text is UTF-8, and
+		// uses the wide entry point on Windows. Wide paths are native.
 		std::filesystem::path VfsPath(const char* pathText)
 		{
 			return FileSystem::PathFromUtf8(pathText);
@@ -136,10 +136,17 @@ namespace Basalt {
 			}
 		}
 
-		// Clip paths are native narrow text (AudioSystem passes path::string()), so they convert back the same way.
+		// A narrow path on Windows would reach the disk through CreateFileA (the ANSI code page): opened wide instead, so it
+		// names the same file the archive lookup did.
 		ma_result VfsOpen(ma_vfs* vfs, const char* path, ma_uint32 openMode, ma_vfs_file* outFile)
 		{
-			return OpenVfsFile(vfs, path, openMode, outFile, [&](ma_vfs* disk, ma_vfs_file* diskFile) { return ma_vfs_open(disk, path, openMode, diskFile); });
+			return OpenVfsFile(vfs, path, openMode, outFile, [&](ma_vfs* disk, ma_vfs_file* diskFile) {
+#if defined(BS_PLATFORM_WINDOWS)
+				return ma_vfs_open_w(disk, VfsPath(path).c_str(), openMode, diskFile);
+#else
+				return ma_vfs_open(disk, path, openMode, diskFile);
+#endif
+			});
 		}
 
 		ma_result VfsOpenW(ma_vfs* vfs, const wchar_t* path, ma_uint32 openMode, ma_vfs_file* outFile)

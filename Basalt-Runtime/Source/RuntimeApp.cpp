@@ -11,7 +11,6 @@
 
 #include <array>
 #include <optional>
-#include <utility>
 #include <vector>
 
 namespace Basalt {
@@ -88,7 +87,7 @@ namespace Basalt {
 
 	}
 
-	Application* CreateApplication(ApplicationCommandLineArgs args)
+	Application* CreateApplication(const ApplicationCommandLineArgs& args)
 	{
 		const CommandLine commandLine(args.Arguments, { "project", "scene", "frames", "screenshot", "width", "height", "debug-view", "gpu", "render-scale", "dynamic-resolution", "min-render-scale" });
 		// An option without its value would otherwise run with the default silently (a test passing vacuously).
@@ -200,7 +199,6 @@ namespace Basalt {
 
 		ApplicationSpecification specification;
 		specification.Name = project->GetConfig().Name;
-		specification.CommandLineArgs = std::move(args);
 		specification.GpuSelector = commandLine.GetValue("gpu").value_or("");
 		auto readSize = [&](const char* name, uint32_t fallback) {
 			if (!commandLine.GetValue(name))

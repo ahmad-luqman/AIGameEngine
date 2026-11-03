@@ -37,9 +37,8 @@ namespace {
 		return { text.begin(), text.end() };
 	}
 
-	// A texture name outside ASCII ("Ünïcode.png"; split so \xAF does not swallow the "c").
-	const std::string UnicodeTexture = "Assets/Textures/\xC3\x9Cn\xC3\xAF"
-									   "code.png";
+	// A texture name outside ASCII, and outside every single-byte Windows code page.
+	const std::string UnicodeTexture = "Assets/Textures/模様.png";
 
 	// Bytes that zstd cannot shrink.
 	std::vector<uint8_t> Noise(size_t size, uint32_t seed = 7)
@@ -560,12 +559,9 @@ TEST_SUITE("Archive")
 			CHECK_MESSAGE(AssetManager::GetMesh("Assets/Models/Shared.gltf"), AssetManager::GetError("Assets/Models/Shared.gltf"));
 			AssetManager::Clear();
 		}
-#if !defined(_WIN32)
-		// Not on Windows, where Project::ResolvePath reads string keys in the ANSI code page (ROADMAP: Unicode asset keys).
 		const std::vector<uint8_t> unicodePng = EncodeIconPng(MakeDefaultIcon(8));
 		REQUIRE(FileSystem::WriteBinaryFile(temp.GetDirectory() / FileSystem::PathFromUtf8(UnicodeTexture),
 											unicodePng.data(), unicodePng.size()));
-#endif
 		const std::vector<uint8_t> png = EncodeIconPng(MakeDefaultIcon(64));
 		REQUIRE(FileSystem::WriteBinaryFile(assets / "Textures" / "Icon.png", png.data(), png.size()));
 		std::error_code copyError;
@@ -576,6 +572,7 @@ TEST_SUITE("Archive")
 		temp.WriteFile("Assets/Audio/Beep.wav", BasaltTest::MakeWav(0.5f));
 		temp.WriteFile("Assets/Scripts/Lib/Util.lua", "return { Triple = function(x) return 3 * x end }");
 		temp.WriteFile("Assets/Scripts/Pkg/init.lua", "return { Name = 'package' }");
+		temp.WriteFile("Assets/Scripts/Layered/init.lua", "return 'archive init'");
 		temp.WriteFile("Assets/Scripts/Lib/Bad.lua", "return {");
 		temp.WriteFile("Assets/Scripts/Lib/Priority.lua", "return 'archive'");
 		// A byte order mark and a shebang line, which Lua's file loader skips (line numbers stay right).
@@ -673,6 +670,9 @@ TEST_SUITE("Archive")
 		// Loose files beside the archive: the archive's copy wins, other files still come from disk.
 		REQUIRE(FileSystem::WriteTextFile(output / "Assets" / "Scripts" / "Lib" / "Priority.lua", "return 'disk'"));
 		REQUIRE(FileSystem::WriteTextFile(output / "Assets" / "Scripts" / "Lib" / "DiskOnly.lua", "return 'disk only'"));
+		// Templates go in package.path order, each asking the archive and then the disk (as FileSystem reads one path):
+		// "?.lua" on disk comes before "?/init.lua" in the archive.
+		REQUIRE(FileSystem::WriteTextFile(output / "Assets" / "Scripts" / "Layered.lua", "return 'loose'"));
 		const uint64_t beforeMount = Log::GetHistory().GetTotalCount();
 		REQUIRE_MESSAGE(Exporter::MountExportedArchive(output, error), error);
 		REQUIRE(FileSystem::GetMountedArchive(output));
@@ -713,9 +713,7 @@ TEST_SUITE("Archive")
 		CHECK_MESSAGE(AssetManager::GetTexture("Assets/Textures/UASTC.ktx2"), AssetManager::GetError("Assets/Textures/UASTC.ktx2"));
 		CHECK(UIFonts::CheckFile("Assets/Fonts/Karla.ttf").empty());
 		CHECK_MESSAGE(AssetManager::GetMesh("Assets/Models/Shared.gltf"), AssetManager::GetError("Assets/Models/Shared.gltf"));
-#if !defined(_WIN32)
 		CHECK_MESSAGE(AssetManager::GetTexture(UnicodeTexture), AssetManager::GetError(UnicodeTexture));
-#endif
 		// Archive paths match letter case exactly on every platform, as on Linux.
 		CHECK_FALSE(FileSystem::ReadBinaryFile(output / "Assets" / "textures" / "Icon.png"));
 
@@ -742,6 +740,7 @@ TEST_SUITE("Archive")
 			CHECK(BasaltTest::Eval(*scene, "return require('Assets.Scripts.Pkg').Name") == "package");
 			CHECK(BasaltTest::Eval(*scene, "return require('Assets.Scripts.Lib.Priority')") == "archive");
 			CHECK(BasaltTest::Eval(*scene, "return require('Assets.Scripts.Lib.DiskOnly')") == "disk only");
+			CHECK(BasaltTest::Eval(*scene, "return require('Assets.Scripts.Layered')") == "loose");
 			CHECK(BasaltTest::Eval(*scene, "return require('Assets.Scripts.Lib.Shebang').Value") == "7");
 			const std::string failure = BasaltTest::Eval(*scene, "local ok, message = pcall(require('Assets.Scripts.Lib.Shebang').Fail) return message");
 			CHECK_MESSAGE(failure.find("Shebang.lua:3: boom") != std::string::npos, failure);
@@ -750,7 +749,7 @@ TEST_SUITE("Archive")
 			CHECK(bad.find("no file '") == std::string::npos);
 			const std::string missing = BasaltTest::Eval(*scene, "return require('Assets.Scripts.Missing')");
 			CHECK_MESSAGE(missing.find("no file '") != std::string::npos, missing);
-			// require puts "\n\t" before each searcher's lines; the archive searcher must not add another (no empty line).
+			// require puts "\n\t" before each searcher's lines; the engine's file searcher must not add another (no empty line).
 			CHECK_MESSAGE(missing.find("\n\t\n") == std::string::npos, missing);
 			scene->OnRuntimeStop();
 		}

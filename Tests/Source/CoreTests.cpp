@@ -1,7 +1,6 @@
 #include <doctest/doctest.h>
 
 #include <Basalt/Core/FileSystem.h>
-#include <Basalt/Core/Platform.h>
 #include <Basalt/Core/FileWatcher.h>
 #include <Basalt/Core/GamepadCodes.h>
 #include <Basalt/Core/Input.h>
@@ -11,6 +10,7 @@
 #include <Basalt/Core/LayerStack.h>
 #include <Basalt/Core/Log.h>
 #include <Basalt/Core/MouseCodes.h>
+#include <Basalt/Core/Platform.h>
 #include <Basalt/Core/Process.h>
 #include <Basalt/Core/UUID.h>
 #include <Basalt/Events/ApplicationEvent.h>
@@ -1220,6 +1220,32 @@ TEST_SUITE("Core")
 		const char* argv[] = { "app", "--project", "資産", nullptr };
 		CHECK(Platform::GetProcessArguments(4, argv) == std::vector<std::string>{ "app", "--project", "資産", "" });
 		CHECK(Platform::GetProcessArguments(0, argv).empty());
+#endif
+	}
+
+	// Lua strings and percent-decoded URIs need not be UTF-8: converting them must not throw (MSVC's std::filesystem
+	// does), only name no file.
+	TEST_CASE("Paths convert to and from UTF-8 without throwing, whatever the text")
+	{
+		CHECK(FileSystem::PathToUtf8(FileSystem::PathFromUtf8("Assets/資産.png")) == "Assets/資産.png");
+		CHECK(FileSystem::PathToGenericUtf8(FileSystem::PathFromUtf8("Assets/資産.png")) == "Assets/資産.png");
+		std::filesystem::path invalid;
+		CHECK_NOTHROW(invalid = FileSystem::PathFromUtf8("Caf\xE9.lua"));
+		CHECK_NOTHROW(FileSystem::PathToUtf8(invalid));
+		CHECK_FALSE(FileSystem::Exists(invalid));
+#if defined(_WIN32)
+		// Invalid sequences and unpaired surrogates (NTFS names may hold them) become U+FFFD.
+		CHECK(invalid.native() == std::wstring(L"Caf\uFFFD.lua"));
+		CHECK(FileSystem::PathToUtf8(std::filesystem::path(std::wstring{ L'a', wchar_t(0xD800), L'b' })) == "a\xEF\xBF\xBD"
+																											"b");
+		CHECK(Platform::WideToUtf8(std::wstring{ wchar_t(0xD800) }) == "\xEF\xBF\xBD");
+		CHECK(Platform::WideToUtf8(L"") == "");
+		CHECK(Platform::Utf8ToWide("資産") == std::optional<std::wstring>(L"\u8CC7\u7523"));
+		CHECK_FALSE(Platform::Utf8ToWide("\xFF").has_value());
+		CHECK(Platform::Utf8ToWideReplacing("\xFF") == std::wstring(L"\uFFFD"));
+		CHECK(Platform::WideToUtf8(*Platform::Utf8ToWide("日本語 名前")) == "日本語 名前");
+		CHECK(Platform::GetErrorMessage(2 /* ERROR_FILE_NOT_FOUND */).find('\n') == std::string::npos);
+		CHECK_FALSE(Platform::GetErrorMessage(2).empty());
 #endif
 	}
 

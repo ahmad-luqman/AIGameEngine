@@ -14,7 +14,7 @@ namespace Basalt {
 	class CommandLine
 	{
 	public:
-		// arguments holds the program name first, then the arguments (Platform::GetProcessArguments: UTF-8 everywhere).
+		// arguments[0], the program name, is skipped (the layout of Platform::GetProcessArguments).
 		CommandLine(const std::vector<std::string>& arguments, const std::vector<std::string>& optionsWithValues);
 
 		bool HasFlag(const std::string& name) const;

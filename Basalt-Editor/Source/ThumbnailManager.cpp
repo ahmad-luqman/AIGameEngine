@@ -315,7 +315,7 @@ namespace Basalt {
 			case ThumbnailKind::Environment:
 			{
 				// Loaded directly, not through AssetManager: browsing must not keep every image (or a 100 MB HDRI) in memory.
-				const Ref<TextureSource> source = TextureSource::LoadFromFile(Project::ResolvePath(FileSystem::PathFromUtf8(relativePath)), outError);
+				const Ref<TextureSource> source = TextureSource::LoadFromFile(Project::ResolvePath(relativePath), outError);
 				if (!source)
 					return std::nullopt;
 				ThumbnailImage image = MakeImageThumbnail(*source, PreviewRenderer::OutputSize, &outError);
@@ -350,7 +350,7 @@ namespace Basalt {
 				auto image = m_Renderer->RenderPrefab(relativePath, outError);
 				if (!image)
 					return std::nullopt;
-				const auto text = FileSystem::ReadTextFile(Project::ResolvePath(FileSystem::PathFromUtf8(relativePath)));
+				const auto text = FileSystem::ReadTextFile(Project::ResolvePath(relativePath));
 				const nlohmann::json data = text ? ParseJson(*text) : nlohmann::json();
 				const auto entities = data.is_object() ? data.find("Entities") : data.end();
 				std::vector<std::string> details;

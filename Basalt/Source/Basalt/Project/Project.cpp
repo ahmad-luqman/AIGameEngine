@@ -136,18 +136,19 @@ namespace Basalt {
 		std::filesystem::path filePath = std::filesystem::absolute(path, error);
 		if (std::filesystem::is_directory(filePath, error))
 			filePath /= FileName;
+		const std::string fileText = FileSystem::PathToUtf8(filePath);
 
 		const auto text = FileSystem::ReadTextFile(filePath);
 		if (!text)
 		{
-			outError = "cannot read project file '" + FileSystem::PathToUtf8(filePath) + "'";
+			outError = "cannot read project file '" + fileText + "'";
 			return nullptr;
 		}
 
 		const nlohmann::json data = ParseJson(*text);
 		if (data.is_discarded() || !data.is_object())
 		{
-			outError = "'" + FileSystem::PathToUtf8(filePath) + "' is not valid JSON";
+			outError = "'" + fileText + "' is not valid JSON";
 			return nullptr;
 		}
 
@@ -183,7 +184,7 @@ namespace Basalt {
 			// saving writes the reference back unchanged.
 			if (data.contains("Icon") && !project->m_Assets.Decode(data["Icon"], config.Icon, outError, true))
 			{
-				outError = "invalid project file '" + FileSystem::PathToUtf8(filePath) + "': Icon: " + outError;
+				outError = "invalid project file '" + fileText + "': Icon: " + outError;
 				return nullptr;
 			}
 			if (!outError.empty())
@@ -194,17 +195,17 @@ namespace Basalt {
 		}
 		catch (const nlohmann::json::exception& e)
 		{
-			outError = "invalid project file '" + FileSystem::PathToUtf8(filePath) + "': " + e.what();
+			outError = "invalid project file '" + fileText + "': " + e.what();
 			return nullptr;
 		}
 		if (!ParseProjectVersion(config.Version))
 		{
-			outError = fmt::format("invalid project file '{}': Version '{}' must be {}", FileSystem::PathToUtf8(filePath), config.Version, VersionFormat);
+			outError = fmt::format("invalid project file '{}': Version '{}' must be {}", fileText, config.Version, VersionFormat);
 			return nullptr;
 		}
 		if (!ValidateProjectText(config, outError))
 		{
-			outError = fmt::format("invalid project file '{}': {}", FileSystem::PathToUtf8(filePath), outError);
+			outError = fmt::format("invalid project file '{}': {}", fileText, outError);
 			return nullptr;
 		}
 		nlohmann::json graphicsPatch = nlohmann::json::object();
@@ -213,12 +214,12 @@ namespace Basalt {
 				graphicsPatch[key] = data[key];
 		if (!PatchGraphicsSettings(graphicsPatch, config.Graphics, outError))
 		{
-			outError = fmt::format("invalid project file '{}': {}", FileSystem::PathToUtf8(filePath), outError);
+			outError = fmt::format("invalid project file '{}': {}", fileText, outError);
 			return nullptr;
 		}
 		if (const auto seed = data.find("RandomSeed"); seed != data.end() && !JsonToUInt32(*seed, config.RandomSeed))
 		{
-			outError = fmt::format("invalid project file '{}': RandomSeed must be an integer between 0 and {}", FileSystem::PathToUtf8(filePath), UINT32_MAX);
+			outError = fmt::format("invalid project file '{}': RandomSeed must be an integer between 0 and {}", fileText, UINT32_MAX);
 			return nullptr;
 		}
 		// The window size reaches the runtime's window unchecked otherwise (a negative value would wrap around).
@@ -227,13 +228,13 @@ namespace Basalt {
 			const auto value = data.find(key);
 			if (value != data.end() && (!JsonToUInt32(*value, *size) || *size < ProjectConfig::MinWindowSize || *size > ProjectConfig::MaxWindowSize))
 			{
-				outError = fmt::format("invalid project file '{}': {} must be an integer in [{}, {}]", FileSystem::PathToUtf8(filePath), key, ProjectConfig::MinWindowSize, ProjectConfig::MaxWindowSize);
+				outError = fmt::format("invalid project file '{}': {} must be an integer in [{}, {}]", fileText, key, ProjectConfig::MinWindowSize, ProjectConfig::MaxWindowSize);
 				return nullptr;
 			}
 		}
 		if (const auto step = data.find("FixedTimestep"); step != data.end() && (!JsonToFloat(*step, config.FixedTimestep) || !IsValidFixedTimestep(config.FixedTimestep)))
 		{
-			outError = fmt::format("invalid project file '{}': FixedTimestep must be a number of seconds in (0, {}]", FileSystem::PathToUtf8(filePath), MaxFixedTimestep);
+			outError = fmt::format("invalid project file '{}': FixedTimestep must be a number of seconds in (0, {}]", fileText, MaxFixedTimestep);
 			return nullptr;
 		}
 		if (const auto layers = data.find("PhysicsLayers"); layers != data.end())
@@ -242,7 +243,7 @@ namespace Basalt {
 			auto physics = PhysicsLayers::FromJson(*layers, layerError);
 			if (!physics)
 			{
-				outError = "invalid project file '" + FileSystem::PathToUtf8(filePath) + "': " + layerError;
+				outError = "invalid project file '" + fileText + "': " + layerError;
 				return nullptr;
 			}
 			config.Physics = std::move(*physics);
@@ -364,7 +365,7 @@ namespace Basalt {
 		return true;
 	}
 
-	std::filesystem::path Project::ResolvePath(const std::filesystem::path& relativePath)
+	std::filesystem::path Project::ResolveNativePath(const std::filesystem::path& relativePath)
 	{
 		// Unresolved identity keys must never be interpreted as ordinary files, even if one mimics the key.
 		if (FileSystem::PathToGenericUtf8(relativePath).starts_with("asset-uuid:"))
@@ -377,14 +378,9 @@ namespace Basalt {
 		return std::filesystem::absolute(relativePath, error);
 	}
 
-	std::filesystem::path Project::ResolvePath(const std::string& relativePath)
+	std::filesystem::path Project::ResolvePath(std::string_view relativePath)
 	{
-		return ResolvePath(FileSystem::PathFromUtf8(relativePath));
-	}
-
-	std::filesystem::path Project::ResolvePath(const char* relativePath)
-	{
-		return ResolvePath(FileSystem::PathFromUtf8(relativePath ? relativePath : ""));
+		return ResolveNativePath(FileSystem::PathFromUtf8(relativePath));
 	}
 
 	std::string Project::MakeRelative(const std::filesystem::path& absolutePath)

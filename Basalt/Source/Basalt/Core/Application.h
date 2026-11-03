@@ -28,7 +28,6 @@ namespace Basalt {
 	{
 		std::string Name = "Basalt Application";
 		std::filesystem::path WorkingDirectory;
-		ApplicationCommandLineArgs CommandLineArgs;
 
 		uint32_t WindowWidth = 1600;
 		uint32_t WindowHeight = 900;
@@ -123,6 +122,6 @@ namespace Basalt {
 	};
 
 	// Implemented by each executable (editor, runtime, CLI).
-	Application* CreateApplication(ApplicationCommandLineArgs args);
+	Application* CreateApplication(const ApplicationCommandLineArgs& args);
 
 }

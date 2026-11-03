@@ -36,7 +36,8 @@ namespace Basalt {
 		{
 			// Per image: empty when embedded, else the external file's URI (which loads as its own texture).
 			std::vector<std::string> ImageUris;
-			// Per buffer: empty when embedded (a GLB's binary chunk or a data: URI), else the external file's URI.
+			// Per buffer: empty when embedded (a GLB's binary chunk or a data: URI), else the URI as written (percent-encoded;
+			// GetExternalFileKey decodes it).
 			std::vector<std::string> BufferUris;
 			size_t Materials = 0;
 		};
