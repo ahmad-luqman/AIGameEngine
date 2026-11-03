@@ -202,9 +202,9 @@ namespace Basalt {
 			CheckChainSettings(config, chainProblems);
 			ResolvedChain resolved{ .Config = &config, .Problem = &chain.Problem, .Weight = chain.Weight.Get() };
 			const bool followsTarget = config.FollowTarget && component.Target != 0;
-			// Only feet that follow their animation (or the ground) lock; any other target, or a chain that is not solved
-			// below, releases the lock at once.
-			const bool locksFoot = config.FootLock && IKChainReaches(config.Type) && std::holds_alternative<std::monostate>(chain.Target) && !followsTarget;
+			// Only feet that follow their animation (or the ground) lock, while their chain has weight; any other target, zero
+			// weight, or a chain that is not solved below releases the lock at once (restoring the weight starts afresh).
+			const bool locksFoot = config.FootLock && IKChainReaches(config.Type) && std::holds_alternative<std::monostate>(chain.Target) && !followsTarget && resolved.Weight > 0;
 			if (!locksFoot)
 				chain.Lock = {};
 			if (static_cast<size_t>(config.Type) >= IKChainTypeCount)

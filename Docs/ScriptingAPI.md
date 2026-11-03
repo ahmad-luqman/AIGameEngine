@@ -1575,7 +1575,7 @@ entity's up axis: the animation cannot slide it, while its height still follows 
 that locks in the air still comes down). Once locked it stays locked, whatever its speed, until the animation lifts the
 joint `LockHeight` (default 0.05 m) above its height when it locked, the character leaves the ground, or (at once, without
 easing) the target gets `LockDistance` (default 0.3 m) away across the up axis (a teleport, or a stride the lock cannot
-follow). Locking and releasing ease with `Smoothing`. A script target, turning `FootLock` off, and frames the entity's IK
+follow). Locking and releasing ease with `Smoothing`. A script target, turning `FootLock` off, a zero chain weight, and frames the entity's IK
 does not run (an active ragdoll, an Animator that cannot play, a zero scale, an unresolvable chain) release the lock at
 once, without easing. `IsIKFootLocked` reports the lock (footstep sounds).
 
