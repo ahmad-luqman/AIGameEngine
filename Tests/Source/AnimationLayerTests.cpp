@@ -5,19 +5,18 @@
 #include "TestUtils.h"
 
 #include <Basalt/Animation/AnimatedModel.h>
-
 #include <Basalt/Animation/AnimationMask.h>
 #include <Basalt/Animation/AnimationPose.h>
-#include <Basalt/Animation/FadingWeight.h>
 #include <Basalt/Animation/AnimationSystem.h>
+#include <Basalt/Animation/FadingWeight.h>
 #include <Basalt/Asset/AssetManager.h>
 #include <Basalt/Asset/MeshImporter.h>
 #include <Basalt/Core/JsonUtils.h>
 #include <Basalt/Core/Log.h>
 #include <Basalt/Project/ProjectValidator.h>
 #include <Basalt/Scene/ComponentRegistry.h>
-#include <Basalt/Scene/SceneSerializer.h>
 #include <Basalt/Scene/Entity.h>
+#include <Basalt/Scene/SceneSerializer.h>
 #include <Basalt/Scripting/ScriptEngine.h>
 
 using namespace Basalt;
@@ -891,6 +890,7 @@ TEST_SUITE("Animation")
 		CHECK(RunError(registry, session, "asset.write", { { "path", "Assets/Masks/Upper.banimmask" }, { "content", R"({ "Joints": [ { "Joint": "Chest", "Weight": 2 } ] })" } }).find("invalid animation mask: Joints[0].Weight") != std::string::npos);
 		CHECK_FALSE(FileSystem::Exists(Project::ResolvePath("Assets/Masks/Upper.banimmask")));
 		CHECK(RunError(registry, session, "asset.write", { { "path", "Assets/Animations/Upper.banimgraph" }, { "content", "{}" } }).find("invalid animation graph") != std::string::npos);
+		CHECK(RunError(registry, session, "asset.write", { { "path", "Assets/Masks/Upper.banimmask" }, { "content", "not json" } }).find("invalid animation mask") != std::string::npos);
 		Run(registry, session, "asset.write", { { "path", "Assets/Masks/Upper.banimmask" }, { "content", R"({ "Joints": [ { "Joint": "Chest" } ] })" } });
 		Run(registry, session, "asset.write", { { "path", "Assets/Animations/Upper.banimgraph" }, { "content", UpperBodyGraph().dump() } });
 
@@ -901,6 +901,7 @@ TEST_SUITE("Animation")
 		// References name files of their kind.
 		CHECK(RunError(registry, session, "component.set", { { "entity", "Hero" }, { "component", "Animator" }, { "data", { { "Layers", { { { "Name", "Upper" }, { "MaskAsset", "Assets/Animations/Upper.banimgraph" } } } } } } }).find("Layers[0].MaskAsset 'Assets/Animations/Upper.banimgraph' must be a .banimmask file") != std::string::npos);
 		CHECK(RunError(registry, session, "component.set", { { "entity", "Hero" }, { "component", "Animator" }, { "data", { { "Layers", { { { "Name", "Upper" }, { "StateMachine", "Assets/Masks/Upper.banimmask" } } } } } } }).find("must be a .banimgraph file") != std::string::npos);
+		CHECK(RunError(registry, session, "component.set", { { "entity", "Hero" }, { "component", "Animator" }, { "data", { { "StateMachine", "Assets/Models/Biped.gltf" } } } }).find("StateMachine 'Assets/Models/Biped.gltf' must be a .banimgraph file") != std::string::npos);
 
 		// Saved as UUID/path objects, and moves follow them.
 		Run(registry, session, "scene.save", { { "path", "Assets/Scenes/Layers.bscene" } });
@@ -918,6 +919,30 @@ TEST_SUITE("Animation")
 		REQUIRE_MESSAGE(loaded, error);
 		CHECK(loaded->GetAllEntitiesOrdered()[0].GetComponent<AnimatorComponent>().Layers[0].MaskAsset == "Assets/Shared/UpperBody.banimmask");
 		CHECK(GetAnimationWarnings(session.GetScene()->GetAllEntitiesOrdered()[0]).empty());
+		// A deleted file leaves an unresolved reference that loads (and saves back unchanged) rather than failing the scene.
+		Run(registry, session, "scene.save", { { "path", "Assets/Scenes/Layers.bscene" } });
+		const json reference = ParseJson(*FileSystem::ReadTextFile(Project::ResolvePath("Assets/Scenes/Layers.bscene")))["Entities"][0]["Components"]["Animator"]["Layers"][0];
+		const auto mask = FileSystem::ReadTextFile(Project::ResolvePath("Assets/Shared/UpperBody.banimmask"));
+		const auto graphText = FileSystem::ReadTextFile(Project::ResolvePath("Assets/Shared/UpperBody.banimgraph"));
+		const auto maskMeta = FileSystem::ReadTextFile(Project::ResolvePath("Assets/Shared/UpperBody.banimmask.meta"));
+		const auto graphMeta = FileSystem::ReadTextFile(Project::ResolvePath("Assets/Shared/UpperBody.banimgraph.meta"));
+		REQUIRE(Project::GetActive()->GetAssets().Remove("Assets/Shared/UpperBody.banimmask", error));
+		REQUIRE(Project::GetActive()->GetAssets().Remove("Assets/Shared/UpperBody.banimgraph", error));
+		const auto orphaned = SceneSerializer::LoadScene(Project::ResolvePath("Assets/Scenes/Layers.bscene"), error);
+		REQUIRE_MESSAGE(orphaned, error);
+		const auto& unresolved = orphaned->GetAllEntitiesOrdered()[0].GetComponent<AnimatorComponent>().Layers[0];
+		CHECK(AssetRegistry::IsUnresolvedKey(unresolved.MaskAsset));
+		CHECK(AssetRegistry::IsUnresolvedKey(unresolved.StateMachine));
+		REQUIRE(SceneSerializer::SaveScene(*orphaned, Project::ResolvePath("Assets/Scenes/Orphaned.bscene"), error));
+		const json saved2 = ParseJson(*FileSystem::ReadTextFile(Project::ResolvePath("Assets/Scenes/Orphaned.bscene")))["Entities"][0]["Components"]["Animator"]["Layers"][0];
+		CHECK(saved2["MaskAsset"] == reference["MaskAsset"]);
+		CHECK(saved2["StateMachine"] == reference["StateMachine"]);
+		// Restored with their identities, the references resolve again.
+		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/Shared/UpperBody.banimmask"), *mask));
+		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/Shared/UpperBody.banimgraph"), *graphText));
+		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/Shared/UpperBody.banimmask.meta"), *maskMeta));
+		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/Shared/UpperBody.banimgraph.meta"), *graphMeta));
+		REQUIRE(Project::GetActive()->GetAssets().Refresh(error));
 
 		// project.validate checks the files and the references.
 		Project::GetActive()->GetConfig().StartScene = "Assets/Scenes/Layers.bscene";
@@ -1020,6 +1045,42 @@ TEST_SUITE("Animation")
 		CHECK(system.SetParameter(biped, "Speed", 1.0f));
 		CHECK(system.SetParameter(biped, "Speed", 2.0f));
 		CHECK(CountLogMessages(since, "Animator 'Biped' layer 'Upper': parameter 'Speed': type mismatch: expected Bool, got Float") == 1);
+		// The other way round, the layer takes the value and the base reports its own mismatch, once.
+		CHECK(system.SetParameter(biped, "Speed", true));
+		CHECK(system.SetParameter(biped, "Speed", true));
+		CHECK(CountLogMessages(since, "Animator 'Biped': parameter 'Speed': type mismatch: expected Float, got Bool") == 1);
+		// A name only the layer declares is the layer's to report: no unknown name from the base.
+		CHECK_FALSE(system.SetParameter(biped, "Waving", 1.0f));
+		CHECK(CountLogMessages(since, "Animator 'Biped' layer 'Upper': parameter 'Waving': type mismatch: expected Bool, got Float") == 1);
+		CHECK(CountLogMessages(since, "unknown name") == 0);
+		// A typo between good calls stays logged once: a good call clears only its own name's report.
+		for (int i = 0; i < 3; i++)
+		{
+			CHECK_FALSE(system.SetParameter(biped, "Wavin", true));
+			CHECK(system.SetParameter(biped, "Waving", false));
+		}
+		CHECK(CountLogMessages(since, "parameter 'Wavin': unknown name; declared parameters: Nod Speed Waving") == 1);
+		// A trigger latched before a restart belongs to the old run: the restarted graph does not take Nod.
+		REQUIRE(system.SetParameter(biped, "Waving", true));
+		system.Update(Step);
+		REQUIRE(system.GetLayerState(biped, "Upper") == "Wave");
+		REQUIRE(system.SetParameter(biped, "Waving", false));
+		system.Pause(biped, true);
+		REQUIRE(system.SetTrigger(biped, "Nod"));
+		REQUIRE(system.PlayLayer(biped, "Upper", std::nullopt));
+		system.Pause(biped, false);
+		REQUIRE(system.SetParameter(biped, "Waving", true));
+		system.Update(Step);
+		system.Update(Step);
+		CHECK(system.GetLayerState(biped, "Upper") == "Wave");
+		// After a script clip replaced the graph, it starts from its defaults; a name only it declares is reported as
+		// declared by a layer whose graph is not running.
+		REQUIRE(system.PlayLayer(biped, "Upper", std::string("Breathe")));
+		CHECK_FALSE(system.SetParameter(biped, "Waving", true));
+		CHECK(CountLogMessages(since, "parameter 'Waving': declared by layer 'Upper', whose state machine is not running") == 1);
+		REQUIRE(system.PlayLayer(biped, "Upper", std::nullopt));
+		system.Update(Step);
+		CHECK(system.GetLayerState(biped, "Upper") == "Lean");
 
 		// A graph whose initial state cannot play shows nothing, and restarting it every frame logs the state once.
 		json broken = UpperBodyGraph();
@@ -1035,6 +1096,30 @@ TEST_SUITE("Animation")
 		CHECK(CountLogMessages(since, "layer 'Upper': state 'Lean' cannot play: clip 'Gone' not found") == 1);
 		CHECK(system.GetLayerState(biped, "Upper") == "");
 		CHECK(NearRotation(LocalRotation(system, biped, *source, "RightUpperArm"), glm::quat(1, 0, 0, 0)));
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Parameter problems name what is missing: no graph at all, idle layer graphs or an undeclared name")
+	{
+		ClearAssetCache clear;
+		TempProject project("ParameterMessages");
+		Scene scene;
+		auto plain = AddBiped(scene);
+		auto idle = AddBiped(scene);
+		idle.GetComponent<AnimatorComponent>().Layers = { GraphLayer("Upper", project.WriteFile("Assets/Animations/Broken.banimgraph", "{}")) };
+		auto empty = AddBiped(scene, "");
+		const json bare = { { "InitialState", "Idle" }, { "States", json::array({ { { "Name", "Idle" }, { "Clip", "Breathe" } } }) } };
+		empty.GetComponent<AnimatorComponent>().StateMachine = project.WriteFile("Assets/Animations/Bare.banimgraph", bare.dump());
+		scene.OnRuntimeStart();
+		auto& system = *scene.GetAnimationSystem();
+		const auto since = Log::GetHistory().GetTotalCount();
+		CHECK_FALSE(system.SetParameter(plain, "Go", true));
+		CHECK_FALSE(system.SetParameter(idle, "Go", true));
+		CHECK_FALSE(system.SetParameter(empty, "Go", true));
+		CHECK(CountLogMessages(since, "parameter 'Go': Animator has no StateMachine") == 1);
+		CHECK(CountLogMessages(since, "parameter 'Go': no state machine is running (the layers' graphs show nothing or a script clip replaced them)") == 1);
+		// A running graph without parameters: the name is unknown, not the graph missing.
+		CHECK(CountLogMessages(since, "parameter 'Go': unknown name; declared parameters:") == 1);
 		scene.OnRuntimeStop();
 	}
 }

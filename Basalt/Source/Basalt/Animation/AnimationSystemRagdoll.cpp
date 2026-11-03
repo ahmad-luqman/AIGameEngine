@@ -95,7 +95,7 @@ namespace Basalt {
 					const auto& animated = playback.Pose.Nodes[node];
 					pose.Translation = glm::mix(animated.Translation, pose.Translation, weight);
 					pose.Scale = glm::mix(animated.Scale, pose.Scale, weight);
-					pose.Rotation = BlendRagdollRotation(animated.Rotation, pose.Rotation, weight);
+					pose.Rotation = Math::Slerp(animated.Rotation, pose.Rotation, weight);
 				}
 			for (const auto& [node, matrix] : joints)
 				playback.RagdollOverlay.push_back({ node, physical.Nodes[node] });

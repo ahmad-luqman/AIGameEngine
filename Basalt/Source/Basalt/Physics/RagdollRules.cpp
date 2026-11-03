@@ -25,11 +25,6 @@ namespace Basalt {
 		return true;
 	}
 
-	glm::quat BlendRagdollRotation(const glm::quat& animated, const glm::quat& physical, float weight)
-	{
-		return Math::Slerp(animated, physical, weight);
-	}
-
 	bool RagdollNeedsRebuild(const RagdollComponent& built, const RagdollComponent& current)
 	{
 		RagdollComponent structural = current;

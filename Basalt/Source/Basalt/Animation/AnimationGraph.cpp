@@ -1,5 +1,6 @@
 #include "Basalt/Animation/AnimationGraph.h"
 
+#include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/JsonUtils.h"
 
 #include <algorithm>
@@ -240,9 +241,14 @@ namespace Basalt {
 		return std::nullopt;
 	}
 
-	std::optional<AnimationGraph> AnimationGraph::FromText(const std::string& text, std::string& outError)
+	std::optional<AnimationGraph> AnimationGraph::FromText(std::string_view text, std::string& outError)
 	{
 		const nlohmann::json data = ParseJson(text, outError);
 		return data.is_discarded() ? std::nullopt : FromJson(data, outError);
+	}
+
+	bool AnimationGraph::IsGraphFile(const std::string& path)
+	{
+		return FileSystem::GetLowercaseExtension(FileSystem::PathFromUtf8(path)) == Extension;
 	}
 }

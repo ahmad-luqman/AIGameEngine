@@ -207,7 +207,7 @@ namespace Basalt {
 					warnings.push_back(fmt::format("Animator layer '{}': ReferenceClip only applies to Additive layers", layer.Name));
 				if (!layer.MaskAsset.empty() && !layer.Mask.empty())
 					warnings.push_back(fmt::format("Animator layer '{}': Mask is unused; the MaskAsset replaces it", layer.Name));
-				const auto asset = layer.MaskAsset.empty() ? nullptr : AssetManager::GetAnimationMask(layer.MaskAsset);
+				const auto asset = AssetManager::GetAnimationMask(layer.MaskAsset);
 				const std::vector<AnimationMaskJoint>* mask = SelectLayerMask(layer, asset.get());
 				if (!mask)
 				{

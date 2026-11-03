@@ -515,7 +515,8 @@ function Entity:SetAnimationLayerWeight(layer, weight, seconds) end
 function Entity:GetAnimationLayerWeight(layer) end
 
 ---The current state of a StateMachine layer's graph; "" for a clip layer, while a script clip plays instead, and while
----the layer shows no graph (one that cannot load or has no playable initial state, an unloadable mask); nil for an unknown layer.
+---the layer shows no graph (one that cannot load or has no playable initial state, an unloadable mask, or an Additive layer
+---whose reference clip is missing); nil for an unknown layer.
 ---@param layer string
 ---@return string?
 function Entity:GetAnimationLayerState(layer) end

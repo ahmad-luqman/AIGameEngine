@@ -1847,18 +1847,18 @@ namespace Basalt {
 				const json& content = Require(params, "content");
 				if (!content.is_string())
 					throw CommandError("'content' must be a string");
-				const std::string extension = FileSystem::GetLowercaseExtension(FileSystem::PathFromUtf8(path));
+				const std::string& text = content.get_ref<const std::string&>();
 				std::string parseError;
-				if (extension == AnimationGraph::Extension && !AnimationGraph::FromText(content.get_ref<const std::string&>(), parseError))
+				if (AnimationGraph::IsGraphFile(path) && !AnimationGraph::FromText(text, parseError))
 					throw CommandError("invalid animation graph: " + parseError);
-				if (extension == AnimationMask::Extension && !AnimationMask::FromText(content.get_ref<const std::string&>(), parseError))
+				if (AnimationMask::IsMaskFile(path) && !AnimationMask::FromText(text, parseError))
 					throw CommandError("invalid animation mask: " + parseError);
 				std::vector<std::string> warnings;
 				if (MaterialAsset::IsMaterialFile(path))
 				{
 					std::string error;
 					// Parse warnings (unresolved UUIDs) are covered by AddMaterialTextureWarnings, with the same wording.
-					const auto material = MaterialAsset::FromText(content.get_ref<const std::string&>(), error);
+					const auto material = MaterialAsset::FromText(text, error);
 					if (!material)
 						throw CommandError("invalid material: " + error);
 					AddMaterialTextureWarnings(*material, warnings);

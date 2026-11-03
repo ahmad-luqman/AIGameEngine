@@ -761,7 +761,7 @@ namespace Basalt {
 
 	FadingWeight& PhysicsWorld::Impl::MotorStrengthFor(UUID uuid, const RagdollComponent& component)
 	{
-		FadingWeight& strength = RagdollStrength.try_emplace(uuid, component.MotorStrength).first->second;
+		FadingWeight& strength = RagdollStrength.try_emplace(uuid, component.MotorStrength).first->second.Weight;
 		strength.Configure(component.MotorStrength);
 		return strength;
 	}
@@ -778,9 +778,9 @@ namespace Basalt {
 				it = RagdollStrength.erase(it);
 				continue;
 			}
-			it->second.Configure(component->MotorStrength);
+			it->second.Weight.Configure(component->MotorStrength);
 			if (std::isfinite(seconds) && seconds > 0)
-				it->second.Advance(seconds);
+				it->second.Weight.Advance(seconds);
 			++it;
 		}
 		for (auto& [id, record] : Ragdolls)
@@ -806,8 +806,11 @@ namespace Basalt {
 			return std::isnan(value) ? fallback : std::clamp(value, low, high);
 		};
 		const RagdollComponent defaults;
-		// The strength itself is already clamped (FadingWeight; NaN is 0): only said so.
-		setting(component.MotorStrength, 0.0f, 1.0f, defaults.MotorStrength, "MotorStrength");
+		// The strength itself is already clamped (FadingWeight; a non-finite one is 0): only said so.
+		if (!std::isfinite(component.MotorStrength))
+			problems.emplace_back("MotorStrength must be finite; motors are off");
+		else
+			setting(component.MotorStrength, 0.0f, 1.0f, defaults.MotorStrength, "MotorStrength");
 		const float frequency = setting(component.MotorFrequency, 0.1f, RagdollComponent::MaxMotorFrequency, defaults.MotorFrequency, "MotorFrequency");
 		const float damping = setting(component.MotorDamping, 0.0f, RagdollComponent::MaxMotorDamping, defaults.MotorDamping, "MotorDamping");
 		const float torque = setting(component.MotorTorque, 0.0f, RagdollComponent::MaxMotorTorque, defaults.MotorTorque, "MotorTorque") * strength;
@@ -828,14 +831,19 @@ namespace Basalt {
 		auto* animations = ScenePtr->GetAnimationSystem();
 		const auto view = animations ? animations->GetPoseView(entity) : std::nullopt;
 		std::vector<glm::mat4> animated;
+		const char* unavailable = nullptr;
 		if (!view)
-			problems.emplace_back("the Animator cannot animate; motors are off");
+			unavailable = "the Animator cannot animate; motors are off";
 		else if (view->Source != record.Source)
-			problems.emplace_back("the Animator's model differs from the one the ragdoll was built for; motors are off until it rebuilds");
+			unavailable = "the Animator's model differs from the one the ragdoll was built for; motors are off until it rebuilds";
+		// A pose that does not compose leaves `animated` partly filled: never drive toward it.
 		else if (!animations->GetAnimatedPose(entity, *record.Source, animated))
-			problems.emplace_back("the animated pose is not finite; motors are off");
-		if (animated.empty())
+			unavailable = "the animated pose is not finite; motors are off";
+		if (unavailable)
+		{
+			problems.emplace_back(unavailable);
 			return turnOff();
+		}
 		// Each body's rotation relative to its skeleton parent's, from the animated joints in world space. The portable
 		// decomposition keeps the targets identical on every platform.
 		const glm::mat4 world = ScenePtr->GetWorldTransform(entity);
@@ -910,7 +918,7 @@ namespace Basalt {
 			return std::nullopt;
 		const auto it = m_Impl->RagdollStrength.find(entity.GetUUID());
 		// FadingWeight's clamp, for a strength no call or frame has configured yet.
-		return it != m_Impl->RagdollStrength.end() ? it->second.Get() : FadingWeight(component->MotorStrength).Get();
+		return it != m_Impl->RagdollStrength.end() ? it->second.Weight.Get() : FadingWeight(component->MotorStrength).Get();
 	}
 
 	void PhysicsWorld::RejectRagdollPose(Entity entity)

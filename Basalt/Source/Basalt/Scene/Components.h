@@ -364,7 +364,8 @@ namespace Basalt {
 		// LookAt: the largest turn, in degrees (0..180), away from the animated aim.
 		float MaxAngle = 60.0f;
 		// TwoBone: the direction (not a point) the middle joint bends toward, in the entity's space; zero keeps the
-		// animated bend. Fabrik: the side a straight chain is nudged toward before solving (zero: +Z).
+		// animated bend. Fabrik: the side a straight chain is nudged toward when its target lies within reach (zero: +Z, else
+		// X or Y).
 		glm::vec3 Pole = { 0.0f, 0.0f, 0.0f };
 		// TwoBone, Fabrik: place Joint on the ground below it (foot placement) while no other target is set.
 		bool Ground = false;

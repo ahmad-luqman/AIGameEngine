@@ -72,9 +72,9 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   `AnimationSystem::LateUpdate` (after physics and OnLateUpdate, before attachments) from `Pose`, never from the last
   solution; the solved joints' local transforms are kept as an overlay so a pose evaluated again that frame (Play in a
   callback) keeps the IK. Targets apply as script target, then the component's `Target` (FollowTarget chains), then
-  ground; FootLock chains hold a planted joint's position across the up axis (its height follows the animation) from when its
-  target is slower than `LockSpeed` until a lift, a carry or leaving the ground, and release on frames the chain is not
-  solved. Foot rays use
+  ground; FootLock chains hold a planted joint's position across the up axis (its height follows the animation and the
+  ground) from when its target is slower than `LockSpeed` until a lift, a carry or leaving the ground, and release at once
+  when another target applies, FootLock turns off, or the entity's IK does not run. Foot rays use
   `PhysicsWorld::RaycastAll` and skip the entity, its descendants and its
   character controller's entity and descendants. IK targets and weights live in the system keyed by entity (they
   survive playback resets); layer state belongs to the playback. Solvers (`Animation/InverseKinematics.h`) are
@@ -87,8 +87,8 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   on the current pose. Active ragdolls suspend the entity's body/controller and inherit the body's linear/angular motion (a controller's linear motion); live rebuilds preserve
   physical placement and joint motion. Animation keeps
   ticking, but root motion, IK and springs yield to the physical overlay, applied last before attachments. Powered rigs
-  (motor strength > 0: a per-entity `FadingWeight` in `PhysicsWorld`, configured from `MotorStrength`, faded by
-  `SetRagdollMotorStrength`, surviving rebuilds) set swing-twist position
+  (strength x `MotorTorque` > 0; the strength is a per-entity `FadingWeight` in `PhysicsWorld`, configured from
+  `MotorStrength`, faded by `SetRagdollMotorStrength`, surviving rebuilds) set swing-twist position
   motors toward the layered animation once per physics frame (`DriveRagdollMotors`, targets from the portable
   decomposition, from clips sampled with the portable `Math::Slerp`); a rig never powered never touches its motors, and motor
   settings never rebuild (`RagdollNeedsRebuild`). Recovery
@@ -96,7 +96,8 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   supplies the height when recovering onto a different ground level. Positive uniform transforms are required.
   `scene.hash` includes physical joints and recovery weight; saves/copies contain configuration only. Ragdoll TRS
   decomposition avoids platform libm rounding, and recovery rotations and clip sampling and pose blends use Jolt's
-  portable interpolation (`Math::Slerp`), so poses that drive physics agree across platforms.
+  portable interpolation (`Math::Slerp`), so the layered poses ragdoll motors read agree across platforms (IK and root
+  motion still use libm, and feed no physics).
 - **Morph targets and retargeting.** Morph deltas are imported per submesh (`MeshSource::MorphDeltas`, following vertex
   reordering) and drawn in the vertex shader from a per-model delta texture (set 2, vertex stage) with each draw's
   nonzero weights packed into draw records alongside the palettes. Weights live in the pose

@@ -1492,6 +1492,14 @@ TEST_SUITE("Animation")
 		system.Update(Step);
 		CHECK(Locked(system, biped, "RightHand"));
 		CHECK(Near(BoneWorld(scene, biped, "RightHand"), planted - glm::vec3(0, 0.05f, 0), 1e-3f));
+		// A crouch (the body dropping further, straight down) only lowers the hand: the lock measures its distance across the
+		// up axis.
+		biped.GetTransform().Translation.y = -0.15f;
+		system.Update(Step);
+		CHECK(Locked(system, biped, "RightHand"));
+		CHECK(Near(BoneWorld(scene, biped, "RightHand"), planted - glm::vec3(0, 0.15f, 0), 1e-3f));
+		biped.GetTransform().Translation.y = -0.05f;
+		system.Update(Step);
 		// Once the animated hand is LockDistance away it lets go at once, and while it moves faster than LockSpeed (it
 		// moved 0.04 m in a 60th of a second here) it does not lock again.
 		biped.GetTransform().Translation.x = 0.12f;
@@ -1510,6 +1518,30 @@ TEST_SUITE("Animation")
 		system.Update(Step);
 		system.Update(Step);
 		CHECK(Locked(system, biped, "RightHand"));
+		// A target entity that is gone by the next solve still releases the lock, and so does a zero-scale frame.
+		auto doomed = scene.CreateEntity("Doomed");
+		REQUIRE(system.SetIKTarget(biped, "RightHand", doomed, false));
+		scene.DestroyEntity(doomed);
+		system.Update(Step);
+		CHECK(!Locked(system, biped, "RightHand"));
+		REQUIRE(system.ClearIKTarget(biped, "RightHand"));
+		system.Update(Step);
+		system.Update(Step);
+		REQUIRE(Locked(system, biped, "RightHand"));
+		biped.GetTransform().Scale = glm::vec3(0);
+		system.Update(Step);
+		CHECK(!Locked(system, biped, "RightHand"));
+		biped.GetTransform().Scale = glm::vec3(1);
+		system.Update(Step);
+		system.Update(Step);
+		REQUIRE(Locked(system, biped, "RightHand"));
+		// So does a chain that stops resolving.
+		ik.Chains[0].Joint = "Missing";
+		system.Update(Step);
+		CHECK(!Locked(system, biped, "RightHand"));
+		ik.Chains[0].Joint = "RightHand";
+		system.Update(Step);
+		system.Update(Step);
 		// Turning FootLock off releases it too, and turning it back on starts afresh where the hand stands.
 		ik.Chains[0].FootLock = false;
 		system.Update(Step);

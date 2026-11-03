@@ -3,6 +3,7 @@
 #include "EditorColors.h"
 #include "Panels/JsonWidgets.h"
 
+#include "Basalt/Animation/AnimationGraph.h"
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Project/Project.h"
 
@@ -104,7 +105,7 @@ namespace Basalt {
 	bool AnimationGraphPanel::Open(const std::string& requested, std::string& error)
 	{
 		const auto path = FileSystem::NormalizeGeneric(requested);
-		if (!Project::GetActive() || !path.starts_with("Assets/") || FileSystem::GetLowercaseExtension(FileSystem::PathFromUtf8(path)) != ".banimgraph" || path.find("..") != std::string::npos)
+		if (!Project::GetActive() || !path.starts_with("Assets/") || !AnimationGraph::IsGraphFile(path) || path.find("..") != std::string::npos)
 		{
 			error = "open a .banimgraph under the active project's Assets/";
 			return false;
@@ -450,7 +451,7 @@ namespace Basalt {
 			{
 				if (IsDirty())
 					m_Error = "Save or Revert the current graph first";
-				else if (!m_PathInput.starts_with("Assets/") || m_PathInput.find("..") != std::string::npos || FileSystem::GetLowercaseExtension(FileSystem::PathFromUtf8(m_PathInput)) != ".banimgraph")
+				else if (!m_PathInput.starts_with("Assets/") || m_PathInput.find("..") != std::string::npos || !AnimationGraph::IsGraphFile(m_PathInput))
 					m_Error = "Choose a .banimgraph path under Assets/";
 				else if (FileSystem::Exists(Project::ResolvePath(m_PathInput)))
 					m_Error = "The file already exists; Open it instead";
