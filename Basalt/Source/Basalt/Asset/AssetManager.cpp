@@ -160,66 +160,47 @@ namespace Basalt {
 			return s_Materials.emplace(key, std::move(entry)).first->second.Asset;
 		}
 
-		Ref<const AnimationGraph> LoadAnimationGraph(const std::string& key, std::string& outError)
+		// A JSON asset (an animation graph or mask: T::FromText), read through FileSystem so a mounted archive serves it.
+		template<typename T>
+		Ref<const T> LoadJsonAsset(const std::string& key, const char* kind, std::string& outError)
 		{
 			std::string readError;
 			const auto text = FileSystem::ReadTextFile(Project::ResolvePath(key), &readError);
 			if (!text)
-				outError = "cannot read animation graph '" + key + "' (" + readError + ")";
-			else
 			{
-				const auto data = ParseJson(*text, outError);
-				if (!data.is_discarded())
-					if (auto graph = AnimationGraph::FromJson(data, outError))
-						return CreateRef<const AnimationGraph>(std::move(*graph));
+				outError = fmt::format("cannot read animation {} '{}' ({})", kind, key, readError);
+				return nullptr;
 			}
-			return nullptr;
+			auto asset = T::FromText(*text, outError);
+			return asset ? CreateRef<const T>(std::move(*asset)) : nullptr;
 		}
 
-		Ref<const AnimationMask> LoadAnimationMask(const std::string& key, std::string& outError)
+		// The cached JSON asset of `key`, loaded (and a failure logged) once.
+		template<typename T>
+		Ref<const T> GetJsonAsset(std::unordered_map<std::string, CacheEntry<const T>>& cache, const std::string& key, const char* kind)
 		{
-			std::string readError;
-			const auto text = FileSystem::ReadTextFile(Project::ResolvePath(key), &readError);
-			if (!text)
-				outError = "cannot read animation mask '" + key + "' (" + readError + ")";
-			else
-			{
-				const auto data = ParseJson(*text, outError);
-				if (!data.is_discarded())
-					if (auto mask = AnimationMask::FromJson(data, outError))
-						return CreateRef<const AnimationMask>(std::move(*mask));
-			}
-			return nullptr;
+			CheckProject();
+			if (key.empty())
+				return nullptr;
+			if (auto it = cache.find(key); it != cache.end())
+				return it->second.Asset;
+			CacheEntry<const T> entry;
+			entry.Asset = LoadJsonAsset<T>(key, kind, entry.Error);
+			if (!entry.Asset)
+				BS_CORE_ERROR("Animation {} '{}': {}", kind, key, entry.Error);
+			return cache.emplace(key, std::move(entry)).first->second.Asset;
 		}
 
 	}
 
 	Ref<const AnimationMask> AssetManager::GetAnimationMask(const std::string& key)
 	{
-		CheckProject();
-		if (key.empty())
-			return nullptr;
-		if (auto it = s_Masks.find(key); it != s_Masks.end())
-			return it->second.Asset;
-		CacheEntry<const AnimationMask> entry;
-		entry.Asset = LoadAnimationMask(key, entry.Error);
-		if (!entry.Asset)
-			BS_CORE_ERROR("Animation mask '{}': {}", key, entry.Error);
-		return s_Masks.emplace(key, std::move(entry)).first->second.Asset;
+		return GetJsonAsset(s_Masks, key, "mask");
 	}
 
 	Ref<const AnimationGraph> AssetManager::GetAnimationGraph(const std::string& key)
 	{
-		CheckProject();
-		if (key.empty())
-			return nullptr;
-		if (auto it = s_Graphs.find(key); it != s_Graphs.end())
-			return it->second.Asset;
-		CacheEntry<const AnimationGraph> entry;
-		entry.Asset = LoadAnimationGraph(key, entry.Error);
-		if (!entry.Asset)
-			BS_CORE_ERROR("Animation graph '{}': {}", key, entry.Error);
-		return s_Graphs.emplace(key, std::move(entry)).first->second.Asset;
+		return GetJsonAsset(s_Graphs, key, "graph");
 	}
 
 	Ref<const MaterialData> AssetManager::RequestMaterial(const std::string& key)

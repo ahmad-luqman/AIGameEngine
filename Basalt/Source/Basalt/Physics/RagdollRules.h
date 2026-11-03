@@ -15,4 +15,8 @@ namespace Basalt {
 	// Shared by the registry and physics: C++ component writes meet the same rules as JSON/Lua edits.
 	std::string ValidateRagdoll(const RagdollComponent& component);
 
+	// Whether a live rig built from `built` must be rebuilt for `current`: only structural settings count. Control
+	// (Enabled, RecoveryTime) and motor settings apply live.
+	bool RagdollNeedsRebuild(const RagdollComponent& built, const RagdollComponent& current);
+
 }

@@ -23,6 +23,17 @@ namespace Basalt {
 	using namespace PhysicsInternal;
 
 	namespace {
+		// Visits a rig's swing-twist joints until `visit` returns true; whether one did.
+		template<typename Visit>
+		bool ForEachSwingTwist(JPH::Ragdoll& doll, const Visit& visit)
+		{
+			for (size_t i = 0; i < doll.GetConstraintCount(); i++)
+				if (auto* constraint = doll.GetConstraint(static_cast<int>(i)); constraint && constraint->GetSubType() == JPH::EConstraintSubType::SwingTwist)
+					if (visit(*static_cast<JPH::SwingTwistConstraint*>(constraint)))
+						return true;
+			return false;
+		}
+
 		bool UniformTransform(const glm::mat4& matrix, glm::vec3& position, glm::quat& rotation, glm::vec3& scale)
 		{
 			return DecomposeRagdollTransform(matrix, position, rotation, scale) && scale.x > 1e-5f &&
@@ -220,6 +231,7 @@ namespace Basalt {
 		settings->CalculateBodyIndexToConstraintIndex();
 		settings->CalculateConstraintIndexToBodyIdxPair();
 		record.Doll = settings->CreateRagdoll(NextRagdollGroup++, static_cast<uint64_t>(entity.GetUUID()), System.get());
+		record.MotorsOn = false;
 		if (!record.Doll)
 		{
 			cacheFailure = false;
@@ -340,6 +352,7 @@ namespace Basalt {
 		}
 		record.Doll->RemoveFromPhysicsSystem();
 		record.Doll = nullptr;
+		record.MotorsOn = false;
 		if (!ShuttingDown)
 		{
 			DirtyEntities.Insert(uuid);
@@ -651,18 +664,10 @@ namespace Basalt {
 					record.FrozenWorld = std::move(matrices);
 				record.World = currentWorld;
 			}
-			// Control and motor settings apply live; only structural edits rebuild.
-			auto settings = *component;
-			settings.Enabled = record.Settings.Enabled;
-			settings.RecoveryTime = record.Settings.RecoveryTime;
-			settings.MotorStrength = record.Settings.MotorStrength;
-			settings.MotorFrequency = record.Settings.MotorFrequency;
-			settings.MotorDamping = record.Settings.MotorDamping;
-			settings.MotorTorque = record.Settings.MotorTorque;
 			auto* animations = ScenePtr->GetAnimationSystem();
 			const auto view = animations ? animations->GetPoseView(entity) : std::nullopt;
 			const bool sourceChanged = !view || view->Source != record.Source;
-			if (record.Doll && (sourceChanged || (component->Enabled && (resized || settings != record.Settings))))
+			if (record.Doll && (sourceChanged || (component->Enabled && (resized || RagdollNeedsRebuild(record.Settings, *component)))))
 			{
 				rebuilds[id] = CaptureRagdollMotion(record);
 				remove.push_back(id);
@@ -754,6 +759,13 @@ namespace Basalt {
 		DriveRagdollMotors(seconds);
 	}
 
+	FadingWeight& PhysicsWorld::Impl::MotorStrengthFor(UUID uuid, const RagdollComponent& component)
+	{
+		FadingWeight& strength = RagdollStrength.try_emplace(uuid, component.MotorStrength).first->second;
+		strength.Configure(component.MotorStrength);
+		return strength;
+	}
+
 	void PhysicsWorld::Impl::DriveRagdollMotors(float seconds)
 	{
 		// Strengths fade while their rig is inactive too, so a fade a script started before activation has moved on.
@@ -779,8 +791,7 @@ namespace Basalt {
 			const auto* component = entity ? entity.TryGetComponent<RagdollComponent>() : nullptr;
 			if (!component)
 				continue;
-			const auto strength = RagdollStrength.try_emplace(id, component->MotorStrength).first;
-			ApplyRagdollMotors(entity, record, *component, strength->second.Get());
+			ApplyRagdollMotors(entity, record, *component, MotorStrengthFor(id, *component).Get());
 		}
 	}
 
@@ -795,59 +806,62 @@ namespace Basalt {
 			return std::isnan(value) ? fallback : std::clamp(value, low, high);
 		};
 		const RagdollComponent defaults;
+		// The strength itself is already clamped (FadingWeight; NaN is 0): only said so.
+		setting(component.MotorStrength, 0.0f, 1.0f, defaults.MotorStrength, "MotorStrength");
 		const float frequency = setting(component.MotorFrequency, 0.1f, RagdollComponent::MaxMotorFrequency, defaults.MotorFrequency, "MotorFrequency");
 		const float damping = setting(component.MotorDamping, 0.0f, RagdollComponent::MaxMotorDamping, defaults.MotorDamping, "MotorDamping");
 		const float torque = setting(component.MotorTorque, 0.0f, RagdollComponent::MaxMotorTorque, defaults.MotorTorque, "MotorTorque") * strength;
-		const int constraints = static_cast<int>(record.Doll->GetConstraintCount());
-		const auto forEachJoint = [&](const auto& visit) {
-			for (int i = 0; i < constraints; i++)
-				if (auto* constraint = record.Doll->GetConstraint(i); constraint && constraint->GetSubType() == JPH::EConstraintSubType::SwingTwist)
-					visit(*static_cast<JPH::SwingTwistConstraint*>(constraint));
-		};
-		const auto stop = [&] {
-			// Never touched while off, so a ragdoll that was never powered simulates exactly like a passive one.
+		// Never touched while off, so a ragdoll that was never powered simulates exactly like a passive one.
+		const auto turnOff = [&] {
 			if (record.MotorsOn)
-				forEachJoint([](JPH::SwingTwistConstraint& joint) {
+				ForEachSwingTwist(*record.Doll, [](JPH::SwingTwistConstraint& joint) {
 					joint.SetSwingMotorState(JPH::EMotorState::Off);
 					joint.SetTwistMotorState(JPH::EMotorState::Off);
+					return false;
 				});
 			record.MotorsOn = false;
+			MotorWarnings.Report(entity, problems);
 		};
 		if (!(torque > 0))
-		{
-			stop();
-			return MotorWarnings.Report(entity, problems);
-		}
+			return turnOff();
 		// The layered animation before physical overlays: the pose the body tries to hold.
 		auto* animations = ScenePtr->GetAnimationSystem();
+		const auto view = animations ? animations->GetPoseView(entity) : std::nullopt;
 		std::vector<glm::mat4> animated;
-		if (!animations || !animations->GetAnimatedPose(entity, *record.Source, animated))
-		{
-			problems.emplace_back("the animated pose is not available; motors are off");
-			stop();
-			return MotorWarnings.Report(entity, problems);
-		}
+		if (!view)
+			problems.emplace_back("the Animator cannot animate; motors are off");
+		else if (view->Source != record.Source)
+			problems.emplace_back("the Animator's model differs from the one the ragdoll was built for; motors are off until it rebuilds");
+		else if (!animations->GetAnimatedPose(entity, *record.Source, animated))
+			problems.emplace_back("the animated pose is not finite; motors are off");
+		if (animated.empty())
+			return turnOff();
 		// Each body's rotation relative to its skeleton parent's, from the animated joints in world space. The portable
 		// decomposition keeps the targets identical on every platform.
 		const glm::mat4 world = ScenePtr->GetWorldTransform(entity);
+		glm::vec3 position, scale;
+		glm::quat rotation;
+		if (!DecomposeRagdollTransform(world, position, rotation, scale))
+		{
+			problems.emplace_back("the entity's world transform cannot be decomposed; motors are off");
+			return turnOff();
+		}
 		const JPH::Skeleton* skeleton = record.Doll->GetRagdollSettings()->GetSkeleton();
 		JPH::SkeletonPose pose;
 		pose.SetSkeleton(skeleton);
 		std::vector<glm::quat> rotations(record.Nodes.size());
 		for (size_t i = 0; i < record.Nodes.size(); i++)
 		{
-			glm::vec3 position, scale;
 			if (!DecomposeRagdollTransform(world * animated[record.Nodes[i]], position, rotations[i], scale))
 			{
 				problems.push_back(fmt::format("the animated joint '{}' cannot be decomposed; motors are off", record.Source->Nodes[record.Nodes[i]].Name));
-				stop();
-				return MotorWarnings.Report(entity, problems);
+				return turnOff();
 			}
 			const int parent = skeleton->GetJoint(static_cast<int>(i)).mParentJointIndex;
 			const glm::quat local = parent < 0 ? rotations[i] : glm::conjugate(rotations[static_cast<size_t>(parent)]) * rotations[i];
 			pose.GetJoint(static_cast<int>(i)).mRotation = ToJolt(local).Normalized();
 		}
-		forEachJoint([&](JPH::SwingTwistConstraint& joint) {
+		ForEachSwingTwist(*record.Doll, [&](JPH::SwingTwistConstraint& joint) {
 			for (JPH::MotorSettings* motor : { &joint.GetSwingMotorSettings(), &joint.GetTwistMotorSettings() })
 			{
 				motor->mSpringSettings.mMode = JPH::ESpringMode::FrequencyAndDamping;
@@ -855,6 +869,7 @@ namespace Basalt {
 				motor->mSpringSettings.mDamping = damping;
 				motor->SetTorqueLimit(torque);
 			}
+			return false;
 		});
 		record.Doll->DriveToPoseUsingMotors(pose);
 		// A sleeping body ignores its motors: the animation keeps a powered rig awake.
@@ -884,9 +899,7 @@ namespace Basalt {
 			return false;
 		}
 		impl.MotorCallWarnings.Report(entity, {});
-		FadingWeight& weight = impl.RagdollStrength.try_emplace(entity.GetUUID(), component->MotorStrength).first->second;
-		weight.Configure(component->MotorStrength);
-		weight.FadeTo(strength, seconds);
+		impl.MotorStrengthFor(entity.GetUUID(), *component).FadeTo(strength, seconds);
 		return true;
 	}
 
@@ -970,12 +983,7 @@ namespace Basalt {
 		pose.Active = record.Doll != nullptr;
 		pose.Sleeping = record.Doll && !record.Doll->IsActive();
 		if (record.Doll)
-			for (size_t i = 0; i < record.Doll->GetConstraintCount() && !pose.Powered; i++)
-				if (const auto* constraint = record.Doll->GetConstraint(static_cast<int>(i)); constraint && constraint->GetSubType() == JPH::EConstraintSubType::SwingTwist)
-				{
-					const auto& joint = *static_cast<const JPH::SwingTwistConstraint*>(constraint);
-					pose.Powered = joint.GetSwingMotorState() != JPH::EMotorState::Off || joint.GetTwistMotorState() != JPH::EMotorState::Off;
-				}
+			pose.Powered = ForEachSwingTwist(*record.Doll, [](const JPH::SwingTwistConstraint& joint) { return joint.GetSwingMotorState() != JPH::EMotorState::Off || joint.GetTwistMotorState() != JPH::EMotorState::Off; });
 		const glm::mat4 inverse = glm::inverse(world);
 		for (size_t i = 0; i < record.Nodes.size(); i++)
 			pose.Joints.emplace_back(record.Nodes[i], inverse * matrices[i]);

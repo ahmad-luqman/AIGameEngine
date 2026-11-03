@@ -444,14 +444,15 @@ function Entity:IsAnimationPlaying() end
 ---@return string[]
 function Entity:GetAnimationClips() end
 
----Sets a declared Float or Bool parameter. False on a missing parameter, wrong declared type, non-finite value or inactive machine.
+---Sets a declared Float or Bool parameter on the state machine and on every StateMachine layer graph that declares it.
+---True when any takes it; false (logged once) when none does: a missing parameter, wrong declared type, non-finite value or inactive machine.
 ---Nil and values other than numbers/booleans raise an argument error.
 ---@param name string
 ---@param value number|boolean
 ---@return boolean
 function Entity:SetAnimationParameter(name, value) end
 
----Latches a declared trigger until a successful transition consumes it; false for an unknown/wrong-type parameter or inactive graph.
+---Latches a declared trigger on every graph declaring it until a successful transition consumes it; false for an unknown/wrong-type parameter or inactive graph.
 ---@param name string
 ---@return boolean
 function Entity:SetAnimationTrigger(name) end
@@ -513,8 +514,8 @@ function Entity:SetAnimationLayerWeight(layer, weight, seconds) end
 ---@return number?
 function Entity:GetAnimationLayerWeight(layer) end
 
----The current state of a StateMachine layer's graph; "" for a clip layer, while a script clip plays instead, or while
----the graph cannot load; nil for an unknown layer.
+---The current state of a StateMachine layer's graph; "" for a clip layer, while a script clip plays instead, and while
+---the layer shows no graph (one that cannot load or has no playable initial state, an unloadable mask); nil for an unknown layer.
 ---@param layer string
 ---@return string?
 function Entity:GetAnimationLayerState(layer) end

@@ -26,6 +26,10 @@ namespace Basalt::Math {
 	glm::quat QuatFromEuler(const glm::vec3& euler);
 	glm::vec3 EulerFromQuat(const glm::quat& rotation);
 
+	// Shortest-arc spherical interpolation (weight 0: from, 1: to), normalized, computed with Jolt's portable trigonometry so
+	// it rounds the same on every platform (libm's acos and sin do not): sampled poses can drive deterministic physics.
+	glm::quat Slerp(const glm::quat& from, const glm::quat& to, float weight);
+
 	inline bool NearlyEqual(float a, float b, float epsilon = 1e-5f)
 	{
 		return glm::abs(a - b) <= epsilon;

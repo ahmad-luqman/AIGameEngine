@@ -1,5 +1,8 @@
 #include "Basalt/Scene/ComponentRegistry.h"
 
+#include "Basalt/Animation/AnimationGraph.h"
+#include "Basalt/Animation/AnimationMask.h"
+
 #include "Basalt/Animation/PropertyAnimation.h"
 #include "Basalt/Asset/MaterialAsset.h"
 #include "Basalt/Audio/AudioRules.h"
@@ -1954,6 +1957,14 @@ namespace Basalt {
 					return fmt::format("Layers[{}].ReferenceTime {} must be finite and nonnegative", i, layer.ReferenceTime);
 				if (layer.Mask.size() > AnimationLayer::MaxMaskJoints)
 					return fmt::format("Layers[{}] mask holds at most {} joints", i, AnimationLayer::MaxMaskJoints);
+				// Unresolved UUID references stay opaque keys so the project validator can report them.
+				const auto names = [](const std::string& path, const char* extension) {
+					return path.empty() || AssetRegistry::IsUnresolvedKey(path) || FileSystem::GetLowercaseExtension(FileSystem::PathFromUtf8(path)) == extension;
+				};
+				if (!names(layer.StateMachine, AnimationGraph::Extension))
+					return fmt::format("Layers[{}].StateMachine '{}' must be a {} file", i, layer.StateMachine, AnimationGraph::Extension);
+				if (!names(layer.MaskAsset, AnimationMask::Extension))
+					return fmt::format("Layers[{}].MaskAsset '{}' must be a {} file", i, layer.MaskAsset, AnimationMask::Extension);
 				for (size_t j = 0; j < layer.Mask.size(); j++)
 				{
 					const AnimationMaskJoint& joint = layer.Mask[j];
@@ -1999,9 +2010,9 @@ namespace Basalt {
 					return fmt::format("Chains[{}].MaxAngle {} must be between 0 and 180 degrees", i, chain.MaxAngle);
 				if (!std::isfinite(chain.Weight) || chain.Weight < 0.0f || chain.Weight > 1.0f)
 					return fmt::format("Chains[{}].Weight {} must be between 0 and 1", i, chain.Weight);
-				if (chain.Ground && chain.Type == IKChainType::LookAt)
+				if (chain.Ground && !IKChainReaches(chain.Type))
 					return fmt::format("Chains[{}]: only TwoBone and Fabrik chains can be Ground chains", i);
-				if (chain.FootLock && chain.Type == IKChainType::LookAt)
+				if (chain.FootLock && !IKChainReaches(chain.Type))
 					return fmt::format("Chains[{}]: only TwoBone and Fabrik chains can lock their feet", i);
 			}
 			if (c.RayHeight + c.RayDepth <= 0.0f && std::ranges::any_of(c.Chains, &IKChain::Ground))

@@ -33,7 +33,7 @@ namespace Basalt {
 	namespace {
 
 		// File types components reference by path. A string ending in one of these is treated as an asset path.
-		const std::set<std::string> s_AssetExtensions = { ".gltf", ".glb", ".ktx2", ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".hdr", ".wav", ".mp3", ".ogg", ".flac", ".ttf", ".otf", ".lua", ".bscene", ".bprefab", ".banimgraph", ".banimmask", ".bmaterial" };
+		const std::set<std::string> s_AssetExtensions = { ".gltf", ".glb", ".ktx2", ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".hdr", ".wav", ".mp3", ".ogg", ".flac", ".ttf", ".otf", ".lua", ".bscene", ".bprefab", AnimationGraph::Extension, AnimationMask::Extension, ".bmaterial" };
 
 		bool HasAssetExtension(const std::string& value)
 		{
@@ -98,9 +98,9 @@ namespace Basalt {
 				for (const auto& path : scripts)
 					CheckScriptSyntax(path);
 				for (const auto& path : graphs)
-					CheckAnimationGraph(path);
+					CheckJsonAsset<AnimationGraph>(path, "graph");
 				for (const auto& path : masks)
-					CheckAnimationMask(path);
+					CheckJsonAsset<AnimationMask>(path, "mask");
 				for (const auto& path : materials)
 					CheckMaterial(path);
 				for (const auto& [script, file] : m_ReferencedScripts)
@@ -229,7 +229,7 @@ namespace Basalt {
 						scenes.push_back(it->path());
 					else if (extension == ".bprefab")
 						prefabs.push_back(it->path());
-					else if (extension == ".banimgraph")
+					else if (extension == AnimationGraph::Extension)
 						graphs.push_back(it->path());
 					else if (extension == AnimationMask::Extension)
 						masks.push_back(it->path());
@@ -406,22 +406,16 @@ namespace Basalt {
 					m_Report.Add(severity, file, fmt::format("{} '{}', but {}", role, reference, *problem));
 			}
 
-			void CheckAnimationGraph(const std::filesystem::path& path)
+			// A JSON asset (an animation graph or mask) must read and parse.
+			template<typename T>
+			void CheckJsonAsset(const std::filesystem::path& path, const char* kind)
 			{
 				std::string error;
-				const auto text = FileSystem::ReadTextFile(path);
-				const auto graph = text ? ParseJson(*text, error) : nlohmann::json();
-				if (!text || graph.is_discarded() || !AnimationGraph::FromJson(graph, error))
-					m_Report.Add(ValidationSeverity::Error, Relative(path), "invalid animation graph: " + (text ? error : "cannot read file"));
-			}
-
-			void CheckAnimationMask(const std::filesystem::path& path)
-			{
-				std::string error;
-				const auto text = FileSystem::ReadTextFile(path);
-				const auto mask = text ? ParseJson(*text, error) : nlohmann::json();
-				if (!text || mask.is_discarded() || !AnimationMask::FromJson(mask, error))
-					m_Report.Add(ValidationSeverity::Error, Relative(path), "invalid animation mask: " + (text ? error : "cannot read file"));
+				const auto text = FileSystem::ReadTextFile(path, &error);
+				if (!text)
+					m_Report.Add(ValidationSeverity::Error, Relative(path), fmt::format("invalid animation {}: cannot read file ({})", kind, error));
+				else if (!T::FromText(*text, error))
+					m_Report.Add(ValidationSeverity::Error, Relative(path), fmt::format("invalid animation {}: {}", kind, error));
 			}
 
 			// A material must parse (its UUIDs through this project's registry), and every texture it names must be a texture

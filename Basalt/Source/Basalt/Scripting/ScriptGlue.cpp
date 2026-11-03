@@ -778,7 +778,6 @@ namespace Basalt {
 			};
 			entityType["IsIKFootLocked"] = [&context](sol::this_state state, const ScriptEntity& self, const std::string& chain) {
 				bool locked = false;
-				// nil for an unknown chain.
 				if (!RequireAnimations(context).GetIKFootLock(RequireInverseKinematics(self, "IsIKFootLocked"), chain, locked))
 					return sol::make_object(state, sol::lua_nil);
 				return sol::make_object(state, locked);

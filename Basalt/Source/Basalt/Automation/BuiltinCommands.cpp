@@ -1847,20 +1847,12 @@ namespace Basalt {
 				const json& content = Require(params, "content");
 				if (!content.is_string())
 					throw CommandError("'content' must be a string");
-				if (FileSystem::GetLowercaseExtension(FileSystem::PathFromUtf8(path)) == ".banimgraph")
-				{
-					std::string error;
-					const auto graph = ParseJson(content.get_ref<const std::string&>(), error);
-					if (graph.is_discarded() || !AnimationGraph::FromJson(graph, error))
-						throw CommandError("invalid animation graph: " + error);
-				}
-				if (AnimationMask::IsMaskFile(path))
-				{
-					std::string error;
-					const auto mask = ParseJson(content.get_ref<const std::string&>(), error);
-					if (mask.is_discarded() || !AnimationMask::FromJson(mask, error))
-						throw CommandError("invalid animation mask: " + error);
-				}
+				const std::string extension = FileSystem::GetLowercaseExtension(FileSystem::PathFromUtf8(path));
+				std::string parseError;
+				if (extension == AnimationGraph::Extension && !AnimationGraph::FromText(content.get_ref<const std::string&>(), parseError))
+					throw CommandError("invalid animation graph: " + parseError);
+				if (extension == AnimationMask::Extension && !AnimationMask::FromText(content.get_ref<const std::string&>(), parseError))
+					throw CommandError("invalid animation mask: " + parseError);
 				std::vector<std::string> warnings;
 				if (MaterialAsset::IsMaterialFile(path))
 				{

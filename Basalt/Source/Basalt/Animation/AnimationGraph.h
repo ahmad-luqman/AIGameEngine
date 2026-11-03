@@ -66,6 +66,8 @@ namespace Basalt {
 	// Immutable declarations shared by Animators using a .banimgraph asset. Transitions use array order as priority.
 	struct AnimationGraph
 	{
+		static constexpr const char* Extension = ".banimgraph";
+
 		// Authored name is diagnostic; InitialStateIndex selects the initial state at runtime.
 		std::string InitialState;
 		// Index of the validated initial state.
@@ -75,5 +77,7 @@ namespace Basalt {
 		std::vector<AnimationTransition> Transitions;
 		// Strict, bounded parser that resolves parameter and state indices and validates all references.
 		static std::optional<AnimationGraph> FromJson(const nlohmann::json& data, std::string& outError);
+		// ParseJson, then FromJson.
+		static std::optional<AnimationGraph> FromText(const std::string& text, std::string& outError);
 	};
 }

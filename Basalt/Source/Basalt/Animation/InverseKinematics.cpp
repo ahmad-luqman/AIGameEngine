@@ -180,8 +180,13 @@ namespace Basalt {
 		if (end < 0)
 			return fmt::format("joint '{}' not found in '{}'", chain.Joint, source.Key);
 		const uint32_t chainLength = std::clamp<uint32_t>(chain.ChainLength, 1, IKChain::MaxChainLength);
+		// LookAt: the aiming joint and its ancestors.
+		size_t length = chainLength;
+		if (chain.Type == IKChainType::TwoBone)
+			length = 3;
 		// Fabrik's ChainLength counts bones, so the end joint comes on top.
-		const size_t length = chain.Type == IKChainType::TwoBone ? 3 : (chain.Type == IKChainType::Fabrik ? chainLength + 1 : chainLength);
+		else if (chain.Type == IKChainType::Fabrik)
+			length = chainLength + 1;
 		for (int32_t node = end; node >= 0 && outJoints.size() < length; node = source.Nodes[node].Parent)
 			outJoints.push_back(static_cast<uint32_t>(node));
 		std::string problem;
@@ -192,7 +197,7 @@ namespace Basalt {
 			problem = fmt::format("joint '{}' has a fixed matrix and cannot be turned", source.Nodes[*fixed].Name);
 		if (!problem.empty())
 			outJoints.clear();
-		else if (chain.Type != IKChainType::LookAt)
+		else if (IKChainReaches(chain.Type))
 			std::ranges::reverse(outJoints);
 		return problem;
 	}
@@ -320,8 +325,8 @@ namespace Basalt {
 	{
 		const std::span<const uint32_t> joints = request.Joints;
 		BS_CORE_ASSERT(joints.size() >= 2 && pose.Nodes.size() == source.Nodes.size() && globals.size() == source.Nodes.size(), "FABRIK needs two joints, and a pose and globals of the model");
-		for (size_t i = 1; i < joints.size(); i++)
-			BS_CORE_ASSERT(source.Nodes[joints[i]].Parent == static_cast<int32_t>(joints[i - 1]), "FABRIK joints must form a parent-child chain");
+		for (size_t i = 0; i < joints.size(); i++)
+			BS_CORE_ASSERT(joints[i] < source.Nodes.size() && (i == 0 || source.Nodes[joints[i]].Parent == static_cast<int32_t>(joints[i - 1])), "FABRIK joints must form a parent-child chain of the model");
 		const float weight = ClampWeight(request.Weight);
 		if (weight <= 0.0f)
 			return IKSolveResult::Unchanged;
@@ -334,11 +339,16 @@ namespace Basalt {
 		const size_t bones = turned.size();
 		std::vector<glm::vec3> points(joints.size());
 		std::vector<float> lengths(bones);
-		for (size_t i = 0; i < joints.size(); i++)
-			points[i] = Position(globals, joints[i]);
+		// Each bone's animated direction: where a bone that collapses onto its neighbour during a pass keeps pointing.
+		std::vector<glm::vec3> animated(bones);
 		float reach = 0;
+		points.front() = Position(globals, joints.front());
 		for (size_t i = 0; i < bones; i++)
+		{
+			points[i + 1] = Position(globals, joints[i + 1]);
 			reach += lengths[i] = glm::length(points[i + 1] - points[i]);
+			animated[i] = lengths[i] > 1e-9f ? (points[i + 1] - points[i]) / lengths[i] : glm::vec3(0, 1, 0);
+		}
 		if (reach < 1e-6f)
 			return IKSolveResult::Degenerate;
 		const glm::vec3 root = points.front();
@@ -349,9 +359,7 @@ namespace Basalt {
 			const float distance = glm::length(direction);
 			return from + (distance > 1e-9f ? direction / distance : fallback) * length;
 		};
-		std::vector<glm::vec3> animated(bones);
-		for (size_t i = 0; i < bones; i++)
-			animated[i] = lengths[i] > 1e-9f ? (points[i + 1] - points[i]) / lengths[i] : glm::vec3(0, 1, 0);
+		const float tolerance = FabrikTolerance * reach;
 		if (glm::length(target - root) >= reach)
 		{
 			const glm::vec3 direction = glm::normalize(target - root);
@@ -360,10 +368,10 @@ namespace Basalt {
 		}
 		else
 		{
-			// A straight chain stays straight under FABRIK's passes (it folds along its line), so a target along it first
-			// bends the inner joints slightly toward the pole.
+			// A straight chain stays straight under FABRIK's passes (it folds along its line), so one whose end is not already
+			// at the target first bends its inner joints slightly toward the pole.
 			const glm::vec3 line = points.back() - root;
-			bool straight = glm::length(line) > 1e-6f * reach;
+			bool straight = glm::length(points.back() - target) > tolerance && glm::length(line) > 1e-6f * reach;
 			for (size_t i = 1; straight && i < bones; i++)
 				straight = glm::length(glm::cross(points[i] - root, line)) <= 1e-4f * reach * glm::length(line);
 			if (straight)
@@ -376,7 +384,6 @@ namespace Basalt {
 				for (size_t i = 1; i < bones; i++)
 					points[i] += side * (0.01f * reach);
 			}
-			const float tolerance = FabrikTolerance * reach;
 			for (uint32_t iteration = 0; iteration < FabrikMaxIterations && glm::length(points.back() - target) > tolerance; iteration++)
 			{
 				points.back() = target;

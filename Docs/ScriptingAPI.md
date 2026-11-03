@@ -1285,9 +1285,9 @@ clip in Play, CrossFade and Blend. Crossfade duration is scene time, independent
 or removing/re-adding Animator resets playback according to `PlayOnStart`. With PlayOnStart false,
 the selected clip is held at time 0 until played. Edit mode shows the authored rest pose, unless `Preview` is on.
 
-**Edit-mode preview.** With the Animator's `Preview` on, the editor plays it in the scene view while editing (whatever
-`PlayOnStart` says): its clip or
-state machine (at its parameters' defaults), blend spaces at (0, 0), layers (clips and graphs) and inverse kinematics
+**Edit-mode preview.** With the Animator's `Preview` on, the editor plays it in the scene view while editing (regardless
+of `PlayOnStart`): its clip or state machine (at its parameters' defaults, so a blend space state at those parameters' values and a
+`Clip` naming a blend space at (0, 0)), layers (clips and graphs) and inverse kinematics
 (script-free targets: `FollowTarget` chains follow `Target`; foot locks work, ground placement does not, as edit mode has
 no physics). The preview never changes the scene: root motion plays in place (the entity stays where it was
 authored), events are not delivered, and spring bones, ragdolls and bone attachments wait for Play. Component edits
@@ -1457,7 +1457,7 @@ actor:SetComponent("Animator", { Layers = {
     { Name = "Upper", StateMachine = "Assets/Animations/UpperBody.banimgraph", MaskAsset = "Assets/Masks/UpperBody.banimmask" },
 } })
 actor:SetAnimationLayerWeight("Wave", 0, 0.3) -- fade the wave out over 0.3 s
-actor:SetAnimatorParameter("Aiming", true)  -- reaches every graph declaring "Aiming", the layer's too
+actor:SetAnimationParameter("Aiming", true)  -- reaches every graph declaring "Aiming", the layer's too
 ```
 
 | Field | Meaning |
@@ -1467,7 +1467,7 @@ actor:SetAnimatorParameter("Aiming", true)  -- reaches every graph declaring "Ai
 | `StateMachine` | A `.banimgraph` the layer runs on its own instead of `Clip` (an upper-body graph); see below |
 | `Blend` | `"Override"` moves the pose below toward the clip by the weight; `"Additive"` adds the clip's difference from its reference pose |
 | `Weight` | 0..1, the starting weight; a changed value applies at once (and ends a fade) |
-| `Speed`, `Looping` | The layer's own clock: `Speed` 0..100 (not scaled by `Animator.Speed`); a non-looping layer holds its last frame |
+| `Speed`, `Looping` | The layer's own clock: `Speed` 0..100 (not scaled by `Animator.Speed`); `Looping` (clip layers only: a `StateMachine`'s states loop as each says) false holds the last frame |
 | `ReferenceClip`, `ReferenceTime` | Additive only: the pose the clip is a difference from, `ReferenceClip` (empty: the layer's own clip; required with a `StateMachine`) at `ReferenceTime` seconds (clamped to the clip) |
 | `Mask` | `{ Joint, Weight }` entries (each joint at most once): each joint and its subtree take `Weight` (0..1) unless a deeper entry names one of its descendants; joints under no entry take 0; entries without a `Joint` are ignored. Empty (or only entries without a `Joint`): the whole model at 1 |
 | `MaskAsset` | A `.banimmask` file shared between Animators; when set, its entries replace `Mask`. One that cannot load hides the layer (logged once) |
@@ -1478,13 +1478,16 @@ validates it, as `project.validate` does; edits apply to every layer naming it o
 
 **State machine layers.** A layer with a `StateMachine` plays its own instance of the graph: states (clips or the
 Animator's blend spaces), transitions with exit times, conditions and crossfades, at the layer's `Speed`, under its
-mask and weight. Its parameters and triggers share the Animator's names: `SetAnimatorParameter`/`SetAnimationTrigger`
+mask and weight. Its parameters and triggers share the Animator's names: `SetAnimationParameter`/`SetAnimationTrigger`
 reach every graph that declares the name (the base's and each layer's), and succeed when one takes the value (an
-Animator without its own `StateMachine` can drive layer graphs alone); each graph consumes its own triggers. A layer
-graph has no root motion and fires no events. An Override layer moves every channel a clip of any of its graph's states
-animates, so a state that leaves such a channel alone holds it at that clip's rest. `PlayAnimationLayer(layer)` restarts
-the graph at its initial state; `PlayAnimationLayer(layer, clip)` plays the clip instead until `PlayAnimationLayer(layer)`.
-A graph that cannot load, or whose initial state cannot play yet, shows nothing.
+Animator without its own `StateMachine` can drive layer graphs alone); each graph that declares the name but cannot take
+the value (a wrong type, a stopped base graph) logs that once, and each graph consumes its own triggers. A layer graph
+has no root motion and fires no events. An Override layer moves every channel a clip of any of its graph's states (and
+their blend spaces' samples) animates, so a state that leaves such a channel alone holds it at the model's rest pose; an
+Additive graph layer adds each state's difference from its `ReferenceClip` pose, so give the states and the reference the
+same channels. `PlayAnimationLayer(layer)` restarts the graph at its initial state, keeping its parameter values;
+`PlayAnimationLayer(layer, clip)` plays the clip instead until `PlayAnimationLayer(layer)`. A graph that cannot load, or
+whose initial state cannot play yet, shows nothing (and `PlayAnimationLayer` returns false).
 
 A layer changes only the channels (translation, rotation, scale, and morph weights of the mesh nodes it masks) its clip
 animates, on joints its mask weights.
@@ -1502,10 +1505,10 @@ reload).
 
 | Function | Behavior |
 |---|---|
-| `e:PlayAnimationLayer(layer, [clip])` | Restarts the layer at 0, on `clip` when given (until the configured `Clip` changes), otherwise on its configured `Clip` (or its `StateMachine`'s initial state). False, changing nothing, for an unknown layer, an unknown or empty clip name, or when the layer would show nothing (no clip, a missing reference clip, mask asset or graph) |
+| `e:PlayAnimationLayer(layer, [clip])` | Restarts the layer at 0, on `clip` when given (until the configured `Clip` changes), otherwise on its configured `Clip` (or its `StateMachine`'s initial state). False, changing nothing, for an unknown layer, an unknown or empty clip name, or when the layer would show nothing (no clip, a missing reference clip, mask asset or graph, a graph whose initial state cannot play) |
 | `e:SetAnimationLayerWeight(layer, weight, [seconds])` | Fades the weight (0..1) linearly over `seconds` (default 0: at once). False for an unknown layer or an invalid weight or time |
 | `e:GetAnimationLayerWeight(layer)` | The current weight, or nil for an unknown layer |
-| `e:GetAnimationLayerState(layer)` | The current state of a `StateMachine` layer's graph; `""` for a clip layer, while a script clip plays instead, or while the graph cannot load; nil for an unknown layer |
+| `e:GetAnimationLayerState(layer)` | The current state of a `StateMachine` layer's graph; `""` for a clip layer, while a script clip plays instead, and while the layer shows no graph (one that cannot load or has no playable initial state, an unloadable mask, an Additive layer without a `ReferenceClip`); nil for an unknown layer |
 
 A failing call is logged once per entity, function and layer, whatever values it passes, until the same call
 succeeds; so a script repeating one every frame logs it once. A non-string clip or non-number seconds raise errors. Problems with a layer's configuration (missing clips, reference
@@ -1565,12 +1568,14 @@ toward `Pole`, else +Z), iterates up to 32 times until its end is within 0.01% o
 and stretches straight toward targets beyond its reach. It has no joint limits.
 
 **Foot locking.** A `FootLock` chain whose joint follows its animation (or the ground: no script or `FollowTarget`
-target) locks while the animated joint's world speed is below `LockSpeed` (default 0.5 m/s), as a planted foot stands
-still in the world while the character moves over it, and holds the joint at that world position: the animation
-cannot slide it. It releases when the animation lifts the joint `LockHeight` (default 0.05 m) above its height when it
-locked, while the character is not grounded, or at once when the animated joint gets `LockDistance` (default 0.3 m)
-away (a teleport, or a stride the lock cannot follow). Locking and releasing ease with `Smoothing`. A script target
-releases the lock until it is cleared. `IsIKFootLocked` reports the lock (footstep sounds).
+target) locks once its target (the animated joint, or its ground point) moves slower than `LockSpeed` (default 0.5 m/s)
+in the world, as a planted foot stands still while the character moves over it, and holds the joint's position across the
+entity's up axis: the animation cannot slide it, while its height still follows the animation and the ground (so a foot
+that locks in the air still comes down). Once locked it stays locked, whatever its speed, until the animation lifts the
+joint `LockHeight` (default 0.05 m) above its height when it locked, the character leaves the ground, or (at once, without
+easing) the target gets `LockDistance` (default 0.3 m) away across the up axis (a teleport, or a stride the lock cannot
+follow). Locking and releasing ease with `Smoothing`. A script target, turning `FootLock` off and frames the chain is not
+solved (a ragdoll, an Animator that cannot play) release the lock. `IsIKFootLocked` reports the lock (footstep sounds).
 
 **Foot placement.** For each `Ground` chain a ray is cast down the entity's up axis under the animated joint, from
 `RayHeight` above the plane through the entity's origin to `RayDepth` below it (meters, defaults 0.5; their sum must be
@@ -1600,7 +1605,10 @@ until the same call succeeds. Chains whose joints are missing, lack enough ances
 missing `Pelvis`, and an InverseKinematics whose Animator cannot animate are logged once and skipped; the inspector and
 `scene.info` show the same problems and warn about settings that do nothing, such as an InverseKinematics without an
 Animator, `Pole` on a LookAt chain, `ChainLength` on a TwoBone chain, `MaxAngle` 0, a `Pelvis` without Ground chains or
-not above a ground leg, and two chains driving the same joint. Targets and weights are gameplay state: they survive
+not above a ground leg, two chains driving the same joint, `FollowTarget` without a `Target` (or a `Target` no chain
+follows, or that is gone), `FootLock` with `LockSpeed` 0 or on a `FollowTarget` chain, and, for layers, a `StateMachine`
+or mask that cannot load, its states' missing clips and blend spaces, and `Clip`, `Looping` or `Mask` made unused by a
+`StateMachine` or `MaskAsset`. Targets and weights are gameplay state: they survive
 playback resets (changes to `Mesh`, `Clip` or `StateMachine`, asset reload) and end with the component.
 
 ### Morph targets
@@ -1752,11 +1760,12 @@ Clear `StateMachine` to use direct playback. Direct `PlayAnimation`, `CrossFadeA
 `BlendAnimations` and `PlayBlendSpace` calls take control from the graph until its configuration or asset
 reloads.
 
-- `e:SetAnimationParameter(name, value)` sets a declared `Float` (number) or `Bool` (boolean); returns false
-  for a wrong declared type, unknown parameter, non-finite value, or inactive machine. Nil and values other than
-  numbers or booleans raise an argument error.
-- `e:SetAnimationTrigger(name)` latches a `Trigger` until a successful transition using it consumes it; returns
-  true on success, false for an unknown/wrong-type parameter or inactive machine.
+- `e:SetAnimationParameter(name, value)` sets a declared `Float` (number) or `Bool` (boolean) on the state machine and
+  on every StateMachine layer graph that declares the name; returns true when any of them takes it, false when none does
+  (a wrong declared type, unknown parameter, non-finite value, or inactive machine). Nil and values other than numbers
+  or booleans raise an argument error.
+- `e:SetAnimationTrigger(name)` latches a `Trigger` (on every graph that declares it) until a successful transition
+  using it consumes it; returns true on success, false for an unknown/wrong-type parameter or inactive machine.
   Pausing preserves parameters and triggers; stopping disables the graph (setters return false and
   GetAnimationState returns empty) and holds the rest pose until direct playback, `SetAnimationTime`,
   or a graph reload. Seeking leaves the stopped graph inactive.
@@ -1829,7 +1838,7 @@ pose immediately.
 ## Ragdolls
 
 Add `Ragdoll` to an entity with an `Animator` whose model has a skin. `Enabled = true` starts physics on its shown pose
-at the next physics update: passive, or powered by motors that track the animation (`MotorStrength` above 0). The
+at the next physics update: passive, or powered by motors that track the animation (a motor strength above 0: `MotorStrength`, or faded by `SetRagdollMotorStrength`). The
 inspector and `component.set` use the same validated fields as Lua:
 
 ```lua
@@ -1902,9 +1911,9 @@ validation are clamped and logged once.
 ```lua
 function Enemy:OnHit(direction)
     self.Entity:ActivateRagdoll(direction * 80)
-    self.Entity:SetRagdollMotorStrength(0.2)        -- stunned
-    self.Entity:SetRagdollMotorStrength(1, 0.6)     -- regaining control
-    Timer.After(1.0, function() self.Entity:RecoverRagdoll("Idle", 0.4) end)
+    self.Entity:SetRagdollMotorStrength(0.2)                                       -- stunned
+    Timer.After(0.3, function() self.Entity:SetRagdollMotorStrength(1, 0.6) end)  -- regaining control
+    Timer.After(1.2, function() self.Entity:RecoverRagdoll("Idle", 0.4) end)
 end
 ```
 

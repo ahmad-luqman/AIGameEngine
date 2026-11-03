@@ -74,8 +74,8 @@ namespace Basalt {
 		// The chain root first, each joint followed by its child, ending with the joint that reaches (at least two).
 		std::span<const uint32_t> Joints;
 		glm::vec3 Target = glm::vec3(0);
-		// The direction a straight chain starts bending toward when the target lies along it; nullopt or zero picks one
-		// (+Z, else X or Y). A bent chain keeps its animated bend.
+		// The side a straight chain is nudged toward before solving, when its end is not at the target; nullopt or zero
+		// picks one (+Z, else X or Y). A bent chain keeps its animated bend.
 		std::optional<glm::vec3> Pole;
 		// The last joint's model-space rotation; nullopt keeps its local rotation.
 		std::optional<glm::quat> EndRotation;

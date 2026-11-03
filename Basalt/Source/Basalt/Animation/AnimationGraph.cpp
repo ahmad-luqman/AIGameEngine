@@ -239,4 +239,10 @@ namespace Basalt {
 		}
 		return std::nullopt;
 	}
+
+	std::optional<AnimationGraph> AnimationGraph::FromText(const std::string& text, std::string& outError)
+	{
+		const nlohmann::json data = ParseJson(text, outError);
+		return data.is_discarded() ? std::nullopt : FromJson(data, outError);
+	}
 }

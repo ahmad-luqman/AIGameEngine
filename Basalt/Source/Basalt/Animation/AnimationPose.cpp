@@ -47,7 +47,7 @@ namespace Basalt {
 			}
 			else if (track.Path == AnimationPath::Rotation)
 			{
-				const glm::quat q = glm::slerp(Quaternion(a), Quaternion(b), t);
+				const glm::quat q = Math::Slerp(Quaternion(a), Quaternion(b), t);
 				value = { q.x, q.y, q.z, q.w };
 			}
 			else
@@ -142,7 +142,7 @@ namespace Basalt {
 		for (size_t i = 0; i < target.Nodes.size(); i++)
 		{
 			target.Nodes[i].Translation = glm::mix(from.Nodes[i].Translation, target.Nodes[i].Translation, weight);
-			target.Nodes[i].Rotation = glm::normalize(glm::slerp(from.Nodes[i].Rotation, target.Nodes[i].Rotation, weight));
+			target.Nodes[i].Rotation = Math::Slerp(from.Nodes[i].Rotation, target.Nodes[i].Rotation, weight);
 			target.Nodes[i].Scale = glm::mix(from.Nodes[i].Scale, target.Nodes[i].Scale, weight);
 		}
 		BS_CORE_ASSERT(target.MorphWeights.size() == from.MorphWeights.size());
@@ -240,7 +240,7 @@ namespace Basalt {
 			if (channels & AnimatedChannel::Translation)
 				node.Translation = glm::mix(node.Translation, source.Translation, amount);
 			if (channels & AnimatedChannel::Rotation)
-				node.Rotation = glm::normalize(glm::slerp(node.Rotation, source.Rotation, amount));
+				node.Rotation = Math::Slerp(node.Rotation, source.Rotation, amount);
 			if (channels & AnimatedChannel::Scale)
 				node.Scale = glm::mix(node.Scale, source.Scale, amount);
 		}
@@ -269,7 +269,7 @@ namespace Basalt {
 			if (channels & AnimatedChannel::Rotation)
 			{
 				const glm::quat delta = glm::normalize(source.Rotation * glm::inverse(base.Rotation));
-				node.Rotation = glm::normalize(glm::slerp(glm::quat(1, 0, 0, 0), delta, amount) * node.Rotation);
+				node.Rotation = glm::normalize(Math::Slerp(glm::quat(1, 0, 0, 0), delta, amount) * node.Rotation);
 			}
 			if (channels & AnimatedChannel::Scale)
 			{

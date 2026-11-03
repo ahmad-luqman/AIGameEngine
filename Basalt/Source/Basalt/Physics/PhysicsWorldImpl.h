@@ -92,7 +92,7 @@ namespace Basalt {
 		{
 			JPH::Ref<JPH::Ragdoll> Doll;
 			Ref<MeshSource> Source;
-			// Structural settings, compared with Enabled and RecoveryTime masked out.
+			// The settings the rig was built from, compared through RagdollNeedsRebuild (structural settings only).
 			RagdollComponent Settings;
 			// Parallel arrays in Jolt part order; part 0 is the selected skeleton root. Scales are world scales,
 			// Capsules are BODY-local hemisphere centers/radii, and Nodes index Source's immutable hierarchy.
@@ -105,7 +105,8 @@ namespace Basalt {
 			glm::mat4 World = glm::mat4(1);
 			float RecoveryLeft = 0;
 			float RecoveryDuration = 0;
-			// The joint motors drive toward the animated pose (DriveRagdollMotors); off until a strength above 0 first applies.
+			// Whether this Doll's joint motors are on (DriveRagdollMotors). Never touched until strength * MotorTorque first
+			// exceeds 0, and back to false (motors off) when it drops to 0; cleared with each new or removed Doll.
 			bool MotorsOn = false;
 			float Weight() const { return Doll ? 1.0f : (RecoveryDuration > 0 ? RecoveryLeft / RecoveryDuration : 0.0f); }
 		};
@@ -139,6 +140,9 @@ namespace Basalt {
 		// Advances motor strengths and turns every active rig's joint motors toward its animated pose (or off at strength 0).
 		void DriveRagdollMotors(float seconds);
 		void ApplyRagdollMotors(Entity entity, RagdollRecord& record, const RagdollComponent& component, float strength);
+		// The entity's motor strength, created from (and configured by) its MotorStrength. Never RagdollStrength[id]: a
+		// default FadingWeight is 1, full torque.
+		FadingWeight& MotorStrengthFor(UUID uuid, const RagdollComponent& component);
 		bool BuildRagdoll(Entity entity, RagdollRecord& record, std::string& error, bool& cacheFailure);
 		bool ActivateRagdoll(PhysicsWorld& world, Entity entity, const glm::vec3& impulse, const std::vector<RagdollMotion>* motion = nullptr);
 		void RemoveRagdoll(UUID uuid, bool deferContacts = false);

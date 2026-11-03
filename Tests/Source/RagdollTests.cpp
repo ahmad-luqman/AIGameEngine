@@ -619,7 +619,7 @@ TEST_SUITE("Ragdolls")
 		Floor(scene);
 		Entity rig = Rig(scene, true);
 		scene.OnSimulationStart();
-		Simulate(scene, 600);
+		Simulate(scene, 240);
 		const auto pose = scene.GetPhysicsWorld()->GetRagdollPose(rig);
 		REQUIRE(pose);
 		REQUIRE(pose->Sleeping);
@@ -1224,11 +1224,17 @@ TEST_SUITE("Ragdolls")
 		Entity plain = scene.CreateEntity("Plain");
 		CHECK_FALSE(physics.GetRagdollMotorStrength(plain).has_value());
 		CHECK_FALSE(physics.SetRagdollMotorStrength(plain, 1, 0));
-		// Settings C++ wrote past validation are clamped and said so once.
+		// Settings C++ wrote past validation are clamped and said so once (a NaN strength is 0: motors off).
 		component.MotorFrequency = std::numeric_limits<float>::quiet_NaN();
 		Simulate(scene, 3);
 		CHECK(CountLogMessages(since, "MotorFrequency must be in 0.1..30; clamping") == 1);
 		component.MotorFrequency = 8;
+		component.MotorStrength = std::numeric_limits<float>::quiet_NaN();
+		Simulate(scene, 3);
+		CHECK(CountLogMessages(since, "MotorStrength must be in 0..1; clamping") == 1);
+		CHECK(physics.GetRagdollMotorStrength(rig) == 0.0f);
+		CHECK_FALSE(physics.GetRagdollPose(rig)->Powered);
+		component.MotorStrength = 0.75f;
 		// The strength ends with the component.
 		rig.RemoveComponent<RagdollComponent>();
 		CHECK_FALSE(physics.GetRagdollMotorStrength(rig).has_value());
@@ -1252,5 +1258,87 @@ TEST_SUITE("Ragdolls")
 		CHECK(Eval(scene, "return pcall(function() Scene.FindEntityByName('Plain'):GetRagdollMotorStrength() end)").starts_with("false"));
 		CHECK(Eval(scene, "return pcall(function() Scene.FindEntityByName('Ragdoll'):SetRagdollMotorStrength(1, 'soon') end)").starts_with("false"));
 		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Only structural Ragdoll settings rebuild a rig")
+	{
+		RagdollComponent built;
+		built.Enabled = true;
+		auto live = built;
+		live.Enabled = false;
+		live.RecoveryTime = 2;
+		live.MotorStrength = 1;
+		live.MotorFrequency = 3;
+		live.MotorDamping = 0.2f;
+		live.MotorTorque = 10;
+		CHECK_FALSE(RagdollNeedsRebuild(built, live));
+		for (const auto& edit : std::vector<std::function<void(RagdollComponent&)>>{ [](RagdollComponent& c) { c.Mass = 40; }, [](RagdollComponent& c) { c.RadiusRatio = 0.2f; }, [](RagdollComponent& c) { c.RootJoint = "Tip"; }, [](RagdollComponent& c) { c.Layer = "Debris"; }, [](RagdollComponent& c) { c.Bones.push_back({}); } })
+		{
+			auto structural = live;
+			edit(structural);
+			CHECK(RagdollNeedsRebuild(built, structural));
+		}
+	}
+
+	TEST_CASE("Motor strength fades while the rig is inactive and powers a selected subtree of a biped")
+	{
+		ClearAssetCache clear;
+		Scene scene;
+		Floor(scene);
+		Entity rig = scene.CreateEntity("Biped");
+		auto& animator = rig.AddComponent<AnimatorComponent>();
+		animator.Mesh = FixturePath("BipedArmature.gltf").string();
+		animator.Clip = "Wave";
+		animator.PlayOnStart = false;
+		rig.GetTransform().Translation = { 0, 0.1f, 0 };
+		auto& ragdoll = rig.AddComponent<RagdollComponent>();
+		// The chest and everything above it: the arms branch off the subtree's root. The arm joints swing far enough for the
+		// wave.
+		ragdoll.RootJoint = "Chest";
+		for (const char* joint : { "RightUpperArm", "RightForeArm" })
+			ragdoll.Bones.push_back({ .Joint = joint, .SwingAngle = 120, .TwistMin = -90, .TwistMax = 90 });
+		scene.GetPhysicsSettings().Gravity = glm::vec3(0);
+		scene.OnSimulationStart();
+		auto& physics = *scene.GetPhysicsWorld();
+		// A fade started before activation has moved on by then.
+		REQUIRE(physics.SetRagdollMotorStrength(rig, 1, 0.5f));
+		Simulate(scene, 15);
+		CHECK(physics.GetRagdollMotorStrength(rig).value() == doctest::Approx(0.5f).epsilon(0.02));
+		// Activated on the rest pose; the wave then raises the right arm and bends its elbow, which the motors follow.
+		REQUIRE(physics.ActivateRagdoll(rig));
+		REQUIRE(scene.GetAnimationSystem()->Seek(rig, 0.5f));
+		Simulate(scene, 240);
+		CHECK(physics.GetRagdollMotorStrength(rig) == 1.0f);
+		const auto pose = physics.GetRagdollPose(rig);
+		REQUIRE(pose);
+		CHECK(pose->Powered);
+		CHECK(ragdoll.Enabled);
+		const auto source = AssetManager::GetMesh(animator.Mesh);
+		std::vector<glm::mat4> animated;
+		REQUIRE(scene.GetAnimationSystem()->GetAnimatedPose(rig, *source, animated));
+		// The armature's scale is in every joint's matrix: the rotations come from the decomposition the motors use.
+		const auto Rotation = [](const glm::mat4& matrix) {
+			glm::vec3 position, scale;
+			glm::quat rotation;
+			REQUIRE(DecomposeRagdollTransform(matrix, position, rotation, scale));
+			return rotation;
+		};
+		const auto physical = [&](const char* joint) {
+			const uint32_t node = Node(*source, joint);
+			const auto found = std::ranges::find(pose->Joints, node, &std::pair<uint32_t, glm::mat4>::first);
+			REQUIRE(found != pose->Joints.end());
+			return Rotation(found->second);
+		};
+		const auto relative = [](const glm::quat& parent, const glm::quat& child) { return glm::normalize(glm::conjugate(parent) * child); };
+		const auto rotationOf = [&](const char* joint) { return Rotation(animated[Node(*source, joint)]); };
+		// The elbow's bend relative to the upper arm, and the shoulder's relative to the chest (the subtree root), match
+		// the animation within a few degrees.
+		for (const auto& [parent, child] : { std::pair{ "RightUpperArm", "RightForeArm" }, std::pair{ "Chest", "RightUpperArm" } })
+		{
+			CAPTURE(child);
+			const glm::quat error = glm::conjugate(relative(rotationOf(parent), rotationOf(child))) * relative(physical(parent), physical(child));
+			CHECK(glm::degrees(2.0f * std::acos(std::min(1.0f, std::abs(error.w)))) < 3.0f);
+		}
+		scene.OnSimulationStop();
 	}
 }
