@@ -12,7 +12,6 @@
 #include <nlohmann/json.hpp>
 
 #include <fstream>
-#include <functional>
 
 using namespace Basalt;
 using namespace BasaltTest;
@@ -402,7 +401,7 @@ TEST_SUITE("MorphTargets")
 			data["meshes"][1]["extras"].erase("targetNames");
 			// Teeth's animated weights are now MaxMorphTargets wide.
 			data["animations"][0]["channels"].erase(1);
-			expected = "its morph targets need 4194560 deltas (counted once per primitive, also one that shares an earlier one's geometry), past the 4194286 left of the limit of 4194304 per model";
+			expected = "its morph targets need 4194560 deltas (counted once per primitive, also one that shares an earlier one's geometry), past the 4194286 left of the limit of 4194304 per model; reduce its targets or vertices, or merge primitives that repeat the same accessors";
 		}
 		SUBCASE("more deltas than a model may hold, counting each primitive that repeats the same accessors")
 		{
@@ -421,7 +420,7 @@ TEST_SUITE("MorphTargets")
 			data["meshes"][1]["primitives"] = { primitive, primitive };
 			data["meshes"][1]["extras"].erase("targetNames");
 			data["animations"][0]["channels"].erase(1);
-			expected = "its morph targets need 4194816 deltas (counted once per primitive, also one that shares an earlier one's geometry), past the 4194286 left of the limit of 4194304 per model";
+			expected = "its morph targets need 4194816 deltas (counted once per primitive, also one that shares an earlier one's geometry), past the 4194286 left of the limit of 4194304 per model; reduce its targets or vertices, or merge primitives that repeat the same accessors";
 		}
 		SUBCASE("too many targets on a node with weights")
 		{
@@ -599,7 +598,7 @@ TEST_SUITE("MorphTargets")
 
 		// A copy that reads one of its skin attributes or target deltas through another accessor over the same bytes gets
 		// vertices and deltas of its own.
-		const auto separates = [&](const char* name, const std::function<void(nlohmann::json&, nlohmann::json&)>& change) {
+		const auto separates = [&](const char* name, const auto& change) {
 			INFO(name);
 			nlohmann::json variant = data;
 			change(variant, variant["meshes"][0]["primitives"][1]);

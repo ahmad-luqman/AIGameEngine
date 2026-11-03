@@ -48,13 +48,14 @@ protection, so renaming or removing jobs blocks nothing; check `gh api repos/ahm
   hand before releases (`Docs/TestedHardware.md`).
 - **Long fuzzing on pull requests.** Each push fuzzes every target for 60 s; only the nightly runs long enough to reach
   deeper inputs. Primitives that read separate accessors over the same bytes are each imported (sharing goes by
-  accessor; see `Docs/AssetPipeline.md`): FuzzGltf inputs of about 15 KB whose 70 primitives each read their own accessor
-  over one 16x16-vertex grid's indices take about 0.7 s per execution in the fuzz build, well within the 10 s per-input
-  limit (`-timeout=10` in `scripts/fuzz.sh`). Such inputs are just above the `-max_len` libFuzzer takes from the largest
-  seed (`MixamoRig.gltf`, 12.6 kB), so a larger seed raises the risk. Pass `-detect_leaks=0` to time one execution by
-  hand: libFuzzer runs an input again when its allocations outnumber its frees. A primitive that reads a large POSITION
-  accessor through a few indices also processes every vertex; compacting each primitive to the vertices its indices use
-  before generating normals and tangents would bound that if it ever times out.
+  accessor; see `Docs/AssetPipeline.md`): FuzzGltf inputs of about 15 kB whose 70 primitives each read their own
+  accessor over one 16x16-vertex grid's indices take about 0.7 s per execution in the fuzz build, well within the 10 s
+  per-input limit (`-timeout=10` in `scripts/fuzz.sh`). Without `-max_len`, libFuzzer caps inputs at the largest seed's
+  size (`MixamoRig.gltf`, 12.6 kB), just below such inputs; a larger seed would let it build inputs with more primitives
+  and longer imports. Pass `-detect_leaks=0` to time one execution by hand: libFuzzer runs an input again when its
+  allocations outnumber its frees. A primitive that reads a large POSITION accessor through a few indices also processes
+  every vertex; compacting each primitive to the vertices its indices use, right after reading its attributes, would
+  bound the normal, tangent, morph and optimization work by the index count if it ever times out.
 - **Release packaging and the nightly between triggers.** `release.yml` runs only on tags, on pull requests touching its
   inputs, and by hand; `fuzz-nightly.yml` only nightly and by hand.
 

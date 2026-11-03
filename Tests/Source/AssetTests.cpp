@@ -1138,8 +1138,8 @@ TEST_SUITE("Assets")
 	}
 
 	// Regression (review of the FuzzGltf fixes): each primitive was imported again even when it read the same accessors as
-	// an earlier one (multi-material exports repeat them), and 250 primitives repeating one 16x16-vertex grid's accessors took
-	// 2.4 s in the fuzz build. Later ones now draw the first one's ranges with their own material.
+	// an earlier one (multi-material exports repeat them), and 250 primitives repeating one 16x16-vertex grid's accessors
+	// took 2.4 s in the fuzz build. Later ones now draw the first one's ranges with their own material.
 	TEST_CASE("glTF primitives that read the same accessors share one submesh's geometry")
 	{
 		BasaltTest::TempDirectory directory("GltfSharedPrimitives");
@@ -1168,8 +1168,11 @@ TEST_SUITE("Assets")
 		const auto path = directory.GetPath() / "Shared.gltf";
 		REQUIRE(FileSystem::WriteTextFile(path, gltf.dump()));
 		std::string error;
+		const auto since = Log::GetHistory().GetTotalCount();
 		const auto source = MeshImporter::LoadGltf(path, "Shared.gltf", error);
 		REQUIRE_MESSAGE(source, error);
+		// Sharing fully optimized geometry is not worth a word.
+		CHECK(BasaltTest::CountLogMessages(since, "Shared.gltf: mesh") == 0);
 
 		REQUIRE(source->Meshes.size() == 2);
 		REQUIRE(source->Meshes[0].Submeshes.size() == 5);
@@ -1212,14 +1215,12 @@ TEST_SUITE("Assets")
 		CHECK(source->Vertices.size() == base.VertexCount + blended.VertexCount + ownIndices.VertexCount);
 
 		// Every attribute the importer reads is part of what decides sharing: a second primitive that reads one of them
-		// through another accessor over the same bytes, or adds one, imports on its own.
+		// through another accessor over the same bytes, or adds one, imports on its own (JOINTS_0, WEIGHTS_0 and target
+		// deltas in MorphTargetTests; the indices by primitive 3 above).
 		for (const char* attribute : { "POSITION", "NORMAL", "TANGENT", "TEXCOORD_0", "TEXCOORD_1" })
 		{
 			INFO(attribute);
 			nlohmann::json variant = gltf;
-			variant["meshes"].erase(1);
-			variant["nodes"].erase(1);
-			variant["scenes"][0]["nodes"] = { 0 };
 			nlohmann::json& attributes = variant["meshes"][0]["primitives"][1]["attributes"];
 			if (attributes.contains(attribute))
 			{
@@ -1232,9 +1233,9 @@ TEST_SUITE("Assets")
 			REQUIRE(FileSystem::WriteTextFile(variantPath, variant.dump()));
 			const auto separate = MeshImporter::LoadGltf(variantPath, "Variant.gltf", error);
 			REQUIRE_MESSAGE(separate, error);
-			const auto& own = separate->Submeshes[separate->Meshes[0].Submeshes[1]];
-			CHECK(own.BaseVertex != separate->Submeshes[separate->Meshes[0].Submeshes[0]].BaseVertex);
-			CHECK(separate->Submeshes[separate->Meshes[0].Submeshes[4]].BaseVertex == separate->Submeshes[separate->Meshes[0].Submeshes[0]].BaseVertex);
+			const auto separateSubmesh = [&](size_t index) -> const Submesh& { return separate->Submeshes[separate->Meshes[0].Submeshes[index]]; };
+			CHECK(separateSubmesh(1).BaseVertex != separateSubmesh(0).BaseVertex);
+			CHECK(separateSubmesh(4).BaseVertex == separateSubmesh(0).BaseVertex);
 		}
 	}
 
@@ -1364,6 +1365,21 @@ TEST_SUITE("Assets")
 		REQUIRE_MESSAGE(nonFinite, AssetManager::GetError("Assets/Models/NaN.gltf"));
 		CHECK(nonFinite->Submeshes[0].LODs.empty());
 		CHECK(BasaltTest::CountLogMessages(since, "NaN.gltf: mesh 'QuadMesh' primitive 0: optimization and LODs skipped for non-finite vertex positions") == 1);
+		// A primitive that repeats its accessors shares that geometry, and says so.
+		nlohmann::json repeated = MakeUntexturedGltfJson(EmbeddedBufferJson(buffer));
+		repeated["materials"].push_back({ { "name", "Other" } });
+		repeated["meshes"][0]["primitives"].push_back(repeated["meshes"][0]["primitives"][0]);
+		repeated["meshes"][0]["primitives"][1]["material"] = 1;
+		project.WriteFile("Assets/Models/RepeatedNaN.gltf", repeated.dump());
+		AssetManager::Clear();
+		since = Log::GetHistory().GetTotalCount();
+		const auto repeatedNonFinite = AssetManager::GetMesh("Assets/Models/RepeatedNaN.gltf");
+		REQUIRE_MESSAGE(repeatedNonFinite, AssetManager::GetError("Assets/Models/RepeatedNaN.gltf"));
+		REQUIRE(repeatedNonFinite->Submeshes.size() == 2);
+		CHECK(repeatedNonFinite->Submeshes[1].BaseVertex == repeatedNonFinite->Submeshes[0].BaseVertex);
+		CHECK(repeatedNonFinite->Submeshes[1].LODs.empty());
+		CHECK(BasaltTest::CountLogMessages(since, "RepeatedNaN.gltf: mesh 'QuadMesh' primitive 1: optimization and LODs skipped") == 0);
+		CHECK(BasaltTest::CountLogMessages(since, "RepeatedNaN.gltf: mesh 'QuadMesh' primitive 1: it shares mesh 'QuadMesh' primitive 0's geometry, which had optimization and LODs skipped (non-finite vertex positions)") == 1);
 
 		// cgltf accepts an index accessor without elements; that primitive is skipped and the next one still loads.
 		nlohmann::json empty = MakeUntexturedGltfJson(EmbeddedBufferJson(MakeQuadBuffer()));

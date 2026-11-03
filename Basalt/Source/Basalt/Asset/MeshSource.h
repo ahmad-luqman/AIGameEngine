@@ -120,14 +120,14 @@ namespace Basalt {
 	inline constexpr uint32_t MaxMorphTextureRows = 2048;
 	inline constexpr uint32_t MaxMorphDeltas = MorphTextureWidth * MaxMorphTextureRows / 2u;
 
-	// Import limits for a model's triangle geometry, summed over every primitive that is read (primitives can share one
-	// accessor). At the limits a model holds 1.4 GiB of Vertex data and 256 MiB of indices before per-attribute scratch.
-	// Elements of accessors without a buffer view are zero-filled (apart from any sparse values) from almost no data, so a
-	// few bytes of JSON could otherwise ask for seconds of import work per million elements in the fuzz build (normals,
-	// tangents, optimization and LODs; 4 million zero-filled positions took 27 s there, found by FuzzGltf). They have a
-	// far tighter limit, counted once more per morph target of their primitive (each target can generate the normals
-	// again); 2^16 import in under half a second there. Real files use them for sparse morph targets, which do not count
-	// (MaxMorphDeltas bounds their memory).
+	// Import limits for a model's triangle geometry, summed over every triangle primitive, once per use of an accessor,
+	// also for a primitive that repeats an earlier one's accessors and shares its geometry. At the limits a model holds
+	// 1.4 GiB of Vertex data and 256 MiB of indices before per-attribute scratch. Elements of accessors without a buffer
+	// view are zero-filled (apart from any sparse values) from almost no data, so a few bytes of JSON could otherwise ask
+	// for seconds of import work per million elements in the fuzz build (normals, tangents, optimization and LODs;
+	// 4 million zero-filled positions took 27 s there, found by FuzzGltf). They have a far tighter limit, counted once more
+	// per morph target of their primitive (each target can generate the normals again); 2^16 import in under half a second
+	// there. Real files use them for sparse morph targets, which do not count (MaxMorphDeltas bounds their memory).
 	inline constexpr uint32_t MaxModelVertices = 1u << 24;
 	inline constexpr uint32_t MaxModelIndices = 1u << 26;
 	inline constexpr uint32_t MaxZeroFilledElements = 1u << 16;
@@ -149,7 +149,8 @@ namespace Basalt {
 	};
 
 	// A contiguous range of the index buffer drawn with one material. Submeshes may share their ranges (ShareSubmesh), so
-	// a write through one reaches the others, and summing their counts can count a range twice.
+	// writing the vertices, indices or morph deltas in one's ranges changes the others, and summing their counts can count
+	// a range twice.
 	struct Submesh
 	{
 		uint32_t BaseVertex = 0;
@@ -158,7 +159,8 @@ namespace Basalt {
 		uint32_t VertexCount = 0;
 		uint32_t MaterialIndex = 0;
 		AABB Bounds;
-		// Derived by AddSubmesh (copied by ShareSubmesh); changing positions/joints/weights requires re-adding geometry and its GPU buffers.
+		// Derived by AddSubmesh (copied by ShareSubmesh); changing positions/joints/weights requires re-adding geometry
+		// and its GPU buffers.
 		std::vector<JointInfluenceBounds> JointBounds;
 		// Reduced ranges, most detailed first, sharing BaseVertex. CPU queries and physics use the base range.
 		std::vector<MeshLOD> LODs;
@@ -304,11 +306,12 @@ namespace Basalt {
 		// Adds a submesh from raw geometry, updating bounds. Returns the submesh index. `morphDeltas` holds
 		// morphTargetCount * vertices.size() deltas, target-major (empty without morph targets).
 		uint32_t AddSubmesh(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices, uint32_t materialIndex, const std::vector<MorphDelta>& morphDeltas = {}, uint32_t morphTargetCount = 0);
-		// Adds a submesh that draws an existing one's vertices, indices, LODs and morph deltas (and has its bounds) with its
-		// own material, for glTF primitives that read the same accessors. Call once the existing one is complete (LODs
-		// generated): it is a copy, which later changes do not reach. The material must be blended exactly when the existing
-		// one's is, since only non-blended triangles are reordered and get LODs. Bounds need no update: the ranges already
-		// count. Returns the new submesh index.
+		// Adds a submesh that draws an existing one's vertices, indices, LODs and morph deltas with its own material, for
+		// glTF primitives that read the same accessors. Its Bounds, JointBounds and MorphBounds are copied, since they
+		// describe the same ranges; MeshData and model bounds still come from UpdateBounds, as after AddSubmesh. Call once
+		// the existing one is complete (LODs generated): it is a copy, which later changes do not reach. The material must
+		// be blended exactly when the existing one's is, since only non-blended triangles are reordered and may get LODs
+		// (material indices past Materials are not checked, as in AddSubmesh). Returns the new submesh index.
 		uint32_t ShareSubmesh(uint32_t submeshIndex, uint32_t materialIndex);
 		// Recomputes MeshData and global bounds from submesh bounds.
 		void UpdateBounds();

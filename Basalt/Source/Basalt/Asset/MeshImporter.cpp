@@ -520,9 +520,9 @@ namespace Basalt {
 
 		// Why a mesh's morph targets cannot be kept within the import limits (empty when they can), given the deltas left
 		// in the model's budget. Runs before the mesh's primitives import, so it counts each one, also one that will share
-		// an earlier one's deltas and take none from the budget: telling them apart would need each primitive's whole
-		// PrimitiveGeometryKey, and a conservative count keeps ReadMorphTargets from ever running out (which fails the model
-		// rather than dropping the mesh's targets).
+		// an earlier one's deltas, or be skipped, and take none from the budget: telling them apart would need each
+		// primitive's whole PrimitiveGeometryKey, and a conservative count keeps ReadMorphTargets from ever running out
+		// (which fails the model rather than dropping the mesh's targets).
 		std::string MorphLimitProblem(const cgltf_mesh& mesh, size_t budget)
 		{
 			const size_t targets = mesh.primitives_count > 0 ? mesh.primitives[0].targets_count : 0;
@@ -535,7 +535,7 @@ namespace Basalt {
 					if (const cgltf_attribute& attribute = mesh.primitives[p].attributes[a]; attribute.type == cgltf_attribute_type_position && attribute.data)
 						deltas += attribute.data->count * targets;
 			if (deltas > budget)
-				return fmt::format("its morph targets need {} deltas (counted once per primitive, also one that shares an earlier one's geometry), past the {} left of the limit of {} per model", deltas, budget, MaxMorphDeltas);
+				return fmt::format("its morph targets need {} deltas (counted once per primitive, also one that shares an earlier one's geometry), past the {} left of the limit of {} per model; reduce its targets or vertices, or merge primitives that repeat the same accessors", deltas, budget, MaxMorphDeltas);
 			return {};
 		}
 
@@ -584,7 +584,7 @@ namespace Basalt {
 			const cgltf_accessor* Positions = nullptr;
 			const cgltf_accessor* Normals = nullptr;
 			// The target also carries attributes other than POSITION, NORMAL and TANGENT, which the importer drops.
-			bool IgnoresOthers = false;
+			bool HasIgnoredAttributes = false;
 		};
 
 		MorphTargetAccessors FindMorphTargetAccessors(const cgltf_morph_target& target)
@@ -598,7 +598,7 @@ namespace Basalt {
 				else if (attribute.type == cgltf_attribute_type_normal && attribute.index == 0)
 					result.Normals = attribute.data;
 				else if (attribute.type != cgltf_attribute_type_tangent)
-					result.IgnoresOthers = true;
+					result.HasIgnoredAttributes = true;
 			}
 			return result;
 		}
@@ -671,6 +671,10 @@ namespace Basalt {
 		// primitives repeating one 16x16-vertex grid's accessors took 2.4 s in the fuzz build when each was imported again.
 		struct PrimitiveGeometryKey
 		{
+			// A new vertex or morph delta attribute needs a field here too, or primitives that differ only in it would share.
+			static_assert(sizeof(Vertex) == 88, "a new vertex attribute needs a PrimitiveGeometryKey field");
+			static_assert(sizeof(MorphDelta) == 2 * sizeof(glm::vec3), "a new morph delta attribute needs a MorphTargets entry");
+
 			static constexpr size_t NoAccessor = std::numeric_limits<size_t>::max();
 			size_t Positions = NoAccessor;
 			size_t Normals = NoAccessor;
@@ -697,14 +701,16 @@ namespace Basalt {
 		{
 			static constexpr uint32_t NoSubmesh = std::numeric_limits<uint32_t>::max();
 			uint32_t Submesh = NoSubmesh;
-			// Why it was skipped (a string literal) when it has no submesh, else null.
+			// Why it was skipped (a string literal), or null when it has a submesh.
 			const char* SkipReason = nullptr;
 			// It read its vertices without a usable TEXCOORD_1, before any later skip, so a repeat whose material samples one
 			// fails there too.
 			bool LacksUV1 = false;
-			// When its geometry was not fully optimized: "<where>'s geometry, which <what it lacks>", which repeats inherit
-			// and warn about too. Empty otherwise.
+			// When its geometry was not fully optimized, which repeats inherit and report too: "mesh '<name>' primitive <n>'s
+			// geometry, which <what happened to it>" (logged after "it shares "), at error level for an importer bug. Empty
+			// otherwise.
 			std::string Degradation;
+			bool DegradationIsError = false;
 		};
 
 		bool ReadIndices(const cgltf_accessor* accessor, std::vector<uint32_t>& out)
@@ -974,7 +980,7 @@ namespace Basalt {
 				outError = fmt::format("{}: mesh '{}': {}", key, meshData.Name, outError);
 				return nullptr;
 			}
-			bool ignoredMorphAttributes = false;
+			bool meshIgnoresMorphAttributes = false;
 
 			for (cgltf_size primitiveIndex = 0; primitiveIndex < mesh.primitives_count; primitiveIndex++)
 			{
@@ -993,6 +999,7 @@ namespace Basalt {
 				const cgltf_accessor* texCoords1 = nullptr;
 				const cgltf_accessor* joints = nullptr;
 				const cgltf_accessor* weights = nullptr;
+				// Every accessor read here is part of the PrimitiveGeometryKey below.
 				for (cgltf_size a = 0; a < primitive.attributes_count; a++)
 				{
 					const cgltf_attribute& attribute = primitive.attributes[a];
@@ -1030,12 +1037,12 @@ namespace Basalt {
 				std::vector<MorphTargetAccessors> morphTargets;
 				morphTargets.reserve(targets);
 				geometryKey.MorphTargets.reserve(targets);
-				bool ignoresMorphAttributes = false;
+				bool primitiveIgnoresMorphAttributes = false;
 				for (uint32_t t = 0; t < targets; t++)
 				{
 					const MorphTargetAccessors& target = morphTargets.emplace_back(FindMorphTargetAccessors(primitive.targets[t]));
 					geometryKey.MorphTargets.push_back({ accessorIndex(target.Positions), accessorIndex(target.Normals) });
-					ignoresMorphAttributes |= target.IgnoresOthers;
+					primitiveIgnoresMorphAttributes |= target.HasIgnoredAttributes;
 				}
 
 				// A material that samples TEXCOORD_1 fails a primitive without a usable one.
@@ -1054,12 +1061,11 @@ namespace Basalt {
 				if (const auto cached = importedPrimitives.find(geometryKey); cached != importedPrimitives.end())
 				{
 					const ImportedPrimitive& imported = cached->second;
-					BS_CORE_ASSERT((imported.Submesh == ImportedPrimitive::NoSubmesh) == (imported.SkipReason != nullptr), "a recorded primitive has a submesh or a skip reason");
 					// The TEXCOORD_1 check depends on the material, so a repeat runs it where the first primitive did: after
 					// reading its vertices, before any later skip.
 					if (imported.LacksUV1 && !checkUV1())
 						return nullptr;
-					if (imported.Submesh == ImportedPrimitive::NoSubmesh)
+					if (imported.SkipReason)
 					{
 						warnSkipped(imported.SkipReason);
 						continue;
@@ -1067,18 +1073,26 @@ namespace Basalt {
 					meshData.Submeshes.push_back(source->ShareSubmesh(imported.Submesh, materialIndex));
 					// The key holds only POSITION and NORMAL, so a repeat's targets may carry ignored attributes the first
 					// one's did not.
-					ignoredMorphAttributes |= ignoresMorphAttributes;
-					if (!imported.Degradation.empty())
+					meshIgnoresMorphAttributes |= primitiveIgnoresMorphAttributes;
+					if (imported.DegradationIsError)
+						BS_CORE_ERROR("MeshImporter: {}: mesh '{}' primitive {}: it shares {}", key, meshData.Name, primitiveIndex, imported.Degradation);
+					else if (!imported.Degradation.empty())
 						BS_CORE_WARN("MeshImporter: {}: mesh '{}' primitive {}: it shares {}", key, meshData.Name, primitiveIndex, imported.Degradation);
 					continue;
 				}
 				// Recorded for the primitives that repeat this one once its outcome is known.
 				ImportedPrimitive imported;
-				const auto record = [&] { importedPrimitives.emplace(std::move(geometryKey), std::move(imported)); };
+				// Its outcome: a submesh, or the reason it was skipped. Once per primitive, after everything else is set.
+				const auto record = [&](uint32_t submesh, const char* skipReason) {
+					BS_CORE_ASSERT((submesh == ImportedPrimitive::NoSubmesh) == (skipReason != nullptr), "a primitive imports to a submesh or is skipped for a reason");
+					imported.Submesh = submesh;
+					imported.SkipReason = skipReason;
+					[[maybe_unused]] const bool inserted = importedPrimitives.emplace(std::move(geometryKey), std::move(imported)).second;
+					BS_CORE_ASSERT(inserted, "a primitive geometry is recorded once");
+				};
 				const auto skip = [&](const char* reason) {
 					warnSkipped(reason);
-					imported.SkipReason = reason;
-					record();
+					record(ImportedPrimitive::NoSubmesh, reason);
 				};
 
 				std::vector<Vertex> vertices(positions->count);
@@ -1144,7 +1158,7 @@ namespace Basalt {
 						vertices[v].TexCoord1 = texCoordData[v];
 
 				imported.LacksUV1 = !hasUV1;
-				if (imported.LacksUV1 && !checkUV1())
+				if (!hasUV1 && !checkUV1())
 					return nullptr;
 
 				std::vector<uint32_t> indices;
@@ -1200,7 +1214,10 @@ namespace Basalt {
 
 				const MeshOptimizer::OptimizeResult result = MeshOptimizer::Optimize(vertices, indices, reorder, &morphDeltas, targets, &valenceAllowance);
 				// What the geometry lacks when it is not fully optimized, which repeats of this primitive inherit.
-				const auto degraded = [&](std::string_view what) { imported.Degradation = fmt::format("mesh '{}' primitive {}'s geometry, which {}", meshData.Name, primitiveIndex, what); };
+				const auto recordDegradation = [&](std::string_view what, bool error) {
+					imported.Degradation = fmt::format("mesh '{}' primitive {}'s geometry, which {}", meshData.Name, primitiveIndex, what);
+					imported.DegradationIsError = error;
+				};
 				switch (result)
 				{
 					case MeshOptimizer::OptimizeResult::Optimized:
@@ -1210,28 +1227,27 @@ namespace Basalt {
 						const uint64_t limit = MeshOptimizer::MaxValenceCostPerIndex * indices.size() + MeshOptimizer::ValenceCostAllowance;
 						const char* lods = targets == 0 && !joints ? " and gets no LODs" : "";
 						BS_CORE_WARN("MeshImporter: {}: mesh '{}' primitive {}: the squares of its vertices' triangle counts sum past {} per index plus the model's allowance (at most {} for its {} indices), so it keeps its triangle order{}; split vertices shared by thousands of triangles or remove repeated degenerate triangles", key, meshData.Name, primitiveIndex, MeshOptimizer::MaxValenceCostPerIndex, limit, indices.size(), lods);
-						degraded(fmt::format("keeps its triangle order{} (its vertices are in too many triangles)", lods));
+						recordDegradation(fmt::format("keeps its triangle order{} (its vertices are in too many triangles)", lods), false);
 						break;
 					}
 					case MeshOptimizer::OptimizeResult::Invalid:
 						// The checks above leave nothing Optimize rejects, so this is an importer bug.
 						BS_CORE_ERROR("MeshImporter: {}: mesh '{}' primitive {}: inconsistent geometry buffers; optimization and LODs skipped", key, meshData.Name, primitiveIndex);
-						degraded("skipped optimization and LODs (inconsistent geometry buffers)");
+						recordDegradation("had optimization and LODs skipped (inconsistent geometry buffers)", true);
 						break;
 					case MeshOptimizer::OptimizeResult::NonFinite:
 						BS_CORE_WARN("MeshImporter: {}: mesh '{}' primitive {}: optimization and LODs skipped for non-finite vertex positions", key, meshData.Name, primitiveIndex);
-						degraded("skipped optimization and LODs (non-finite vertex positions)");
+						recordDegradation("had optimization and LODs skipped (non-finite vertex positions)", false);
 						break;
 				}
 				const auto submesh = source->AddSubmesh(vertices, indices, materialIndex, morphDeltas, targets);
 				if (result == MeshOptimizer::OptimizeResult::Optimized)
 					MeshOptimizer::GenerateLODs(*source, submesh);
 				meshData.Submeshes.push_back(submesh);
-				ignoredMorphAttributes |= ignoresMorphAttributes;
-				imported.Submesh = submesh;
-				record();
+				meshIgnoresMorphAttributes |= primitiveIgnoresMorphAttributes;
+				record(submesh, nullptr);
 			}
-			if (ignoredMorphAttributes)
+			if (meshIgnoresMorphAttributes)
 				BS_CORE_WARN("MeshImporter: {}: mesh '{}': morph targets keep only POSITION and NORMAL deltas; their other attributes are ignored", key, meshData.Name);
 			source->Meshes.push_back(std::move(meshData));
 		}
