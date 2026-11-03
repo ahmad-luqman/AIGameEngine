@@ -45,10 +45,12 @@ namespace Basalt {
 		{
 			if (static_cast<size_t>(chain.Type) >= IKChainTypeCount)
 				problems.push_back(fmt::format("Type {} is not a chain type; ignoring the chain", static_cast<int>(chain.Type)));
-			if (chain.Type == IKChainType::LookAt && (chain.ChainLength < 1 || chain.ChainLength > IKChain::MaxChainLength))
+			if (chain.Type != IKChainType::TwoBone && (chain.ChainLength < 1 || chain.ChainLength > IKChain::MaxChainLength))
 				problems.push_back(fmt::format("ChainLength must be between 1 and {}; clamping", IKChain::MaxChainLength));
 			if (chain.Type == IKChainType::LookAt && chain.Ground)
-				problems.emplace_back("Ground only applies to TwoBone chains; ignoring it");
+				problems.emplace_back("Ground only applies to TwoBone and Fabrik chains; ignoring it");
+			if (chain.Type == IKChainType::LookAt && chain.FootLock)
+				problems.emplace_back("FootLock only applies to TwoBone and Fabrik chains; ignoring it");
 			if (!Math::IsFinite(chain.Pole))
 				problems.emplace_back("Pole is not finite; keeping the animated bend");
 			if (!Math::IsFinite(chain.Axis) || glm::length(chain.Axis) <= 0)
@@ -107,7 +109,10 @@ namespace Basalt {
 		const float rayHeight = ClampSetting(component.RayHeight, 0, 100, defaults.RayHeight, "RayHeight", problems);
 		const float rayDepth = ClampSetting(component.RayDepth, 0, 100, defaults.RayDepth, "RayDepth", problems);
 		const float smoothing = ClampSetting(component.Smoothing, 0, 100, defaults.Smoothing, "Smoothing", problems);
-		const bool groundChains = std::ranges::any_of(component.Chains, [](const IKChain& chain) { return chain.Ground && chain.Type == IKChainType::TwoBone; });
+		const float lockSpeed = ClampSetting(component.LockSpeed, 0, 100, defaults.LockSpeed, "LockSpeed", problems);
+		const float lockHeight = ClampSetting(component.LockHeight, 0, 100, defaults.LockHeight, "LockHeight", problems);
+		const float lockDistance = ClampSetting(component.LockDistance, 0, 100, defaults.LockDistance, "LockDistance", problems);
+		const bool groundChains = std::ranges::any_of(component.Chains, [](const IKChain& chain) { return chain.Ground && chain.Type != IKChainType::LookAt; });
 		if (groundChains && rayHeight + rayDepth <= 0)
 			problems.emplace_back("RayHeight + RayDepth must be positive for Ground chains; feet keep their animation");
 		for (const IKChain& config : component.Chains)
@@ -155,6 +160,15 @@ namespace Basalt {
 					break;
 				}
 		const float blend = smoothing > 0 ? 1.0f - std::exp(-seconds / smoothing) : 1.0f;
+		// FollowTarget chains share the component's Target; a missing one is the entity's problem, logged once.
+		std::optional<glm::vec3> componentTarget;
+		if (component.Target != 0)
+		{
+			if (const Entity target = m_Scene.GetEntityByUUID(component.Target))
+				componentTarget = glm::vec3(m_Scene.GetWorldTransform(target)[3]);
+			else if (std::ranges::any_of(component.Chains, &IKChain::FollowTarget))
+				problems.emplace_back("the Target entity no longer exists; FollowTarget chains keep their animation");
+		}
 
 		std::vector<ResolvedChain> chains;
 		float pelvisOffset = 0;
@@ -197,7 +211,12 @@ namespace Basalt {
 				if (followed->MatchRotation)
 					resolved.Rotation = GlobalRotation(transform);
 			}
-			else if (config.Ground && config.Type == IKChainType::TwoBone)
+			else if (config.FollowTarget && component.Target != 0)
+			{
+				// Missing: reported for the entity above; the chain idles.
+				resolved.Target = componentTarget;
+			}
+			else if (config.Ground && config.Type != IKChainType::LookAt)
 			{
 				// The ground below the animated foot, relative to the plane through the entity's origin: the animation is
 				// authored on that plane, so lifts and steps keep their height above the ground.
@@ -246,6 +265,52 @@ namespace Basalt {
 				resolved.Target = foot + up * ground.Offset;
 				// Turns the animated foot from the entity's up axis to the ground normal.
 				resolved.Rotation = RotationBetween(up, ground.Normal) * GlobalRotation(world * globals[end]);
+			}
+			if (config.FootLock && config.Type != IKChainType::LookAt)
+			{
+				auto& lock = chain.Lock;
+				// Only feet that follow their animation (or the ground) lock; another target releases the lock at once.
+				const bool free = std::holds_alternative<std::monostate>(chain.Target) && !(config.FollowTarget && component.Target != 0);
+				if (!free)
+					lock = {};
+				else
+				{
+					const glm::vec3 joint = glm::vec3(world * globals[resolved.Joints.back()][3]);
+					const glm::vec3 current = resolved.Target.value_or(joint);
+					if (seconds > 0)
+					{
+						// The animated joint's height above the plane through the entity's origin: a lifting foot rises.
+						const float height = glm::dot(joint - origin, up);
+						const float speed = lock.Last ? glm::length(current - *lock.Last) / seconds : std::numeric_limits<float>::infinity();
+						lock.Last = current;
+						if (lock.Locked)
+						{
+							const bool carried = glm::length(current - lock.Position) > lockDistance;
+							if (airborne || carried || height > lock.Height + lockHeight)
+							{
+								lock.Locked = false;
+								// Carried away (a teleport, or the character outran the lock): no easing back from there.
+								if (carried)
+									lock.Weight = 0;
+							}
+						}
+						else if (!airborne && speed < lockSpeed)
+						{
+							lock.Locked = true;
+							lock.Position = current;
+							lock.Height = height;
+						}
+						const float goal = lock.Locked ? 1.0f : 0.0f;
+						lock.Weight += (goal - lock.Weight) * blend;
+						if (std::abs(goal - lock.Weight) < 1e-4f)
+							lock.Weight = goal;
+					}
+					if (lock.Weight > 0)
+					{
+						resolved.Target = glm::mix(current, lock.Position, lock.Weight);
+						resolved.Settled = false;
+					}
+				}
 			}
 			if (resolved.Rotation && config.Type == IKChainType::LookAt)
 			{
@@ -316,6 +381,12 @@ namespace Basalt {
 				// A zero Pole keeps the animated bend; a non-finite one was reported and does too.
 				const std::optional<glm::vec3> pole = Math::IsFinite(config.Pole) ? std::optional<glm::vec3>(config.Pole) : std::nullopt;
 				result = SolveTwoBoneIK(source, pose, globals, { .Upper = chain.Joints[0], .Middle = chain.Joints[1], .End = chain.Joints[2], .Target = *chain.Target, .Pole = pole, .EndRotation = chain.Rotation, .Weight = chain.Weight });
+			}
+			else if (config.Type == IKChainType::Fabrik)
+			{
+				// The pole only picks the side a straight chain starts bending toward.
+				const std::optional<glm::vec3> pole = Math::IsFinite(config.Pole) ? std::optional<glm::vec3>(config.Pole) : std::nullopt;
+				result = SolveFabrikIK(source, pose, globals, { .Joints = chain.Joints, .Target = *chain.Target, .Pole = pole, .EndRotation = chain.Rotation, .Weight = chain.Weight });
 			}
 			else
 			{
@@ -433,6 +504,14 @@ namespace Basalt {
 		if (!state)
 			return std::nullopt;
 		return state->Weight.Get();
+	}
+
+	std::optional<bool> AnimationSystem::IsIKFootLocked(Entity entity, const std::string& chain)
+	{
+		const auto [state, config] = FindChain(entity, chain, "IsIKFootLocked");
+		if (!state)
+			return std::nullopt;
+		return state->Lock.Locked;
 	}
 
 }

@@ -1202,3 +1202,277 @@ TEST_SUITE("Animation")
 		scene.OnSimulationStop();
 	}
 }
+
+namespace {
+	bool Fabrik(Rig& rig, const std::vector<uint32_t>& joints, const glm::vec3& target, const glm::vec3& pole = glm::vec3(0), const std::optional<glm::quat>& rotation = std::nullopt, float weight = 1)
+	{
+		const FabrikIKRequest request{ .Joints = joints, .Target = target, .Pole = glm::length(pole) > 0 ? std::optional<glm::vec3>(pole) : std::nullopt, .EndRotation = rotation, .Weight = weight };
+		return SolveFabrikIK(*rig.Source, rig.Pose, rig.Globals, request) == IKSolveResult::Solved;
+	}
+	// The left arm from the chest: three bones, straight along +X at rest.
+	std::vector<uint32_t> LeftArmChain(const MeshSource& source)
+	{
+		return { Node(source, "Chest"), Node(source, "LeftUpperArm"), Node(source, "LeftForeArm"), Node(source, "LeftHand") };
+	}
+	std::vector<float> BoneLengths(const std::vector<glm::mat4>& globals, const std::vector<uint32_t>& joints)
+	{
+		std::vector<float> lengths;
+		for (size_t i = 0; i + 1 < joints.size(); i++)
+			lengths.push_back(glm::length(Position(globals, joints[i + 1]) - Position(globals, joints[i])));
+		return lengths;
+	}
+}
+
+TEST_SUITE("Animation")
+{
+	TEST_CASE("FABRIK reaches targets keeps bone lengths and stretches toward targets out of reach")
+	{
+		Rig rig(LoadModel(BipedPath()));
+		const auto joints = LeftArmChain(*rig.Source);
+		const auto lengths = BoneLengths(rig.Globals, joints);
+		const glm::vec3 root = Position(rig.Globals, joints.front());
+		const auto reachOf = [&] { return lengths[0] + lengths[1] + lengths[2]; };
+
+		// A bent arm reaching forward and down.
+		const glm::vec3 target(0.4f, 1.1f, 0.35f);
+		REQUIRE(Fabrik(rig, joints, target));
+		CHECK(Near(Position(rig.Globals, joints.back()), target, 1e-3f));
+		CHECK(Near(Position(rig.Globals, joints.front()), root));
+		const auto solved = BoneLengths(rig.Globals, joints);
+		for (size_t i = 0; i < lengths.size(); i++)
+			CHECK(solved[i] == doctest::Approx(lengths[i]).epsilon(1e-4));
+
+		// Out of reach: straight toward the target, the hand at the chain's full reach.
+		Rig far(rig.Source);
+		const glm::vec3 away(3.0f, 2.0f, 1.0f);
+		REQUIRE(Fabrik(far, joints, away));
+		const glm::vec3 hand = Position(far.Globals, joints.back());
+		CHECK(glm::length(hand - root) == doctest::Approx(reachOf()).epsilon(1e-4));
+		CHECK(Degrees(hand - root, away - root) < 0.05f);
+		CHECK(Degrees(Position(far.Globals, joints[2]) - root, away - root) < 0.05f);
+	}
+
+	TEST_CASE("FABRIK bends straight chains toward the pole and blends weights and end rotations")
+	{
+		const auto source = LoadModel(BipedPath());
+		const auto joints = LeftArmChain(*source);
+		Rig animated(source);
+		// The rest spine is straight up from the hips to the head; a target along that line, closer than its reach,
+		// needs a bend.
+		const std::vector<uint32_t> spine{ Node(*source, "Hips"), Node(*source, "Spine"), Node(*source, "Chest"), Node(*source, "Head") };
+		const glm::vec3 inward = Position(animated.Globals, spine.front()) + glm::vec3(0, 0.5f, 0);
+		Rig forward(source);
+		REQUIRE(Fabrik(forward, spine, inward));
+		CHECK(Near(Position(forward.Globals, spine.back()), inward, 1e-3f));
+		// Without a pole the spine starts bending toward +Z.
+		CHECK(Position(forward.Globals, spine[2]).z > 0.01f);
+		Rig backward(source);
+		REQUIRE(Fabrik(backward, spine, inward, glm::vec3(0, 0, -1)));
+		CHECK(Near(Position(backward.Globals, spine.back()), inward, 1e-3f));
+		CHECK(Position(backward.Globals, spine[2]).z < -0.01f);
+		// A bent chain keeps its plane: the arm bends in the plane its shoulder offset makes.
+		Rig planar(source);
+		const glm::vec3 inline_ = Position(animated.Globals, joints.front()) + glm::vec3(0.5f, 0.1f, 0);
+		REQUIRE(Fabrik(planar, joints, inline_));
+		CHECK(Near(Position(planar.Globals, joints.back()), inline_, 1e-3f));
+		CHECK(std::abs(Position(planar.Globals, joints[2]).z) < 1e-4f);
+
+		// Weight 0 changes nothing; half weight lands between the animated and the solved hand.
+		const glm::vec3 target(0.4f, 1.1f, 0.35f);
+		Rig none(source);
+		CHECK(SolveFabrikIK(*source, none.Pose, none.Globals, { .Joints = joints, .Target = target, .Weight = 0 }) == IKSolveResult::Unchanged);
+		CHECK(NearPose(none.Globals, animated.Globals));
+		Rig half(source);
+		REQUIRE(Fabrik(half, joints, target, glm::vec3(0), std::nullopt, 0.5f));
+		const float halfway = glm::length(Position(half.Globals, joints.back()) - target);
+		CHECK(halfway > 0.05f);
+		CHECK(halfway < glm::length(Position(animated.Globals, joints.back()) - target));
+
+		// An end rotation turns the hand itself.
+		Rig turned(source);
+		const glm::quat rotation = glm::angleAxis(glm::radians(40.0f), glm::vec3(0, 1, 0));
+		REQUIRE(Fabrik(turned, joints, target, glm::vec3(0), rotation));
+		CHECK(NearRotation(GlobalRotation(turned.Globals[joints.back()]), rotation, 1e-3f));
+
+		// Non-finite requests leave the pose alone; zero-length chains cannot bend.
+		Rig bad(source);
+		CHECK(SolveFabrikIK(*source, bad.Pose, bad.Globals, { .Joints = joints, .Target = glm::vec3(std::numeric_limits<float>::quiet_NaN()) }) == IKSolveResult::NonFinite);
+		CHECK(NearPose(bad.Globals, animated.Globals));
+		Rig squashed(source);
+		for (uint32_t joint : joints)
+			squashed.Pose.Nodes[joint].Scale = glm::vec3(joint == joints.front() ? 1.0f : 0.0f);
+		REQUIRE(ComposeAnimationPose(*source, squashed.Pose, squashed.Globals));
+		squashed.Pose.Nodes[joints.front()].Scale = glm::vec3(0.0f);
+		REQUIRE(ComposeAnimationPose(*source, squashed.Pose, squashed.Globals));
+		CHECK(SolveFabrikIK(*source, squashed.Pose, squashed.Globals, { .Joints = joints, .Target = target }) == IKSolveResult::Degenerate);
+	}
+
+	TEST_CASE("Fabrik chains resolve ChainLength bones and solve scripted and ground targets")
+	{
+		const auto source = LoadModel(BipedPath());
+		std::vector<uint32_t> joints;
+		auto arm = Chain("Arm", IKChainType::Fabrik, "LeftHand");
+		arm.ChainLength = 3;
+		CHECK(ResolveIKChain(*source, arm, joints).empty());
+		CHECK(joints == LeftArmChain(*source));
+		arm.ChainLength = 6;
+		CHECK(ResolveIKChain(*source, arm, joints) == "joint 'LeftHand' has fewer than 6 joints above it");
+		CHECK(joints.empty());
+
+		ClearAssetCache clear;
+		Scene scene;
+		arm.ChainLength = 3;
+		auto leg = Chain("LeftFoot", IKChainType::Fabrik, "LeftFoot");
+		leg.ChainLength = 2;
+		leg.Ground = true;
+		auto biped = AddBiped(scene, { arm, leg });
+		biped.GetComponent<InverseKinematicsComponent>().Pelvis = "Hips";
+		biped.GetTransform().Translation = { 0, 0.2f, 0 };
+		AddBox(scene, "Floor", { 0, -0.5f, 0 }, { 5, 0.5f, 5 });
+		scene.OnSimulationStart();
+		auto& system = *scene.GetAnimationSystem();
+		const glm::vec3 target(0.4f, 1.3f, 0.35f);
+		REQUIRE(system.SetIKTarget(biped, "Arm", target, std::nullopt));
+		scene.OnUpdate(Step);
+		CHECK(Near(BoneWorld(scene, biped, "LeftHand"), target, 1e-3f));
+		// The foot reaches down 0.2 m to the floor (the pelvis drops with it), its ankle 0.05 m above it, like a two-bone
+		// ground chain.
+		CHECK(BoneWorld(scene, biped, "LeftFoot").y == doctest::Approx(0.05f).epsilon(1e-3));
+		CHECK(BoneWorld(scene, biped, "LeftFoot").x == doctest::Approx(0.1f).epsilon(1e-3));
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("FollowTarget chains follow the component's Target until a script target replaces it")
+	{
+		ClearAssetCache clear;
+		Scene scene;
+		auto look = Chain("Look", IKChainType::LookAt, "Head");
+		look.FollowTarget = true;
+		look.MaxAngle = 180;
+		auto arm = Chain("LeftArm", IKChainType::TwoBone, "LeftHand");
+		arm.FollowTarget = true;
+		auto biped = AddBiped(scene, { look, arm });
+		auto ball = scene.CreateEntity("Ball");
+		ball.GetTransform().Translation = { 0.3f, 1.2f, 0.3f };
+		scene.OnRuntimeStart();
+		auto& system = *scene.GetAnimationSystem();
+		const glm::vec3 animated = BoneWorld(scene, biped, "LeftHand");
+		// Read every frame, so a Target set while playing applies at the next solve.
+		biped.GetComponent<InverseKinematicsComponent>().Target = ball.GetUUID();
+		const auto headAim = [&] { return glm::vec3(BoneWorldTransform(scene, biped, "Head") * glm::vec4(0, 0, 1, 0)); };
+		system.Update(Step);
+		CHECK(Near(BoneWorld(scene, biped, "LeftHand"), glm::vec3(0.3f, 1.2f, 0.3f), 1e-3f));
+		CHECK(Degrees(headAim(), glm::vec3(0.3f, 1.2f, 0.3f) - BoneWorld(scene, biped, "Head")) < 0.1f);
+		// Moving the target moves the chains with it.
+		ball.GetTransform().Translation = { 0.35f, 1.2f, 0.2f };
+		system.Update(Step);
+		CHECK(Near(BoneWorld(scene, biped, "LeftHand"), glm::vec3(0.35f, 1.2f, 0.2f), 1e-3f));
+
+		// A script target wins; clearing it follows the Target again.
+		const glm::vec3 scripted(0.4f, 1.3f, 0.3f);
+		REQUIRE(system.SetIKTarget(biped, "LeftArm", scripted, std::nullopt));
+		system.Update(Step);
+		CHECK(Near(BoneWorld(scene, biped, "LeftHand"), scripted, 1e-3f));
+		REQUIRE(system.ClearIKTarget(biped, "LeftArm"));
+		system.Update(Step);
+		CHECK(Near(BoneWorld(scene, biped, "LeftHand"), glm::vec3(0.35f, 1.2f, 0.2f), 1e-3f));
+
+		// Without FollowTarget a chain ignores the Target; a destroyed Target idles the chains and is logged once.
+		biped.GetComponent<InverseKinematicsComponent>().Chains[1].FollowTarget = false;
+		system.Update(Step);
+		CHECK(Near(BoneWorld(scene, biped, "LeftHand"), animated));
+		const auto since = Log::GetHistory().GetTotalCount();
+		scene.DestroyEntity(ball);
+		system.Update(Step);
+		system.Update(Step);
+		CHECK(CountLogMessages(since, "the Target entity no longer exists") == 1);
+		CHECK(Degrees(headAim(), glm::vec3(0, 0, 1)) < 0.01f);
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Foot locks hold planted joints in place until the animation carries them away")
+	{
+		ClearAssetCache clear;
+		Scene scene;
+		auto foot = Chain("LeftFoot", IKChainType::TwoBone, "LeftFoot");
+		foot.FootLock = true;
+		auto biped = AddBiped(scene, { foot });
+		auto& ik = biped.GetComponent<InverseKinematicsComponent>();
+		ik.Smoothing = 0;
+		ik.LockDistance = 0.3f;
+		scene.OnRuntimeStart();
+		auto& system = *scene.GetAnimationSystem();
+		// The first solve has no speed yet; standing still then locks the foot where it stands.
+		system.Update(Step);
+		CHECK(system.IsIKFootLocked(biped, "LeftFoot") == false);
+		system.Update(Step);
+		REQUIRE(system.IsIKFootLocked(biped, "LeftFoot") == true);
+		const glm::vec3 planted = BoneWorld(scene, biped, "LeftFoot");
+
+		// Lowering the character (the legs bend) keeps the foot planted in the world...
+		for (int i = 1; i <= 14; i++)
+		{
+			biped.GetTransform().Translation.y = -0.02f * static_cast<float>(i);
+			system.Update(Step);
+			CHECK(Near(BoneWorld(scene, biped, "LeftFoot"), planted, 1e-3f));
+		}
+		CHECK(system.IsIKFootLocked(biped, "LeftFoot") == true);
+		// ...until the animated foot is LockDistance away: then it lets go at once, and while the foot moves faster than
+		// LockSpeed (1.2 m/s here) it does not lock again.
+		biped.GetTransform().Translation.y = -0.32f;
+		system.Update(Step);
+		CHECK(system.IsIKFootLocked(biped, "LeftFoot") == false);
+		CHECK(BoneWorld(scene, biped, "LeftFoot").y == doctest::Approx(planted.y - 0.32f).epsilon(1e-3));
+		// Standing still locks it again, where it now stands.
+		system.Update(Step);
+		CHECK(system.IsIKFootLocked(biped, "LeftFoot") == true);
+
+		// A script target releases the lock; the lock only engages again once the target is cleared.
+		REQUIRE(system.SetIKTarget(biped, "LeftFoot", glm::vec3(0.1f, -0.1f, 0.2f), std::nullopt));
+		system.Update(Step);
+		CHECK(system.IsIKFootLocked(biped, "LeftFoot") == false);
+		REQUIRE(system.ClearIKTarget(biped, "LeftFoot"));
+		system.Update(Step);
+		system.Update(Step);
+		CHECK(system.IsIKFootLocked(biped, "LeftFoot") == true);
+
+		// Chains without FootLock report false; unknown chains nothing.
+		CHECK_FALSE(system.IsIKFootLocked(biped, "Missing").has_value());
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Foot locks release when the animation lifts the joint and ease back with Smoothing")
+	{
+		ClearAssetCache clear;
+		Scene scene;
+		// Wave raises the right arm: the hand stands in for a foot the animation lifts.
+		auto hand = Chain("RightHand", IKChainType::TwoBone, "RightHand");
+		hand.FootLock = true;
+		auto biped = AddBiped(scene, { hand });
+		biped.GetComponent<AnimatorComponent>().Clip = "Wave";
+		auto& ik = biped.GetComponent<InverseKinematicsComponent>();
+		ik.Smoothing = 0.1f;
+		ik.LockHeight = 0.05f;
+		scene.OnRuntimeStart();
+		auto& system = *scene.GetAnimationSystem();
+		system.Update(Step);
+		system.Update(Step);
+		// Locking eases in over Smoothing, and a held pose keeps the hand where it locked.
+		for (int i = 0; i < 60; i++)
+			system.Update(Step);
+		REQUIRE(system.IsIKFootLocked(biped, "RightHand") == true);
+		const glm::vec3 planted = BoneWorld(scene, biped, "RightHand");
+
+		// Seeking 0.1 s into the wave lifts the hand about 7 cm: past LockHeight, so the lock releases and eases out.
+		REQUIRE(system.Seek(biped, 0.1f));
+		system.Update(Step);
+		CHECK(system.IsIKFootLocked(biped, "RightHand") == false);
+		const glm::vec3 easing = BoneWorld(scene, biped, "RightHand");
+		CHECK(glm::length(easing - planted) > 1e-3f);
+		system.Update(1.0f);
+		const glm::vec3 lifted = BoneWorld(scene, biped, "RightHand");
+		CHECK(glm::length(lifted - planted) > glm::length(easing - planted));
+		CHECK(lifted.y - planted.y > ik.LockHeight);
+		scene.OnRuntimeStop();
+	}
+}
