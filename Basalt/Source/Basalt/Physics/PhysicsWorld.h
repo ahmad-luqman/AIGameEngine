@@ -35,6 +35,8 @@ namespace Basalt {
 		float Weight = 0;
 		bool Active = false;
 		bool Sleeping = false;
+		// Some joint's motor is driving toward the animated pose (read from the physics joints themselves).
+		bool Powered = false;
 	};
 
 	struct RaycastHit
@@ -194,6 +196,11 @@ namespace Basalt {
 		// Aligns the incoming animation root horizontally with the fall; callers place height for a different ground level.
 		bool RecoverRagdoll(Entity entity, const std::string& clip, float seconds);
 		bool IsRagdollActive(Entity entity) const;
+		// Fades the motor strength (0..1, scaling MotorTorque) linearly over seconds (0: at once); a changed MotorStrength
+		// applies at once and ends a fade. False with a diagnostic for a missing Ragdoll component or invalid values.
+		bool SetRagdollMotorStrength(Entity entity, float strength, float seconds);
+		// The current motor strength; nullopt without a Ragdoll component.
+		std::optional<float> GetRagdollMotorStrength(Entity entity) const;
 		uint32_t GetRagdollBodyCount(Entity entity) const;
 		// Construction attempts, including rejections; useful for diagnosing automatic activation retries.
 		uint64_t GetRagdollBuildCount() const;

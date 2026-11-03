@@ -1092,3 +1092,165 @@ TEST_SUITE("Ragdolls")
 		scene.OnRuntimeStop();
 	}
 }
+
+namespace {
+	// The tip's rotation relative to the root body in the physical pose, in degrees.
+	float PhysicalBend(PhysicsWorld& physics, Entity rig)
+	{
+		const auto pose = physics.GetRagdollPose(rig);
+		REQUIRE(pose);
+		REQUIRE(pose->Joints.size() == 2);
+		const glm::quat root = glm::quat_cast(glm::mat3(pose->Joints[0].second));
+		const glm::quat tip = glm::quat_cast(glm::mat3(pose->Joints[1].second));
+		return glm::degrees(glm::angle(glm::normalize(glm::conjugate(root) * tip)));
+	}
+	// A rig floating without gravity, activated on its rest pose, whose animation then bends the tip 30 degrees.
+	struct PoweredRig
+	{
+		explicit PoweredRig(float strength)
+		{
+			Floor(scene);
+			rig = Rig(scene);
+			rig.GetComponent<RagdollComponent>().MotorStrength = strength;
+			scene.OnSimulationStart();
+			physics = scene.GetPhysicsWorld();
+			physics->SetGravity(glm::vec3(0));
+			scene.GetAnimationSystem()->Update(0);
+			REQUIRE(physics->ActivateRagdoll(rig));
+			REQUIRE(scene.GetAnimationSystem()->Seek(rig, 1.0f / 3.0f));
+		}
+		~PoweredRig() { scene.OnSimulationStop(); }
+		Scene scene;
+		Entity rig;
+		PhysicsWorld* physics = nullptr;
+	};
+}
+
+TEST_SUITE("Ragdolls")
+{
+	TEST_CASE("Powered ragdolls turn their joints toward the animated pose")
+	{
+		ClearAssetCache clear;
+		PoweredRig powered(1.0f);
+		PoweredRig passive(0.0f);
+		const uint64_t builds = powered.physics->GetRagdollBuildCount();
+		Simulate(powered.scene, 90);
+		Simulate(passive.scene, 90);
+		// The motors bend the tip to the animated 30 degrees; a passive rig keeps the pose it was activated on.
+		CHECK(PhysicalBend(*powered.physics, powered.rig) == doctest::Approx(30.0f).epsilon(0.05));
+		CHECK(PhysicalBend(*passive.physics, passive.rig) < 1.0f);
+		CHECK(powered.physics->IsRagdollActive(powered.rig));
+		CHECK(powered.physics->GetRagdollPose(powered.rig)->Powered);
+		CHECK_FALSE(passive.physics->GetRagdollPose(passive.rig)->Powered);
+
+		// Motor settings apply live, without rebuilding the rig.
+		auto& component = powered.rig.GetComponent<RagdollComponent>();
+		component.MotorFrequency = 2.0f;
+		component.MotorDamping = 0.5f;
+		component.MotorTorque = 50.0f;
+		Simulate(powered.scene, 5);
+		CHECK(powered.physics->GetRagdollBuildCount() == builds);
+		CHECK(powered.physics->IsRagdollActive(powered.rig));
+
+		// At strength 0 the motors let go: the bend no longer follows the animation back to straight.
+		REQUIRE(powered.physics->SetRagdollMotorStrength(powered.rig, 0, 0));
+		REQUIRE(powered.scene.GetAnimationSystem()->Seek(powered.rig, 0));
+		Simulate(powered.scene, 60);
+		CHECK(PhysicalBend(*powered.physics, powered.rig) > 20.0f);
+		CHECK_FALSE(powered.physics->GetRagdollPose(powered.rig)->Powered);
+		// A weak motor (tiny torque) barely turns it back.
+		REQUIRE(powered.physics->SetRagdollMotorStrength(powered.rig, 1, 0));
+		component.MotorTorque = 0.0001f;
+		Simulate(powered.scene, 60);
+		CHECK(PhysicalBend(*powered.physics, powered.rig) > 20.0f);
+		component.MotorTorque = 500.0f;
+		component.MotorFrequency = 8.0f;
+		component.MotorDamping = 1.0f;
+		Simulate(powered.scene, 90);
+		CHECK(PhysicalBend(*powered.physics, powered.rig) < 2.0f);
+		CHECK(powered.physics->GetRagdollBuildCount() == builds);
+	}
+
+	TEST_CASE("Ragdoll motor strength fades, survives recovery and stays passive at zero")
+	{
+		ClearAssetCache clear;
+		// Motor settings without strength change nothing: a passive rig falls exactly alike with any of them.
+		const auto fall = [](float frequency, float torque) {
+			Scene scene;
+			Floor(scene);
+			Entity rig = Rig(scene);
+			rig.GetComponent<RagdollComponent>().MotorFrequency = frequency;
+			rig.GetComponent<RagdollComponent>().MotorTorque = torque;
+			scene.OnSimulationStart();
+			scene.GetAnimationSystem()->Update(0);
+			REQUIRE(scene.GetPhysicsWorld()->ActivateRagdoll(rig, glm::vec3(3, 0, 1)));
+			Simulate(scene, 120);
+			const auto pose = scene.GetPhysicsWorld()->GetRagdollPose(rig);
+			REQUIRE(pose);
+			scene.OnSimulationStop();
+			return pose->Joints;
+		};
+		CHECK(fall(8, 500) == fall(20, 900));
+
+		Scene scene;
+		Floor(scene);
+		Entity rig = Rig(scene);
+		auto& component = rig.GetComponent<RagdollComponent>();
+		scene.OnSimulationStart();
+		auto& physics = *scene.GetPhysicsWorld();
+		scene.GetAnimationSystem()->Update(0);
+		REQUIRE(physics.ActivateRagdoll(rig));
+		// Scripts fade the strength; a changed MotorStrength applies at once and ends the fade.
+		CHECK(physics.GetRagdollMotorStrength(rig) == 0.0f);
+		REQUIRE(physics.SetRagdollMotorStrength(rig, 1, 0.5f));
+		Simulate(scene, 15);
+		CHECK(physics.GetRagdollMotorStrength(rig).value() == doctest::Approx(0.5f).epsilon(0.02));
+		component.MotorStrength = 0.25f;
+		Simulate(scene, 15);
+		CHECK(physics.GetRagdollMotorStrength(rig) == 0.25f);
+		// Gameplay state: it survives recovery and a new activation.
+		REQUIRE(physics.SetRagdollMotorStrength(rig, 0.75f, 0));
+		REQUIRE(physics.RecoverRagdoll(rig, {}, 0));
+		Simulate(scene, 2);
+		REQUIRE(physics.ActivateRagdoll(rig));
+		CHECK(physics.GetRagdollMotorStrength(rig) == 0.75f);
+
+		// Invalid values fail and are logged once; an entity without a Ragdoll has no strength.
+		const auto since = Log::GetHistory().GetTotalCount();
+		CHECK_FALSE(physics.SetRagdollMotorStrength(rig, 2, 0));
+		CHECK_FALSE(physics.SetRagdollMotorStrength(rig, 0.5f, -1));
+		CHECK(CountLogMessages(since, "the strength must be between 0 and 1") == 1);
+		CHECK(physics.GetRagdollMotorStrength(rig) == 0.75f);
+		Entity plain = scene.CreateEntity("Plain");
+		CHECK_FALSE(physics.GetRagdollMotorStrength(plain).has_value());
+		CHECK_FALSE(physics.SetRagdollMotorStrength(plain, 1, 0));
+		// Settings C++ wrote past validation are clamped and said so once.
+		component.MotorFrequency = std::numeric_limits<float>::quiet_NaN();
+		Simulate(scene, 3);
+		CHECK(CountLogMessages(since, "MotorFrequency must be in 0.1..30; clamping") == 1);
+		component.MotorFrequency = 8;
+		// The strength ends with the component.
+		rig.RemoveComponent<RagdollComponent>();
+		CHECK_FALSE(physics.GetRagdollMotorStrength(rig).has_value());
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("Lua fades and reads ragdoll motor strength")
+	{
+		ClearAssetCache clear;
+		Scene scene;
+		Entity rig = Rig(scene);
+		rig.GetComponent<RagdollComponent>().MotorStrength = 0.5f;
+		scene.CreateEntity("Plain");
+		scene.OnRuntimeStart();
+		CHECK(Eval(scene, "return Scene.FindEntityByName('Ragdoll'):GetRagdollMotorStrength()") == "0.5");
+		CHECK(Eval(scene, "return Scene.FindEntityByName('Ragdoll'):SetRagdollMotorStrength(1, 1)") == "true");
+		CHECK(Eval(scene, "return Scene.FindEntityByName('Ragdoll'):SetRagdollMotorStrength(-1)") == "false");
+		Simulate(scene, 30);
+		CHECK(std::stof(Eval(scene, "return Scene.FindEntityByName('Ragdoll'):GetRagdollMotorStrength()")) == doctest::Approx(0.75f).epsilon(0.03));
+		CHECK(Eval(scene, "return pcall(function() Scene.FindEntityByName('Plain'):SetRagdollMotorStrength(1) end)").starts_with("false"));
+		CHECK(Eval(scene, "return pcall(function() Scene.FindEntityByName('Plain'):GetRagdollMotorStrength() end)").starts_with("false"));
+		CHECK(Eval(scene, "return pcall(function() Scene.FindEntityByName('Ragdoll'):SetRagdollMotorStrength(1, 'soon') end)").starts_with("false"));
+		scene.OnRuntimeStop();
+	}
+}
