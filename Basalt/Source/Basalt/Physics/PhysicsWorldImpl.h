@@ -12,6 +12,7 @@
 #include "Basalt/Physics/PhysicsJobs.h"
 #include "Basalt/Physics/PhysicsLayers.h"
 #include "Basalt/Physics/WarningLog.h"
+#include "Basalt/Animation/FadingWeight.h"
 #include "Basalt/Scene/Components.h"
 #include "Basalt/Scene/Entity.h"
 #include "Basalt/Scene/Scene.h"
@@ -104,6 +105,8 @@ namespace Basalt {
 			glm::mat4 World = glm::mat4(1);
 			float RecoveryLeft = 0;
 			float RecoveryDuration = 0;
+			// The joint motors drive toward the animated pose (DriveRagdollMotors); off until a strength above 0 first applies.
+			bool MotorsOn = false;
 			float Weight() const { return Doll ? 1.0f : (RecoveryDuration > 0 ? RecoveryLeft / RecoveryDuration : 0.0f); }
 		};
 		// A rebuild carries physical orientation and COM velocities by joint name; new joints follow their
@@ -125,7 +128,17 @@ namespace Basalt {
 			bool DependsOnSource = false;
 		};
 		PhysicsInternal::WarningLog RagdollWarnings{ "ragdoll on", false };
+		// Motor problems (settings C++ wrote past validation, an animated pose that is not available) and failed
+		// SetRagdollMotorStrength calls, each logged when they change.
+		PhysicsInternal::WarningLog MotorWarnings{ "ragdoll motors on", true };
+		PhysicsInternal::WarningLog MotorCallWarnings{ "ragdoll on", false };
+		// Motor strength per Ragdoll entity: gameplay state that survives activation, recovery and rebuilds and ends with the
+		// component (configured from MotorStrength, faded by SetRagdollMotorStrength).
+		std::map<UUID, FadingWeight> RagdollStrength;
 		void SyncRagdolls(PhysicsWorld& world, float seconds);
+		// Advances motor strengths and turns every active rig's joint motors toward its animated pose (or off at strength 0).
+		void DriveRagdollMotors(float seconds);
+		void ApplyRagdollMotors(Entity entity, RagdollRecord& record, const RagdollComponent& component, float strength);
 		bool BuildRagdoll(Entity entity, RagdollRecord& record, std::string& error, bool& cacheFailure);
 		bool ActivateRagdoll(PhysicsWorld& world, Entity entity, const glm::vec3& impulse, const std::vector<RagdollMotion>* motion = nullptr);
 		void RemoveRagdoll(UUID uuid, bool deferContacts = false);
