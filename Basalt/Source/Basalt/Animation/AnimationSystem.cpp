@@ -2334,11 +2334,11 @@ namespace Basalt {
 		LayerState previous = *state;
 		state->ScriptClip = clip;
 		state->Time = 0;
-		const bool shows = ResolveLayer(*playback, config, *state, component).Shows();
+		const LayerResolution& resolved = ResolveLayer(*playback, config, *state, component);
+		const bool shows = resolved.Shows();
 		// Without a clip a StateMachine layer starts its graph over.
-		if (shows)
-			SyncLayerGraph(*playback, config, *state, component, true);
-		if (!shows || (state->Resolved->Graph && !state->Graph.front().StateIndex))
+		const bool graph = shows && SyncLayerGraph(*playback, config, *state, component, true);
+		if (!shows || (graph && !state->Graph.front().StateIndex))
 		{
 			// The configuration (or graph state) problem itself was logged when the layer resolved (or entered the state).
 			std::string problem;
@@ -2397,10 +2397,12 @@ namespace Basalt {
 		if (!state)
 			return std::nullopt;
 		ReportLayerCall(entity, operation, {}, {});
-		if (state->Graph.empty() || !state->Graph.front().StateIndex)
+		if (state->Graph.empty())
 			return std::string();
 		const Playback& graph = state->Graph.front();
-		return graph.Graph->States[*graph.StateIndex].Name;
+		if (const std::optional<size_t>& index = graph.StateIndex)
+			return graph.Graph->States[*index].Name;
+		return std::string();
 	}
 
 	std::vector<AnimationEventRecord> AnimationSystem::TakeEvents()

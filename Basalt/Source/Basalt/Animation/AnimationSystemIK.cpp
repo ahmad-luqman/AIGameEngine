@@ -506,12 +506,13 @@ namespace Basalt {
 		return state->Weight.Get();
 	}
 
-	std::optional<bool> AnimationSystem::IsIKFootLocked(Entity entity, const std::string& chain)
+	bool AnimationSystem::GetIKFootLock(Entity entity, const std::string& chain, bool& outLocked)
 	{
 		const auto [state, config] = FindChain(entity, chain, "IsIKFootLocked");
 		if (!state)
-			return std::nullopt;
-		return state->Lock.Locked;
+			return false;
+		outLocked = state->Lock.Locked;
+		return true;
 	}
 
 }

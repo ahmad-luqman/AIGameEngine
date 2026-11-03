@@ -3,6 +3,7 @@
 #include "Basalt/Animation/AnimationSystem.h"
 #include "Basalt/Animation/InverseKinematics.h"
 #include "Basalt/Animation/AnimationClipSet.h"
+#include "Basalt/Animation/AnimationMask.h"
 #include "Basalt/Animation/SpringBones.h"
 #include "Basalt/Asset/AssetManager.h"
 #include "Basalt/Core/Assert.h"
@@ -181,13 +182,46 @@ namespace Basalt {
 				warnings.emplace_back("Animator MatchVelocity has no effect: no blend space sample has a Speed");
 			for (const AnimationLayer& layer : animator.Layers)
 			{
-				if (!layer.Clip.empty() && !findClip(layer.Clip))
+				if (!layer.StateMachine.empty())
+				{
+					if (!layer.Clip.empty())
+						warnings.push_back(fmt::format("Animator layer '{}': Clip is unused; the StateMachine replaces it", layer.Name));
+					if (layer.Blend == AnimationLayerBlend::Additive && layer.ReferenceClip.empty())
+						warnings.push_back(fmt::format("Animator layer '{}': an Additive layer with a StateMachine needs a ReferenceClip", layer.Name));
+					if (const auto graph = AssetManager::GetAnimationGraph(layer.StateMachine); !graph)
+						warnings.push_back(fmt::format("Animator layer '{}': state machine could not be loaded: {}", layer.Name, AssetManager::GetError(layer.StateMachine)));
+					else
+						for (const auto& state : graph->States)
+						{
+							if (state.BlendSpace.empty())
+							{
+								if (state.Clip.empty() ? clips.empty() : !findClip(state.Clip))
+									warnings.push_back(fmt::format("Animator layer '{}' state '{}': clip '{}' not found", layer.Name, state.Name, state.Clip));
+							}
+							else if (std::ranges::find(animator.BlendSpaces, state.BlendSpace, &AnimationBlendSpace::Name) == animator.BlendSpaces.end())
+								warnings.push_back(fmt::format("Animator layer '{}' state '{}': blend space '{}' not found", layer.Name, state.Name, state.BlendSpace));
+						}
+				}
+				else if (!layer.Clip.empty() && !findClip(layer.Clip))
 					warnings.push_back(fmt::format("Animator layer '{}': clip '{}' not found", layer.Name, layer.Clip));
 				if (layer.Blend == AnimationLayerBlend::Additive && !layer.ReferenceClip.empty() && !findClip(layer.ReferenceClip))
 					warnings.push_back(fmt::format("Animator layer '{}': reference clip '{}' not found", layer.Name, layer.ReferenceClip));
 				if (layer.Blend == AnimationLayerBlend::Override && !layer.ReferenceClip.empty())
 					warnings.push_back(fmt::format("Animator layer '{}': ReferenceClip only applies to Additive layers", layer.Name));
-				for (const AnimationMaskJoint& joint : layer.Mask)
+				const std::vector<AnimationMaskJoint>* mask = &layer.Mask;
+				if (!layer.MaskAsset.empty())
+				{
+					if (!layer.Mask.empty())
+						warnings.push_back(fmt::format("Animator layer '{}': Mask is unused; the MaskAsset replaces it", layer.Name));
+					const auto asset = AssetManager::GetAnimationMask(layer.MaskAsset);
+					if (!asset)
+					{
+						warnings.push_back(fmt::format("Animator layer '{}': mask could not be loaded, so the layer shows nothing: {}", layer.Name, AssetManager::GetError(layer.MaskAsset)));
+						continue;
+					}
+					mask = &asset->Joints;
+				}
+				for (const AnimationMaskJoint& joint : *mask)
 				{
 					if (joint.Joint.empty())
 						warnings.push_back(fmt::format("Animator layer '{}': a mask entry has no Joint and is ignored", layer.Name));
@@ -208,11 +242,22 @@ namespace Basalt {
 			for (const IKChain& chain : ik.Chains)
 			{
 				if (chain.Type == IKChainType::LookAt && glm::length(chain.Pole) > 0)
-					warnings.push_back(fmt::format("InverseKinematics chain '{}': Pole only applies to TwoBone chains", chain.Name));
+					warnings.push_back(fmt::format("InverseKinematics chain '{}': Pole only applies to TwoBone and Fabrik chains", chain.Name));
 				if (chain.Type == IKChainType::TwoBone && chain.ChainLength != 1)
-					warnings.push_back(fmt::format("InverseKinematics chain '{}': ChainLength only applies to LookAt chains", chain.Name));
+					warnings.push_back(fmt::format("InverseKinematics chain '{}': ChainLength only applies to LookAt and Fabrik chains", chain.Name));
+				if (chain.FollowTarget && ik.Target == 0)
+					warnings.push_back(fmt::format("InverseKinematics chain '{}': FollowTarget has no effect: the component has no Target", chain.Name));
+				if (chain.FootLock && ik.LockSpeed <= 0)
+					warnings.push_back(fmt::format("InverseKinematics chain '{}': FootLock never locks: LockSpeed is 0", chain.Name));
 				if (chain.Type == IKChainType::LookAt && chain.MaxAngle == 0)
 					warnings.push_back(fmt::format("InverseKinematics chain '{}': MaxAngle 0 never turns the chain", chain.Name));
+			}
+			if (ik.Target != 0)
+			{
+				if (!entity.GetScene()->GetEntityByUUID(ik.Target))
+					warnings.emplace_back("InverseKinematics Target entity not found");
+				else if (std::ranges::none_of(ik.Chains, &IKChain::FollowTarget))
+					warnings.emplace_back("InverseKinematics Target has no effect: no chain has FollowTarget");
 			}
 			// AddAnimatorWarnings reports a model that cannot load.
 			const auto source = animator->Mesh.empty() ? nullptr : AssetManager::GetMesh(animator->Mesh);
@@ -233,10 +278,10 @@ namespace Basalt {
 					warnings.push_back(fmt::format("InverseKinematics chain '{}': {}", chain.Name, problem));
 					continue;
 				}
-				if (chain.Ground && chain.Type == IKChainType::TwoBone)
+				if (chain.Ground && chain.Type != IKChainType::LookAt)
 					groundUppers.push_back(joints.front());
 				// Chains solve in order, so a later one driving the same joint overrides the earlier one.
-				const uint32_t end = chain.Type == IKChainType::TwoBone ? joints.back() : joints.front();
+				const uint32_t end = chain.Type != IKChainType::LookAt ? joints.back() : joints.front();
 				if (const auto other = std::ranges::find(ends, end, &std::pair<uint32_t, const IKChain*>::first); other != ends.end())
 					warnings.push_back(fmt::format("InverseKinematics chains '{}' and '{}' both drive joint '{}'; the later one wins", other->second->Name, chain.Name, chain.Joint));
 				else

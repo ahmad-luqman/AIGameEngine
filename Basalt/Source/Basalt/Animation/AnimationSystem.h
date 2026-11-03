@@ -120,9 +120,9 @@ namespace Basalt {
 		bool ClearIKTarget(Entity entity, const std::string& chain);
 		bool SetIKWeight(Entity entity, const std::string& chain, float weight, float seconds);
 		std::optional<float> GetIKWeight(Entity entity, const std::string& chain);
-		// Whether a FootLock chain holds its joint where it was planted (nullopt for a missing component or chain, logged
-		// as ReportCallProblem describes); false for chains without FootLock.
-		std::optional<bool> IsIKFootLocked(Entity entity, const std::string& chain);
+		// Whether a FootLock chain holds its joint where it was planted (false for chains without FootLock) in outLocked;
+		// false for a missing component or chain, logged as ReportCallProblem describes.
+		bool GetIKFootLock(Entity entity, const std::string& chain, bool& outLocked);
 		// Morph targets, found by name in every mesh node of the model with that target (a name shared by several meshes,
 		// such as a head and its teeth, sets them all). A script weight (0..1) replaces the animated one, fading over
 		// `seconds` from the weight shown, until ClearMorphWeight; it survives playback resets. False for an unknown

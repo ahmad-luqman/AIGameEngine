@@ -1,0 +1,14 @@
+{
+	"InitialState": "Rest",
+	"Parameters": [
+		{ "Name": "Waving", "Type": "Bool" }
+	],
+	"States": [
+		{ "Name": "Rest", "Clip": "Breathe" },
+		{ "Name": "Wave", "Clip": "Wave" }
+	],
+	"Transitions": [
+		{ "From": "Rest", "To": "Wave", "Duration": 0.2, "Conditions": [ { "Parameter": "Waving", "Value": true } ] },
+		{ "From": "Wave", "To": "Rest", "Duration": 0.2, "Conditions": [ { "Parameter": "Waving", "Value": false } ] }
+	]
+}

@@ -776,8 +776,12 @@ namespace Basalt {
 			entityType["GetIKWeight"] = [&context](const ScriptEntity& self, const std::string& chain) {
 				return RequireAnimations(context).GetIKWeight(RequireInverseKinematics(self, "GetIKWeight"), chain);
 			};
-			entityType["IsIKFootLocked"] = [&context](const ScriptEntity& self, const std::string& chain) {
-				return RequireAnimations(context).IsIKFootLocked(RequireInverseKinematics(self, "IsIKFootLocked"), chain);
+			entityType["IsIKFootLocked"] = [&context](sol::this_state state, const ScriptEntity& self, const std::string& chain) {
+				bool locked = false;
+				// nil for an unknown chain.
+				if (!RequireAnimations(context).GetIKFootLock(RequireInverseKinematics(self, "IsIKFootLocked"), chain, locked))
+					return sol::make_object(state, sol::lua_nil);
+				return sol::make_object(state, locked);
 			};
 			entityType["SetMorphWeight"] = [&context](const ScriptEntity& self, const std::string& target, float weight, const sol::object& seconds) {
 				Entity entity = RequireAnimator(self, "SetMorphWeight");

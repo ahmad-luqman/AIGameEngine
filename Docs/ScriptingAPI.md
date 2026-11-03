@@ -176,7 +176,7 @@ Entity handles store an ID and stay safe to hold: using a destroyed entity raise
 | `e:GetGroundNormal()` | Normal of the ground the character touches (walkable or too steep); nil in the air or without a character |
 | `e:GetJointPosition()` | Hinge angle (degrees) or slider offset (meters) of the Joint this entity holds, from its rest pose; nil otherwise |
 | `e:GetJointRotation()` | Rotation (Euler degrees, like `Rotation`) of a cone or six-DOF Joint this entity holds, in the joint frame from its rest pose; nil otherwise |
-| `e:ActivateRagdoll([impulse])`, `e:RecoverRagdoll(clip, seconds)`, `e:IsRagdollActive()` | Passive skeleton physics and get-up recovery; see Ragdolls |
+| `e:ActivateRagdoll([impulse])`, `e:RecoverRagdoll(clip, seconds)`, `e:IsRagdollActive()`, `e:SetRagdollMotorStrength(strength, [seconds])`, `e:GetRagdollMotorStrength()` | Passive or powered skeleton physics and get-up recovery; see Ragdolls |
 | `e:HasJoint()` | Whether the Joint this entity holds is a live constraint (false before both bodies exist, when it is invalid, and after it broke) |
 | `e:PlayAudio()`, `e:StopAudio()`, `e:IsAudioPlaying()` | The entity's AudioSource |
 | `e:GetAudioDopplerPitch()` | The Doppler pitch factor of the AudioSource from the last update (the shift its next mix applies): 1 = unshifted, also while it is not playing or for a non-spatial source |
@@ -591,7 +591,7 @@ translation axes outright, with or without `UseLimits` (their linear limits are 
 `UseLimits`, translation is locked and rotation free. A limit spring softens only limited translation axes;
 locked and free axes and rotation limits stay rigid (Jolt has no soft rotation limits).
 
-**Manually authored motor rigs.** These Joint motors are independent of the passive `Ragdoll` component; automatic powered ragdolls remain a follow-up. Six-DOF joints have a motor per axis of the joint frame: `LinearMotorMode` and
+**Manually authored motor rigs.** These Joint motors are independent of the `Ragdoll` component, whose own motors (`MotorStrength`) track the animated pose. Six-DOF joints have a motor per axis of the joint frame: `LinearMotorMode` and
 `AngularMotorMode` are `{ x, y, z }` lists of `"Off"`, `"Velocity"` or `"Position"`, and each axis reads
 its component of `LinearMotorTarget` (m/s, or meters from the rest pose) or `AngularMotorTarget` (degrees/s
 around the axis; a velocity axis turns with the joint's own body, so it drifts from the connected body's
@@ -1528,7 +1528,7 @@ actor:AddComponent("InverseKinematics", {
         { Name = "RightHand", Joint = "RightHand", Weight = 0 },
         { Name = "Tail", Type = "Fabrik", Joint = "TailTip", ChainLength = 6, FollowTarget = true },
     },
-    Target = Scene.FindEntityByName("Bone"):GetID(), -- what FollowTarget chains reach for
+    Target = Scene.FindEntityByName("Bone").ID, -- what FollowTarget chains reach for
 })
 actor:SetIKTarget("Head", Scene.FindEntityByName("Camera")) -- follow an entity
 actor:SetIKTarget("RightHand", lever.WorldPosition, lever.Rotation) -- lever has no parent here
@@ -1828,8 +1828,9 @@ pose immediately.
 
 ## Ragdolls
 
-Add `Ragdoll` to an entity with an `Animator` whose model has a skin. `Enabled = true` starts passive physics on
-its shown pose at the next physics update. The inspector and `component.set` use the same validated fields as Lua:
+Add `Ragdoll` to an entity with an `Animator` whose model has a skin. `Enabled = true` starts physics on its shown pose
+at the next physics update: passive, or powered by motors that track the animation (`MotorStrength` above 0). The
+inspector and `component.set` use the same validated fields as Lua:
 
 ```lua
 local character = Scene.FindEntityByName("Enemy")
@@ -1848,6 +1849,9 @@ character:RecoverRagdoll("GetUp", 0.5)
   false with a diagnostic; the original controller/body is retained on construction failure. A missing Ragdoll component
   and a wrongly typed Lua impulse raise an error (a missing Animator returns false). Finite impulses that would overflow physics are also rejected.
 - `IsRagdollActive() -> boolean` stays true even when the bodies sleep. It is false during recovery.
+- `SetRagdollMotorStrength(strength, [seconds]) -> boolean` fades the motor strength (0..1) linearly over `seconds`
+  (default 0: at once); false for an invalid strength or time (logged once). `GetRagdollMotorStrength() -> number`
+  returns the current strength. Both raise errors without a Ragdoll component.
 - `RecoverRagdoll(clip, seconds) -> boolean` removes the bodies and blends the frozen physical pose back to animation
   over 0..60 seconds. Empty `clip` keeps the current playback. A missing clip, invalid duration or inactive ragdoll
   returns false; a rejected request leaves the ragdoll active. The entity moves horizontally with its fallen root;
@@ -1881,7 +1885,28 @@ Active physics replaces the entity's controller/body until recovery; the authore
 and events continue, while root motion, IK and springs yield to the physical pose during simulation and recovery.
 Attachments and skinning follow that pose, including animation re-evaluation in callbacks. Play and Simulate both
 support ragdolls. Runtime handles and frozen poses stay outside saves and scene copies; `scene.hash` includes the
-physical joints and recovery weight. Powered pose-following motors remain a follow-up.
+physical joints and recovery weight.
+
+**Powered ragdolls.** While a ragdoll with a motor strength above 0 is active, every joint's motor turns it toward the
+Animator's current layered pose (before IK, springs and the physical pose), as a stunned body that still falls: a hit
+reaction or stumble activates it with an impulse, lets the motors pull the limbs back toward the animation, then
+recovers. The root body is not driven. Each joint is a spring of `MotorFrequency` (Hz, 0.1..30, default 8) and
+`MotorDamping` (ratio 0..10, default 1) whose torque is capped at `MotorTorque * strength` (N·m, `MotorTorque`
+0..1,000,000, default 500): low strength makes weak, floppy limbs, and 0 turns the motors off. `MotorStrength` (0..1,
+default 0) is the starting strength; a changed value applies at once and ends a `SetRagdollMotorStrength` fade. The
+strength is gameplay state: it survives activation, recovery and rebuilds, keeps fading while the ragdoll is inactive,
+and ends with the component. Motor settings apply live and never rebuild the rig; a powered rig stays awake. A ragdoll
+that is never powered never touches its motors, so it simulates exactly as a passive one. Values written from C++ past
+validation are clamped and logged once.
+
+```lua
+function Enemy:OnHit(direction)
+    self.Entity:ActivateRagdoll(direction * 80)
+    self.Entity:SetRagdollMotorStrength(0.2)        -- stunned
+    self.Entity:SetRagdollMotorStrength(1, 0.6)     -- regaining control
+    Timer.After(1.0, function() self.Entity:RecoverRagdoll("Idle", 0.4) end)
+end
+```
 
 `ActivateRagdoll` writes `Ragdoll.Enabled = true`; recovery writes it back to false. A stale component table with
 `Enabled = false` therefore starts recovery when passed to `SetComponent`. The original rigid body or character
