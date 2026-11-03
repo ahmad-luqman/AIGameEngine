@@ -31,8 +31,8 @@ function(basalt_use_dependency_sources pinsFile)
 		string(STRIP "${stamp}" stamp)
 	endif()
 	if(NOT stamp STREQUAL pins)
-		# A missing directory is a cache miss in a workflow that does not fetch (the nightly fuzz run) or a local tree
-		# without one; a directory with another stamp, or none, holds sources for other pins.
+		# A missing directory is a local tree that has not fetched one (CI jobs fetch on a cache miss, through
+		# .github/actions/setup-basalt); a directory with another stamp, or none, holds sources for other pins.
 		if(EXISTS "${sourceDir}")
 			message(WARNING "Basalt: ignoring BASALT_DEPS_SOURCE_DIR (${sourceDir}): its sources were not fetched for "
 				"these pins (scripts/ci-fetch-deps.sh)")

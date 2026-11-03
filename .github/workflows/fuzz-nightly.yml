@@ -1,11 +1,13 @@
 name: Fuzz (nightly)
 
-# Longer fuzzing than the per-push CI job, one job per target so the wall-clock time does not grow with the number
-# of targets (twelve targets at 20 minutes each outlasted the old single job's 150-minute timeout). One job builds every
-# target and the per-target jobs download them, so they need no compiler, dependency sources or compiler cache. Each
-# target's grown corpus is cached between nights so each run starts from everything found before. After changing this
-# workflow or .github/actions/setup-basalt, start it by hand on the branch (gh workflow run fuzz-nightly.yml --ref
-# <branch> -f seconds=60): nothing else runs it before the next night.
+# Longer fuzzing than the per-push CI job, one job per target so the wall-clock time does not grow with the number of
+# targets (at 20 minutes per target, the old single job outlasted its 150-minute timeout). One job builds every target and
+# the per-target jobs download them, so they need no compiler, dependency sources or compiler cache; they run on the
+# same image, and the targets link everything but the C and C++ runtimes statically. The matrix, the build and the
+# tarball all take their targets from scripts/fuzz.sh --list. Each target's grown corpus is cached between nights so
+# each run starts from everything found before. After changing this workflow, .github/actions/setup-basalt or the
+# FUZZ_MODE paths of scripts/fuzz.sh, start it by hand on the branch (gh workflow run fuzz-nightly.yml --ref <branch>
+# -f seconds=60): nothing else runs it before the next night.
 on:
   schedule:
     - cron: "17 3 * * *"
@@ -18,9 +20,15 @@ on:
 env:
   SECONDS_PER_TARGET: ${{ github.event.inputs.seconds || '1200' }}
 
+# Explicit bash adds pipefail (the default shell runs bash -e only).
+defaults:
+  run:
+    shell: bash
+
 jobs:
-  # The build compiles through ccache, restoring (never saving) the CI fuzz job's cache, and takes the dependency
-  # sources from CI's dependency-source cache (main's entry; scripts/ci-fetch-deps.sh, cmake/DependencySources.cmake).
+  # The build compiles through ccache, restoring (never saving) the CI fuzz job's cache. Its dependency sources come from
+  # CI's dependency-source cache like any CI job's (main's entry for the scheduled run, or the branch's own; fetched and
+  # saved on a miss).
   build:
     name: build
     runs-on: ubuntu-24.04
@@ -34,17 +42,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Checked before anything is built, so a bad manual input fails once instead of in every fuzz job.
+      # The only check of the input before the fuzz jobs use it, so a bad manual value fails once, before the build.
       - name: Check the input
         run: |
-          if [[ ! "$SECONDS_PER_TARGET" =~ ^[0-9]{1,4}$ ]] || [[ "$SECONDS_PER_TARGET" -gt 2400 ]]; then
-            echo "::error::seconds must be a whole number of at most 2400 to fit the Fuzz step's timeout"
+          if [[ ! "$SECONDS_PER_TARGET" =~ ^[1-9][0-9]{0,3}$ ]] || [[ "$SECONDS_PER_TARGET" -gt 2400 ]]; then
+            echo "::error::seconds must be a whole number from 1 to 2400, to fit the Fuzz step's timeout"
             exit 1
           fi
 
+      # An assignment, so a failing --list fails the step (a command substitution inside echo's arguments would not).
       - name: List fuzz targets
         id: list
-        run: echo "targets=$(scripts/fuzz.sh --list)" >> "$GITHUB_OUTPUT"
+        run: |
+          targets="$(scripts/fuzz.sh --list)"
+          jq -e 'type == "array" and length > 0' <<< "$targets" > /dev/null
+          echo "targets=$targets" >> "$GITHUB_OUTPUT"
 
       - name: Set up the build tools
         timeout-minutes: 30
@@ -62,28 +74,36 @@ jobs:
           save: false
 
       - name: Build
-        run: FUZZ_MODE=build scripts/fuzz.sh "$SECONDS_PER_TARGET"
+        run: FUZZ_MODE=build scripts/fuzz.sh
 
       - name: Check that the build uses the caches
         run: scripts/ci-check-caches.sh build-fuzz
 
-      # Artifacts lose file modes, so the executables travel in a tarball. Debug builds with ASan, UBSan and coverage
-      # instrumentation are large; zstd shrinks them several times, and the artifact stores the tarball uncompressed.
+      # Artifacts lose file modes, so the executables travel in a tarball. Debug builds with ASan, UBSan and libFuzzer's
+      # coverage instrumentation are large (about 600 MB packed); the artifact stores the zstd tarball as it is.
       - name: Pack the targets
         env:
           TARGETS: ${{ steps.list.outputs.targets }}
         run: |
-          mapfile -t targets < <(jq -r '.[]' <<< "$TARGETS")
+          jq -er '.[]' <<< "$TARGETS" > "$RUNNER_TEMP/targets.txt"
+          mapfile -t targets < "$RUNNER_TEMP/targets.txt"
           tar -C build-fuzz/bin -I 'zstd -T0 -3' -cf "$RUNNER_TEMP/fuzz-targets.tar.zst" "${targets[@]}"
+          packed="$(tar -I zstd -tf "$RUNNER_TEMP/fuzz-targets.tar.zst" | wc -l)"
+          if [[ "$packed" -ne ${#targets[@]} ]]; then
+            echo "::error::packed $packed of ${#targets[@]} targets"
+            exit 1
+          fi
           ls -l "$RUNNER_TEMP/fuzz-targets.tar.zst"
 
+      # Kept three days, so failed fuzz jobs can be re-run the next day too. A re-run of every job uploads it again.
       - uses: actions/upload-artifact@v4
         with:
           name: fuzz-targets
           path: ${{ runner.temp }}/fuzz-targets.tar.zst
           if-no-files-found: error
           compression-level: 0
-          retention-days: 1
+          retention-days: 3
+          overwrite: true
 
   fuzz:
     needs: build
@@ -107,9 +127,13 @@ jobs:
           mkdir -p build-fuzz/bin
           tar -C build-fuzz/bin -I zstd -xf "$RUNNER_TEMP/fuzz-targets.tar.zst"
 
-      # The sanitizers print source locations only through llvm-symbolizer on PATH; without it a crash report is a list of
-      # raw addresses. The image ships it with a version suffix, if at all; otherwise apt installs LLVM.
+      # The sanitizers print source locations only through llvm-symbolizer; without it a crash report is a list of raw
+      # addresses, and nothing fails. The image ships LLVM (the version-suffixed name is enough); otherwise apt installs
+      # it. The step resolves this target's entry point to a source line, so a symbolizer that cannot read the binary
+      # fails here.
       - name: Find llvm-symbolizer
+        env:
+          TARGET: ${{ matrix.target }}
         run: |
           shopt -s nullglob
           symbolizer="$(command -v llvm-symbolizer || true)"
@@ -121,10 +145,18 @@ jobs:
             scripts/ci-apt-install.sh llvm
             symbolizer="$(command -v llvm-symbolizer)"
           fi
-          mkdir -p "$RUNNER_TEMP/symbolizer"
-          ln -sf "$symbolizer" "$RUNNER_TEMP/symbolizer/llvm-symbolizer"
-          echo "$RUNNER_TEMP/symbolizer" >> "$GITHUB_PATH"
-          "$symbolizer" --version | head -n 2
+          "$symbolizer" --version | sed -n '1,2p'
+          address="$(nm "build-fuzz/bin/$TARGET" | awk '$3 == "LLVMFuzzerTestOneInput" { print $1 }')"
+          location="$("$symbolizer" --obj="build-fuzz/bin/$TARGET" "0x$address")"
+          echo "$location"
+          if [[ "$location" != *"Tests/Fuzz/$TARGET.cpp:"[0-9]* ]]; then
+            echo "::error::$symbolizer cannot resolve $TARGET's entry point to its source"
+            exit 1
+          fi
+          {
+            echo "ASAN_SYMBOLIZER_PATH=$symbolizer"
+            echo "UBSAN_SYMBOLIZER_PATH=$symbolizer"
+          } >> "$GITHUB_ENV"
 
       # Restored and saved separately so the corpus grown before a crash or a Fuzz step timeout is kept too
       # (actions/cache's own save is a post step that runs only when every earlier step succeeded).
