@@ -131,7 +131,8 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   The runtime mounts it (`Exporter::MountExportedArchive`, before `Project::Load`); `FileSystem::Mount` serves
   `ReadTextFile`/`ReadBinaryFile`/`Exists`/`GetRegularFileSize` from it (a damaged entry fails, never falling back to
   disk). cgltf's file callbacks (which keep only each buffer's declared bytes), miniaudio (a VFS) and font stamps ask
-  `FileSystem::FindMounted` (Lua `require`'s searcher reads through `FileSystem` and asks it only whether a module exists), and `AssetRegistry::Refresh` reads the UUIDs from the index
+  `FileSystem::FindMounted` (Lua `require`'s searcher reads through `FileSystem` and asks `FindMounted` only whether a
+  module is in the archive), and `AssetRegistry::Refresh` reads the UUIDs from the index
   (`GetMountedArchive`). A new reader that bypasses `FileSystem` must do one of these. `Core/CrashReporter`
   (installed in `EntryPoint.h` and the CLI's `main`, off under ASan) writes reports with stack traces and the last log
   lines to `<user data>/<app>/Crashes`, formatting only into fixed buffers (no allocation or fork on POSIX), then ends the
@@ -276,8 +277,10 @@ Other rules:
   Convert text to paths only with `FileSystem::PathFromUtf8` (or `Project::ResolvePath`'s text overload) and back with
   `PathToUtf8`/`PathToGenericUtf8` (none of them throws), and use `Platform::Utf8ToWide`/`WideToUtf8` for other wide
   Windows APIs. On Windows `std::filesystem::path(std::string)` reads the ANSI code page, `path::string()` throws for names
-  outside it, and narrow C APIs (`fopen`, `LoadLibraryA`, miniaudio's narrow `*_file` entry points, `FormatMessageA`)
-  cannot handle such text: read through `FileSystem`, or pass `path.c_str()` to the wide variant.
+  outside it, and narrow C APIs (`fopen`, `LoadLibraryA`, miniaudio's narrow file and VFS entry points) cannot open such
+  names: read through `FileSystem`, or pass `path.c_str()` to the wide variant. New code takes system error text from
+  `Platform::GetErrorMessage` or `FileSystem::DescribeError` (`FormatMessageA` and MSVC's `std::error_code::message()`
+  are ANSI; ROADMAP lists the older calls).
 - Ownership: `Scope<T>` (unique) / `Ref<T>` (shared) from `Basalt/Core/Base.h`; raw pointers are
   non-owning. GPU objects use nvrhi handles (`nvrhi::TextureHandle`, ...).
 - No exceptions across module boundaries. Fallible operations return `bool`/`std::optional`/a result

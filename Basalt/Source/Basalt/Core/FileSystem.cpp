@@ -358,7 +358,6 @@ namespace Basalt {
 		return !outError;
 	}
 
-	// On Windows through Platform's conversions, which replace what does not convert: the standard library's throw.
 	std::string FileSystem::PathToUtf8(const std::filesystem::path& path)
 	{
 #if defined(BS_PLATFORM_WINDOWS)
@@ -386,6 +385,18 @@ namespace Basalt {
 #else
 		return std::filesystem::path(std::u8string(text.begin(), text.end()));
 #endif
+	}
+
+	std::string FileSystem::DescribeError(const std::error_code& error)
+	{
+#if defined(BS_PLATFORM_WINDOWS)
+		if (error.category() == std::system_category())
+		{
+			if (std::string message = Platform::GetErrorMessage(static_cast<uint32_t>(error.value())); !message.empty())
+				return message;
+		}
+#endif
+		return error.message();
 	}
 
 	std::string FileSystem::GetLowercaseExtension(const std::filesystem::path& path)

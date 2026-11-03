@@ -5,7 +5,6 @@
 
 #include <climits>
 #include <cstdlib>
-#include <cstring>
 
 #if defined(BS_PLATFORM_WINDOWS)
 	#include <process.h>
@@ -164,23 +163,13 @@ namespace Basalt::Platform {
 
 	namespace {
 
-		// The variable as a path, read as wide text on Windows so user names outside the ANSI code page survive.
+		// The variable as a path. GetEnvVar reads the wide environment on Windows, so user names outside the ANSI code page
+		// survive.
 		std::optional<std::filesystem::path> GetPathVar(const char* name)
 		{
-#if defined(BS_PLATFORM_WINDOWS)
-			const std::optional<std::wstring> wideName = Utf8ToWide(name);
-			wchar_t* buffer = nullptr;
-			size_t length = 0;
-			if (!wideName || _wdupenv_s(&buffer, &length, wideName->c_str()) != 0 || !buffer)
-				return std::nullopt;
-			std::filesystem::path value(buffer);
-			std::free(buffer);
-			return value;
-#else
 			if (auto value = GetEnvVar(name))
 				return FileSystem::PathFromUtf8(*value);
 			return std::nullopt;
-#endif
 		}
 
 		// The variable's path when it is set to an absolute one; otherwise nullopt and why.

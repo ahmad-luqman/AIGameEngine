@@ -2855,6 +2855,10 @@ TEST_SUITE("Scripting")
 		CHECK_MESSAGE(broken.find("error loading module 'Assets.Scripts.壊れ' from file '") != std::string::npos, broken);
 		CHECK_MESSAGE(broken.find("/Assets/Scripts/壊れ.lua'") != std::string::npos, broken);
 		CHECK(BasaltTest::Eval(scene, "return require('Assets.Scripts.道具')") == "init");
+		// A file where a template expects a folder names no module either (ENOTDIR, or Windows' own code for it).
+		project.WriteFile("Assets/Scripts/Util", "not a folder");
+		const std::string throughFile = BasaltTest::Eval(scene, "local ok, message = pcall(require, 'Assets.Scripts.Util.Helper') return message");
+		CHECK_MESSAGE(throughFile.find("module 'Assets.Scripts.Util.Helper' not found") != std::string::npos, throughFile);
 #if !defined(_WIN32)
 		// A file that exists but cannot be read is a load error, not a missing module (root reads it anyway).
 		if (geteuid() != 0)
@@ -2873,27 +2877,87 @@ TEST_SUITE("Scripting")
 	TEST_CASE("require and hot reload report a package.path that is not text")
 	{
 		BasaltTest::TempProject project("ScriptPackagePathNotText");
+		const std::string module = project.WriteFile("Assets/Scripts/Tuning.lua", "return { Step = 1 }");
 		const std::string script = project.WriteFile("Assets/Scripts/User.lua", R"(
+			local Tuning = require("Assets.Scripts.Tuning")
 			local User = {}
 			function User:OnCreate() self.Total = 0 end
-			function User:OnUpdate(dt) self.Total = self.Total + 1 end
+			function User:OnUpdate(dt) self.Total = self.Total + Tuning.Step end
 			return User
 		)");
 		Scene scene;
 		Entity entity = AddScripted(scene, "User", script);
 		scene.OnRuntimeStart();
+		scene.OnUpdate(Step);
+		REQUIRE(Field(scene, entity, "Total") == 1);
 		const std::string message = BasaltTest::Eval(scene, "package.path = {} local ok, message = pcall(require, 'Assets.Scripts.Other') return message");
 		CHECK_MESSAGE(message.find("'package.path' must be a string") != std::string::npos, message);
 
-		// Changed modules cannot be found: every script loads again, and the problem is reported once.
-		CHECK(scene.GetScriptEngine()->ReloadScripts({ script }).Reloaded == std::vector<std::string>{ script });
+		// The search cannot run: every script loads again (require could not load a new module version anyway, so the cached
+		// one stays), the scene keeps running, and the problem is reported once.
+		project.WriteFile(module, "return { Step = 100 }");
+		CHECK(scene.GetScriptEngine()->ReloadScripts({ module }).Reloaded == std::vector<std::string>{ script });
 		scene.GetScriptEngine()->ReloadScripts({ script });
 		const auto& errors = scene.GetScriptEngine()->GetErrors();
 		CHECK(std::count_if(errors.begin(), errors.end(), [](const std::string& error) { return error.find("package.path to something other than text") != std::string::npos; }) == 1);
 		scene.OnUpdate(Step);
-		CHECK(Field(scene, entity, "Total") == 1);
+		CHECK(Field(scene, entity, "Total") == 2);
 		scene.OnRuntimeStop();
 	}
+
+#if !defined(_WIN32)
+	// Regression: a candidate that could not be inspected made hot reload reload every class while keeping the changed
+	// module's old version cached.
+	TEST_CASE("A module search that cannot inspect a candidate still reloads changed modules, and says why")
+	{
+		if (geteuid() == 0)
+			return; // root inspects any folder
+		BasaltTest::TempProject project("ScriptHotReloadUninspectable");
+		const std::string module = project.WriteFile("Assets/Scripts/Tuning.lua", "return { Step = 1 }");
+		project.WriteFile("Assets/Scripts/Locked/Mod.lua", "return 1");
+		const std::filesystem::path locked = project.GetDirectory() / "Assets/Scripts/Locked";
+		const std::string script = project.WriteFile("Assets/Scripts/User.lua", R"(
+			local Tuning = require("Assets.Scripts.Tuning")
+			local ok, message = pcall(require, "Assets.Scripts.Locked.Mod")
+			Locked = message
+			local User = {}
+			function User:OnCreate() self.Total = 0 end
+			function User:OnUpdate(dt) self.Total = self.Total + Tuning.Step end
+			return User
+		)");
+		std::error_code error;
+		std::filesystem::permissions(locked, std::filesystem::perms::none, error);
+		REQUIRE_FALSE(error);
+		struct Unlock
+		{
+			std::filesystem::path Folder;
+			~Unlock()
+			{
+				std::error_code ignored;
+				std::filesystem::permissions(Folder, std::filesystem::perms::owner_all, ignored);
+			}
+		} unlock{ locked };
+		Scene scene;
+		Entity entity = AddScripted(scene, "User", script);
+		scene.OnRuntimeStart();
+		scene.OnUpdate(Step);
+		REQUIRE(Field(scene, entity, "Total") == 1);
+		const std::string message = BasaltTest::Eval(scene, "Locked");
+		CHECK_MESSAGE(message.find("error loading module 'Assets.Scripts.Locked.Mod': cannot inspect '") != std::string::npos, message);
+
+		project.WriteFile(module, "return { Step = 100 }");
+		CHECK(scene.GetScriptEngine()->ReloadScripts({ module }).Reloaded == std::vector<std::string>{ script });
+		scene.OnUpdate(Step);
+		CHECK(Field(scene, entity, "Total") == 101);
+		project.WriteFile(module, "return { Step = 1000 }");
+		scene.GetScriptEngine()->ReloadScripts({ module });
+		scene.OnUpdate(Step);
+		CHECK(Field(scene, entity, "Total") == 1101);
+		const auto& errors = scene.GetScriptEngine()->GetErrors();
+		CHECK(std::count_if(errors.begin(), errors.end(), [](const std::string& text) { return text.find("changed modules cannot all be found (cannot inspect '") != std::string::npos; }) == 1);
+		scene.OnRuntimeStop();
+	}
+#endif
 }
 
 TEST_SUITE("Scripting")

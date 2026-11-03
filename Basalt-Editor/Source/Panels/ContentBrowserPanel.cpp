@@ -195,10 +195,17 @@ return %s
 						break;
 					}
 					case NewItem::Folder:
-						std::filesystem::create_directories(m_CurrentDirectory / FileSystem::PathFromUtf8(m_NewItemName), error);
-						if (error)
-							m_Context.SetStatus("Cannot create folder '" + m_NewItemName + "': " + error.message(), true);
+					{
+						// Outside the command layer, which would have logged the failure.
+						const bool created = std::filesystem::create_directories(m_CurrentDirectory / FileSystem::PathFromUtf8(m_NewItemName), error);
+						const std::string problem = error ? FileSystem::DescribeError(error) : (created ? std::string() : std::string("it already exists"));
+						if (!problem.empty())
+						{
+							BS_ERROR("Cannot create folder '{}': {}", m_NewItemName, problem);
+							m_Context.SetStatus("Cannot create folder '" + m_NewItemName + "': " + problem, true);
+						}
 						break;
+					}
 					case NewItem::None:
 						break;
 				}

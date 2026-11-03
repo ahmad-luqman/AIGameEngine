@@ -121,7 +121,7 @@ namespace Basalt {
 		static Application* s_Instance;
 	};
 
-	// Implemented by each executable (editor, runtime, CLI).
+	// Implemented by each executable built on Application (editor, runtime; the CLI has its own main).
 	Application* CreateApplication(const ApplicationCommandLineArgs& args);
 
 }

@@ -131,8 +131,8 @@ namespace Basalt {
 		// not loaded.
 		void AddModelDependencies(const std::filesystem::path& projectDirectory, const std::string& model, std::set<std::string>& outDependencies)
 		{
-			// An unreadable model has no dependencies to track: making its thumbnail fails and reports why. Traced, not
-			// logged: keys are made every frame the content browser shows the model.
+			// An unreadable model has no dependencies to track: making its thumbnail fails and reports why. Logged at trace level
+			// only: keys are made again every few seconds (ThumbnailManager's RecheckSeconds) for each model the browser shows.
 			std::string error;
 			const std::optional<MeshImporter::Contents> contents = MeshImporter::Inspect(projectDirectory / FileSystem::PathFromUtf8(model), error);
 			if (!contents)

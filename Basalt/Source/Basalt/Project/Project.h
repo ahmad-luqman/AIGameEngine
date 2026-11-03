@@ -125,6 +125,8 @@ namespace Basalt {
 		// std::filesystem::path conversion would read it in the ANSI code page on Windows. Strings, literals and views all
 		// land here.
 		static std::filesystem::path ResolvePath(std::string_view relativePath);
+		// A null pointer would make an undefined string_view; text must be some text, even empty.
+		static std::filesystem::path ResolvePath(std::nullptr_t) = delete;
 		// Converts an absolute path inside the active project into a project-relative generic UTF-8 path (the form of
 		// asset keys); paths outside it come back absolute, also generic UTF-8.
 		static std::string MakeRelative(const std::filesystem::path& absolutePath);
