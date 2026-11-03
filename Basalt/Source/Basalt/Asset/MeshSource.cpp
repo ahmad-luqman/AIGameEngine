@@ -142,6 +142,7 @@ namespace Basalt {
 	uint32_t MeshSource::ShareSubmesh(uint32_t submeshIndex, uint32_t materialIndex)
 	{
 		BS_CORE_ASSERT(submeshIndex < Submeshes.size(), "sharing a missing submesh");
+		BS_CORE_ASSERT(materialIndex >= Materials.size() || Submeshes[submeshIndex].MaterialIndex >= Materials.size() || Materials[materialIndex].IsBlended() == Materials[Submeshes[submeshIndex].MaterialIndex].IsBlended(), "sharing a submesh across blend modes");
 		// A copy first: push_back may reallocate the vector the source element lives in.
 		Submesh submesh = Submeshes[submeshIndex];
 		submesh.MaterialIndex = materialIndex;

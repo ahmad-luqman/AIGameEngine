@@ -22,11 +22,13 @@
 #include <cstring>
 #include <exception>
 #include <fstream>
+#include <limits>
 #include <map>
 #include <memory>
 #include <new>
 #include <optional>
 #include <set>
+#include <span>
 #include <string_view>
 #include <tuple>
 
@@ -468,9 +470,11 @@ namespace Basalt {
 		}
 
 		// Why the model's geometry exceeds the import limits (empty when it does not). The importer allocates per vertex
-		// and index before reading any data, so a small glTF repeating one accessor in many primitives, or declaring a
-		// huge accessor without a buffer view, could ask for gigabytes (found by FuzzGltf). Counts the primitives the
-		// geometry loop reads, each use of an accessor separately, before it allocates.
+		// and index before reading any data, so a small glTF pairing one large accessor with different others in many
+		// primitives (exact repeats share one submesh), or declaring a huge accessor without a buffer view, could ask for
+		// gigabytes (found by FuzzGltf). Counts every triangle primitive, each use of an accessor separately, before the
+		// import allocates; that includes primitives that will share an earlier one's geometry, which only the import finds
+		// out, so the bound stays conservative.
 		std::string GeometryLimitProblem(const cgltf_data* data)
 		{
 			uint64_t vertices = 0;
@@ -515,7 +519,10 @@ namespace Basalt {
 		}
 
 		// Why a mesh's morph targets cannot be kept within the import limits (empty when they can), given the deltas left
-		// in the model's budget.
+		// in the model's budget. Runs before the mesh's primitives import, so it counts each one, also one that will share
+		// an earlier one's deltas and take none from the budget: telling them apart would need each primitive's whole
+		// PrimitiveGeometryKey, and a conservative count keeps ReadMorphTargets from ever running out (which fails the model
+		// rather than dropping the mesh's targets).
 		std::string MorphLimitProblem(const cgltf_mesh& mesh, size_t budget)
 		{
 			const size_t targets = mesh.primitives_count > 0 ? mesh.primitives[0].targets_count : 0;
@@ -528,7 +535,7 @@ namespace Basalt {
 					if (const cgltf_attribute& attribute = mesh.primitives[p].attributes[a]; attribute.type == cgltf_attribute_type_position && attribute.data)
 						deltas += attribute.data->count * targets;
 			if (deltas > budget)
-				return fmt::format("its morph targets need {} deltas, past the {} left of the limit of {} per model", deltas, budget, MaxMorphDeltas);
+				return fmt::format("its morph targets need {} deltas (counted once per primitive, also one that shares an earlier one's geometry), past the {} left of the limit of {} per model", deltas, budget, MaxMorphDeltas);
 			return {};
 		}
 
@@ -571,29 +578,36 @@ namespace Basalt {
 			return true;
 		}
 
-		// The POSITION and NORMAL delta accessors of a morph target (null when absent; the last of each wins). True when the
-		// target also carries attributes other than POSITION, NORMAL and TANGENT, which the importer drops.
-		bool FindMorphTargetAccessors(const cgltf_morph_target& target, const cgltf_accessor*& outPositions, const cgltf_accessor*& outNormals)
+		// The delta accessors the importer reads from a morph target (null when absent; the last of each wins).
+		struct MorphTargetAccessors
 		{
-			outPositions = outNormals = nullptr;
-			bool ignored = false;
+			const cgltf_accessor* Positions = nullptr;
+			const cgltf_accessor* Normals = nullptr;
+			// The target also carries attributes other than POSITION, NORMAL and TANGENT, which the importer drops.
+			bool IgnoresOthers = false;
+		};
+
+		MorphTargetAccessors FindMorphTargetAccessors(const cgltf_morph_target& target)
+		{
+			MorphTargetAccessors result;
 			for (cgltf_size a = 0; a < target.attributes_count; a++)
 			{
 				const cgltf_attribute& attribute = target.attributes[a];
 				if (attribute.type == cgltf_attribute_type_position && attribute.index == 0)
-					outPositions = attribute.data;
+					result.Positions = attribute.data;
 				else if (attribute.type == cgltf_attribute_type_normal && attribute.index == 0)
-					outNormals = attribute.data;
+					result.Normals = attribute.data;
 				else if (attribute.type != cgltf_attribute_type_tangent)
-					ignored = true;
+					result.IgnoresOthers = true;
 			}
-			return ignored;
+			return result;
 		}
 
-		// Reads `targets` morph targets of a primitive into target-major deltas. A target without NORMAL deltas takes the
-		// change in generated normals between the base and the fully morphed shape, so lighting follows the new surface.
-		bool ReadMorphTargets(const cgltf_primitive& primitive, size_t targets, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices, std::vector<MorphDelta>& outDeltas, size_t& budget, std::string& outError)
+		// Reads a primitive's morph targets into target-major deltas. A target without NORMAL deltas takes the change in
+		// generated normals between the base and the fully morphed shape, so lighting follows the new surface.
+		bool ReadMorphTargets(std::span<const MorphTargetAccessors> morphTargets, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices, std::vector<MorphDelta>& outDeltas, size_t& budget, std::string& outError)
 		{
+			const size_t targets = morphTargets.size();
 			if (targets == 0)
 				return true;
 			// MorphLimitProblem checked the whole mesh first; this keeps the budget honest on its own.
@@ -608,9 +622,8 @@ namespace Basalt {
 			std::vector<glm::vec3> data;
 			for (size_t t = 0; t < targets; t++)
 			{
-				const cgltf_accessor* positions = nullptr;
-				const cgltf_accessor* normals = nullptr;
-				FindMorphTargetAccessors(primitive.targets[t], positions, normals);
+				const cgltf_accessor* positions = morphTargets[t].Positions;
+				const cgltf_accessor* normals = morphTargets[t].Normals;
 				MorphDelta* deltas = outDeltas.data() + t * vertices.size();
 				const auto read = [&](const cgltf_accessor* accessor, const char* name, glm::vec3 MorphDelta::* field) {
 					if (!accessor)
@@ -650,34 +663,48 @@ namespace Basalt {
 			return true;
 		}
 
-		// Everything a triangle primitive's import depends on apart from its material: the accessors it reads (by index into
-		// cgltf_data::accessors, NoAccessor when absent), the morph targets' (none when its mesh's are dropped) and whether
-		// its triangles are reordered (blended materials keep theirs and get no LODs). Primitives with equal keys import
-		// identically, so later ones draw the first one's ranges (MeshSource::ShareSubmesh). Multi-material exports repeat
-		// accessors, and 250 primitives sharing one 16x16 grid's indices took 2.4 s in the fuzz build when each was
-		// imported again.
+		// Everything that decides a triangle primitive's geometry: the accessors the importer reads (by index into
+		// cgltf_data::accessors, NoAccessor when absent), its morph targets' POSITION and NORMAL accessors (none when its
+		// mesh's targets are dropped), and whether its triangles are reordered, the one thing its material changes (blended
+		// materials keep their order and get no LODs). Primitives with equal keys would import to the same geometry, so later
+		// ones draw the first one's ranges (MeshSource::ShareSubmesh). Multi-material exports repeat accessors, and 250
+		// primitives repeating one 16x16-vertex grid's accessors took 2.4 s in the fuzz build when each was imported again.
 		struct PrimitiveGeometryKey
 		{
-			static constexpr size_t NoAccessor = SIZE_MAX;
-			// POSITION, NORMAL, TANGENT, TEXCOORD_0, TEXCOORD_1, JOINTS_0, WEIGHTS_0 and the indices.
-			std::array<size_t, 8> Accessors{};
-			// Per morph target read: its POSITION and NORMAL delta accessors.
+			static constexpr size_t NoAccessor = std::numeric_limits<size_t>::max();
+			size_t Positions = NoAccessor;
+			size_t Normals = NoAccessor;
+			size_t Tangents = NoAccessor;
+			size_t TexCoords = NoAccessor;
+			size_t TexCoords1 = NoAccessor;
+			size_t Joints = NoAccessor;
+			size_t Weights = NoAccessor;
+			size_t Indices = NoAccessor;
+			// Per morph target: its POSITION and NORMAL delta accessors.
 			std::vector<std::array<size_t, 2>> MorphTargets;
 			bool Reorder = false;
 
-			bool operator<(const PrimitiveGeometryKey& other) const { return std::tie(Accessors, MorphTargets, Reorder) < std::tie(other.Accessors, other.MorphTargets, other.Reorder); }
+			bool operator<(const PrimitiveGeometryKey& other) const
+			{
+				const auto fields = [](const PrimitiveGeometryKey& key) { return std::tie(key.Positions, key.Normals, key.Tangents, key.TexCoords, key.TexCoords1, key.Joints, key.Weights, key.Indices, key.MorphTargets, key.Reorder); };
+				return fields(*this) < fields(other);
+			}
 		};
 
-		// How the first primitive with a PrimitiveGeometryKey imported, for the primitives that repeat it.
+		// How the first primitive with a PrimitiveGeometryKey imported, recorded once that is known, for the primitives that
+		// repeat it: a submesh, or the reason it was skipped.
 		struct ImportedPrimitive
 		{
-			// Its submesh, or nullopt when it was skipped for SkipReason.
-			std::optional<uint32_t> Submesh;
-			std::string SkipReason;
-			// Its vertices were read (a skip after that still checks the material's TEXCOORD_1 first), and HasUV1 says
-			// whether TEXCOORD_1 was among them.
-			bool ReadVertices = false;
-			bool HasUV1 = false;
+			static constexpr uint32_t NoSubmesh = std::numeric_limits<uint32_t>::max();
+			uint32_t Submesh = NoSubmesh;
+			// Why it was skipped (a string literal) when it has no submesh, else null.
+			const char* SkipReason = nullptr;
+			// It read its vertices without a usable TEXCOORD_1, before any later skip, so a repeat whose material samples one
+			// fails there too.
+			bool LacksUV1 = false;
+			// When its geometry was not fully optimized: "<where>'s geometry, which <what it lacks>", which repeats inherit
+			// and warn about too. Empty otherwise.
+			std::string Degradation;
 		};
 
 		bool ReadIndices(const cgltf_accessor* accessor, std::vector<uint32_t>& out)
@@ -952,9 +979,10 @@ namespace Basalt {
 			for (cgltf_size primitiveIndex = 0; primitiveIndex < mesh.primitives_count; primitiveIndex++)
 			{
 				const cgltf_primitive& primitive = mesh.primitives[primitiveIndex];
+				const auto warnSkipped = [&](std::string_view reason) { BS_CORE_WARN("MeshImporter: {}: mesh '{}' primitive {}: skipped, {}", key, meshData.Name, primitiveIndex, reason); };
 				if (primitive.type != cgltf_primitive_type_triangles)
 				{
-					BS_CORE_WARN("MeshImporter: {}: mesh '{}' primitive {}: skipped, it is not made of triangles", key, meshData.Name, primitiveIndex);
+					warnSkipped("it is not made of triangles");
 					continue;
 				}
 
@@ -988,7 +1016,6 @@ namespace Basalt {
 					else if (attribute.type == cgltf_attribute_type_texcoord && attribute.index == 0)
 						texCoords = attribute.data;
 				}
-				const auto warnSkipped = [&](std::string_view reason) { BS_CORE_WARN("MeshImporter: {}: mesh '{}' primitive {}: skipped, {}", key, meshData.Name, primitiveIndex, reason); };
 				if (!positions || positions->count == 0)
 				{
 					warnSkipped("it has no positions");
@@ -996,27 +1023,24 @@ namespace Basalt {
 				}
 
 				const uint32_t materialIndex = primitive.material ? static_cast<uint32_t>(primitive.material - data->materials) : defaultMaterial;
+				const bool reorder = !source->Materials[materialIndex].IsBlended();
 				const uint32_t targets = static_cast<uint32_t>(meshData.MorphTargets.size());
 				const auto accessorIndex = [&](const cgltf_accessor* accessor) { return accessor ? static_cast<size_t>(accessor - data->accessors) : PrimitiveGeometryKey::NoAccessor; };
-				PrimitiveGeometryKey geometryKey;
-				geometryKey.Accessors = { accessorIndex(positions), accessorIndex(normals), accessorIndex(tangents), accessorIndex(texCoords), accessorIndex(texCoords1), accessorIndex(joints), accessorIndex(weights), accessorIndex(primitive.indices) };
-				geometryKey.Reorder = !source->Materials[materialIndex].IsBlended();
-				bool ignoresMorphAttributes = false;
+				PrimitiveGeometryKey geometryKey{ .Positions = accessorIndex(positions), .Normals = accessorIndex(normals), .Tangents = accessorIndex(tangents), .TexCoords = accessorIndex(texCoords), .TexCoords1 = accessorIndex(texCoords1), .Joints = accessorIndex(joints), .Weights = accessorIndex(weights), .Indices = accessorIndex(primitive.indices), .MorphTargets = {}, .Reorder = reorder };
+				std::vector<MorphTargetAccessors> morphTargets;
+				morphTargets.reserve(targets);
 				geometryKey.MorphTargets.reserve(targets);
+				bool ignoresMorphAttributes = false;
 				for (uint32_t t = 0; t < targets; t++)
 				{
-					const cgltf_accessor* targetPositions = nullptr;
-					const cgltf_accessor* targetNormals = nullptr;
-					ignoresMorphAttributes = FindMorphTargetAccessors(primitive.targets[t], targetPositions, targetNormals) || ignoresMorphAttributes;
-					geometryKey.MorphTargets.push_back({ accessorIndex(targetPositions), accessorIndex(targetNormals) });
+					const MorphTargetAccessors& target = morphTargets.emplace_back(FindMorphTargetAccessors(primitive.targets[t]));
+					geometryKey.MorphTargets.push_back({ accessorIndex(target.Positions), accessorIndex(target.Normals) });
+					ignoresMorphAttributes |= target.IgnoresOthers;
 				}
-				const bool reorder = geometryKey.Reorder;
-				const auto [cached, firstUse] = importedPrimitives.try_emplace(std::move(geometryKey));
-				ImportedPrimitive& imported = cached->second;
 
-				// A material that samples TEXCOORD_1 needs the primitive to have one.
-				const auto checkUV1 = [&](bool hasUV1) {
-					if (!primitive.material || hasUV1)
+				// A material that samples TEXCOORD_1 fails a primitive without a usable one.
+				const auto checkUV1 = [&] {
+					if (!primitive.material)
 						return true;
 					for (const auto& transform : source->Materials[materialIndex].TextureTransforms)
 						if (transform.TexCoord == 1)
@@ -1027,23 +1051,34 @@ namespace Basalt {
 						}
 					return true;
 				};
-				if (!firstUse)
+				if (const auto cached = importedPrimitives.find(geometryKey); cached != importedPrimitives.end())
 				{
-					// The checks that depend on the material still run, in the order the first primitive met them.
-					if (imported.ReadVertices && !checkUV1(imported.HasUV1))
+					const ImportedPrimitive& imported = cached->second;
+					BS_CORE_ASSERT((imported.Submesh == ImportedPrimitive::NoSubmesh) == (imported.SkipReason != nullptr), "a recorded primitive has a submesh or a skip reason");
+					// The TEXCOORD_1 check depends on the material, so a repeat runs it where the first primitive did: after
+					// reading its vertices, before any later skip.
+					if (imported.LacksUV1 && !checkUV1())
 						return nullptr;
-					if (const std::optional<uint32_t> shared = imported.Submesh)
+					if (imported.Submesh == ImportedPrimitive::NoSubmesh)
 					{
-						meshData.Submeshes.push_back(source->ShareSubmesh(*shared, materialIndex));
-						ignoredMorphAttributes = ignoredMorphAttributes || ignoresMorphAttributes;
-					}
-					else
 						warnSkipped(imported.SkipReason);
+						continue;
+					}
+					meshData.Submeshes.push_back(source->ShareSubmesh(imported.Submesh, materialIndex));
+					// The key holds only POSITION and NORMAL, so a repeat's targets may carry ignored attributes the first
+					// one's did not.
+					ignoredMorphAttributes |= ignoresMorphAttributes;
+					if (!imported.Degradation.empty())
+						BS_CORE_WARN("MeshImporter: {}: mesh '{}' primitive {}: it shares {}", key, meshData.Name, primitiveIndex, imported.Degradation);
 					continue;
 				}
-				const auto skip = [&](std::string reason) {
+				// Recorded for the primitives that repeat this one once its outcome is known.
+				ImportedPrimitive imported;
+				const auto record = [&] { importedPrimitives.emplace(std::move(geometryKey), std::move(imported)); };
+				const auto skip = [&](const char* reason) {
 					warnSkipped(reason);
-					imported.SkipReason = std::move(reason);
+					imported.SkipReason = reason;
+					record();
 				};
 
 				std::vector<Vertex> vertices(positions->count);
@@ -1108,9 +1143,8 @@ namespace Basalt {
 					for (size_t v = 0; v < vertices.size(); v++)
 						vertices[v].TexCoord1 = texCoordData[v];
 
-				imported.ReadVertices = true;
-				imported.HasUV1 = hasUV1;
-				if (!checkUV1(hasUV1))
+				imported.LacksUV1 = !hasUV1;
+				if (imported.LacksUV1 && !checkUV1())
 					return nullptr;
 
 				std::vector<uint32_t> indices;
@@ -1158,13 +1192,15 @@ namespace Basalt {
 				}
 
 				std::vector<MorphDelta> morphDeltas;
-				if (!ReadMorphTargets(primitive, targets, vertices, indices, morphDeltas, morphBudget, outError))
+				if (!ReadMorphTargets(morphTargets, vertices, indices, morphDeltas, morphBudget, outError))
 				{
 					outError = fmt::format("{}: mesh '{}' primitive {}: {}", key, meshData.Name, primitiveIndex, outError);
 					return nullptr;
 				}
 
 				const MeshOptimizer::OptimizeResult result = MeshOptimizer::Optimize(vertices, indices, reorder, &morphDeltas, targets, &valenceAllowance);
+				// What the geometry lacks when it is not fully optimized, which repeats of this primitive inherit.
+				const auto degraded = [&](std::string_view what) { imported.Degradation = fmt::format("mesh '{}' primitive {}'s geometry, which {}", meshData.Name, primitiveIndex, what); };
 				switch (result)
 				{
 					case MeshOptimizer::OptimizeResult::Optimized:
@@ -1172,23 +1208,28 @@ namespace Basalt {
 					case MeshOptimizer::OptimizeResult::ValenceCostExceeded:
 					{
 						const uint64_t limit = MeshOptimizer::MaxValenceCostPerIndex * indices.size() + MeshOptimizer::ValenceCostAllowance;
-						BS_CORE_WARN("MeshImporter: {}: mesh '{}' primitive {}: the squares of its vertices' triangle counts sum past {} per index plus the model's allowance (at most {} for its {} indices), so it keeps its triangle order{}; split vertices shared by thousands of triangles or remove repeated degenerate triangles", key, meshData.Name, primitiveIndex, MeshOptimizer::MaxValenceCostPerIndex, limit, indices.size(), targets == 0 && !joints ? " and gets no LODs" : "");
+						const char* lods = targets == 0 && !joints ? " and gets no LODs" : "";
+						BS_CORE_WARN("MeshImporter: {}: mesh '{}' primitive {}: the squares of its vertices' triangle counts sum past {} per index plus the model's allowance (at most {} for its {} indices), so it keeps its triangle order{}; split vertices shared by thousands of triangles or remove repeated degenerate triangles", key, meshData.Name, primitiveIndex, MeshOptimizer::MaxValenceCostPerIndex, limit, indices.size(), lods);
+						degraded(fmt::format("keeps its triangle order{} (its vertices are in too many triangles)", lods));
 						break;
 					}
 					case MeshOptimizer::OptimizeResult::Invalid:
 						// The checks above leave nothing Optimize rejects, so this is an importer bug.
 						BS_CORE_ERROR("MeshImporter: {}: mesh '{}' primitive {}: inconsistent geometry buffers; optimization and LODs skipped", key, meshData.Name, primitiveIndex);
+						degraded("skipped optimization and LODs (inconsistent geometry buffers)");
 						break;
 					case MeshOptimizer::OptimizeResult::NonFinite:
 						BS_CORE_WARN("MeshImporter: {}: mesh '{}' primitive {}: optimization and LODs skipped for non-finite vertex positions", key, meshData.Name, primitiveIndex);
+						degraded("skipped optimization and LODs (non-finite vertex positions)");
 						break;
 				}
 				const auto submesh = source->AddSubmesh(vertices, indices, materialIndex, morphDeltas, targets);
 				if (result == MeshOptimizer::OptimizeResult::Optimized)
 					MeshOptimizer::GenerateLODs(*source, submesh);
 				meshData.Submeshes.push_back(submesh);
+				ignoredMorphAttributes |= ignoresMorphAttributes;
 				imported.Submesh = submesh;
-				ignoredMorphAttributes = ignoredMorphAttributes || ignoresMorphAttributes;
+				record();
 			}
 			if (ignoredMorphAttributes)
 				BS_CORE_WARN("MeshImporter: {}: mesh '{}': morph targets keep only POSITION and NORMAL deltas; their other attributes are ignored", key, meshData.Name);

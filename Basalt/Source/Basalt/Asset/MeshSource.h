@@ -148,7 +148,8 @@ namespace Basalt {
 		float Error = 0; // Simplifier error relative to the primitive's extent.
 	};
 
-	// A contiguous range of the index buffer drawn with one material. Submeshes may share their ranges (ShareSubmesh).
+	// A contiguous range of the index buffer drawn with one material. Submeshes may share their ranges (ShareSubmesh), so
+	// a write through one reaches the others, and summing their counts can count a range twice.
 	struct Submesh
 	{
 		uint32_t BaseVertex = 0;
@@ -157,7 +158,7 @@ namespace Basalt {
 		uint32_t VertexCount = 0;
 		uint32_t MaterialIndex = 0;
 		AABB Bounds;
-		// Derived by AddSubmesh; changing positions/joints/weights requires re-adding geometry and its GPU buffers.
+		// Derived by AddSubmesh (copied by ShareSubmesh); changing positions/joints/weights requires re-adding geometry and its GPU buffers.
 		std::vector<JointInfluenceBounds> JointBounds;
 		// Reduced ranges, most detailed first, sharing BaseVertex. CPU queries and physics use the base range.
 		std::vector<MeshLOD> LODs;
@@ -303,8 +304,11 @@ namespace Basalt {
 		// Adds a submesh from raw geometry, updating bounds. Returns the submesh index. `morphDeltas` holds
 		// morphTargetCount * vertices.size() deltas, target-major (empty without morph targets).
 		uint32_t AddSubmesh(const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices, uint32_t materialIndex, const std::vector<MorphDelta>& morphDeltas = {}, uint32_t morphTargetCount = 0);
-		// Adds a submesh that draws an existing one's vertices, indices, LODs and morph deltas with another material, for
-		// glTF primitives that read the same accessors. Returns the new submesh index.
+		// Adds a submesh that draws an existing one's vertices, indices, LODs and morph deltas (and has its bounds) with its
+		// own material, for glTF primitives that read the same accessors. Call once the existing one is complete (LODs
+		// generated): it is a copy, which later changes do not reach. The material must be blended exactly when the existing
+		// one's is, since only non-blended triangles are reordered and get LODs. Bounds need no update: the ranges already
+		// count. Returns the new submesh index.
 		uint32_t ShareSubmesh(uint32_t submeshIndex, uint32_t materialIndex);
 		// Recomputes MeshData and global bounds from submesh bounds.
 		void UpdateBounds();

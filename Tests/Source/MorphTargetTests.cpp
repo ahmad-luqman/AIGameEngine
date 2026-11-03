@@ -12,6 +12,7 @@
 #include <nlohmann/json.hpp>
 
 #include <fstream>
+#include <functional>
 
 using namespace Basalt;
 using namespace BasaltTest;
@@ -401,7 +402,26 @@ TEST_SUITE("MorphTargets")
 			data["meshes"][1]["extras"].erase("targetNames");
 			// Teeth's animated weights are now MaxMorphTargets wide.
 			data["animations"][0]["channels"].erase(1);
-			expected = "its morph targets need 4194560 deltas, past the 4194286 left of the limit of 4194304 per model";
+			expected = "its morph targets need 4194560 deltas (counted once per primitive, also one that shares an earlier one's geometry), past the 4194286 left of the limit of 4194304 per model";
+		}
+		SUBCASE("more deltas than a model may hold, counting each primitive that repeats the same accessors")
+		{
+			// Two primitives repeat the same accessors, so they would store MaxMorphTargets x 8193 deltas once, within
+			// MaxMorphDeltas; the check runs before the import knows that and counts both, past it.
+			constexpr size_t HalfVertices = MaxMorphDeltas / MaxMorphTargets / 2 + 1;
+			nlohmann::json zeros = { { "componentType", 5126 }, { "count", HalfVertices }, { "type", "VEC3" }, { "min", { 0, 0, 0 } }, { "max", { 0, 0, 0 } } };
+			data["accessors"].push_back(zeros);
+			const size_t target = data["accessors"].size() - 1;
+			data["buffers"].push_back({ { "byteLength", HalfVertices * 12 }, { "uri", "Zeros.bin" } });
+			data["bufferViews"].push_back({ { "buffer", data["buffers"].size() - 1 }, { "byteLength", HalfVertices * 12 } });
+			zeros["bufferView"] = data["bufferViews"].size() - 1;
+			data["accessors"].push_back(zeros);
+			const size_t base = data["accessors"].size() - 1;
+			const nlohmann::json primitive = { { "attributes", { { "POSITION", base } } }, { "targets", nlohmann::json(MaxMorphTargets, { { "POSITION", target } }) } };
+			data["meshes"][1]["primitives"] = { primitive, primitive };
+			data["meshes"][1]["extras"].erase("targetNames");
+			data["animations"][0]["channels"].erase(1);
+			expected = "its morph targets need 4194816 deltas (counted once per primitive, also one that shares an earlier one's geometry), past the 4194286 left of the limit of 4194304 per model";
 		}
 		SUBCASE("too many targets on a node with weights")
 		{
@@ -577,14 +597,52 @@ TEST_SUITE("MorphTargets")
 		CHECK(second.MorphBounds[0].Max == first.MorphBounds[0].Max);
 		CHECK(shared->MorphDeltas.size() == 2 * 9 + 3); // as without the copy
 
-		// The second target's NORMAL deltas make it read another accessor.
-		data["meshes"][0]["primitives"][1]["targets"][1]["NORMAL"] = data["meshes"][0]["primitives"][0]["targets"][0]["NORMAL"];
-		const auto separate = AnimationTest::LoadModified(data, directory.GetPath(), "Separate.gltf");
-		REQUIRE(separate->Meshes[0].Submeshes.size() == 2);
-		const Submesh& own = separate->Submeshes[separate->Meshes[0].Submeshes[1]];
-		CHECK(own.BaseVertex != separate->Submeshes[separate->Meshes[0].Submeshes[0]].BaseVertex);
-		CHECK(own.MorphDeltaOffset == 2 * 9); // after the first primitive's, before Teeth's
-		CHECK(separate->MorphDeltas.size() == 2 * (2 * 9) + 3);
+		// A copy that reads one of its skin attributes or target deltas through another accessor over the same bytes gets
+		// vertices and deltas of its own.
+		const auto separates = [&](const char* name, const std::function<void(nlohmann::json&, nlohmann::json&)>& change) {
+			INFO(name);
+			nlohmann::json variant = data;
+			change(variant, variant["meshes"][0]["primitives"][1]);
+			const auto separate = AnimationTest::LoadModified(variant, directory.GetPath(), "Separate.gltf");
+			REQUIRE(separate->Meshes[0].Submeshes.size() == 2);
+			const Submesh& own = separate->Submeshes[separate->Meshes[0].Submeshes[1]];
+			CHECK(own.BaseVertex != separate->Submeshes[separate->Meshes[0].Submeshes[0]].BaseVertex);
+			CHECK(own.MorphDeltaOffset == 2 * 9); // after the first primitive's, before Teeth's
+			CHECK(separate->MorphDeltas.size() == 2 * (2 * 9) + 3);
+		};
+		const auto duplicate = [](nlohmann::json& model, nlohmann::json& reference) {
+			model["accessors"].push_back(model["accessors"][reference.get<size_t>()]);
+			reference = model["accessors"].size() - 1;
+		};
+		separates("JOINTS_0", [&](nlohmann::json& model, nlohmann::json& primitive) { duplicate(model, primitive["attributes"]["JOINTS_0"]); });
+		separates("WEIGHTS_0", [&](nlohmann::json& model, nlohmann::json& primitive) { duplicate(model, primitive["attributes"]["WEIGHTS_0"]); });
+		separates("target POSITION", [&](nlohmann::json& model, nlohmann::json& primitive) { duplicate(model, primitive["targets"][1]["POSITION"]); });
+		// The second target gains NORMAL deltas.
+		separates("target NORMAL", [&](nlohmann::json&, nlohmann::json& primitive) { primitive["targets"][1]["NORMAL"] = primitive["targets"][0]["NORMAL"]; });
+	}
+
+	// A mesh whose targets are dropped imports without them, so it shares geometry with a mesh that has none, and never
+	// with one that kept them.
+	TEST_CASE("Primitives of meshes whose morph targets were dropped share only geometry without targets")
+	{
+		auto data = MorphJson();
+		nlohmann::json plain = data["meshes"][0]["primitives"][0];
+		plain.erase("targets");
+		nlohmann::json tooMany = data["meshes"][0]["primitives"][0];
+		while (tooMany["targets"].size() <= MaxMorphTargets)
+			tooMany["targets"].push_back(tooMany["targets"][0]);
+		data["meshes"].push_back({ { "name", "Plain" }, { "primitives", { plain } } });
+		data["meshes"].push_back({ { "name", "Dropped" }, { "primitives", { tooMany } } });
+		ClearAssetCache cacheGuard;
+		TempDirectory directory("MorphDroppedShared");
+		const auto source = AnimationTest::LoadModified(data, directory.GetPath(), "Dropped.gltf");
+		REQUIRE(source->Meshes.size() == 4);
+		const auto first = [&](size_t mesh) -> const Submesh& { return source->Submeshes[source->Meshes[mesh].Submeshes[0]]; };
+		CHECK(source->Meshes[3].MorphTargets.empty());
+		CHECK(first(3).MorphTargetCount == 0);
+		CHECK(first(3).BaseVertex == first(2).BaseVertex);
+		CHECK(first(0).MorphTargetCount == 2);
+		CHECK(first(0).BaseVertex != first(2).BaseVertex);
 	}
 
 	TEST_CASE("Models with morph targets import as an Animator root, keeping node weights")

@@ -43,19 +43,23 @@ threshold), then vertex fetch. Complete interleaved vertices move together, incl
 Blended primitives keep their authored triangle order and only optimize vertex fetch. Triangle reordering
 can alter exact coplanar depth ties. Built-in primitives keep their existing topology.
 
-Primitives that read the same accessors (attributes, indices and morph targets, as multi-material exports repeat them)
-import once: a later one, in the same mesh or another, draws the first one's vertices, indices, LODs and morph deltas
-with its own material, and is skipped with the first one's reason when that one was. Blended and non-blended primitives
-never share, since only the latter are reordered and get LODs. Sharing goes by accessor, not by content: separate
+Primitives that read the same accessors import once, as multi-material exports repeat them: POSITION, NORMAL, TANGENT,
+TEXCOORD_0, TEXCOORD_1, JOINTS_0, WEIGHTS_0, the indices and each morph target's POSITION and NORMAL (other attributes
+do not matter). A later one, in the same mesh or another, draws the first one's vertices, indices, LODs and morph
+deltas with its own material. It inherits the first one's optimization outcome too, with a warning of its own when that
+was degraded (triangle order kept, or no LODs), and it is skipped with the first one's reason when that one was. Its
+material still fails the model when it samples a TEXCOORD_1 the geometry lacks. Blended and non-blended primitives never
+share, since only the latter are reordered and may get LODs. Sharing goes by accessor, not by content: separate
 accessors over the same bytes are imported separately.
 
 meshoptimizer's vertex-cache order and simplifier take time that grows with the squares of vertex valences (how
 many triangle corners name each vertex). Each primitive may sum its squared valences to 16 per index; ordinary meshes
 sum to about 6 per index and never reach it. Costs past that draw on one allowance of 4,194,304 per model (primitives
-can share their indices), which fits a vertex named by about 2,000 triangle corners: a fan of about 2,000 triangles,
-or about 700 repeated degenerate ones. A primitive past the limit keeps its triangle order and gets no LODs, with a
-warning; its vertices are still ordered for fetch. Blended primitives are never reordered, so the limit does not apply
-to them. A reduced LOD level whose collapses push it past the limit keeps the simplifier's triangle order.
+can repeat their indices through separate accessors), which fits a vertex named by about 2,000 triangle corners: a fan
+of about 2,000 triangles, or about 700 repeated degenerate ones. A primitive past the limit keeps its triangle order and
+gets no LODs, with a warning; its vertices are still ordered for fetch. Blended primitives are never reordered, so the
+limit does not apply to them. A reduced LOD level whose collapses push it past the limit keeps the simplifier's triangle
+order.
 
 Static opaque/masked primitives generate up to three LOD index ranges (targets 50%, 25%, 12.5%, maximum
 relative geometric error 1%, locked borders). Material boundaries and vertex seams are retained. A level
@@ -99,10 +103,10 @@ allocates and reports the reason instead:
   nothing in place); the specification requires all three.
 - A primitive whose index accessor is empty is skipped with a warning, like one without positions.
 - A model's triangle primitives may have at most 16,777,216 vertices and 67,108,864 indices, counted once per
-  primitive that uses an accessor (also when the primitive shares an earlier one's geometry). At most 65,536 of those vertices and indices may come from accessors without a
-  buffer view (zero-filled apart from any sparse values), each counted once more per morph target of its primitive,
-  since each target can generate the normals again. Real files use such accessors for sparse morph targets, which do
-  not count.
+  primitive that uses an accessor, also when the primitive shares an earlier one's geometry. At most 65,536 of those
+  vertices and indices may come from accessors without a buffer view (zero-filled apart from any sparse values), each
+  counted once more per morph target of its primitive, since each target can generate the normals again. Real files use
+  such accessors for sparse morph targets, which do not count.
 
 ## Morph targets
 
@@ -113,7 +117,9 @@ without NORMAL deltas gets the change in generated normals between the base and 
 ignored, and other target attributes are dropped with a warning. Deltas follow their vertices through the vertex-fetch
 optimization. Every primitive of a mesh must have the same number of targets, and weight and name counts must match it
 (cgltf's validation rejects the file otherwise). A mesh with more than 256 targets, or whose deltas (targets times
-vertices) would take the model past 4,194,304, imports without its targets (with a warning), keeping its geometry.
+vertices, counted for every primitive, also one that shares an earlier one's geometry and stores none) would take the
+model past 4,194,304, imports without its targets (with a warning), keeping its geometry. Only stored deltas count
+toward later meshes.
 glTF `weights` animation channels import as clip tracks, and `asset.import_model` puts an Animator on the root of a model
 with morph targets. Rendering is described in [Rendering.md](Rendering.md#morph-targets).
 
