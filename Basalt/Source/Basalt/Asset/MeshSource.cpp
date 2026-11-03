@@ -139,6 +139,16 @@ namespace Basalt {
 		return static_cast<uint32_t>(Submeshes.size() - 1);
 	}
 
+	uint32_t MeshSource::ShareSubmesh(uint32_t submeshIndex, uint32_t materialIndex)
+	{
+		BS_CORE_ASSERT(submeshIndex < Submeshes.size(), "sharing a missing submesh");
+		// A copy first: push_back may reallocate the vector the source element lives in.
+		Submesh submesh = Submeshes[submeshIndex];
+		submesh.MaterialIndex = materialIndex;
+		Submeshes.push_back(std::move(submesh));
+		return static_cast<uint32_t>(Submeshes.size() - 1);
+	}
+
 	AABB MorphDisplacementBounds(const Submesh& submesh, std::span<const float> weights)
 	{
 		AABB range;

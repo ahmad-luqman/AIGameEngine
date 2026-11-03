@@ -549,6 +549,44 @@ TEST_SUITE("MorphTargets")
 		CHECK(source->Meshes[0].MorphTargets.size() == 2);
 	}
 
+	// A primitive that repeats an earlier one's accessors, morph targets included, shares its deltas as well as its
+	// vertices; one whose targets read other accessors gets deltas of its own.
+	TEST_CASE("Primitives that read the same morph target accessors share their deltas")
+	{
+		auto data = MorphJson();
+		data["materials"].push_back({ { "name", "Eyes" } });
+		nlohmann::json copy = data["meshes"][0]["primitives"][0];
+		copy["material"] = 1;
+		// An attribute the importer ignores does not change the geometry, but still earns the mesh's warning.
+		for (auto& target : copy["targets"])
+			target["COLOR_0"] = copy["attributes"]["POSITION"];
+		data["meshes"][0]["primitives"].push_back(copy);
+		ClearAssetCache cacheGuard;
+		TempDirectory directory("MorphSharedPrimitives");
+		auto since = Log::GetHistory().GetTotalCount();
+		const auto shared = AnimationTest::LoadModified(data, directory.GetPath(), "Shared.gltf");
+		CHECK(CountLogMessages(since, "mesh 'Face': morph targets keep only POSITION and NORMAL deltas; their other attributes are ignored") == 1);
+		REQUIRE(shared->Meshes[0].Submeshes.size() == 2);
+		const Submesh& first = shared->Submeshes[shared->Meshes[0].Submeshes[0]];
+		const Submesh& second = shared->Submeshes[shared->Meshes[0].Submeshes[1]];
+		CHECK(second.MaterialIndex == 1);
+		CHECK(second.BaseVertex == first.BaseVertex);
+		CHECK(second.MorphTargetCount == 2);
+		CHECK(second.MorphDeltaOffset == first.MorphDeltaOffset);
+		REQUIRE(second.MorphBounds.size() == 2);
+		CHECK(second.MorphBounds[0].Max == first.MorphBounds[0].Max);
+		CHECK(shared->MorphDeltas.size() == 2 * 9 + 3); // as without the copy
+
+		// The second target's NORMAL deltas make it read another accessor.
+		data["meshes"][0]["primitives"][1]["targets"][1]["NORMAL"] = data["meshes"][0]["primitives"][0]["targets"][0]["NORMAL"];
+		const auto separate = AnimationTest::LoadModified(data, directory.GetPath(), "Separate.gltf");
+		REQUIRE(separate->Meshes[0].Submeshes.size() == 2);
+		const Submesh& own = separate->Submeshes[separate->Meshes[0].Submeshes[1]];
+		CHECK(own.BaseVertex != separate->Submeshes[separate->Meshes[0].Submeshes[0]].BaseVertex);
+		CHECK(own.MorphDeltaOffset == 2 * 9); // after the first primitive's, before Teeth's
+		CHECK(separate->MorphDeltas.size() == 2 * (2 * 9) + 3);
+	}
+
 	TEST_CASE("Models with morph targets import as an Animator root, keeping node weights")
 	{
 		auto data = MorphJson();

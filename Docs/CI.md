@@ -47,7 +47,9 @@ protection, so renaming or removing jobs blocks nothing; check `gh api repos/ahm
 - **Real GPUs.** GPU tests run on Mesa's lavapipe only; the Windows and macOS jobs run none. Real hardware is checked by
   hand before releases (`Docs/TestedHardware.md`).
 - **Long fuzzing on pull requests.** Each push fuzzes every target for 60 s; only the nightly runs long enough to reach
-  deeper inputs. Known slow inputs are tracked in `ROADMAP.md` (FuzzGltf primitives sharing index accessors).
+  deeper inputs. Import work grows with what an input declares: FuzzGltf inputs of about 15 KB whose 70 primitives each
+  read a separate accessor over one 16x16 grid's indices take about 0.7 s per execution in the fuzz build, well within
+  the 10 s limit (primitives that repeat the same accessors import once; see `Docs/AssetPipeline.md`).
 - **Release packaging and the nightly between triggers.** `release.yml` runs only on tags, on pull requests touching its
   inputs, and by hand; `fuzz-nightly.yml` only nightly and by hand.
 

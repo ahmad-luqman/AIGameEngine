@@ -43,6 +43,12 @@ threshold), then vertex fetch. Complete interleaved vertices move together, incl
 Blended primitives keep their authored triangle order and only optimize vertex fetch. Triangle reordering
 can alter exact coplanar depth ties. Built-in primitives keep their existing topology.
 
+Primitives that read the same accessors (attributes, indices and morph targets, as multi-material exports repeat them)
+import once: a later one, in the same mesh or another, draws the first one's vertices, indices, LODs and morph deltas
+with its own material, and is skipped with the first one's reason when that one was. Blended and non-blended primitives
+never share, since only the latter are reordered and get LODs. Sharing goes by accessor, not by content: separate
+accessors over the same bytes are imported separately.
+
 meshoptimizer's vertex-cache order and simplifier take time that grows with the squares of vertex valences (how
 many triangle corners name each vertex). Each primitive may sum its squared valences to 16 per index; ordinary meshes
 sum to about 6 per index and never reach it. Costs past that draw on one allowance of 4,194,304 per model (primitives
@@ -93,7 +99,7 @@ allocates and reports the reason instead:
   nothing in place); the specification requires all three.
 - A primitive whose index accessor is empty is skipped with a warning, like one without positions.
 - A model's triangle primitives may have at most 16,777,216 vertices and 67,108,864 indices, counted once per
-  primitive that uses an accessor. At most 65,536 of those vertices and indices may come from accessors without a
+  primitive that uses an accessor (also when the primitive shares an earlier one's geometry). At most 65,536 of those vertices and indices may come from accessors without a
   buffer view (zero-filled apart from any sparse values), each counted once more per morph target of its primitive,
   since each target can generate the normals again. Real files use such accessors for sparse morph targets, which do
   not count.

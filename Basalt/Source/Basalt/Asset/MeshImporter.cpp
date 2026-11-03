@@ -27,6 +27,8 @@
 #include <new>
 #include <optional>
 #include <set>
+#include <string_view>
+#include <tuple>
 
 namespace Basalt {
 
@@ -569,10 +571,28 @@ namespace Basalt {
 			return true;
 		}
 
+		// The POSITION and NORMAL delta accessors of a morph target (null when absent; the last of each wins). True when the
+		// target also carries attributes other than POSITION, NORMAL and TANGENT, which the importer drops.
+		bool FindMorphTargetAccessors(const cgltf_morph_target& target, const cgltf_accessor*& outPositions, const cgltf_accessor*& outNormals)
+		{
+			outPositions = outNormals = nullptr;
+			bool ignored = false;
+			for (cgltf_size a = 0; a < target.attributes_count; a++)
+			{
+				const cgltf_attribute& attribute = target.attributes[a];
+				if (attribute.type == cgltf_attribute_type_position && attribute.index == 0)
+					outPositions = attribute.data;
+				else if (attribute.type == cgltf_attribute_type_normal && attribute.index == 0)
+					outNormals = attribute.data;
+				else if (attribute.type != cgltf_attribute_type_tangent)
+					ignored = true;
+			}
+			return ignored;
+		}
+
 		// Reads `targets` morph targets of a primitive into target-major deltas. A target without NORMAL deltas takes the
 		// change in generated normals between the base and the fully morphed shape, so lighting follows the new surface.
-		// outIgnored is set when a target carries attributes other than POSITION, NORMAL and TANGENT, which are dropped.
-		bool ReadMorphTargets(const cgltf_primitive& primitive, size_t targets, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices, std::vector<MorphDelta>& outDeltas, size_t& budget, bool& outIgnored, std::string& outError)
+		bool ReadMorphTargets(const cgltf_primitive& primitive, size_t targets, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& indices, std::vector<MorphDelta>& outDeltas, size_t& budget, std::string& outError)
 		{
 			if (targets == 0)
 				return true;
@@ -588,19 +608,9 @@ namespace Basalt {
 			std::vector<glm::vec3> data;
 			for (size_t t = 0; t < targets; t++)
 			{
-				const cgltf_morph_target& target = primitive.targets[t];
 				const cgltf_accessor* positions = nullptr;
 				const cgltf_accessor* normals = nullptr;
-				for (cgltf_size a = 0; a < target.attributes_count; a++)
-				{
-					const cgltf_attribute& attribute = target.attributes[a];
-					if (attribute.type == cgltf_attribute_type_position && attribute.index == 0)
-						positions = attribute.data;
-					else if (attribute.type == cgltf_attribute_type_normal && attribute.index == 0)
-						normals = attribute.data;
-					else if (attribute.type != cgltf_attribute_type_tangent)
-						outIgnored = true;
-				}
+				FindMorphTargetAccessors(primitive.targets[t], positions, normals);
 				MorphDelta* deltas = outDeltas.data() + t * vertices.size();
 				const auto read = [&](const cgltf_accessor* accessor, const char* name, glm::vec3 MorphDelta::* field) {
 					if (!accessor)
@@ -639,6 +649,36 @@ namespace Basalt {
 			}
 			return true;
 		}
+
+		// Everything a triangle primitive's import depends on apart from its material: the accessors it reads (by index into
+		// cgltf_data::accessors, NoAccessor when absent), the morph targets' (none when its mesh's are dropped) and whether
+		// its triangles are reordered (blended materials keep theirs and get no LODs). Primitives with equal keys import
+		// identically, so later ones draw the first one's ranges (MeshSource::ShareSubmesh). Multi-material exports repeat
+		// accessors, and 250 primitives sharing one 16x16 grid's indices took 2.4 s in the fuzz build when each was
+		// imported again.
+		struct PrimitiveGeometryKey
+		{
+			static constexpr size_t NoAccessor = SIZE_MAX;
+			// POSITION, NORMAL, TANGENT, TEXCOORD_0, TEXCOORD_1, JOINTS_0, WEIGHTS_0 and the indices.
+			std::array<size_t, 8> Accessors{};
+			// Per morph target read: its POSITION and NORMAL delta accessors.
+			std::vector<std::array<size_t, 2>> MorphTargets;
+			bool Reorder = false;
+
+			bool operator<(const PrimitiveGeometryKey& other) const { return std::tie(Accessors, MorphTargets, Reorder) < std::tie(other.Accessors, other.MorphTargets, other.Reorder); }
+		};
+
+		// How the first primitive with a PrimitiveGeometryKey imported, for the primitives that repeat it.
+		struct ImportedPrimitive
+		{
+			// Its submesh, or nullopt when it was skipped for SkipReason.
+			std::optional<uint32_t> Submesh;
+			std::string SkipReason;
+			// Its vertices were read (a skip after that still checks the material's TEXCOORD_1 first), and HasUV1 says
+			// whether TEXCOORD_1 was among them.
+			bool ReadVertices = false;
+			bool HasUV1 = false;
+		};
 
 		bool ReadIndices(const cgltf_accessor* accessor, std::vector<uint32_t>& out)
 		{
@@ -890,6 +930,8 @@ namespace Basalt {
 		size_t morphBudget = MaxMorphDeltas;
 		uint64_t valenceAllowance = MeshOptimizer::ValenceCostAllowance;
 		std::vector<bool> droppedMorphs;
+		// Across meshes too: a model's meshes may share accessors.
+		std::map<PrimitiveGeometryKey, ImportedPrimitive> importedPrimitives;
 		for (cgltf_size meshIndex = 0; meshIndex < data->meshes_count; meshIndex++)
 		{
 			const cgltf_mesh& mesh = data->meshes[meshIndex];
@@ -946,17 +988,69 @@ namespace Basalt {
 					else if (attribute.type == cgltf_attribute_type_texcoord && attribute.index == 0)
 						texCoords = attribute.data;
 				}
+				const auto warnSkipped = [&](std::string_view reason) { BS_CORE_WARN("MeshImporter: {}: mesh '{}' primitive {}: skipped, {}", key, meshData.Name, primitiveIndex, reason); };
 				if (!positions || positions->count == 0)
 				{
-					BS_CORE_WARN("MeshImporter: {}: mesh '{}' primitive {}: skipped, it has no positions", key, meshData.Name, primitiveIndex);
+					warnSkipped("it has no positions");
 					continue;
 				}
+
+				const uint32_t materialIndex = primitive.material ? static_cast<uint32_t>(primitive.material - data->materials) : defaultMaterial;
+				const uint32_t targets = static_cast<uint32_t>(meshData.MorphTargets.size());
+				const auto accessorIndex = [&](const cgltf_accessor* accessor) { return accessor ? static_cast<size_t>(accessor - data->accessors) : PrimitiveGeometryKey::NoAccessor; };
+				PrimitiveGeometryKey geometryKey;
+				geometryKey.Accessors = { accessorIndex(positions), accessorIndex(normals), accessorIndex(tangents), accessorIndex(texCoords), accessorIndex(texCoords1), accessorIndex(joints), accessorIndex(weights), accessorIndex(primitive.indices) };
+				geometryKey.Reorder = !source->Materials[materialIndex].IsBlended();
+				bool ignoresMorphAttributes = false;
+				geometryKey.MorphTargets.reserve(targets);
+				for (uint32_t t = 0; t < targets; t++)
+				{
+					const cgltf_accessor* targetPositions = nullptr;
+					const cgltf_accessor* targetNormals = nullptr;
+					ignoresMorphAttributes = FindMorphTargetAccessors(primitive.targets[t], targetPositions, targetNormals) || ignoresMorphAttributes;
+					geometryKey.MorphTargets.push_back({ accessorIndex(targetPositions), accessorIndex(targetNormals) });
+				}
+				const bool reorder = geometryKey.Reorder;
+				const auto [cached, firstUse] = importedPrimitives.try_emplace(std::move(geometryKey));
+				ImportedPrimitive& imported = cached->second;
+
+				// A material that samples TEXCOORD_1 needs the primitive to have one.
+				const auto checkUV1 = [&](bool hasUV1) {
+					if (!primitive.material || hasUV1)
+						return true;
+					for (const auto& transform : source->Materials[materialIndex].TextureTransforms)
+						if (transform.TexCoord == 1)
+						{
+							const char* problem = !texCoords1 ? "has no TEXCOORD_1" : (texCoords1->count != positions->count ? "has a TEXCOORD_1 whose count differs from POSITION" : "has an unreadable TEXCOORD_1");
+							outError = fmt::format("{}: material '{}' uses TEXCOORD_1 but mesh '{}' {}", key, source->Materials[materialIndex].Name, meshData.Name, problem);
+							return false;
+						}
+					return true;
+				};
+				if (!firstUse)
+				{
+					// The checks that depend on the material still run, in the order the first primitive met them.
+					if (imported.ReadVertices && !checkUV1(imported.HasUV1))
+						return nullptr;
+					if (const std::optional<uint32_t> shared = imported.Submesh)
+					{
+						meshData.Submeshes.push_back(source->ShareSubmesh(*shared, materialIndex));
+						ignoredMorphAttributes = ignoredMorphAttributes || ignoresMorphAttributes;
+					}
+					else
+						warnSkipped(imported.SkipReason);
+					continue;
+				}
+				const auto skip = [&](std::string reason) {
+					warnSkipped(reason);
+					imported.SkipReason = std::move(reason);
+				};
 
 				std::vector<Vertex> vertices(positions->count);
 				std::vector<glm::vec3> positionData;
 				if (!ReadAccessor(positions, positionData, 3))
 				{
-					BS_CORE_WARN("MeshImporter: {}: mesh '{}' primitive {}: skipped, its positions are unreadable", key, meshData.Name, primitiveIndex);
+					skip("its positions are unreadable");
 					continue;
 				}
 				for (size_t v = 0; v < vertices.size(); v++)
@@ -1014,27 +1108,23 @@ namespace Basalt {
 					for (size_t v = 0; v < vertices.size(); v++)
 						vertices[v].TexCoord1 = texCoordData[v];
 
-				if (primitive.material && !hasUV1)
-					for (const auto& transform : source->Materials[static_cast<size_t>(primitive.material - data->materials)].TextureTransforms)
-						if (transform.TexCoord == 1)
-						{
-							const char* problem = !texCoords1 ? "has no TEXCOORD_1" : (texCoords1->count != positions->count ? "has a TEXCOORD_1 whose count differs from POSITION" : "has an unreadable TEXCOORD_1");
-							outError = fmt::format("{}: material '{}' uses TEXCOORD_1 but mesh '{}' {}", key, source->Materials[static_cast<size_t>(primitive.material - data->materials)].Name, meshData.Name, problem);
-							return nullptr;
-						}
+				imported.ReadVertices = true;
+				imported.HasUV1 = hasUV1;
+				if (!checkUV1(hasUV1))
+					return nullptr;
 
 				std::vector<uint32_t> indices;
 				if (primitive.indices)
 				{
 					if (!ReadIndices(primitive.indices, indices))
 					{
-						BS_CORE_WARN("MeshImporter: {}: mesh '{}' primitive {}: skipped, its indices are unreadable", key, meshData.Name, primitiveIndex);
+						skip("its indices are unreadable");
 						continue;
 					}
 					// cgltf accepts an index accessor with no elements (the specification does not); it would draw nothing.
 					if (indices.empty())
 					{
-						BS_CORE_WARN("MeshImporter: {}: mesh '{}' primitive {}: skipped, its index accessor is empty", key, meshData.Name, primitiveIndex);
+						skip("its index accessor is empty");
 						continue;
 					}
 				}
@@ -1050,7 +1140,7 @@ namespace Basalt {
 					indicesValid = indicesValid && index < vertices.size();
 				if (!indicesValid)
 				{
-					BS_CORE_WARN("MeshImporter: {}: mesh '{}' primitive {}: skipped, its index data is invalid (not whole triangles, or an index past its vertices)", key, meshData.Name, primitiveIndex);
+					skip("its index data is invalid (not whole triangles, or an index past its vertices)");
 					continue;
 				}
 
@@ -1067,16 +1157,13 @@ namespace Basalt {
 					MeshSource::GenerateTangents(vertices, indices);
 				}
 
-				const uint32_t targets = static_cast<uint32_t>(meshData.MorphTargets.size());
 				std::vector<MorphDelta> morphDeltas;
-				if (!ReadMorphTargets(primitive, targets, vertices, indices, morphDeltas, morphBudget, ignoredMorphAttributes, outError))
+				if (!ReadMorphTargets(primitive, targets, vertices, indices, morphDeltas, morphBudget, outError))
 				{
 					outError = fmt::format("{}: mesh '{}' primitive {}: {}", key, meshData.Name, primitiveIndex, outError);
 					return nullptr;
 				}
 
-				const uint32_t materialIndex = primitive.material ? static_cast<uint32_t>(primitive.material - data->materials) : defaultMaterial;
-				const bool reorder = !source->Materials[materialIndex].IsBlended();
 				const MeshOptimizer::OptimizeResult result = MeshOptimizer::Optimize(vertices, indices, reorder, &morphDeltas, targets, &valenceAllowance);
 				switch (result)
 				{
@@ -1100,6 +1187,8 @@ namespace Basalt {
 				if (result == MeshOptimizer::OptimizeResult::Optimized)
 					MeshOptimizer::GenerateLODs(*source, submesh);
 				meshData.Submeshes.push_back(submesh);
+				imported.Submesh = submesh;
+				ignoredMorphAttributes = ignoredMorphAttributes || ignoresMorphAttributes;
 			}
 			if (ignoredMorphAttributes)
 				BS_CORE_WARN("MeshImporter: {}: mesh '{}': morph targets keep only POSITION and NORMAL deltas; their other attributes are ignored", key, meshData.Name);
