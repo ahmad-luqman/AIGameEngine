@@ -6,6 +6,7 @@
 #include "Basalt/Core/CrashReporter.h"
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/Log.h"
+#include "Basalt/Core/Platform.h"
 
 int main(int argc, char** argv)
 {
@@ -15,7 +16,7 @@ int main(int argc, char** argv)
 
 	int exitCode = 1;
 	{
-		Basalt::Application* application = Basalt::CreateApplication({ argc, argv });
+		Basalt::Application* application = Basalt::CreateApplication({ Basalt::Platform::GetProcessArguments(argc, argv) });
 		if (application)
 		{
 			exitCode = application->Run();

@@ -1,8 +1,12 @@
 #pragma once
 
+#include "Basalt/Core/Base.h"
+
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <vector>
 
 namespace Basalt::Platform {
 
@@ -19,6 +23,18 @@ namespace Basalt::Platform {
 
 	// This process's ID, for names that must differ between processes running at the same time.
 	int GetProcessId();
+
+	// The process's arguments as UTF-8 text, program name first: main's argv elsewhere, but on Windows the wide command
+	// line, because argv there is in the ANSI code page and loses every character outside it (a "--project" path in
+	// Japanese, say). argc and argv are the fallback should the wide command line be unavailable.
+	std::vector<std::string> GetProcessArguments(int argc, const char* const* argv);
+
+#if defined(BS_PLATFORM_WINDOWS)
+	// UTF-8 to and from the UTF-16 of Windows' wide APIs. Utf8ToWide is nullopt for text that is not valid UTF-8;
+	// WideToUtf8 replaces unpaired surrogates with U+FFFD.
+	std::optional<std::wstring> Utf8ToWide(std::string_view text);
+	std::string WideToUtf8(std::wstring_view text);
+#endif
 
 	// Overrides GetUserDataDirectory (tests and tools point it at a scratch directory).
 	inline constexpr const char* UserDataDirectoryVariable = "BASALT_USER_DATA_DIR";

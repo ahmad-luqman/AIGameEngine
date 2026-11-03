@@ -360,7 +360,7 @@ namespace Basalt {
 		{
 			if (path.find("..") != std::string::npos)
 				throw CommandError("paths must stay inside the project ('..' is not allowed)");
-			if (std::filesystem::path(path).is_absolute())
+			if (FileSystem::PathFromUtf8(path).is_absolute())
 				throw CommandError("asset paths must be project-relative (e.g. 'Assets/Scripts/Player.lua')");
 			return path;
 		}
@@ -781,16 +781,16 @@ namespace Basalt {
 		{
 			Add(registry, "project.create", "Creates a new project directory (Project.bproject + Assets/) and opens it.", Schema::Object({ { "path", Schema::String("string, project directory", true) }, { "name", Schema::Nullable(Schema::String(fmt::format("string of at most {} bytes", ProjectConfig::MaxTextLength))) } }, { "path" }), [](AutomationSession& session, const json& params) {
 				std::string error;
-				Ref<Project> project = Project::Create(RequireString(params, "path"), OptionalString(params, "name", "Game"), error);
+				Ref<Project> project = Project::Create(FileSystem::PathFromUtf8(RequireString(params, "path")), OptionalString(params, "name", "Game"), error);
 				if (!project)
 					throw CommandError(error);
 				ActivateProject(session, project);
 				session.SetEditScene(CreateRef<Scene>("Untitled"), "");
-				return json{ { "directory", project->GetDirectory().string() } }; }, CommandPolicy::EditBoundary);
+				return json{ { "directory", FileSystem::PathToUtf8(project->GetDirectory()) } }; }, CommandPolicy::EditBoundary);
 
 			Add(registry, "project.open", "Opens a project (directory or .bproject file) and its start scene. Instances of prefabs saved since the start scene was merge their prefab, keeping overrides ('prefabInstances'; instances that cannot merge are 'warnings').", Schema::Object({ { "path", Schema::String("string", true) } }, { "path" }), [](AutomationSession& session, const json& params) {
 				std::string error;
-				Ref<Project> project = Project::Load(RequireString(params, "path"), error);
+				Ref<Project> project = Project::Load(FileSystem::PathFromUtf8(RequireString(params, "path")), error);
 				if (!project)
 					throw CommandError(error);
 				ActivateProject(session, project);
@@ -817,7 +817,7 @@ namespace Basalt {
 					{ "company", config.Company },
 					{ "icon", config.Icon },
 					{ "bundleIdentifier", MakeBundleIdentifier(config.Company, config.Name) },
-					{ "directory", project->GetDirectory().string() },
+					{ "directory", FileSystem::PathToUtf8(project->GetDirectory()) },
 					{ "startScene", config.StartScene },
 					{ "windowWidth", config.WindowWidth },
 					{ "windowHeight", config.WindowHeight },
@@ -2188,7 +2188,7 @@ namespace Basalt {
 		void RequireReferenceImage(const std::filesystem::path& referencePath)
 		{
 			if (!std::filesystem::exists(referencePath))
-				throw CommandError("reference image not found: '" + referencePath.string() + "'");
+				throw CommandError("reference image not found: '" + FileSystem::PathToUtf8(referencePath) + "'");
 		}
 
 		json CompareImageFiles(const std::filesystem::path& actualPath, const std::filesystem::path& referencePath, const json& params)
@@ -2649,7 +2649,7 @@ namespace Basalt {
 				const uint32_t width = static_cast<uint32_t>(OptionalInteger(params, "width", 1280, 16, 8192));
 				const uint32_t height = static_cast<uint32_t>(OptionalInteger(params, "height", 720, 16, 8192));
 				std::string error;
-				if (!session.Screenshot(path, width, height, error))
+				if (!session.Screenshot(FileSystem::PathFromUtf8(path), width, height, error))
 					throw CommandError(error);
 				return json{ { "path", path } };
 			});

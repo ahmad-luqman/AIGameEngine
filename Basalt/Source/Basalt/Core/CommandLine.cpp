@@ -10,11 +10,11 @@
 
 namespace Basalt {
 
-	CommandLine::CommandLine(int argc, const char* const* argv, const std::vector<std::string>& optionsWithValues)
+	CommandLine::CommandLine(const std::vector<std::string>& arguments, const std::vector<std::string>& optionsWithValues)
 	{
-		for (int i = 1; i < argc; i++)
+		for (size_t i = 1; i < arguments.size(); i++)
 		{
-			const std::string argument = argv[i] ? argv[i] : "";
+			const std::string& argument = arguments[i];
 			if (argument.rfind("--", 0) != 0 || argument.size() == 2)
 			{
 				m_Positional.push_back(argument);
@@ -32,12 +32,12 @@ namespace Basalt {
 
 			if (std::find(optionsWithValues.begin(), optionsWithValues.end(), name) != optionsWithValues.end())
 			{
-				if (i + 1 >= argc)
+				if (i + 1 >= arguments.size())
 				{
 					m_Errors.push_back("option --" + name + " requires a value");
 					continue;
 				}
-				m_Values[name] = argv[++i];
+				m_Values[name] = arguments[++i];
 			}
 			else
 			{

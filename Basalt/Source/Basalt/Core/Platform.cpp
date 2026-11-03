@@ -2,13 +2,17 @@
 
 #include "Basalt/Core/Base.h"
 #include "Basalt/Core/FileSystem.h"
+#include "Basalt/Core/Log.h"
 
+#include <climits>
 #include <cstdlib>
 #include <cstring>
 
 #if defined(BS_PLATFORM_WINDOWS)
 	#include <process.h>
 	#include <windows.h>
+	// After windows.h, which it depends on.
+	#include <shellapi.h>
 #else
 	#include <unistd.h>
 #endif
@@ -16,33 +20,31 @@
 namespace Basalt::Platform {
 
 #if defined(BS_PLATFORM_WINDOWS)
-	namespace {
+	std::optional<std::wstring> Utf8ToWide(std::string_view text)
+	{
+		if (text.empty())
+			return std::wstring();
+		if (text.size() > static_cast<size_t>(INT_MAX))
+			return std::nullopt;
+		const int size = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()), nullptr, 0);
+		if (size <= 0)
+			return std::nullopt;
+		std::wstring wide(static_cast<size_t>(size), L'\0');
+		if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()), wide.data(), size) != size)
+			return std::nullopt;
+		return wide;
+	}
 
-		// The CRT's narrow environment uses the ANSI code page, so text outside it would not survive: convert UTF-8
-		// to and from the wide environment instead.
-		std::optional<std::wstring> WidenUtf8(const std::string& text)
-		{
-			if (text.empty())
-				return std::wstring();
-			const int size = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()), nullptr, 0);
-			if (size <= 0)
-				return std::nullopt;
-			std::wstring wide(static_cast<size_t>(size), L'\0');
-			MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()), wide.data(), size);
-			return wide;
-		}
-
-		std::string NarrowToUtf8(const wchar_t* text)
-		{
-			const int size = WideCharToMultiByte(CP_UTF8, 0, text, -1, nullptr, 0, nullptr, nullptr);
-			if (size <= 1)
-				return std::string();
-			std::string narrow(static_cast<size_t>(size), '\0');
-			WideCharToMultiByte(CP_UTF8, 0, text, -1, narrow.data(), size, nullptr, nullptr);
-			narrow.pop_back();
-			return narrow;
-		}
-
+	std::string WideToUtf8(std::wstring_view text)
+	{
+		if (text.empty() || text.size() > static_cast<size_t>(INT_MAX))
+			return std::string();
+		const int size = WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
+		if (size <= 0)
+			return std::string();
+		std::string narrow(static_cast<size_t>(size), '\0');
+		WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), narrow.data(), size, nullptr, nullptr);
+		return narrow;
 	}
 #endif
 
@@ -55,15 +57,37 @@ namespace Basalt::Platform {
 #endif
 	}
 
+	std::vector<std::string> GetProcessArguments(int argc, const char* const* argv)
+	{
+#if defined(BS_PLATFORM_WINDOWS)
+		int count = 0;
+		if (wchar_t** wide = CommandLineToArgvW(GetCommandLineW(), &count))
+		{
+			std::vector<std::string> arguments;
+			arguments.reserve(static_cast<size_t>(count));
+			for (int i = 0; i < count; i++)
+				arguments.push_back(WideToUtf8(wide[i]));
+			LocalFree(wide);
+			return arguments;
+		}
+		BS_CORE_WARN("Cannot read the wide command line (error {}): arguments outside the ANSI code page are lost", GetLastError());
+#endif
+		std::vector<std::string> arguments;
+		arguments.reserve(argc > 0 ? static_cast<size_t>(argc) : 0);
+		for (int i = 0; i < argc; i++)
+			arguments.emplace_back(argv[i] ? argv[i] : "");
+		return arguments;
+	}
+
 	std::optional<std::string> GetEnvVar(const char* name)
 	{
 #if defined(BS_PLATFORM_WINDOWS)
-		const auto wideName = WidenUtf8(name);
+		const auto wideName = Utf8ToWide(name);
 		wchar_t* buffer = nullptr;
 		size_t length = 0;
 		if (!wideName || _wdupenv_s(&buffer, &length, wideName->c_str()) != 0 || !buffer)
 			return std::nullopt;
-		std::string value = NarrowToUtf8(buffer);
+		std::string value = WideToUtf8(buffer);
 		std::free(buffer);
 		return value;
 #else
@@ -84,8 +108,8 @@ namespace Basalt::Platform {
 	bool SetEnvVar(const char* name, const std::string& value)
 	{
 #if defined(BS_PLATFORM_WINDOWS)
-		const auto wideName = WidenUtf8(name);
-		const auto wideValue = WidenUtf8(value);
+		const auto wideName = Utf8ToWide(name);
+		const auto wideValue = Utf8ToWide(value);
 		return wideName && wideValue && _wputenv_s(wideName->c_str(), wideValue->c_str()) == 0;
 #else
 		return setenv(name, value.c_str(), 1) == 0;
@@ -96,7 +120,7 @@ namespace Basalt::Platform {
 	{
 #if defined(BS_PLATFORM_WINDOWS)
 		// An empty value removes the variable on Windows.
-		const auto wideName = WidenUtf8(name);
+		const auto wideName = Utf8ToWide(name);
 		return wideName && _wputenv_s(wideName->c_str(), L"") == 0;
 #else
 		return unsetenv(name) == 0;

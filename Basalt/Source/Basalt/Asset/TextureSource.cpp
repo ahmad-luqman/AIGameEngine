@@ -179,7 +179,7 @@ namespace Basalt {
 		}
 		Ref<TextureSource> texture = LoadFromMemory(bytes->data(), bytes->size(), outError);
 		if (!texture)
-			outError = path.filename().string() + ": " + outError;
+			outError = FileSystem::PathToUtf8(path.filename()) + ": " + outError;
 		return texture;
 	}
 

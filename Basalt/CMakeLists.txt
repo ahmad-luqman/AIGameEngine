@@ -63,8 +63,8 @@ target_link_libraries(Basalt
 		libzstd_static)
 
 if(WIN32)
-	# dbghelp: crash report stack traces and minidumps (Core/CrashReporter).
-	target_link_libraries(Basalt PRIVATE ws2_32 dbghelp)
+	# dbghelp: crash report stack traces and minidumps (Core/CrashReporter). shell32: CommandLineToArgvW (Core/Platform).
+	target_link_libraries(Basalt PRIVATE ws2_32 dbghelp shell32)
 endif()
 
 file(GLOB BASALT_SHADER_SOURCES CONFIGURE_DEPENDS

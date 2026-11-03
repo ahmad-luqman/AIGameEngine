@@ -36,9 +36,12 @@ namespace Basalt {
 		{
 			// Per image: empty when embedded, else the external file's URI (which loads as its own texture).
 			std::vector<std::string> ImageUris;
+			// Per buffer: empty when embedded (a GLB's binary chunk or a data: URI), else the external file's URI.
+			std::vector<std::string> BufferUris;
 			size_t Materials = 0;
 		};
-		// nullopt with the parser's reason when the file is not a readable glTF.
+		// nullopt with the parser's reason when the file is not a readable glTF. Reads through FileSystem (UTF-8 paths on
+		// every platform, mounted archives), never cgltf's own fopen.
 		static std::optional<Contents> Inspect(const std::filesystem::path& path, std::string& outError);
 		// The problem with a "<model>#image/<n>" or "<model>#material/<n>" key given its model's contents, or nullopt.
 		static std::optional<std::string> CheckSubAsset(const Contents& contents, std::string_view key);

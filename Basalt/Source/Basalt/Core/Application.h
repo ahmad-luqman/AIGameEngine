@@ -18,12 +18,10 @@ namespace Basalt {
 	class GraphicsDevice;
 	class ImGuiLayer;
 
+	// The process's arguments, program name first, as UTF-8 text on every platform (Platform::GetProcessArguments).
 	struct ApplicationCommandLineArgs
 	{
-		int Count = 0;
-		char** Args = nullptr;
-
-		const char* operator[](int index) const { return index >= 0 && index < Count ? Args[index] : nullptr; }
+		std::vector<std::string> Arguments;
 	};
 
 	struct ApplicationSpecification

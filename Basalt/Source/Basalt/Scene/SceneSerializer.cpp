@@ -545,7 +545,7 @@ namespace Basalt {
 		const std::string text = data.dump(1, '\t');
 		if (!FileSystem::WriteTextFile(path, text))
 		{
-			outError = "cannot write '" + path.string() + "'";
+			outError = "cannot write '" + FileSystem::PathToUtf8(path) + "'";
 			return false;
 		}
 		scene.m_Path = ScenePathOf(path);
@@ -580,19 +580,19 @@ namespace Basalt {
 	{
 		std::error_code error;
 		const std::filesystem::path absolute = std::filesystem::absolute(path, error);
-		return std::filesystem::path(Project::MakeRelative(error ? path : absolute)).lexically_normal().generic_string();
+		return FileSystem::PathToGenericUtf8(FileSystem::PathFromUtf8(Project::MakeRelative(error ? path : absolute)).lexically_normal());
 	}
 
 	Ref<Scene> SceneSerializer::LoadScene(const std::filesystem::path& path, std::string& outError)
 	{
-		const std::optional<json> data = ReadSceneFile(path, path.string(), outError);
+		const std::optional<json> data = ReadSceneFile(path, FileSystem::PathToUtf8(path), outError);
 		if (!data)
 			return nullptr;
 
-		Ref<Scene> scene = CreateRef<Scene>(path.stem().string());
+		Ref<Scene> scene = CreateRef<Scene>(FileSystem::PathToUtf8(path.stem()));
 		if (!DeserializeScene(*scene, *data, outError))
 		{
-			outError = path.filename().string() + ": " + outError;
+			outError = FileSystem::PathToUtf8(path.filename()) + ": " + outError;
 			return nullptr;
 		}
 		scene->m_Path = ScenePathOf(path);
@@ -656,7 +656,7 @@ namespace Basalt {
 
 		if (!FileSystem::WriteTextFile(path, data.dump(1, '\t')))
 		{
-			outError = "cannot write '" + path.string() + "'";
+			outError = "cannot write '" + FileSystem::PathToUtf8(path) + "'";
 			return false;
 		}
 		return true;

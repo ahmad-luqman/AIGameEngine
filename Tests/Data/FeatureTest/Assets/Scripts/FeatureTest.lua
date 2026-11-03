@@ -545,6 +545,8 @@ local function TestSystems(self)
 	Check("Sandbox: dofile removed", dofile == nil and loadfile == nil and io == nil and os == nil)
 	local util = require("Assets.Scripts.Lib.FeatureUtil")
 	Check("require project module", util.Triple(3) == 9)
+	-- package.path is UTF-8: a module name outside every single-byte Windows code page loads on every platform.
+	Check("require module named in CJK characters", require("Assets.Scripts.Lib.道具").Name == "道具")
 end
 
 -- Timers, coroutines, events and scene information. Scene switching and Storage are exercised by the

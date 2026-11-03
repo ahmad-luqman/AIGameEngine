@@ -66,18 +66,18 @@ namespace Basalt {
 		const std::filesystem::path absolute = std::filesystem::absolute(directory, error);
 		if (error)
 		{
-			outError = "invalid project directory '" + directory.string() + "'";
+			outError = "invalid project directory '" + FileSystem::PathToUtf8(directory) + "'";
 			return nullptr;
 		}
 		if (FileSystem::Exists(absolute / FileName))
 		{
-			outError = "a project already exists in '" + absolute.string() + "'";
+			outError = "a project already exists in '" + FileSystem::PathToUtf8(absolute) + "'";
 			return nullptr;
 		}
 		// A new project has no actions, so Save writes no input file: one left there would be loaded as its own.
 		if (FileSystem::Exists(absolute / InputFileName))
 		{
-			outError = "'" + (absolute / InputFileName).string() + "' already exists (move it away to create a project here)";
+			outError = "'" + FileSystem::PathToUtf8(absolute / InputFileName) + "' already exists (move it away to create a project here)";
 			return nullptr;
 		}
 
@@ -86,7 +86,7 @@ namespace Basalt {
 			std::filesystem::create_directories(absolute / sub, error);
 			if (error)
 			{
-				outError = "cannot create '" + (absolute / sub).string() + "': " + error.message();
+				outError = "cannot create '" + FileSystem::PathToUtf8(absolute / sub) + "': " + error.message();
 				return nullptr;
 			}
 		}
@@ -97,7 +97,7 @@ namespace Basalt {
 		const auto existing = FileSystem::ReadTextFile(ignorePath);
 		if (!existing && FileSystem::Exists(ignorePath))
 		{
-			outError = "cannot read '" + ignorePath.string() + "' to add the Cache/ rule";
+			outError = "cannot read '" + FileSystem::PathToUtf8(ignorePath) + "' to add the Cache/ rule";
 			return nullptr;
 		}
 		std::string ignore = existing.value_or("");
@@ -140,14 +140,14 @@ namespace Basalt {
 		const auto text = FileSystem::ReadTextFile(filePath);
 		if (!text)
 		{
-			outError = "cannot read project file '" + filePath.string() + "'";
+			outError = "cannot read project file '" + FileSystem::PathToUtf8(filePath) + "'";
 			return nullptr;
 		}
 
 		const nlohmann::json data = ParseJson(*text);
 		if (data.is_discarded() || !data.is_object())
 		{
-			outError = "'" + filePath.string() + "' is not valid JSON";
+			outError = "'" + FileSystem::PathToUtf8(filePath) + "' is not valid JSON";
 			return nullptr;
 		}
 
@@ -183,7 +183,7 @@ namespace Basalt {
 			// saving writes the reference back unchanged.
 			if (data.contains("Icon") && !project->m_Assets.Decode(data["Icon"], config.Icon, outError, true))
 			{
-				outError = "invalid project file '" + filePath.string() + "': Icon: " + outError;
+				outError = "invalid project file '" + FileSystem::PathToUtf8(filePath) + "': Icon: " + outError;
 				return nullptr;
 			}
 			if (!outError.empty())
@@ -194,17 +194,17 @@ namespace Basalt {
 		}
 		catch (const nlohmann::json::exception& e)
 		{
-			outError = "invalid project file '" + filePath.string() + "': " + e.what();
+			outError = "invalid project file '" + FileSystem::PathToUtf8(filePath) + "': " + e.what();
 			return nullptr;
 		}
 		if (!ParseProjectVersion(config.Version))
 		{
-			outError = fmt::format("invalid project file '{}': Version '{}' must be {}", filePath.string(), config.Version, VersionFormat);
+			outError = fmt::format("invalid project file '{}': Version '{}' must be {}", FileSystem::PathToUtf8(filePath), config.Version, VersionFormat);
 			return nullptr;
 		}
 		if (!ValidateProjectText(config, outError))
 		{
-			outError = fmt::format("invalid project file '{}': {}", filePath.string(), outError);
+			outError = fmt::format("invalid project file '{}': {}", FileSystem::PathToUtf8(filePath), outError);
 			return nullptr;
 		}
 		nlohmann::json graphicsPatch = nlohmann::json::object();
@@ -213,12 +213,12 @@ namespace Basalt {
 				graphicsPatch[key] = data[key];
 		if (!PatchGraphicsSettings(graphicsPatch, config.Graphics, outError))
 		{
-			outError = fmt::format("invalid project file '{}': {}", filePath.string(), outError);
+			outError = fmt::format("invalid project file '{}': {}", FileSystem::PathToUtf8(filePath), outError);
 			return nullptr;
 		}
 		if (const auto seed = data.find("RandomSeed"); seed != data.end() && !JsonToUInt32(*seed, config.RandomSeed))
 		{
-			outError = fmt::format("invalid project file '{}': RandomSeed must be an integer between 0 and {}", filePath.string(), UINT32_MAX);
+			outError = fmt::format("invalid project file '{}': RandomSeed must be an integer between 0 and {}", FileSystem::PathToUtf8(filePath), UINT32_MAX);
 			return nullptr;
 		}
 		// The window size reaches the runtime's window unchecked otherwise (a negative value would wrap around).
@@ -227,13 +227,13 @@ namespace Basalt {
 			const auto value = data.find(key);
 			if (value != data.end() && (!JsonToUInt32(*value, *size) || *size < ProjectConfig::MinWindowSize || *size > ProjectConfig::MaxWindowSize))
 			{
-				outError = fmt::format("invalid project file '{}': {} must be an integer in [{}, {}]", filePath.string(), key, ProjectConfig::MinWindowSize, ProjectConfig::MaxWindowSize);
+				outError = fmt::format("invalid project file '{}': {} must be an integer in [{}, {}]", FileSystem::PathToUtf8(filePath), key, ProjectConfig::MinWindowSize, ProjectConfig::MaxWindowSize);
 				return nullptr;
 			}
 		}
 		if (const auto step = data.find("FixedTimestep"); step != data.end() && (!JsonToFloat(*step, config.FixedTimestep) || !IsValidFixedTimestep(config.FixedTimestep)))
 		{
-			outError = fmt::format("invalid project file '{}': FixedTimestep must be a number of seconds in (0, {}]", filePath.string(), MaxFixedTimestep);
+			outError = fmt::format("invalid project file '{}': FixedTimestep must be a number of seconds in (0, {}]", FileSystem::PathToUtf8(filePath), MaxFixedTimestep);
 			return nullptr;
 		}
 		if (const auto layers = data.find("PhysicsLayers"); layers != data.end())
@@ -242,7 +242,7 @@ namespace Basalt {
 			auto physics = PhysicsLayers::FromJson(*layers, layerError);
 			if (!physics)
 			{
-				outError = "invalid project file '" + filePath.string() + "': " + layerError;
+				outError = "invalid project file '" + FileSystem::PathToUtf8(filePath) + "': " + layerError;
 				return nullptr;
 			}
 			config.Physics = std::move(*physics);
@@ -270,7 +270,7 @@ namespace Basalt {
 		const auto text = reason.empty() ? FileSystem::ReadTextFile(path) : std::nullopt;
 		if (!text)
 		{
-			outError = "cannot read input actions file '" + path.string() + "'" + reason;
+			outError = "cannot read input actions file '" + FileSystem::PathToUtf8(path) + "'" + reason;
 			return std::nullopt;
 		}
 		std::string error;
@@ -278,7 +278,7 @@ namespace Basalt {
 		auto actions = data.is_discarded() ? std::nullopt : InputActionMap::FromJson(data, error);
 		if (!actions)
 		{
-			outError = "invalid input actions file '" + path.string() + "': " + error;
+			outError = "invalid input actions file '" + FileSystem::PathToUtf8(path) + "': " + error;
 			return std::nullopt;
 		}
 		return actions;
@@ -351,7 +351,7 @@ namespace Basalt {
 			else if (!std::filesystem::remove(GetInputFilePath(), removeError) && removeError)
 				restoreError = removeError.message();
 			if (!restoreError.empty())
-				outError += "; " + GetInputFilePath().string() + " was already updated and could not be put back: " + restoreError;
+				outError += "; " + FileSystem::PathToUtf8(GetInputFilePath()) + " was already updated and could not be put back: " + restoreError;
 			return false;
 		}
 		if (writeInput)
@@ -377,15 +377,25 @@ namespace Basalt {
 		return std::filesystem::absolute(relativePath, error);
 	}
 
+	std::filesystem::path Project::ResolvePath(const std::string& relativePath)
+	{
+		return ResolvePath(FileSystem::PathFromUtf8(relativePath));
+	}
+
+	std::filesystem::path Project::ResolvePath(const char* relativePath)
+	{
+		return ResolvePath(FileSystem::PathFromUtf8(relativePath ? relativePath : ""));
+	}
+
 	std::string Project::MakeRelative(const std::filesystem::path& absolutePath)
 	{
 		if (!s_ActiveProject)
-			return absolutePath.generic_string();
+			return FileSystem::PathToGenericUtf8(absolutePath);
 		std::error_code error;
 		const std::filesystem::path relative = std::filesystem::relative(absolutePath, s_ActiveProject->m_Directory, error);
 		if (error || relative.empty() || *relative.begin() == "..")
-			return absolutePath.generic_string();
-		return relative.generic_string();
+			return FileSystem::PathToGenericUtf8(absolutePath);
+		return FileSystem::PathToGenericUtf8(relative);
 	}
 
 }

@@ -280,7 +280,7 @@ namespace Basalt {
 			if (!stream)
 			{
 				const int reason = errno;
-				outError = "cannot open '" + tempPath.string() + "' for writing" + (reason != 0 ? ": " + std::generic_category().message(reason) : std::string());
+				outError = "cannot open '" + FileSystem::PathToUtf8(tempPath) + "' for writing" + (reason != 0 ? ": " + std::generic_category().message(reason) : std::string());
 				return false;
 			}
 			stream.write(static_cast<const char*>(data), static_cast<std::streamsize>(size));
@@ -290,7 +290,7 @@ namespace Basalt {
 			stream.close();
 			if (stream.fail())
 			{
-				outError = "failed writing '" + tempPath.string() + "' (disk full?)";
+				outError = "failed writing '" + FileSystem::PathToUtf8(tempPath) + "' (disk full?)";
 				std::filesystem::remove(tempPath, error);
 				return false;
 			}

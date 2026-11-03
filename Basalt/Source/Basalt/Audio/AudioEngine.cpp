@@ -80,6 +80,18 @@ namespace Basalt {
 			return &reinterpret_cast<ArchiveVfs*>(vfs)->Disk;
 		}
 
+		// Narrow paths are UTF-8 (AudioSystem passes PathToUtf8 where it does not use the wide entry point); wide ones are
+		// native.
+		std::filesystem::path VfsPath(const char* pathText)
+		{
+			return FileSystem::PathFromUtf8(pathText);
+		}
+
+		std::filesystem::path VfsPath(const wchar_t* pathText)
+		{
+			return std::filesystem::path(pathText);
+		}
+
 		// Called from miniaudio (C, possibly on its job thread): no exception may leave it. pathText converts to the path the
 		// archive is asked about.
 		ma_result OpenVfsFile(ma_vfs* vfs, const auto* pathText, ma_uint32 openMode, ma_vfs_file* outFile, const auto& openDisk)
@@ -87,7 +99,7 @@ namespace Basalt {
 			try
 			{
 				auto file = std::make_unique<VfsFile>();
-				const FileSystem::MountedFile mounted = (openMode & MA_OPEN_MODE_WRITE) == 0 ? FileSystem::FindMounted(std::filesystem::path(pathText)) : FileSystem::MountedFile{};
+				const FileSystem::MountedFile mounted = (openMode & MA_OPEN_MODE_WRITE) == 0 ? FileSystem::FindMounted(VfsPath(pathText)) : FileSystem::MountedFile{};
 				if (mounted)
 				{
 					// No reason can travel through miniaudio's result code: the log gets it (ReadMounted without outError).
@@ -110,7 +122,7 @@ namespace Basalt {
 				// Naming the file converts its path again, which may be what threw.
 				try
 				{
-					BS_CORE_ERROR("AudioEngine: cannot open '{}': {}", FileSystem::PathToUtf8(std::filesystem::path(pathText)), exception.what());
+					BS_CORE_ERROR("AudioEngine: cannot open '{}': {}", FileSystem::PathToUtf8(VfsPath(pathText)), exception.what());
 				}
 				catch (...)
 				{

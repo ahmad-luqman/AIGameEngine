@@ -219,7 +219,7 @@ namespace Basalt {
 		{
 			std::vector<std::filesystem::path> searchDirectories;
 			if (const auto sdk = Platform::GetEnvVar("VULKAN_SDK"))
-				searchDirectories.emplace_back(std::filesystem::path(*sdk) / "lib");
+				searchDirectories.emplace_back(FileSystem::PathFromUtf8(*sdk) / "lib");
 			searchDirectories.emplace_back("/opt/homebrew/lib");
 			searchDirectories.emplace_back("/usr/local/lib");
 			auto find = [&](const char* fileName) -> std::filesystem::path {
@@ -464,7 +464,7 @@ namespace Basalt {
 			result.Error = "the project has no StartScene (set it with project.set)";
 			return result;
 		}
-		if (!FileSystem::Exists(project.GetDirectory() / config.StartScene))
+		if (!FileSystem::Exists(project.GetDirectory() / FileSystem::PathFromUtf8(config.StartScene)))
 		{
 			result.Error = "the start scene '" + config.StartScene + "' does not exist";
 			return result;

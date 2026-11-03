@@ -2,6 +2,7 @@
 
 #include "Basalt/Audio/AudioEngine.h"
 #include "Basalt/Core/Assert.h"
+#include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/Input.h"
 #include "Basalt/Core/Profiler.h"
 #include "Basalt/Core/Timer.h"
@@ -30,7 +31,7 @@ namespace Basalt {
 			std::filesystem::current_path(m_Specification.WorkingDirectory, error);
 			if (error)
 			{
-				BS_CORE_ERROR("Cannot change working directory to '{}': {}", m_Specification.WorkingDirectory.string(), error.message());
+				BS_CORE_ERROR("Cannot change working directory to '{}': {}", FileSystem::PathToUtf8(m_Specification.WorkingDirectory), error.message());
 				return;
 			}
 		}

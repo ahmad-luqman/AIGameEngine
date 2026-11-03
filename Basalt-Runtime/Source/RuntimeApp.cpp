@@ -11,6 +11,7 @@
 
 #include <array>
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace Basalt {
@@ -89,7 +90,7 @@ namespace Basalt {
 
 	Application* CreateApplication(ApplicationCommandLineArgs args)
 	{
-		const CommandLine commandLine(args.Count, args.Args, { "project", "scene", "frames", "screenshot", "width", "height", "debug-view", "gpu", "render-scale", "dynamic-resolution", "min-render-scale" });
+		const CommandLine commandLine(args.Arguments, { "project", "scene", "frames", "screenshot", "width", "height", "debug-view", "gpu", "render-scale", "dynamic-resolution", "min-render-scale" });
 		// An option without its value would otherwise run with the default silently (a test passing vacuously).
 		for (const std::string& error : commandLine.GetErrors())
 			BS_CORE_CRITICAL("{}", error);
@@ -100,7 +101,7 @@ namespace Basalt {
 		// An exported game ships its project file next to the executable (in Contents/Resources of a macOS bundle).
 		// A path, not path::string(), which throws on Windows for an install folder outside the ANSI code page.
 		const std::optional<std::string> projectArgument = commandLine.GetValue("project");
-		const std::filesystem::path projectPath = projectArgument ? std::filesystem::path(*projectArgument) : Exporter::GetExportedProjectDirectory(FileSystem::GetExecutableDirectory());
+		const std::filesystem::path projectPath = projectArgument ? FileSystem::PathFromUtf8(*projectArgument) : Exporter::GetExportedProjectDirectory(FileSystem::GetExecutableDirectory());
 		std::string error;
 		// An archived export reads its Assets from Assets.bpak, mounted before anything (the project's asset UUIDs) loads.
 		std::error_code directoryError;
@@ -199,7 +200,7 @@ namespace Basalt {
 
 		ApplicationSpecification specification;
 		specification.Name = project->GetConfig().Name;
-		specification.CommandLineArgs = args;
+		specification.CommandLineArgs = std::move(args);
 		specification.GpuSelector = commandLine.GetValue("gpu").value_or("");
 		auto readSize = [&](const char* name, uint32_t fallback) {
 			if (!commandLine.GetValue(name))

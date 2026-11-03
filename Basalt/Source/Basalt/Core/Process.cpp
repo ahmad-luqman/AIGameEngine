@@ -2,6 +2,7 @@
 
 #include "Basalt/Core/Base.h"
 #include "Basalt/Core/FileSystem.h"
+#include "Basalt/Core/Platform.h"
 
 #if defined(BS_PLATFORM_WINDOWS)
 	#include <windows.h>
@@ -195,19 +196,6 @@ namespace Basalt {
 			return quoted;
 		}
 
-		// UTF-8 to UTF-16 without throwing; false for text that is not valid UTF-8.
-		bool Widen(const std::string& text, std::wstring& outText)
-		{
-			outText.clear();
-			if (text.empty())
-				return true;
-			const int length = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()), nullptr, 0);
-			if (length <= 0)
-				return false;
-			outText.resize(static_cast<size_t>(length));
-			return MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()), outText.data(), length) == length;
-		}
-
 		// The name part of an environment entry ("NAME=value"; entries such as "=C:=C:\" start with '=').
 		std::wstring_view VariableName(std::wstring_view entry)
 		{
@@ -231,13 +219,14 @@ namespace Basalt {
 			std::vector<std::wstring> entries;
 			for (const auto& [name, value] : overrides)
 			{
-				std::wstring wideName, wideValue;
-				if (!Widen(name, wideName) || !Widen(value, wideValue))
+				const std::optional<std::wstring> wideName = Platform::Utf8ToWide(name);
+				const std::optional<std::wstring> wideValue = Platform::Utf8ToWide(value);
+				if (!wideName || !wideValue)
 				{
 					outError = "the environment variable '" + name + "' (name or value) is not valid UTF-8 text";
 					return false;
 				}
-				entries.push_back(wideName + L"=" + wideValue);
+				entries.push_back(*wideName + L"=" + *wideValue);
 			}
 			wchar_t* current = GetEnvironmentStringsW();
 			if (!current)
@@ -327,13 +316,13 @@ namespace Basalt {
 		std::wstring commandLine = QuoteArgument(executable.wstring());
 		for (size_t i = 0; i < spec.Arguments.size(); i++)
 		{
-			std::wstring wide;
-			if (!Widen(spec.Arguments[i], wide))
+			const std::optional<std::wstring> wide = Platform::Utf8ToWide(spec.Arguments[i]);
+			if (!wide)
 			{
 				result.Error = "argument " + std::to_string(i + 1) + " is not valid UTF-8 text";
 				return result;
 			}
-			commandLine += L" " + QuoteArgument(wide);
+			commandLine += L" " + QuoteArgument(*wide);
 		}
 		std::wstring environment;
 		if (!BuildEnvironment(spec.Environment, environment, result.Error))

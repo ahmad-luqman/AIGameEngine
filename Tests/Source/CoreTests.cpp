@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include <Basalt/Core/FileSystem.h>
+#include <Basalt/Core/Platform.h>
 #include <Basalt/Core/FileWatcher.h>
 #include <Basalt/Core/GamepadCodes.h>
 #include <Basalt/Core/Input.h>
@@ -1193,8 +1194,7 @@ TEST_SUITE("Core")
 {
 	TEST_CASE("CommandLine parses flags, values, positionals and errors")
 	{
-		const char* argv[] = { "app", "--project", "Game", "--headless", "scene.bscene", "--frames=10", "--width", "abc", "--screenshot" };
-		const CommandLine commandLine(9, argv, { "project", "frames", "width", "screenshot" });
+		const CommandLine commandLine({ "app", "--project", "Game", "--headless", "scene.bscene", "--frames=10", "--width", "abc", "--screenshot" }, { "project", "frames", "width", "screenshot" });
 		CHECK(commandLine.GetValue("project") == "Game");
 		CHECK(commandLine.HasFlag("headless"));
 		CHECK_FALSE(commandLine.HasFlag("project"));
@@ -1207,10 +1207,25 @@ TEST_SUITE("Core")
 		CHECK(commandLine.GetErrors()[0].find("screenshot") != std::string::npos);
 	}
 
+	TEST_CASE("GetProcessArguments gives the program name first and the arguments as UTF-8")
+	{
+#if defined(_WIN32)
+		// Windows ignores argv for the wide command line: this process's own, whose program is the test executable. The
+		// RunProcess argument test passes non-ASCII arguments through it.
+		const std::vector<std::string> arguments = Platform::GetProcessArguments(0, nullptr);
+		REQUIRE_FALSE(arguments.empty());
+		CHECK(FileSystem::PathFromUtf8(arguments[0]).stem() == "BasaltTests");
+#else
+		// Elsewhere argv is the process's bytes, UTF-8 already; a null entry becomes empty text.
+		const char* argv[] = { "app", "--project", "資産", nullptr };
+		CHECK(Platform::GetProcessArguments(4, argv) == std::vector<std::string>{ "app", "--project", "資産", "" });
+		CHECK(Platform::GetProcessArguments(0, argv).empty());
+#endif
+	}
+
 	TEST_CASE("CommandLine reads finite floats and rejects everything else")
 	{
-		const char* argv[] = { "app", "--a", "0.5", "--b", "2", "--c", "1e-1", "--d", "0.5x", "--e", "nan", "--f", "inf", "--g", "1e60", "--h", " 1", "--i", "" };
-		const CommandLine commandLine(19, argv, { "a", "b", "c", "d", "e", "f", "g", "h", "i" });
+		const CommandLine commandLine({ "app", "--a", "0.5", "--b", "2", "--c", "1e-1", "--d", "0.5x", "--e", "nan", "--f", "inf", "--g", "1e60", "--h", " 1", "--i", "" }, { "a", "b", "c", "d", "e", "f", "g", "h", "i" });
 		CHECK(commandLine.GetFloat("a") == 0.5f);
 		CHECK(commandLine.GetFloat("b") == 2.0f);
 		CHECK(commandLine.GetFloat("c") == doctest::Approx(0.1f));
@@ -1276,7 +1291,8 @@ TEST_SUITE("Core")
 
 	TEST_CASE("RunProcess passes arguments with spaces, quotes and backslashes unchanged")
 	{
-		const std::vector<std::string> arguments = { "two words", "quote\"inside", "trailing\\", "back\\\"slash", "", "plain" };
+		// The CJK ones are outside every single-byte code page: Windows' narrow argv would lose them.
+		const std::vector<std::string> arguments = { "two words", "quote\"inside", "trailing\\", "back\\\"slash", "", "plain", "資産", "日本語 名前" };
 		std::vector<std::string> actions = { "args" };
 		actions.insert(actions.end(), arguments.begin(), arguments.end());
 		const ProcessResult result = RunProcess(ChildProcess(actions));
@@ -1291,12 +1307,13 @@ TEST_SUITE("Core")
 
 	TEST_CASE("RunProcess runs in the requested working directory")
 	{
-		BasaltTest::TempDirectory directory("ProcessWorkingDirectory");
+		// A CJK name, outside every single-byte code page, also checks that the child reports it as UTF-8.
+		BasaltTest::TempDirectory directory("ProcessWorkingDirectory-作業");
 		ProcessSpec spec = ChildProcess({ "cwd" });
 		spec.WorkingDirectory = directory.GetPath();
 		const ProcessResult result = RunProcess(spec);
-		REQUIRE(result.Succeeded());
-		CHECK(std::filesystem::equivalent(std::filesystem::path(result.Output.substr(0, result.Output.find_first_of("\r\n"))), directory.GetPath()));
+		REQUIRE_MESSAGE(result.Succeeded(), result.Output, result.Error);
+		CHECK(std::filesystem::equivalent(FileSystem::PathFromUtf8(result.Output.substr(0, result.Output.find_first_of("\r\n"))), directory.GetPath()));
 
 		spec.WorkingDirectory = directory.GetPath() / "missing";
 		const ProcessResult missing = RunProcess(spec);
