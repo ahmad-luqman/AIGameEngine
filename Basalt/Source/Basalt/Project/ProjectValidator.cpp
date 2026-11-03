@@ -36,7 +36,7 @@ namespace Basalt {
 
 		bool HasAssetExtension(const std::string& value)
 		{
-			return s_AssetExtensions.contains(FileSystem::GetLowercaseExtension(FileSystem::PathFromUtf8(std::string(GetAssetSource(value)))));
+			return s_AssetExtensions.contains(FileSystem::GetLowercaseExtension(FileSystem::PathFromUtf8(GetAssetSource(value))));
 		}
 
 		// Component fields that hold an asset path the game loads: a broken one is an error. A MeshCollider's empty
@@ -108,12 +108,12 @@ namespace Basalt {
 		private:
 			std::string Relative(const std::filesystem::path& path) const
 			{
-				return FileSystem::PathToUtf8(path.lexically_relative(m_Directory).generic_u8string());
+				return FileSystem::PathToGenericUtf8(path.lexically_relative(m_Directory));
 			}
 
 			static std::string Normalized(const std::string& reference)
 			{
-				return FileSystem::PathToUtf8(FileSystem::PathFromUtf8(reference).lexically_normal().generic_u8string());
+				return FileSystem::NormalizeGeneric(reference);
 			}
 
 			void CheckProjectFile()
@@ -353,7 +353,7 @@ namespace Basalt {
 					m_Report.Add(severity, file, fmt::format("{} '{}', which uses backslashes; separate folders with / so it loads on every platform", role, reference));
 					return;
 				}
-				const std::filesystem::path path = FileSystem::PathFromUtf8(std::string(GetAssetSource(reference))).lexically_normal();
+				const std::filesystem::path path = FileSystem::PathFromUtf8(GetAssetSource(reference)).lexically_normal();
 				const auto first = path.begin();
 				if (path.is_absolute() || path.has_root_name() || first == path.end() || *first != Project::AssetDirectoryName)
 				{

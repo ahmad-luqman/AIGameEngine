@@ -85,7 +85,7 @@ namespace {
 int main(int argc, char** argv)
 {
 	Log::Init();
-	// UTF-8 on every platform, like the JSON the values are passed on in.
+	// UTF-8 on every platform, like the JSON parameters and asset paths the values become.
 	const CommandLine commandLine(Platform::GetProcessArguments(argc, argv), { "project", "scene" });
 	Log::SetConsoleLevel(commandLine.HasFlag("verbose") ? LogLevel::Info : LogLevel::Warn);
 	CrashReporter::Install({ "basalt" });

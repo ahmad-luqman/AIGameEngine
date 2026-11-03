@@ -3,8 +3,6 @@
 #include "Basalt/Core/CommandLine.h"
 #include "Basalt/Core/EntryPoint.h"
 
-#include <utility>
-
 namespace Basalt {
 
 	class EditorApplication : public Application
@@ -19,7 +17,7 @@ namespace Basalt {
 	};
 
 	// BasaltEditor [--project <dir>] [--port <n> | --no-server]
-	Application* CreateApplication(ApplicationCommandLineArgs args)
+	Application* CreateApplication(const ApplicationCommandLineArgs& args)
 	{
 		const CommandLine commandLine(args.Arguments, { "project", "port", "gpu" });
 		for (const std::string& error : commandLine.GetErrors())
@@ -39,7 +37,6 @@ namespace Basalt {
 
 		ApplicationSpecification specification;
 		specification.Name = "Basalt Editor";
-		specification.CommandLineArgs = std::move(args);
 		specification.GpuSelector = commandLine.GetValue("gpu").value_or("");
 		specification.EnableImGui = true;
 		specification.StartMaximized = true;

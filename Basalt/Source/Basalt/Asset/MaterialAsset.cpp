@@ -221,7 +221,7 @@ namespace Basalt::MaterialAsset {
 
 	bool IsMaterialFile(std::string_view path)
 	{
-		return FileSystem::GetLowercaseExtension(FileSystem::PathFromUtf8(std::string(path))) == Extension;
+		return FileSystem::GetLowercaseExtension(FileSystem::PathFromUtf8(path)) == Extension;
 	}
 
 	bool IsMaterialKey(std::string_view key)

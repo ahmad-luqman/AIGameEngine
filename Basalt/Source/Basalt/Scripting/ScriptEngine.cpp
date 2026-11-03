@@ -97,12 +97,20 @@ namespace Basalt {
 			return source;
 		}
 
+		// What FindModulePath found: a module's file, nothing, or a Problem (a candidate that could not be inspected:
+		// permissions, I/O), which must not pass for a missing module, or hot reload would keep a changed module's old version.
+		struct ModuleSearch
+		{
+			std::optional<std::string> File;
+			std::string Problem;
+		};
+
 		// The file require loads for a module name: the first of package.path's templates ('?' standing for the name, its
-		// dots made '/') that names a file on disk or in a mounted archive (an exported game's Assets.bpak). package.path is
-		// UTF-8 (OpenSafeLibraries) and read through FileSystem, where Lua's own searcher would fopen narrow text, which
-		// Windows reads in the ANSI code page. outNotFound, when given, gets require's "no file" line for each template that
-		// names nothing.
-		std::optional<std::string> FindModulePath(std::string_view name, std::string_view templates, std::string* outNotFound)
+		// dots made '/') that names a file in a mounted archive (an exported game's Assets.bpak) or on disk, in template
+		// order (as FileSystem reads one path: the archive's copy first). package.path is UTF-8 (OpenSafeLibraries) and read
+		// through FileSystem, where Lua's own searcher would fopen narrow text, which Windows reads in the ANSI code page.
+		// outNotFound, when given, gets require's "no file" line for each template that names nothing. Runs no Lua.
+		ModuleSearch FindModulePath(std::string_view name, std::string_view templates, std::string* outNotFound)
 		{
 			std::string module(name);
 			std::replace(module.begin(), module.end(), '.', '/');
@@ -118,7 +126,10 @@ namespace Basalt {
 				const std::filesystem::path file = FileSystem::PathFromUtf8(candidate);
 				std::error_code error;
 				if (FileSystem::FindMounted(file) || std::filesystem::is_regular_file(file, error))
-					return candidate;
+					return { candidate, {} };
+				// A folder named like the template ("Tool.lua/") is no module either.
+				if (error && error != std::errc::no_such_file_or_directory && error != std::errc::not_a_directory)
+					return { std::nullopt, "cannot inspect '" + candidate + "': " + error.message() };
 				if (outNotFound)
 				{
 					// require puts "\n\t" before each searcher's message; the lines within one are joined the same way.
@@ -127,7 +138,7 @@ namespace Basalt {
 					*outNotFound += "no file '" + candidate + "'";
 				}
 			}
-			return std::nullopt;
+			return {};
 		}
 
 		// The C++ half of SearchModules, kept apart so no C++ object is alive when the searcher raises its error (Lua is built
@@ -137,19 +148,25 @@ namespace Basalt {
 		{
 			try
 			{
-				const std::optional<std::string> file = FindModulePath(name, path, &outText);
-				if (!file)
+				const ModuleSearch search = FindModulePath(name, path, &outText);
+				if (!search.Problem.empty())
+				{
+					outText = "error loading module '" + std::string(name) + "': " + search.Problem;
+					return ModuleOutcome::LoadFailed;
+				}
+				if (!search.File)
 					return ModuleOutcome::NotFound;
+				const std::string& file = *search.File;
 				const auto failed = [&](std::string_view reason) {
-					outText = "error loading module '" + std::string(name) + "' from file '" + *file + "':\n\t" + std::string(reason);
+					outText = "error loading module '" + std::string(name) + "' from file '" + file + "':\n\t" + std::string(reason);
 					return ModuleOutcome::LoadFailed;
 				};
 				std::string readError;
-				const auto source = FileSystem::ReadBinaryFile(FileSystem::PathFromUtf8(*file), &readError);
+				const auto source = FileSystem::ReadBinaryFile(FileSystem::PathFromUtf8(file), &readError);
 				if (!source)
 					return failed(readError);
 				const std::string_view chunk = SkipFilePrefix(std::string_view(reinterpret_cast<const char*>(source->data()), source->size()));
-				const std::string chunkName = "@" + *file;
+				const std::string chunkName = "@" + file;
 				if (luaL_loadbuffer(state, chunk.data(), chunk.size(), chunkName.c_str()) != LUA_OK)
 				{
 					const char* message = lua_tostring(state, -1);
@@ -157,7 +174,7 @@ namespace Basalt {
 					lua_pop(state, 1);
 					return failed(reason);
 				}
-				outText = *file;
+				outText = file;
 				return ModuleOutcome::Loaded;
 			}
 			catch (const std::exception& exception)
@@ -216,13 +233,14 @@ namespace Basalt {
 			lua["dofile"] = sol::lua_nil;
 			lua["loadfile"] = sol::lua_nil;
 
-			// UTF-8, which only SearchModules reads correctly on Windows (Lua's own package.searchpath, if a script calls it,
-			// does not find names outside the ANSI code page there).
+			// UTF-8, which only the engine's searcher (FindModulePath) reads correctly. Lua's own package.searchpath, if a script
+			// calls it, misses modules inside a mounted archive everywhere and, on Windows, names outside the ANSI code page.
 			const std::string base = FileSystem::PathToGenericUtf8(Project::ResolvePath(".").lexically_normal());
 			lua["package"]["path"] = base + "/?.lua;" + base + "/?/init.lua";
 			lua["package"]["cpath"] = "";
-			// package.searchers[2] is Lua's file searcher (after the preload one, before the C ones, which an empty cpath
-			// leaves with nothing to find).
+			// Replaces package.searchers[2], Lua's file searcher (after the preload one, before the C ones, which an empty cpath
+			// leaves with nothing to find). Left behind ours, it would add misleading "no file" lines for names it misreads on
+			// Windows, and FindModulePath must stay the one way from a module name to a file, so hot reload finds the same file.
 			lua_State* state = lua.lua_state();
 			lua_getglobal(state, "package");
 			lua_getfield(state, -1, "searchers");
@@ -314,8 +332,8 @@ namespace Basalt {
 
 		// What require itself uses, kept in the registry when the engine was made (ScriptEngine's constructor), so a script
 		// replacing the global `package` (or its loaded field) hides no module from hot reload: Lua's own loaded-module table
-		// and the path of the original package table, which require reads. nullopt only when a script set that path to
-		// something other than text (require then fails too).
+		// and the path of the original package table, which the engine's searcher reads (its upvalue). nullopt only when a
+		// script set that path to something other than text (require then fails too).
 		std::optional<PackageView> GetPackage(sol::state& lua)
 		{
 			const sol::table registry = lua.registry();
@@ -328,12 +346,15 @@ namespace Basalt {
 		}
 
 		// The file require would load for a module name now (nullopt for the standard libraries and missing modules).
-		std::optional<std::filesystem::path> FindModuleFile(const PackageView& package, const std::string& name)
+		// outProblem keeps the first candidate that could not be inspected (FindModulePath).
+		std::optional<std::filesystem::path> FindModuleFile(const PackageView& package, const std::string& name, std::string& outProblem)
 		{
-			const std::optional<std::string> found = FindModulePath(name, package.Path, nullptr);
-			if (!found)
+			ModuleSearch found = FindModulePath(name, package.Path, nullptr);
+			if (!found.Problem.empty() && outProblem.empty())
+				outProblem = std::move(found.Problem);
+			if (!found.File)
 				return std::nullopt;
-			return FileSystem::PathFromUtf8(*found).lexically_normal();
+			return FileSystem::PathFromUtf8(*found.File).lexically_normal();
 		}
 
 		// Equivalent, not only equal: "require 'util'" finds Util.lua on case-insensitive file systems.
@@ -731,18 +752,26 @@ namespace Basalt {
 				outError = "a script set package.path to something other than text, so changed modules cannot be found: every script loads again";
 				return true;
 			}
+			std::string problem;
 			outFailedRequireChanged = std::any_of(impl.FailedRequires.begin(), impl.FailedRequires.end(), [&](const std::string& name) {
-				const auto file = FindModuleFile(*package, name);
+				const auto file = FindModuleFile(*package, name, problem);
 				return file && IsAnyOf(*file, files);
 			});
+			// Traversed directly: FindModuleFile runs no Lua, so nothing changes the table meanwhile.
 			std::vector<std::string> forget;
 			for (const auto& [key, value] : package->Loaded)
 			{
 				if (!key.is<std::string>())
 					continue;
 				std::string name = key.as<std::string>();
-				if (const auto file = FindModuleFile(*package, name); file && IsAnyOf(*file, files))
+				if (const auto file = FindModuleFile(*package, name, problem); file && IsAnyOf(*file, files))
 					forget.push_back(std::move(name));
+			}
+			// A module whose file could not be inspected may be one that changed.
+			if (!problem.empty())
+			{
+				outError = "changed modules cannot all be found (" + problem + "): every script loads again";
+				return true;
 			}
 			if (forget.empty())
 				return false;

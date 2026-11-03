@@ -42,6 +42,12 @@ namespace Basalt {
 		};
 		using GltfData = std::unique_ptr<cgltf_data, GltfDeleter>;
 
+		// A file's name as UTF-8, for messages.
+		std::string FileName(const std::filesystem::path& path)
+		{
+			return FileSystem::PathToUtf8(path.filename());
+		}
+
 		const char* ResultToString(cgltf_result result)
 		{
 			switch (result)
@@ -187,7 +193,7 @@ namespace Basalt {
 			const std::filesystem::path inside = resolved.lexically_relative(root.lexically_normal());
 			if (hasScheme || rooted || decoded.empty() || inside.empty() || *inside.begin() == "..")
 			{
-				outError = FileSystem::PathToUtf8(gltfPath.filename()) + ": external file '" + decoded + "' is outside the project";
+				outError = FileName(gltfPath) + ": external file '" + decoded + "' is outside the project";
 				return false;
 			}
 			return true;
@@ -207,7 +213,7 @@ namespace Basalt {
 		// files inside the project) and before cgltf_load_buffers.
 		bool CheckBufferSizes(const cgltf_data* data, const std::filesystem::path& path, std::string& outError)
 		{
-			const std::string name = FileSystem::PathToUtf8(path.filename());
+			const std::string name = FileName(path);
 			uint64_t declaredTotal = 0;
 			uint64_t rereadTotal = 0;
 			// Files a buffer already read, by normalized path.
@@ -291,7 +297,7 @@ namespace Basalt {
 			// uses it, as the specification asks; one without a binary chunk reads nothing in place.
 			if (data->file_type == cgltf_file_type_glb && data->bin && data->json_size % 4 != 0)
 			{
-				outError = fmt::format("{}: GLB JSON chunk is {} bytes, not padded to a multiple of 4 as the glTF specification requires (re-export the file)", FileSystem::PathToUtf8(path.filename()), data->json_size);
+				outError = fmt::format("{}: GLB JSON chunk is {} bytes, not padded to a multiple of 4 as the glTF specification requires (re-export the file)", FileName(path), data->json_size);
 				return false;
 			}
 			auto aligned = [](const cgltf_buffer_view* view, cgltf_size offset, cgltf_size size) { return !view || size == 0 || (view->offset + offset) % size == 0; };
@@ -308,7 +314,7 @@ namespace Basalt {
 				}
 				if (!ok)
 				{
-					outError = FileSystem::PathToUtf8(path.filename()) + ": accessor " + std::to_string(i) + " is not aligned to its component size";
+					outError = FileName(path) + ": accessor " + std::to_string(i) + " is not aligned to its component size";
 					return false;
 				}
 			}
@@ -325,7 +331,7 @@ namespace Basalt {
 				const cgltf_buffer_view& view = data->buffer_views[i];
 				if (!view.buffer || !view.buffer->data || view.offset > view.buffer->size || view.size > view.buffer->size - view.offset)
 				{
-					outError = FileSystem::PathToUtf8(path.filename()) + ": buffer view " + std::to_string(i) + (view.buffer && !view.buffer->data ? " uses a buffer without data" : " lies outside its buffer");
+					outError = FileName(path) + ": buffer view " + std::to_string(i) + (view.buffer && !view.buffer->data ? " uses a buffer without data" : " lies outside its buffer");
 					return false;
 				}
 			}
@@ -358,7 +364,7 @@ namespace Basalt {
 				// (found by review).
 				if (accessor.buffer_view && accessor.stride < elementSize)
 				{
-					outError = fmt::format("{}: accessor {} has {}-byte elements, but its buffer view's byteStride is only {}", FileSystem::PathToUtf8(path.filename()), i, elementSize, accessor.stride);
+					outError = fmt::format("{}: accessor {} has {}-byte elements, but its buffer view's byteStride is only {}", FileName(path), i, elementSize, accessor.stride);
 					return false;
 				}
 				bool ok = !accessor.buffer_view || fits(*accessor.buffer_view, accessor.offset, accessor.count, elementSize, accessor.stride);
@@ -372,7 +378,7 @@ namespace Basalt {
 				}
 				if (!ok)
 				{
-					outError = fmt::format("{}: accessor {} ({} elements) does not fit its buffer views", FileSystem::PathToUtf8(path.filename()), i, accessor.count);
+					outError = fmt::format("{}: accessor {} ({} elements) does not fit its buffer views", FileName(path), i, accessor.count);
 					return false;
 				}
 			}
@@ -390,7 +396,7 @@ namespace Basalt {
 			GltfData data(raw);
 			if (result != cgltf_result_success)
 			{
-				outError = FileSystem::PathToUtf8(path.filename()) + ": " + ResultToString(result) + (cache.Error.empty() ? std::string() : " (" + cache.Error + ")");
+				outError = FileName(path) + ": " + ResultToString(result) + (cache.Error.empty() ? std::string() : " (" + cache.Error + ")");
 				return nullptr;
 			}
 
@@ -426,7 +432,7 @@ namespace Basalt {
 			result = cgltf_load_buffers(&options, data.get(), pathString.c_str());
 			if (result != cgltf_result_success)
 			{
-				outError = FileSystem::PathToUtf8(path.filename()) + ": cannot load buffers (" + ResultToString(result) + (cache.Error.empty() ? std::string() : ": " + cache.Error) + ")";
+				outError = FileName(path) + ": cannot load buffers (" + ResultToString(result) + (cache.Error.empty() ? std::string() : ": " + cache.Error) + ")";
 				return nullptr;
 			}
 			if (!CheckAccessorAlignment(data.get(), path, outError) || !CheckBufferViewBounds(data.get(), path, outError) || !CheckAccessorBounds(data.get(), path, outError))
@@ -434,7 +440,7 @@ namespace Basalt {
 			result = cgltf_validate(data.get());
 			if (result != cgltf_result_success)
 			{
-				outError = FileSystem::PathToUtf8(path.filename()) + ": validation failed (" + ResultToString(result) + ")";
+				outError = FileName(path) + ": validation failed (" + ResultToString(result) + ")";
 				return nullptr;
 			}
 			return data;
@@ -787,13 +793,15 @@ namespace Basalt {
 	{
 		GltfFileCache cache;
 		cgltf_options options = MakeGltfOptions(cache);
-		cgltf_data* data = nullptr;
+		cgltf_data* raw = nullptr;
 		const std::string file = FileSystem::PathToUtf8(path);
-		if (const cgltf_result result = cgltf_parse_file(&options, file.c_str(), &data); result != cgltf_result_success)
+		if (const cgltf_result result = cgltf_parse_file(&options, file.c_str(), &raw); result != cgltf_result_success)
 		{
 			outError = fmt::format("not a readable glTF ({}{})", ResultToString(result), cache.Error.empty() ? std::string() : ": " + cache.Error);
 			return std::nullopt;
 		}
+		// Freed however this returns (the lists below allocate).
+		const GltfData data(raw);
 		Contents contents;
 		contents.Materials = data->materials_count;
 		for (cgltf_size i = 0; i < data->images_count; i++)
@@ -806,7 +814,6 @@ namespace Basalt {
 			const cgltf_buffer& buffer = data->buffers[i];
 			contents.BufferUris.push_back(!buffer.uri || IsDataUri(buffer.uri) ? std::string() : std::string(buffer.uri));
 		}
-		cgltf_free(data);
 		return contents;
 	}
 
@@ -1351,7 +1358,7 @@ namespace Basalt {
 
 		if (source->Submeshes.empty())
 		{
-			outError = FileSystem::PathToUtf8(path.filename()) + ": contains no triangle geometry";
+			outError = FileName(path) + ": contains no triangle geometry";
 			return nullptr;
 		}
 

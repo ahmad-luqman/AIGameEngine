@@ -268,7 +268,7 @@ namespace Basalt {
 
 			// The manifest names the library relative to the manifest file itself.
 			const std::filesystem::path manifestDirectory = manifestBase / "vulkan" / "icd.d";
-			const std::string library = FileSystem::PathToUtf8((libraryDirectory / MoltenVKFileName).lexically_relative(manifestDirectory).generic_u8string());
+			const std::string library = FileSystem::PathToGenericUtf8((libraryDirectory / MoltenVKFileName).lexically_relative(manifestDirectory));
 			const std::string manifest = R"({ "file_format_version": "1.0.0", "ICD": { "library_path": ")" + library + R"(", "api_version": "1.3.0", "is_portability_driver": true } })";
 			if (!FileSystem::WriteTextFile(manifestDirectory / "MoltenVK_icd.json", manifest, outError))
 			{

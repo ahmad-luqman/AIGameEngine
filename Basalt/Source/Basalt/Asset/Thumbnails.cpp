@@ -131,21 +131,27 @@ namespace Basalt {
 		// not loaded.
 		void AddModelDependencies(const std::filesystem::path& projectDirectory, const std::string& model, std::set<std::string>& outDependencies)
 		{
-			// An unreadable model has no dependencies to track: making its thumbnail fails and reports why.
+			// An unreadable model has no dependencies to track: making its thumbnail fails and reports why. Traced, not
+			// logged: keys are made every frame the content browser shows the model.
 			std::string error;
 			const std::optional<MeshImporter::Contents> contents = MeshImporter::Inspect(projectDirectory / FileSystem::PathFromUtf8(model), error);
 			if (!contents)
-				return;
-			for (const std::vector<std::string>* uris : { &contents->BufferUris, &contents->ImageUris })
 			{
-				for (const std::string& uri : *uris)
+				BS_CORE_TRACE("Thumbnail dependencies of '{}': {}", model, error);
+				return;
+			}
+			const auto add = [&](const std::vector<std::string>& uris) {
+				for (const std::string& uri : uris)
 				{
+					// Empty: embedded (GetExternalFileKey would read "" as the model's own folder).
 					if (uri.empty())
 						continue;
 					if (auto file = MeshImporter::GetExternalFileKey(model, uri.c_str()))
 						outDependencies.insert(std::move(*file));
 				}
-			}
+			};
+			add(contents->BufferUris);
+			add(contents->ImageUris);
 		}
 
 	}

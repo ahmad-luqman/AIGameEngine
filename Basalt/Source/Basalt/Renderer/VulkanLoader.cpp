@@ -7,6 +7,7 @@
 #include "Basalt/Renderer/VulkanHeaders.h"
 
 #include <GLFW/glfw3.h>
+#include <spdlog/fmt/fmt.h>
 
 #include <cstdlib>
 #include <string>
@@ -36,6 +37,19 @@ namespace Basalt {
 			return reinterpret_cast<void*>(LoadLibraryW(path.c_str()));
 #else
 			return dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
+#endif
+		}
+
+		// Why OpenLibrary just failed.
+		std::string LastLibraryError()
+		{
+#if defined(BS_PLATFORM_WINDOWS)
+			const DWORD code = GetLastError();
+			const std::string message = Platform::GetErrorMessage(code);
+			return message.empty() ? "error " + std::to_string(code) : message;
+#else
+			const char* message = dlerror();
+			return message ? message : "unknown error";
 #endif
 		}
 
@@ -107,15 +121,24 @@ namespace Basalt {
 
 		RegisterBundledDrivers();
 
+		// Libraries that exist but would not load or lack the entry point: a damaged or mismatched loader is not a missing one.
+		std::string problems;
 		for (const std::filesystem::path& candidate : GetCandidatePaths())
 		{
 			void* library = OpenLibrary(candidate);
 			if (!library)
+			{
+				// Read first: checking the file would replace the error code.
+				const std::string reason = LastLibraryError();
+				if (candidate.has_parent_path() && FileSystem::Exists(candidate))
+					problems += fmt::format("\n  '{}': {}", FileSystem::PathToUtf8(candidate), reason);
 				continue;
+			}
 
 			auto getInstanceProcAddr = reinterpret_cast<PFN_vkGetInstanceProcAddr>(GetSymbol(library, "vkGetInstanceProcAddr"));
 			if (!getInstanceProcAddr)
 			{
+				problems += fmt::format("\n  '{}': no vkGetInstanceProcAddr", FileSystem::PathToUtf8(candidate));
 				CloseLibrary(library);
 				continue;
 			}
@@ -128,7 +151,10 @@ namespace Basalt {
 			return true;
 		}
 
-		BS_CORE_ERROR("Vulkan loader library not found. Install a Vulkan runtime (or the Vulkan SDK / MoltenVK on macOS).");
+		if (!problems.empty())
+			BS_CORE_ERROR("Vulkan loader library found but not usable:{}", problems);
+		else
+			BS_CORE_ERROR("Vulkan loader library not found. Install a Vulkan runtime (or the Vulkan SDK / MoltenVK on macOS).");
 		return false;
 	}
 

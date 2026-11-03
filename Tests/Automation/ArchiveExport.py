@@ -5,7 +5,8 @@ textures, audio, particles, required Lua modules). Its scenes are saved again in
 asset references (and the start scene) by UUID, so the archived game must resolve them from the archive's index. Both
 exports run headless for the same frames; their log lines (timestamps stripped, the export path replaced) must match,
 each as often, apart from the archive's mount message, so any loader that bypassed the archive (and logged a failed
-load while the game still exited) shows up as a difference.
+load while the game still exited) shows up as a difference. Script errors fail either run (--fail-on-script-errors),
+so a module that fails to load from both exports alike does not pass unnoticed.
 
 Usage: ArchiveExport.py <basalt CLI> <feature test project>
 """
@@ -63,7 +64,7 @@ def main():
                 fail(f"{form} export: {run.stdout}{run.stderr}")
             if archive != (output / "Assets.bpak").is_file() or archive == (output / "Assets").is_dir():
                 fail(f"{form} export has the wrong layout: {sorted(p.name for p in output.iterdir())}")
-            game = subprocess.run([response["result"]["executable"], "--headless", "--frames", str(FRAMES)], capture_output=True, text=True, errors="replace", timeout=300, env=env, cwd=output)
+            game = subprocess.run([response["result"]["executable"], "--headless", "--frames", str(FRAMES), "--fail-on-script-errors"], capture_output=True, text=True, errors="replace", timeout=300, env=env, cwd=output)
             if game.returncode != 0:
                 fail(f"the {form} export exited with {game.returncode}: {game.stdout}{game.stderr}")
             lines = []

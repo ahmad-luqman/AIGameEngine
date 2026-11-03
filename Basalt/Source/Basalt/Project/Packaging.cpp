@@ -3,6 +3,7 @@
 #include "Basalt/Core/Assert.h"
 #include "Basalt/Core/Base.h"
 #include "Basalt/Core/FileSystem.h"
+#include "Basalt/Core/Platform.h"
 #include "Basalt/Project/Project.h"
 
 #include <spdlog/fmt/fmt.h>
@@ -561,13 +562,8 @@ namespace Basalt {
 		const LPCWSTR versionType = MAKEINTRESOURCEW(16);
 		const auto describe = [](const char* step) {
 			const DWORD code = GetLastError();
-			char* message = nullptr;
-			FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, nullptr, code, 0, reinterpret_cast<char*>(&message), 0, nullptr);
-			std::string text = fmt::format("{} failed (error {}{}{})", step, code, message ? ": " : "", message ? message : "");
-			LocalFree(message);
-			while (!text.empty() && (text.back() == '\n' || text.back() == '\r'))
-				text.pop_back();
-			return text;
+			const std::string message = Platform::GetErrorMessage(code);
+			return fmt::format("{} failed (error {}{}{})", step, code, message.empty() ? "" : ": ", message);
 		};
 		// A virus scanner may still hold the freshly copied file: retry briefly before giving up.
 		std::string reason;

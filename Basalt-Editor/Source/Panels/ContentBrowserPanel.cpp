@@ -196,6 +196,8 @@ return %s
 					}
 					case NewItem::Folder:
 						std::filesystem::create_directories(m_CurrentDirectory / FileSystem::PathFromUtf8(m_NewItemName), error);
+						if (error)
+							m_Context.SetStatus("Cannot create folder '" + m_NewItemName + "': " + error.message(), true);
 						break;
 					case NewItem::None:
 						break;

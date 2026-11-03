@@ -69,9 +69,10 @@ return Player
   body's, combined by the body's modes: one body can have an icy runner and a grippy seat. Characters
   ignore collider materials.
 - Destroying entities from any callback is safe: destruction is deferred until the current update ends.
-- `require("Assets.Scripts.Lib.Util")` loads project modules, named in any UTF-8 text on every platform (the engine
-  replaces Lua's file searcher; `package.searchpath`, Lua's own, does not find names outside the ANSI code page on
-  Windows). `io`, `os`, `dofile` and `loadfile` are not available (scripts cannot touch the file system).
+- `require("Assets.Scripts.Lib.Util")` loads project modules; module names may use any UTF-8 characters on every
+  platform. `package.searchpath` is Lua's own and does not follow the engine's rules: it misses modules inside an
+  exported game's archive and, on Windows, names outside the system code page. `io`, `os`, `dofile` and `loadfile` are
+  not available (scripts cannot touch the file system).
 
 ### Hot reload
 

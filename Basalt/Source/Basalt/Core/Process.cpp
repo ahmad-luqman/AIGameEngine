@@ -141,14 +141,8 @@ namespace Basalt {
 
 		std::string LastErrorMessage(DWORD code)
 		{
-			char* buffer = nullptr;
-			const DWORD length = FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, nullptr, code, 0, reinterpret_cast<char*>(&buffer), 0, nullptr);
-			std::string message = length && buffer ? std::string(buffer, length) : "error " + std::to_string(code);
-			if (buffer)
-				LocalFree(buffer);
-			while (!message.empty() && (message.back() == '\n' || message.back() == '\r' || message.back() == ' '))
-				message.pop_back();
-			return message;
+			std::string message = Platform::GetErrorMessage(code);
+			return message.empty() ? "error " + std::to_string(code) : message;
 		}
 
 		// An unhandled exception ends a process with its NTSTATUS code: error severity (0xC...) for access

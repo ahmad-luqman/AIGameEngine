@@ -31,6 +31,10 @@
 #include <tuple>
 #include <vector>
 
+#if !defined(_WIN32)
+	#include <unistd.h>
+#endif
+
 using namespace Basalt;
 
 namespace {
@@ -2767,6 +2771,129 @@ TEST_SUITE("Scripting")
 		CHECK(scene.GetScriptEngine()->GetErrors().empty());
 		scene.OnRuntimeStop();
 	}
+
+	// CJK names are outside Windows CI's ANSI code page: hot reload finds the module's file only by its UTF-8 name.
+	TEST_CASE("Hot reload of a module named in CJK characters reloads the scripts that require it")
+	{
+		BasaltTest::TempProject project("ScriptHotReloadCJK-資産");
+		// Broken at first: the class fails to load, and the failed require is what a fixed module must retry.
+		const std::string module = project.WriteFile("Assets/Scripts/調整.lua", "return = broken");
+		const std::string script = project.WriteFile("Assets/Scripts/利用者.lua", R"(
+			local Tuning = require("Assets.Scripts.調整")
+			local User = {}
+			function User:OnCreate() self.Total = 0 end
+			function User:OnUpdate(dt) self.Total = self.Total + Tuning.Step end
+			return User
+		)");
+		Scene scene;
+		Entity entity = AddScripted(scene, "User", script);
+		scene.OnRuntimeStart();
+		REQUIRE_FALSE(scene.GetScriptEngine()->GetErrors().empty());
+		CHECK(Field(scene, entity, "Total").is_null());
+
+		project.WriteFile(module, "return { Step = 1 }");
+		CHECK(scene.GetScriptEngine()->ReloadScripts({ module }).Reloaded == std::vector<std::string>{ script });
+		scene.OnUpdate(Step);
+		REQUIRE(Field(scene, entity, "Total") == 1);
+		project.WriteFile(module, "return { Step = 100 }");
+		CHECK(scene.GetScriptEngine()->ReloadScripts({ module }).Reloaded == std::vector<std::string>{ script });
+		scene.OnUpdate(Step);
+		CHECK(Field(scene, entity, "Total") == 101);
+		scene.OnRuntimeStop();
+	}
+
+	// Regression: on Windows a name that is not UTF-8 made the module lookup throw, and every later hot reload stopped
+	// part way, keeping the old version of every changed module.
+	TEST_CASE("A failed require of a name that is not UTF-8 leaves hot reload working")
+	{
+		BasaltTest::TempProject project("ScriptHotReloadInvalidName");
+		const std::string module = project.WriteFile("Assets/Scripts/Tuning.lua", "return { Step = 1 }");
+		const std::string script = project.WriteFile("Assets/Scripts/User.lua", R"(
+			local Tuning = require("Assets.Scripts.Tuning")
+			local ok, message = pcall(require, "Assets.Scripts.Caf\xE9")
+			Missing = message
+			local User = {}
+			function User:OnCreate() self.Total = 0 end
+			function User:OnUpdate(dt) self.Total = self.Total + Tuning.Step end
+			return User
+		)");
+		Scene scene;
+		Entity entity = AddScripted(scene, "User", script);
+		scene.OnRuntimeStart();
+		scene.OnUpdate(Step);
+		REQUIRE(Field(scene, entity, "Total") == 1);
+		const std::string missing = BasaltTest::Eval(scene, "Missing");
+		CHECK_MESSAGE(missing.find("not found") != std::string::npos, missing);
+		CHECK_MESSAGE(missing.find("no file '") != std::string::npos, missing);
+
+		project.WriteFile(module, "return { Step = 100 }");
+		CHECK(scene.GetScriptEngine()->ReloadScripts({ module }).Reloaded == std::vector<std::string>{ script });
+		scene.OnUpdate(Step);
+		CHECK(Field(scene, entity, "Total") == 101);
+		CHECK(scene.GetScriptEngine()->GetErrors().empty());
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("require reports missing modules and load errors by UTF-8 file name, and skips folders named like modules")
+	{
+		BasaltTest::TempProject project("ScriptRequireDisk-資産");
+		project.WriteFile("Assets/Scripts/壊れ.lua", "return {");
+		// A folder named like the "?.lua" template is no module: the "?/init.lua" one is found next.
+		std::error_code error;
+		std::filesystem::create_directories(project.GetDirectory() / FileSystem::PathFromUtf8("Assets/Scripts/道具.lua"), error);
+		REQUIRE_FALSE(error);
+		project.WriteFile("Assets/Scripts/道具/init.lua", "return 'init'");
+		Scene scene;
+		scene.OnRuntimeStart();
+
+		const std::string missing = BasaltTest::Eval(scene, "local ok, message = pcall(require, 'Assets.Scripts.無い') return message");
+		CHECK_MESSAGE(missing.find("module 'Assets.Scripts.無い' not found") != std::string::npos, missing);
+		CHECK_MESSAGE(missing.find("/Assets/Scripts/無い.lua'") != std::string::npos, missing);
+		CHECK_MESSAGE(missing.find("/Assets/Scripts/無い/init.lua'") != std::string::npos, missing);
+		CHECK_MESSAGE(missing.find("\n\t\n") == std::string::npos, missing);
+		const std::string broken = BasaltTest::Eval(scene, "local ok, message = pcall(require, 'Assets.Scripts.壊れ') return message");
+		CHECK_MESSAGE(broken.find("error loading module 'Assets.Scripts.壊れ' from file '") != std::string::npos, broken);
+		CHECK_MESSAGE(broken.find("/Assets/Scripts/壊れ.lua'") != std::string::npos, broken);
+		CHECK(BasaltTest::Eval(scene, "return require('Assets.Scripts.道具')") == "init");
+#if !defined(_WIN32)
+		// A file that exists but cannot be read is a load error, not a missing module (root reads it anyway).
+		if (geteuid() != 0)
+		{
+			const std::filesystem::path locked = project.GetDirectory() / FileSystem::PathFromUtf8(project.WriteFile("Assets/Scripts/鍵.lua", "return 1"));
+			std::filesystem::permissions(locked, std::filesystem::perms::none, error);
+			REQUIRE_FALSE(error);
+			const std::string unreadable = BasaltTest::Eval(scene, "local ok, message = pcall(require, 'Assets.Scripts.鍵') return message");
+			std::filesystem::permissions(locked, std::filesystem::perms::owner_all, error);
+			CHECK_MESSAGE(unreadable.find("error loading module 'Assets.Scripts.鍵' from file '") != std::string::npos, unreadable);
+		}
+#endif
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("require and hot reload report a package.path that is not text")
+	{
+		BasaltTest::TempProject project("ScriptPackagePathNotText");
+		const std::string script = project.WriteFile("Assets/Scripts/User.lua", R"(
+			local User = {}
+			function User:OnCreate() self.Total = 0 end
+			function User:OnUpdate(dt) self.Total = self.Total + 1 end
+			return User
+		)");
+		Scene scene;
+		Entity entity = AddScripted(scene, "User", script);
+		scene.OnRuntimeStart();
+		const std::string message = BasaltTest::Eval(scene, "package.path = {} local ok, message = pcall(require, 'Assets.Scripts.Other') return message");
+		CHECK_MESSAGE(message.find("'package.path' must be a string") != std::string::npos, message);
+
+		// Changed modules cannot be found: every script loads again, and the problem is reported once.
+		CHECK(scene.GetScriptEngine()->ReloadScripts({ script }).Reloaded == std::vector<std::string>{ script });
+		scene.GetScriptEngine()->ReloadScripts({ script });
+		const auto& errors = scene.GetScriptEngine()->GetErrors();
+		CHECK(std::count_if(errors.begin(), errors.end(), [](const std::string& error) { return error.find("package.path to something other than text") != std::string::npos; }) == 1);
+		scene.OnUpdate(Step);
+		CHECK(Field(scene, entity, "Total") == 1);
+		scene.OnRuntimeStop();
+	}
 }
 
 TEST_SUITE("Scripting")
@@ -3148,8 +3275,10 @@ TEST_SUITE("Scripting")
 		scene.OnRuntimeStart();
 		scene.OnUpdate(Step);
 		REQUIRE(Field(scene, entity, "Total") == 1);
-		// Lua 5.4's loader data (the file name) is passed through.
-		CHECK(BasaltTest::Eval(scene, "type(LoadedFrom)") == "string");
+		// Lua 5.4's loader data (the file name, UTF-8) is passed through.
+		const std::string loadedFrom = BasaltTest::Eval(scene, "LoadedFrom");
+		std::error_code error;
+		CHECK_MESSAGE(std::filesystem::equivalent(FileSystem::PathFromUtf8(loadedFrom), project.GetDirectory() / "Assets/Scripts/Tuning.lua", error), loadedFrom);
 		project.WriteFile(tuning, "return { Step = 100 }");
 		CHECK(scene.GetScriptEngine()->ReloadScripts({ tuning }).Reloaded == std::vector<std::string>{ script });
 		scene.OnUpdate(Step);
