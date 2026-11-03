@@ -11,10 +11,13 @@ description: >-
 # attempt itself; Homebrew, the Vulkan SDK install and the dependency fetch have only the caller's limit.
 inputs:
   apt-packages:
-    description: Ubuntu packages to install besides the base set every Linux build needs (e.g. clang), separated by spaces or newlines.
+    description: >-
+      Ubuntu packages to install besides the base set every Linux build needs (e.g. clang), separated by spaces or
+      newlines; ignored on other OSes.
     default: ""
   brew-packages:
-    description: Homebrew packages to install besides ninja and shaderc, separated by spaces or newlines.
+    description: >-
+      Homebrew packages to install besides ninja and shaderc, separated by spaces or newlines; ignored on other OSes.
     default: ""
 
 runs:
@@ -90,7 +93,7 @@ runs:
         path: _deps
         key: ${{ steps.deps.outputs.cache-primary-key }}
 
-    # printf, not echo: the Windows workspace path holds backslash sequences such as \a.
+    # printf writes the path (D:\a\... on Windows) as data, whatever the shell's echo settings.
     - name: Use the dependency sources
       shell: bash
       run: printf 'BASALT_DEPS_SOURCE_DIR=%s/_deps\n' "$GITHUB_WORKSPACE" >> "$GITHUB_ENV"

@@ -2,12 +2,13 @@ name: Fuzz (nightly)
 
 # Longer fuzzing than the per-push CI job, one job per target so the wall-clock time does not grow with the number of
 # targets (at 20 minutes per target, the old single job outlasted its 150-minute timeout). One job builds every target and
-# the per-target jobs download them, so they need no compiler, dependency sources or compiler cache; they run on the
-# same image, and the targets link everything but the C and C++ runtimes statically. The matrix, the build and the
-# tarball all take their targets from scripts/fuzz.sh --list. Each target's grown corpus is cached between nights so
-# each run starts from everything found before. After changing this workflow, .github/actions/setup-basalt or the
-# FUZZ_MODE paths of scripts/fuzz.sh, start it by hand on the branch (gh workflow run fuzz-nightly.yml --ref <branch>
-# -f seconds=60): nothing else runs it before the next night.
+# the per-target jobs download them, so they need no compiler, dependency sources or compiler cache. They run on the same
+# image, and the targets link everything but the C and C++ runtimes statically (the Vulkan loader and GLFW's window
+# system libraries are opened at run time, which the targets never reach). The matrix and the tarball take their targets
+# from scripts/fuzz.sh --list; the build builds the same ones (fuzz.sh without a filter). Each target's grown corpus is
+# cached between nights. After changing this workflow, .github/actions/setup-basalt or the FUZZ_MODE paths of
+# scripts/fuzz.sh, start it by hand on the branch (gh workflow run fuzz-nightly.yml --ref <branch> -f seconds=60):
+# nothing else runs it before the next night.
 on:
   schedule:
     - cron: "17 3 * * *"
@@ -15,6 +16,7 @@ on:
     inputs:
       seconds:
         description: Seconds per fuzz target (at most 2400, so a run fits the Fuzz step's 60-minute timeout)
+        required: true
         default: "1200"
 
 env:
@@ -27,8 +29,8 @@ defaults:
 
 jobs:
   # The build compiles through ccache, restoring (never saving) the CI fuzz job's cache. Its dependency sources come from
-  # CI's dependency-source cache like any CI job's (main's entry for the scheduled run, or the branch's own; fetched and
-  # saved on a miss).
+  # CI's dependency-source cache like any CI job's (main's entry for the scheduled run, or the branch's own; a pull
+  # request's entries are not visible to it; fetched and saved on a miss).
   build:
     name: build
     runs-on: ubuntu-24.04
@@ -80,22 +82,18 @@ jobs:
         run: scripts/ci-check-caches.sh build-fuzz
 
       # Artifacts lose file modes, so the executables travel in a tarball. Debug builds with ASan, UBSan and libFuzzer's
-      # coverage instrumentation are large (about 600 MB packed); the artifact stores the zstd tarball as it is.
+      # coverage instrumentation are large (about 600 MB packed); the artifact stores the zstd tarball as it is. The list
+      # step checked the list, and tar fails on a missing file or an empty list.
       - name: Pack the targets
         env:
           TARGETS: ${{ steps.list.outputs.targets }}
         run: |
-          jq -er '.[]' <<< "$TARGETS" > "$RUNNER_TEMP/targets.txt"
-          mapfile -t targets < "$RUNNER_TEMP/targets.txt"
+          mapfile -t targets < <(jq -r '.[]' <<< "$TARGETS")
           tar -C build-fuzz/bin -I 'zstd -T0 -3' -cf "$RUNNER_TEMP/fuzz-targets.tar.zst" "${targets[@]}"
-          packed="$(tar -I zstd -tf "$RUNNER_TEMP/fuzz-targets.tar.zst" | wc -l)"
-          if [[ "$packed" -ne ${#targets[@]} ]]; then
-            echo "::error::packed $packed of ${#targets[@]} targets"
-            exit 1
-          fi
           ls -l "$RUNNER_TEMP/fuzz-targets.tar.zst"
 
-      # Kept three days, so failed fuzz jobs can be re-run the next day too. A re-run of every job uploads it again.
+      # Kept three days: long enough to re-run failed fuzz jobs the next day, short enough not to hoard 600 MB artifacts.
+      # A re-run of every job uploads it again.
       - uses: actions/upload-artifact@v4
         with:
           name: fuzz-targets
@@ -127,10 +125,11 @@ jobs:
           mkdir -p build-fuzz/bin
           tar -C build-fuzz/bin -I zstd -xf "$RUNNER_TEMP/fuzz-targets.tar.zst"
 
-      # The sanitizers print source locations only through llvm-symbolizer; without it a crash report is a list of raw
-      # addresses, and nothing fails. The image ships LLVM (the version-suffixed name is enough); otherwise apt installs
-      # it. The step resolves this target's entry point to a source line, so a symbolizer that cannot read the binary
-      # fails here.
+      # Sanitizer reports show source locations only through an llvm-symbolizer that can read the target, and find one by
+      # their own rules (Ubuntu's runtime looks for its own version's name); without one a report is raw addresses and
+      # nothing fails. This step resolves the target's entry point to a source line, so a symbolizer that cannot read it
+      # fails here, and names it explicitly. The image ships LLVM under version-suffixed names only (the newest is
+      # taken); otherwise apt installs it.
       - name: Find llvm-symbolizer
         env:
           TARGET: ${{ matrix.target }}
@@ -143,13 +142,18 @@ jobs:
           fi
           if [[ -z "$symbolizer" ]]; then
             scripts/ci-apt-install.sh llvm
-            symbolizer="$(command -v llvm-symbolizer)"
+            symbolizer="$(command -v llvm-symbolizer)" || { echo "::error::installing llvm put no llvm-symbolizer on PATH"; exit 1; }
           fi
           "$symbolizer" --version | sed -n '1,2p'
-          address="$(nm "build-fuzz/bin/$TARGET" | awk '$3 == "LLVMFuzzerTestOneInput" { print $1 }')"
+          # awk reads all of nm's output (an early exit would fail the pipeline with SIGPIPE).
+          read -r count address < <(nm "build-fuzz/bin/$TARGET" | awk '$3 == "LLVMFuzzerTestOneInput" { n++; a = $1 } END { print n + 0, a }')
+          if [[ "$count" -ne 1 ]]; then
+            echo "::error::nm found $count definitions of LLVMFuzzerTestOneInput in build-fuzz/bin/$TARGET (expected 1)"
+            exit 1
+          fi
           location="$("$symbolizer" --obj="build-fuzz/bin/$TARGET" "0x$address")"
           echo "$location"
-          if [[ "$location" != *"Tests/Fuzz/$TARGET.cpp:"[0-9]* ]]; then
+          if [[ "$location" != *"Tests/Fuzz/$TARGET.cpp:"[1-9]* ]]; then
             echo "::error::$symbolizer cannot resolve $TARGET's entry point to its source"
             exit 1
           fi
@@ -161,6 +165,7 @@ jobs:
       # Restored and saved separately so the corpus grown before a crash or a Fuzz step timeout is kept too
       # (actions/cache's own save is a post step that runs only when every earlier step succeeded).
       - name: Restore corpus
+        id: corpus
         uses: actions/cache/restore@v4
         with:
           path: build-fuzz/corpus/${{ matrix.target }}
@@ -174,19 +179,21 @@ jobs:
           TARGET: ${{ matrix.target }}
         run: FUZZ_MODE=run scripts/fuzz.sh "$SECONDS_PER_TARGET" "$TARGET"
 
+      # Only after a restore: an earlier failure leaves no corpus to save.
       - name: Save corpus
-        if: always()
+        if: always() && steps.corpus.outcome == 'success'
         uses: actions/cache/save@v4
         with:
           path: build-fuzz/corpus/${{ matrix.target }}
           key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
 
-      # Crash inputs and the full fuzzer log (a target can fail without writing a crash input).
+      # Crash inputs and the full fuzzer log (a target can fail without writing a crash input). A re-run attempt gets an
+      # artifact of its own, keeping the earlier attempt's inputs.
       - name: Upload crash inputs
         if: failure() || cancelled()
         uses: actions/upload-artifact@v4
         with:
-          name: fuzz-crashes-${{ matrix.target }}
+          name: fuzz-crashes-${{ matrix.target }}${{ github.run_attempt > 1 && format('-{0}', github.run_attempt) || '' }}
           path: |
             build-fuzz/crashes
             build-fuzz/logs
