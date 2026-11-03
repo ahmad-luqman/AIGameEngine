@@ -236,7 +236,8 @@ scripts/test.sh             # build + ctest (unit tests, format check, ...)
   (`cmake/DependencySources.cmake`): a directory that `scripts/ci-fetch-deps.sh` fills and stamps with the hash of
   `cmake/Dependencies.cmake`. A directory without that stamp (another tree's `build/_deps` included) is ignored; locally,
   one fetch into a shared directory lets worktrees reuse the sources. `scripts/ci-check-caches.sh` fails a CI job whose
-  build tree does not use either cache.
+  build tree does not use either cache. Every workflow sets up its runners through `.github/actions/setup-basalt`
+  (packages, Windows toolchain, dependency sources); see `Docs/CI.md`.
 - **macOS + Homebrew:** Homebrew's validation layer manifest names its library without a path, so non-Dist
   builds point `VK_ADD_LAYER_PATH` at a copy with the absolute path (`Renderer/ValidationLayerManifest`; prefixes
   `$HOMEBREW_PREFIX`, `/opt/homebrew`, `/usr/local`); no
@@ -342,6 +343,7 @@ Other rules:
 
 ## Documentation
 
+- CI: `Docs/CI.md` (the workflows and their shared setup action, caches, what CI does not check).
 - Shipping: `Docs/Shipping.md` (project identity, export and platform packages, signing, the release pipeline).
 - Rendering: `Docs/Rendering.md` (clustered lighting, FSR 1 settings, diagnostics and GPU tests).
 - Lua API: `Docs/ScriptingAPI.md` and the LuaLS definitions `Docs/basalt.d.lua` (update both with every binding change;

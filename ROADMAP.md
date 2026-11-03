@@ -37,6 +37,15 @@ NVIDIA laptop GPU and Intel integrated graphics on Windows (steps 1–3). Remain
 that laptop, an AMD GPU (e.g. AWS g4ad), a desktop NVIDIA GPU, and native Linux for all of them. Optionally
 add an on-demand self-hosted GPU runner later.
 
+### glTF primitives that share index accessors — S (if the nightly fuzz run times out)
+Primitives may share accessors (multi-material exports do), and the importer processes everything each primitive uses
+again, at about 7 µs per index in the fuzz build (Debug with ASan, UBSan and coverage; Release is many times faster).
+GLBs of 14–15 KB whose 100–250 primitives share one 16×16 grid's indices take 2.7–5 s per run there; with libFuzzer's
+leak-check second run and a slower runner, that can reach the nightly's 10 s timeout. `scripts/fuzz.sh` sets no
+`-max_len`, so the largest seed (`MixamoRig.gltf`, 12.3 KB) sets it. Fixes: give primitives that use the same accessors
+the earlier submesh's ranges with their own material, or compact each primitive to the vertices its indices use before
+generating normals and tangents. Bounded and not seen on CI yet; see `Docs/CI.md` for what CI fuzzes.
+
 ---
 
 ## P1 — Core engine features
