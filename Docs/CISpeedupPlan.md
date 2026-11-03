@@ -55,8 +55,8 @@ Target after sessions 1–3: about 15 minutes per run.
 | 1 | Compiler cache, one dependency-source cache, merge ubuntu/Release into lavapipe | Yes (every build) | Merged (#56) |
 | 2 | Shard clang-tidy; run fuzz targets concurrently | Yes (two longest jobs) | Merged (#57) |
 | 3 | Parallel ctest, fast `ReleasePackaging`, shard `BasaltTests` | Yes (test steps) | Merged (#59) |
-| 4 | Remove redundant jobs; early format job; coverage on `main` only | Runner minutes, faster feedback | In review (#62) |
-| 5 | Shared setup action; nightly fuzz builds once | Maintenance | Todo |
+| 4 | Remove redundant jobs; early format job; coverage on `main` only | Runner minutes, faster feedback | Merged (#62) |
+| 5 | Shared setup action; nightly fuzz builds once | Maintenance | Done (this PR deletes the plan) |
 | — | Nightly fuzz findings (FuzzGltf, FuzzCommand) | Separate bug-fix PRs | FuzzCommand merged (#58); FuzzGltf merged (#61) |
 
 ### Session 1 — compiler cache and dependency cache
@@ -370,3 +370,25 @@ Record per session: PR number, measured job times after merge, anything that dev
     (Debug / Release); format 11 s. Second run (41323447289, dfa7a49, green; the commit changed
     `cmake/Dependencies.cmake`, which keys the dependency-source cache, so every job fetched the sources, 88-117 s): clang-tidy 7.5-10.5 min, fuzz 7.7, lavapipe
     5.3 / 7.0, Windows 5.7 / 5.1, macOS 4.0 / 3.1, ASan 4.7; format 9 s.
+  - First run on `main` (41497065950, 29113cf, the merge of #62; dependency sources fetched again in every job because the
+    PR changed `cmake/Dependencies.cmake`): 10.5 min wall, set by clang-tidy shard 2 (10.5 min); coverage 4.4 min (its
+    Coverage step 108 s, after a 113 s fetch), fuzz 7.6, ASan 7.5, lavapipe 7.4 / 7.0, Windows 7.1 / 6.2 (Debug / Release),
+    macOS 4.7 / 3.6, format 15 s.
+- 2026-11-03, session 5, deviations from the plan:
+  - `.github/actions/setup-basalt` also holds the dependency-source restore, fetch and save (repeated 8 times before) and
+    exports `BASALT_DEPS_SOURCE_DIR`, so the workflows no longer set it; `dependency-sources: false` skips it. Inputs are
+    `apt-packages` and `brew-packages` (extras over the base sets), not a Vulkan SDK switch: every Windows job needs it.
+    The fetch now runs before the compiler cache step installs the launcher, so it clears `CMAKE_<LANG>_COMPILER_LAUNCHER`
+    (CMake's configure probes compile through it). Composite steps cannot set `timeout-minutes`, so each caller puts
+    30 minutes on its setup step (it was 10-20 on the install step alone). The nightly fuzz build now installs
+    `libdbus-1-dev` like every other Linux job, so its fetch on a cache miss is complete and it fetches and saves like CI.
+  - `release.yml` also runs on pull requests that change the action or `scripts/ci-*.sh`.
+  - Nightly fuzzing: `scripts/fuzz.sh` gained `FUZZ_MODE` (`build`, `run`, default `build-and-run`); one `build` job
+    (which also lists the targets, replacing the `targets` job, and checks the manual `seconds` input once) packs
+    `build-fuzz/bin` into a zstd tarball (artifacts lose file modes), and each target's job unpacks it and runs
+    `FUZZ_MODE=run`, which checks up front that every selected target is there and executable. Those jobs install
+    nothing but, when the image lacks it, LLVM for `llvm-symbolizer` (sanitizer reports have no source locations without
+    it).
+  - Not done: `paths-ignore` for files no test reads (left out of the session's scope; every push still runs all of CI).
+  - The plan's durable notes moved to `Docs/CI.md` (workflows, caches, what CI does not check, pitfalls) and
+    `ROADMAP.md` (the FuzzGltf accessor-sharing residual).
