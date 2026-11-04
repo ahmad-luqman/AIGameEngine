@@ -5,6 +5,8 @@
 #include "Basalt/Core/Base.h"
 #include "Basalt/Scene/Entity.h"
 
+#include <filesystem>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -95,12 +97,23 @@ namespace Basalt {
 		// Imports a static entity hierarchy or a single Animator root for a skinned/animated model.
 		static Entity ImportModel(Scene& scene, const std::string& key, Entity parent, std::string& outError);
 
-		// Project-relative paths of every file under the asset directory with one of the extensions
-		// (lower-case, including the dot). Metadata is excluded. On an incomplete scan, returns the files found
-		// so far and sets *outError when provided; successful scans clear it. *outSkipped, when provided, gets the entries
-		// of those types left out because no key can hold their names (FileSystem::SkipNonUtf8Entry), sorted, with every
-		// such folder, since it may hold any type.
-		static std::vector<std::string> ListAssets(const std::vector<std::string>& extensions = {}, std::string* outError = nullptr, std::vector<std::string>* outSkipped = nullptr);
+		// Project-relative paths of every file under the asset directory that a key can name, with one of the extensions
+		// (lower-case, including the dot). Metadata is excluded. On an incomplete scan, returns the files found so far and sets
+		// *outError when provided; successful scans clear it. *outSkipped, when provided, is replaced by what those types
+		// left out for names no key can hold, as FileSystem::DescribePath text, with every such folder, since it may hold any
+		// type.
+		static std::vector<std::string> ListAssets(const std::vector<std::string>& extensions = {}, std::string* outError = nullptr, std::set<std::string>* outSkipped = nullptr);
+
+		// One folder of the active project for browsing, as FileSystem::DescribePath text in Skipped.
+		struct FolderListing
+		{
+			// Folders first, each kind by name. Metadata is excluded.
+			std::vector<std::filesystem::directory_entry> Entries;
+			std::set<std::string> Skipped;
+			// Set when the folder could not be listed completely (Entries is then partial).
+			std::string Error;
+		};
+		static FolderListing ListFolder(const std::filesystem::path& folder);
 		static bool IsMeshFile(const std::string& path);
 		static bool IsTextureFile(const std::string& path);
 	};

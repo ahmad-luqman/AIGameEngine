@@ -18,6 +18,7 @@
 #include <span>
 #include <string_view>
 #include <system_error>
+#include <set>
 #include <unordered_set>
 
 namespace Basalt {
@@ -306,8 +307,9 @@ namespace Basalt {
 			return text;
 		}
 
-		// Packs the project's Assets into archive: every file except the .meta sidecars, whose UUIDs go into the index, and
-		// (unless keepOriginals) the originals of compressed textures nothing else mentions.
+		// Packs the project's Assets into archive: every file except the .meta sidecars, whose UUIDs go into the index,
+		// entries no key can name (reported in outWarnings), and (unless keepOriginals) the originals of compressed textures
+		// nothing else mentions.
 		// Assets whose sidecar is broken go in without a UUID, so references to them will not resolve: outWarnings says so
 		// (project.validate reports them as errors, so only an export with validation off gets here).
 		std::optional<WrittenArchive> WriteAssetArchive(const Project& project, const std::filesystem::path& archive, bool keepOriginals, std::vector<std::string>& outWarnings, std::string& outError)
@@ -323,7 +325,7 @@ namespace Basalt {
 				outWarnings.push_back(std::move(warning));
 			}
 			std::vector<ArchiveFile> files;
-			std::vector<std::string> skipped;
+			std::set<std::string> skipped;
 			const std::filesystem::path assets = project.GetDirectory() / Project::AssetDirectoryName;
 			std::error_code error;
 			for (auto it = std::filesystem::recursive_directory_iterator(assets, error); !error && it != std::filesystem::recursive_directory_iterator(); it.increment(error))
@@ -335,7 +337,8 @@ namespace Basalt {
 					outError = "cannot inspect '" + key + "': " + FileSystem::DescribeError(error);
 					return std::nullopt;
 				};
-				// The iterator does not enter linked folders (a folder export's copy does): refuse rather than ship a game
+				// The iterator does not enter linked folders (a folder export's copy does): unless the link's own name is one no
+				// key can hold (skipped above), refuse rather than ship a game
 				// that silently lacks their files. Linked files are read through, as the folder export copies them, and a
 				// link to nothing is refused rather than left out.
 				const bool link = it->is_symlink(error);
@@ -374,10 +377,14 @@ namespace Basalt {
 				outError = "cannot list '" + FileSystem::PathToUtf8(assets) + "': " + FileSystem::DescribeError(error);
 				return std::nullopt;
 			}
-			// Nothing in the game can name them, so the game does not change.
-			std::sort(skipped.begin(), skipped.end());
+			// No scene, prefab or material can name them.
 			for (const std::string& entry : skipped)
 				outWarnings.push_back("'" + entry + "' is left out of the archive: " + FileSystem::NonUtf8NameProblem);
+#if !defined(BS_PLATFORM_WINDOWS)
+			// Here raw bytes still open such a file from a folder, so a game could depend on one without any document saying so.
+			if (!skipped.empty())
+				outWarnings.emplace_back("a Lua string or glTF URI that spells such a name in raw bytes works from a folder, but will not find the file in the archive");
+#endif
 			WrittenArchive written;
 			if (!keepOriginals)
 				written.Omitted = FindReplacedOriginals(project, files, outWarnings);

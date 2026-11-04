@@ -567,7 +567,7 @@ Imports a static model as an entity hierarchy, or a skinned/animated model as on
 
 ### `asset.list`
 
-Lists project asset files, optionally filtered by extensions (e.g. ['.lua']). Entries with names that are not valid Unicode have no key: they are left out and listed in 'warnings' (a folder with everything in it).
+Lists project asset files, optionally filtered by extensions (e.g. ['.lua']). An incomplete scan lists what it found, with the reason in 'warnings'. Entries with names that are not valid Unicode have no key: they are left out and listed in 'warnings' (files of the requested types, and every such folder, since it may hold any type).
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -597,7 +597,7 @@ Lists project asset files, optionally filtered by extensions (e.g. ['.lua']). En
 
 ### `asset.move`
 
-Moves one asset file and its .meta sidecar within Assets/. 'to' is the complete destination path. Creates metadata if needed, migrates scene, prefab and material-file references to this asset to UUIDs and updates the open edit scene and the project's start scene and icon. A scene or prefab that cannot be read stops the move (it might reference the asset); a material file that is not valid JSON, and a document whose name is not valid Unicode, are skipped with a warning. Does not rewrite paths inside scripts or glTF files. Stop Play or Simulate first.
+Moves one asset file and its .meta sidecar within Assets/. 'to' is the complete destination path. Creates metadata if needed, migrates scene, prefab and material-file references to this asset to UUIDs and updates the open edit scene and the project's start scene and icon. A scene or prefab that cannot be read stops the move (it might reference the asset); a material file that is not valid JSON, and a document or folder whose name is not valid Unicode, are skipped with a warning. Does not rewrite paths inside scripts or glTF files. Stop Play or Simulate first.
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -731,7 +731,7 @@ Reloads the asset files changed on disk since changes were last reported (by an 
 
 ### `asset.rename`
 
-Moves one asset file and its .meta sidecar within Assets/. 'to' is the complete destination path. Creates metadata if needed, migrates scene, prefab and material-file references to this asset to UUIDs and updates the open edit scene and the project's start scene and icon. A scene or prefab that cannot be read stops the move (it might reference the asset); a material file that is not valid JSON, and a document whose name is not valid Unicode, are skipped with a warning. Does not rewrite paths inside scripts or glTF files. Stop Play or Simulate first.
+Moves one asset file and its .meta sidecar within Assets/. 'to' is the complete destination path. Creates metadata if needed, migrates scene, prefab and material-file references to this asset to UUIDs and updates the open edit scene and the project's start scene and icon. A scene or prefab that cannot be read stops the move (it might reference the asset); a material file that is not valid JSON, and a document or folder whose name is not valid Unicode, are skipped with a warning. Does not rewrite paths inside scripts or glTF files. Stop Play or Simulate first.
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -3314,7 +3314,7 @@ Runs an exported game headless (no GPU needed) for up to N frames at the runtime
 
 ### `project.validate`
 
-Checks that the project would export and start: settings, start scene, every scene and prefab (loads; referenced asset files exist inside Assets/ with the exact letter case; a model's #image/N or #material/N exists in its glTF; path fields must name files inside Assets/ with forward slashes; other component text naming a missing Assets/ file is a warning), every animation graph and material file (parses; a material's maps are textures that exist), every Lua script (compiles) and the scripts Script components use (load as script classes). Returns {valid, errors, warnings, omitted, issues: [{severity, file, message}]}.
+Checks that the project would export and start: settings, start scene, every scene and prefab (loads; referenced asset files exist inside Assets/ with the exact letter case; a model's #image/N or #material/N exists in its glTF; path fields must name files inside Assets/ with forward slashes; other component text naming a missing Assets/ file is a warning), every animation graph and material file (parses; a material's maps are textures that exist), every Lua script (compiles) and the scripts Script components use (load as script classes). An entry of Assets/ whose name is not valid Unicode is a warning and is not checked. Returns {valid, errors, warnings, omitted, issues: [{severity, file, message}]}.
 
 | Parameter | Type / description |
 |-----------|--------------------|

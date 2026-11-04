@@ -723,10 +723,12 @@ namespace Basalt {
 		return MeshImporter::InstantiateHierarchy(scene, *mesh, name, parent);
 	}
 
-	std::vector<std::string> AssetManager::ListAssets(const std::vector<std::string>& extensions, std::string* outError, std::vector<std::string>* outSkipped)
+	std::vector<std::string> AssetManager::ListAssets(const std::vector<std::string>& extensions, std::string* outError, std::set<std::string>* outSkipped)
 	{
 		if (outError)
 			outError->clear();
+		if (outSkipped)
+			outSkipped->clear();
 		std::vector<std::string> result;
 		const std::filesystem::path root = Project::ResolvePath(Project::AssetDirectoryName);
 		std::error_code error;
@@ -737,15 +739,19 @@ namespace Basalt {
 			return result;
 		}
 
-		std::vector<std::string> skipped;
+		const auto wanted = [&](const std::string& extension) { return extensions.empty() || std::find(extensions.begin(), extensions.end(), extension) != extensions.end(); };
+		std::set<std::string> entry;
 		for (auto it = std::filesystem::recursive_directory_iterator(root, error); !error && it != std::filesystem::recursive_directory_iterator(); it.increment(error))
 		{
-			if (FileSystem::SkipNonUtf8Entry(it, root.parent_path(), skipped))
+			if (FileSystem::SkipNonUtf8Entry(it, root.parent_path(), entry))
 			{
-				// A skipped folder may hold files of any type; a file of another type was not asked for.
+				// A folder may hold files of any type, and an entry that cannot be told from one counts as one (a link to
+				// nothing can: it is no folder).
 				std::error_code folderError;
-				if (!extensions.empty() && !it->is_directory(folderError) && std::find(extensions.begin(), extensions.end(), Extension(skipped.back())) == extensions.end())
-					skipped.pop_back();
+				const bool folder = it->is_directory(folderError) || (folderError && folderError != std::errc::no_such_file_or_directory);
+				if (outSkipped && (folder || wanted(FileSystem::GetLowercaseExtension(it->path()))))
+					outSkipped->merge(entry);
+				entry.clear();
 				continue;
 			}
 			const bool regular = it->is_regular_file(error);
@@ -754,18 +760,34 @@ namespace Basalt {
 			if (!regular || FileSystem::GetLowercaseExtension(it->path()) == ".meta")
 				continue;
 			const std::string path = Project::MakeRelative(it->path());
-			if (extensions.empty() || std::find(extensions.begin(), extensions.end(), Extension(path)) != extensions.end())
+			if (wanted(Extension(path)))
 				result.push_back(path);
 		}
 		if (error && outError)
 			*outError = "cannot scan all asset files: " + FileSystem::DescribeError(error);
 		std::sort(result.begin(), result.end());
-		if (outSkipped)
-		{
-			std::sort(skipped.begin(), skipped.end());
-			*outSkipped = std::move(skipped);
-		}
 		return result;
+	}
+
+	AssetManager::FolderListing AssetManager::ListFolder(const std::filesystem::path& folder)
+	{
+		FolderListing listing;
+		const std::filesystem::path projectDirectory = Project::ResolvePath(Project::AssetDirectoryName).parent_path();
+		std::error_code error;
+		for (auto it = std::filesystem::directory_iterator(folder, error); !error && it != std::filesystem::directory_iterator(); it.increment(error))
+			if (!FileSystem::RecordNonUtf8Entry(*it, projectDirectory, listing.Skipped) && FileSystem::GetLowercaseExtension(it->path()) != ".meta")
+				listing.Entries.push_back(*it);
+		if (error)
+			listing.Error = "cannot list all of this folder: " + FileSystem::DescribeError(error);
+		std::sort(listing.Entries.begin(), listing.Entries.end(), [](const auto& a, const auto& b) {
+			std::error_code ignored;
+			const bool folderA = a.is_directory(ignored);
+			const bool folderB = b.is_directory(ignored);
+			if (folderA != folderB)
+				return folderA;
+			return a.path().filename() < b.path().filename();
+		});
+		return listing;
 	}
 
 	bool AssetManager::IsMeshFile(const std::string& path)

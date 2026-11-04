@@ -225,7 +225,7 @@ namespace Basalt {
 					m_Report.Add(ValidationSeverity::Error, Project::AssetDirectoryName, "the Assets directory is missing");
 					return lists;
 				}
-				std::vector<std::string> skipped;
+				std::set<std::string> skipped;
 				for (auto it = std::filesystem::recursive_directory_iterator(assets, error); !error && it != std::filesystem::recursive_directory_iterator(); it.increment(error))
 				{
 					if (FileSystem::SkipNonUtf8Entry(it, m_Directory, skipped))
@@ -259,9 +259,8 @@ namespace Basalt {
 				if (error)
 					m_Report.Add(ValidationSeverity::Error, Project::AssetDirectoryName, "cannot list all the assets (the walk stopped with: " + FileSystem::DescribeError(error) + "); the remaining files were not checked");
 				// Directory order differs between platforms; reports should not.
-				std::sort(skipped.begin(), skipped.end());
 				for (const std::string& entry : skipped)
-					m_Report.Add(ValidationSeverity::Warning, entry, FileSystem::NonUtf8NameProblem);
+					m_Report.Add(ValidationSeverity::Warning, Project::AssetDirectoryName, "'" + entry + "': " + FileSystem::NonUtf8NameProblem);
 				for (auto* list : lists.All())
 					std::sort(list->begin(), list->end());
 				return lists;

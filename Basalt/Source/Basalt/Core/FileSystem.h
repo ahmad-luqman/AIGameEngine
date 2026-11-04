@@ -8,6 +8,7 @@
 #include <functional>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -107,13 +108,13 @@ namespace Basalt {
 		// The running executable (links resolved on macOS); <current folder>/Unknown, logged, when it cannot be found.
 		static std::filesystem::path GetExecutablePath();
 		static std::filesystem::path GetExecutableDirectory();
-		// Text and paths convert only through these three (AGENTS.md): on Windows std::filesystem::path(std::string) reads
+		// Text and paths convert only through these three (AGENTS.md; DescribePath below is for messages and makes no key): on Windows std::filesystem::path(std::string) reads
 		// the ANSI code page and path::string() throws for names outside it. None of them throws (but std::bad_alloc). On
 		// Windows, text that is not valid UTF-8 (a Lua string, a percent-decoded URI) becomes a path with U+FFFD, which
 		// reads as missing unless a file really has that name (and a write creates one by that name); a name with unpaired
 		// surrogates (NTFS allows them) becomes text with U+FFFD, which no longer leads back to that file. Automation and
 		// scene JSON is valid UTF-8 already (the parser rejects the rest). Elsewhere the bytes are copied unchecked, so a name
-		// that is not UTF-8 stays that way (JSON then shows U+FFFD). Directory scans skip both kinds: SkipNonUtf8Entry.
+		// that is not UTF-8 stays that way (JSON then shows U+FFFD). Scans that make keys skip both such names: SkipNonUtf8Entry.
 		// The path as UTF-8 text, for messages and keys.
 		static std::string PathToUtf8(const std::filesystem::path& path);
 		// The path as '/'-separated UTF-8 text on every platform: the form of asset keys ("Assets/Models/Ship.gltf").
@@ -121,19 +122,20 @@ namespace Basalt {
 		// A path from UTF-8 text (asset references, JSON, Lua, command-line arguments).
 		static std::filesystem::path PathFromUtf8(std::string_view text);
 		// The path has a UTF-8 form that names it exactly: false on Windows for unpaired surrogates, elsewhere for bytes that
-		// are not UTF-8. Only the file system can hold such a name; no asset key, JSON document or message can.
-		static bool IsUtf8Path(const std::filesystem::path& path);
-		// The path as '/'-separated, always valid UTF-8 text for reports, whatever it holds: unpaired surrogates read \uD800
-		// and stray bytes \xFF, so the report says what to look for and two such names stay apart.
-		static std::string PathToEscapedUtf8(const std::filesystem::path& path);
-		// What a scan says about an entry it skipped.
-		static constexpr const char* NonUtf8NameProblem = "its name is not valid Unicode, so no asset key can name it: it is skipped, with anything inside it (rename it)";
-		// For a scan of files that become text keys, first thing for each entry: true when the entry's own name is not
-		// IsUtf8Path, with the entry added to outSkipped (PathToEscapedUtf8, relative to root) and, for the recursive
-		// iterator, its folder not entered, since nothing below it could have a key either. Only the name is checked: where
-		// root itself lies is not part of any key.
-		static bool SkipNonUtf8Entry(const std::filesystem::directory_entry& entry, const std::filesystem::path& root, std::vector<std::string>& outSkipped);
-		static bool SkipNonUtf8Entry(std::filesystem::recursive_directory_iterator& it, const std::filesystem::path& root, std::vector<std::string>& outSkipped);
+		// are not UTF-8. No asset key or JSON document can hold such a name. On Windows no text can; elsewhere a raw string (a
+		// Lua string, a percent-decoded URI) still opens the file.
+		static bool HasUtf8Form(const std::filesystem::path& path);
+		// The path as '/'-separated, always valid UTF-8 text for messages, whatever it holds: unpaired surrogates read \uD800
+		// and stray bytes \xFF, so a report says what to look for and names differing only there stay apart. This text names
+		// no file: never parse it or use it as a key.
+		static std::string DescribePath(const std::filesystem::path& path);
+		static constexpr const char* NonUtf8NameProblem = "its name is not valid Unicode, so neither it nor anything inside it can have an asset key (rename it together with its .meta)";
+		// For a scan that makes text keys, first thing for each entry. True when the entry's own name lacks a UTF-8 form, with
+		// the entry added to outSkipped as DescribePath text relative to root (a sidecar as its source, which shares the
+		// name's problem and the report). Only the name counts: where root lies is part of no key.
+		static bool RecordNonUtf8Entry(const std::filesystem::directory_entry& entry, const std::filesystem::path& root, std::set<std::string>& outSkipped);
+		// RecordNonUtf8Entry for a recursive scan: a folder it skips is not entered, as nothing below it could have a key.
+		static bool SkipNonUtf8Entry(std::filesystem::recursive_directory_iterator& it, const std::filesystem::path& root, std::set<std::string>& outSkipped);
 		// What an error code says, as UTF-8: MSVC's std::error_code::message() is in the ANSI code page for system errors
 		// (the Win32 codes std::filesystem reports), so those come from Platform::GetErrorMessage there.
 		static std::string DescribeError(const std::error_code& error);

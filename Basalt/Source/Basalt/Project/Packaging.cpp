@@ -4,6 +4,7 @@
 #include "Basalt/Core/Base.h"
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/Platform.h"
+#include "Basalt/Core/TextEncoding.h"
 #include "Basalt/Project/Project.h"
 
 #include <spdlog/fmt/fmt.h>
@@ -101,47 +102,24 @@ namespace Basalt {
 			return result;
 		}
 
-		// Length of the UTF-8 sequence a lead byte starts; 0 for a continuation or invalid byte.
-		size_t Utf8SequenceLength(unsigned char lead)
-		{
-			if (lead < 0x80)
-				return 1;
-			if ((lead >> 5) == 0x6)
-				return 2;
-			if ((lead >> 4) == 0xE)
-				return 3;
-			if ((lead >> 3) == 0x1E)
-				return 4;
-			return 0;
-		}
-
 		// UTF-16 code units of UTF-8 text; each byte that starts no valid sequence becomes U+FFFD.
 		std::u16string Utf8ToUtf16(std::string_view text)
 		{
-			// The payload bits of a lead byte and the smallest code point of each sequence length (anything below is overlong).
+			// The payload bits of a lead byte, by sequence length.
 			constexpr std::array<uint32_t, 5> LeadMask = { 0, 0x7F, 0x1F, 0x0F, 0x07 };
-			constexpr std::array<uint32_t, 5> Minimum = { 0, 0, 0x80, 0x800, 0x10000 };
 			std::u16string result;
 			for (size_t i = 0; i < text.size();)
 			{
-				const auto byte = static_cast<unsigned char>(text[i]);
-				const size_t length = Utf8SequenceLength(byte);
-				uint32_t code = byte & LeadMask[length];
-				bool valid = length != 0 && i + length <= text.size();
-				for (size_t j = 1; valid && j < length; ++j)
-				{
-					const auto next = static_cast<unsigned char>(text[i + j]);
-					valid = (next >> 6) == 0x2;
-					code = (code << 6) | (next & 0x3Fu);
-				}
-				// Overlong forms, surrogates and values past U+10FFFF are not characters.
-				valid = valid && code >= Minimum[length] && code <= 0x10FFFF && (code < 0xD800 || code > 0xDFFF);
-				if (!valid)
+				const size_t length = TextEncoding::Utf8SequenceLength(text, i);
+				if (length == 0)
 				{
 					result += u'�';
 					++i;
 					continue;
 				}
+				uint32_t code = static_cast<unsigned char>(text[i]) & LeadMask[length];
+				for (size_t j = 1; j < length; ++j)
+					code = (code << 6) | (static_cast<unsigned char>(text[i + j]) & 0x3Fu);
 				if (code >= 0x10000)
 				{
 					code -= 0x10000;

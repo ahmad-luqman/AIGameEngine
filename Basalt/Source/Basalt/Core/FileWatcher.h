@@ -7,6 +7,7 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -72,9 +73,9 @@ namespace Basalt {
 			Snapshot Files;
 			// Set when the folder could not be read completely (Files is then partial).
 			std::string Error;
-			// Entries left out for names no key can hold (FileSystem::SkipNonUtf8Entry), sorted. Not an Error: one odd name
-			// must not stop every other file from being reported.
-			std::vector<std::string> Skipped;
+			// Entries left out for names no key can hold, as FileSystem::DescribePath text. Not an Error: one odd name must not
+			// stop every other file from being reported.
+			std::set<std::string> Skipped;
 		};
 
 		FileWatcher();
@@ -82,7 +83,7 @@ namespace Basalt {
 		FileWatcher(const FileWatcher&) = delete;
 		FileWatcher& operator=(const FileWatcher&) = delete;
 
-		// Every regular file under root/subdirectory. A missing subdirectory (or a file in its place) is an empty scan,
+		// Every regular file under root/subdirectory that a key can name (the rest go to Skipped). A missing subdirectory (or a file in its place) is an empty scan,
 		// not an error; one that cannot be read, or holds a file or folder that cannot be read, is an error.
 		static Scan ScanDirectory(const std::filesystem::path& root, const std::string& subdirectory);
 
@@ -105,8 +106,9 @@ namespace Basalt {
 		// Why the newest scan could not read the folder (empty when it could).
 		const std::string& GetLastError() const { return m_LastError; }
 		// What the newest complete scan skipped (Scan::Skipped). Entries that were not skipped before are logged once; those
-		// in the baseline are not, as nothing else in it is reported either.
-		const std::vector<std::string>& GetSkipped() const { return m_Skipped; }
+		// in the baseline Watch took are not, as nothing else in it is reported either (a late baseline's are: nobody could
+		// have seen them).
+		const std::set<std::string>& GetSkipped() const { return m_Skipped; }
 		// True once after the baseline was taken late (Watch could not read the folder): changes made before it were not
 		// seen.
 		bool TakeLateBaselineNotice();
@@ -150,7 +152,7 @@ namespace Basalt {
 		// Path -> the first scan sequence that started after its acknowledgement.
 		std::unordered_map<std::string, uint64_t> m_Acknowledged;
 		std::string m_LastError;
-		std::vector<std::string> m_Skipped;
+		std::set<std::string> m_Skipped;
 		std::chrono::milliseconds m_RequestedInterval{ 0 };
 
 		// Shared with the worker.
