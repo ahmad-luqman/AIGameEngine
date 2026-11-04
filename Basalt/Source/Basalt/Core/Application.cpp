@@ -11,7 +11,6 @@
 #include "Basalt/Renderer/GraphicsDevice.h"
 #include "Basalt/Renderer/VulkanLoader.h"
 
-#include <algorithm>
 #include <ranges>
 #include <system_error>
 
@@ -152,11 +151,10 @@ namespace Basalt {
 	{
 		if (!m_Initialized)
 		{
-			// The window or device logged why; that is what a player needs to see.
-			const std::vector<LogMessage> messages = Log::GetHistory().GetAll();
-			const auto reason = std::find_if(messages.rbegin(), messages.rend(), [](const LogMessage& message) { return message.Level >= LogLevel::Error; });
+			// Startup logged why it failed; the newest error is the best reason a player can be shown.
+			const std::optional<std::string> reason = Log::GetHistory().GetLastError();
 			BS_CORE_CRITICAL("Application '{}' failed to initialize", m_Specification.Name);
-			CrashReporter::ShowErrorDialog(fmt::format("{} could not start.\n\n{}", m_Specification.Name, reason != messages.rend() ? reason->Text : "The log has the details."));
+			CrashReporter::ShowErrorDialog(fmt::format("{} could not start.\n\n{}", m_Specification.Name, reason.value_or("It reported no reason.")));
 			return 1;
 		}
 

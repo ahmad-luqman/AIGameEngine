@@ -77,6 +77,18 @@ TEST_SUITE("Core")
 		CHECK_FALSE(UUID(0).IsValid());
 	}
 
+	TEST_CASE("LogHistory finds the newest error, past later warnings")
+	{
+		LogHistory history(8);
+		CHECK_FALSE(history.GetLastError());
+		history.Push({ LogLevel::Warn, "Test", "a warning" });
+		CHECK_FALSE(history.GetLastError());
+		history.Push({ LogLevel::Error, "Test", "the first" });
+		history.Push({ LogLevel::Critical, "Test", "the second" });
+		history.Push({ LogLevel::Warn, "Test", "a later warning" });
+		CHECK(history.GetLastError() == "the second");
+	}
+
 	TEST_CASE("LogHistory keeps the most recent messages in order")
 	{
 		LogHistory history(4);

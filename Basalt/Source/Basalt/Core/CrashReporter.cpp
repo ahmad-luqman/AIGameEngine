@@ -12,11 +12,13 @@
 #include <cstring>
 #include <ctime>
 #include <exception>
+#include <initializer_list>
 #include <iterator>
 #include <mutex>
 #include <system_error>
 #include <thread>
 #include <type_traits>
+#include <variant>
 #include <vector>
 
 #if defined(BS_PLATFORM_WINDOWS)
@@ -42,7 +44,7 @@
 		#include <link.h>
 		#include <sys/wait.h>
 	#endif
-// The environment the dialog program inherits (posix_spawn needs it explicitly).
+// The environment spawned programs inherit (posix_spawn needs it explicitly).
 extern char** environ;
 #endif
 
@@ -73,6 +75,9 @@ namespace Basalt {
 		constexpr std::string_view LogHeading = "\nLast log lines (oldest first):\n";
 		constexpr std::string_view TruncationNote = "\n(cut: the rest did not fit the crash handler's buffer)\n";
 		constexpr std::string_view OpenReportButton = "Open Report";
+		// What a dialog shows: far more than any report's path and reason, and short enough that its AppleScript fits a
+		// CrashText, even with every character escaped.
+		using DialogText = BasicCrashText<size_t{ 4 } * 1024>;
 
 		// Guards the log lines and the context. Writers wait for it; the crash handler gives up after a bounded number of
 		// attempts (the crashed thread may be the holder) and reads whatever is there.
@@ -167,8 +172,6 @@ namespace Basalt {
 			return result.empty() ? std::string("Basalt") : result;
 		}
 
-		// Whether this thread may write the report: false for a crash inside the handler. Another thread that crashes
-		// meanwhile waits here for the report, then dies with the process.
 		// This thread's identity, read without allocating (a register or a system call).
 		uint64_t CurrentThreadKey()
 		{
@@ -187,6 +190,12 @@ namespace Basalt {
 #endif
 		}
 
+#if defined(BS_PLATFORM_WINDOWS)
+		void StartWatchdogDeadline();
+#endif
+
+		// Whether this thread may write the report: false for a crash inside the handler. Another thread that crashes
+		// meanwhile waits here for the report, then dies with the process.
 		bool BeginReport()
 		{
 			const uint64_t self = CurrentThreadKey();
@@ -198,6 +207,8 @@ namespace Basalt {
 				// A reporter stuck on a lock the crash left held (the loader's, inside backtrace_symbols_fd) is ended by
 				// SIGALRM's default action instead of hanging the process.
 				alarm(ReportTimeoutSeconds);
+#else
+				StartWatchdogDeadline();
 #endif
 				return true;
 			}
@@ -221,7 +232,7 @@ namespace Basalt {
 
 		// "<application> crashed: <reason>" and how the report went, for stderr and the dialog; the caller adds the report's
 		// path (written) or the error code and ").".
-		void AppendSummaryOpening(CrashText& out, std::string_view reason, bool written, bool complete)
+		void AppendSummaryOpening(DialogText& out, std::string_view reason, bool written, bool complete)
 		{
 			out.Append(s_Application);
 			out.Append(" crashed: ");
@@ -281,8 +292,7 @@ namespace Basalt {
 		}
 
 		// Escapes a string for an AppleScript string literal ('"' and '\').
-		template<size_t Capacity>
-		void AppendEscaped(BasicCrashText<Capacity>& out, std::string_view text)
+		void AppendEscaped(CrashText& out, std::string_view text)
 		{
 			for (const char c : text)
 			{
@@ -319,26 +329,27 @@ namespace Basalt {
 		constexpr int HandledSignals[] = { SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGABRT, SIGTRAP };
 		struct sigaction s_PreviousActions[std::size(HandledSignals)] = {};
 
-		// The dialog program found at Install. The crashed process starts it with posix_spawn, which (unlike fork) runs no
-		// atfork handlers, so it cannot deadlock on a malloc lock the crash left held; its stdio goes to /dev/null, so it
-		// never holds a parent's output pipes open.
+		// The dialog program found at Install. The crashed process starts it, or the shell that waits for its answer, with
+		// posix_spawn, which (unlike fork) runs no atfork handlers, so it cannot deadlock on a malloc lock the crash left held;
+		// its stdio goes to /dev/null, so it never holds a parent's output pipes open.
 		char s_DialogProgram[MaxPathLength + 1] = {};
 		CrashDialogKind s_DialogKind = CrashDialogKind::Osascript;
 		// What opens a report from the Linux dialogs; empty: they show the path only.
 		char s_Opener[MaxPathLength + 1] = {};
 		posix_spawn_file_actions_t s_DialogActions;
 		posix_spawnattr_t s_SpawnAttributes;
-		bool s_SpawnPrepared = false;
 
+	#if defined(BS_CRASH_BACKTRACE)
+		constexpr int MaxStackFrames = 128;
+	#endif
 	#if defined(BS_CRASH_SYMBOLIZE)
-		constexpr size_t MaxStackFrames = 128;
-		// addr2line can take long over large debug information; what it has written by then stays in the report. Below
-		// ReportTimeoutSeconds, so its section cannot cost the process its signal.
+		// addr2line can take long over large debug information; what it has written by then stays in the report. The report's
+		// alarm restarts with it, so this is below ReportTimeoutSeconds: its section cannot cost the process its signal.
 		constexpr unsigned SymbolizeTimeoutSeconds = 15;
+		constexpr const char* Addr2LineProgram = "/usr/bin/addr2line";
 		constexpr std::string_view SourceLinesHeading = "\nSource lines (addr2line):\n";
 		constexpr std::string_view SymbolizeTimeoutNote = "(addr2line did not finish in time)\n";
 		// Empty: no addr2line, or nothing it could be pointed at.
-		char s_Addr2Line[MaxPathLength + 1] = {};
 		char s_Executable[MaxPathLength + 1] = {};
 		// The executable's load bias and address range, read at Install because the loader's locks may be held at a crash.
 		uintptr_t s_ImageBias = 0;
@@ -383,8 +394,8 @@ namespace Basalt {
 			return open(path.CStr(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0644);
 		}
 
-		// Each opens the report when the player chooses to, through the shell because the dialog must outlive the crashed
-		// process. Text only reaches them as arguments: $1 program, $2 title, $3 message, $4 report, $5 opener.
+		// Each opens the report when the player chooses to. A shell waits for the answer, because the crashed process is gone
+		// by then. Text only reaches them as arguments: $1 program, $2 title, $3 message, $4 report, $5 opener.
 		const char* GetOpenReportScript(CrashDialogKind kind)
 		{
 			switch (kind)
@@ -401,23 +412,25 @@ namespace Basalt {
 			return nullptr;
 		}
 
-		// Starts the dialog program without waiting for it: the crashed process dies at once, as the OS expects, and the
-		// dialog stays until the player closes it. With a reportPath it offers to open that file.
-		void ShowDialog(const char* title, const CrashText& message, const char* reportPath)
+		// Starts the dialog program without waiting for it: the process dies at once, as the OS expects of a crash, and the
+		// dialog stays until the player closes it. With a reportPath and an opener (macOS needs none) it offers to open that
+		// file. False when the program could not start.
+		bool ShowDialog(const char* title, const DialogText& message, const char* reportPath)
 		{
-			if (!s_DialogEnabled || s_DialogProgram[0] == '\0')
-				return;
 			static CrashText s_Script;
 			char* arguments[10] = {};
-			const auto argument = [](const char* text) { return const_cast<char*>(text); };
+			const auto setArguments = [&arguments](std::initializer_list<const char*> texts) {
+				size_t count = 0;
+				for (const char* text : texts)
+					arguments[count++] = const_cast<char*>(text);
+			};
 			const char* program = s_DialogProgram;
 			const char* openScript = reportPath[0] != '\0' && s_Opener[0] != '\0' ? GetOpenReportScript(s_DialogKind) : nullptr;
 			if (openScript)
 			{
 				program = "/bin/sh";
-				size_t count = 0;
-				for (const char* text : { "sh", "-c", openScript, "sh", static_cast<const char*>(s_DialogProgram), title, message.CStr(), reportPath, static_cast<const char*>(s_Opener) })
-					arguments[count++] = argument(text);
+				// The second "sh" is the script's $0.
+				setArguments({ "sh", "-c", openScript, "sh", s_DialogProgram, title, message.CStr(), reportPath, s_Opener });
 			}
 			else
 			{
@@ -426,36 +439,21 @@ namespace Basalt {
 					case CrashDialogKind::Osascript:
 						s_Script.Clear();
 						CrashReporter::FormatAppleScript(s_Script, title, message.View(), reportPath);
-						arguments[0] = argument("osascript");
-						arguments[1] = argument("-e");
-						arguments[2] = argument(s_Script.CStr());
+						setArguments({ "osascript", "-e", s_Script.CStr() });
 						break;
 					case CrashDialogKind::Zenity:
-						arguments[0] = argument("zenity");
-						arguments[1] = argument("--error");
-						arguments[2] = argument("--no-markup");
-						arguments[3] = argument("--title");
-						arguments[4] = argument(title);
-						arguments[5] = argument("--text");
-						arguments[6] = argument(message.CStr());
+						setArguments({ "zenity", "--error", "--no-markup", "--title", title, "--text", message.CStr() });
 						break;
 					case CrashDialogKind::KDialog:
-						arguments[0] = argument("kdialog");
-						arguments[1] = argument("--title");
-						arguments[2] = argument(title);
-						arguments[3] = argument("--error");
-						arguments[4] = argument(message.CStr());
+						setArguments({ "kdialog", "--title", title, "--error", message.CStr() });
 						break;
 					case CrashDialogKind::XMessage:
-						arguments[0] = argument("xmessage");
-						arguments[1] = argument("-center");
-						arguments[2] = argument(message.CStr());
+						setArguments({ "xmessage", "-center", message.CStr() });
 						break;
 				}
 			}
 			pid_t child = 0;
-			if (posix_spawn(&child, program, &s_DialogActions, &s_SpawnAttributes, arguments, environ) != 0)
-				WriteAll(STDERR_FILENO, "The crash dialog could not be shown.\n");
+			return posix_spawn(&child, program, &s_DialogActions, &s_SpawnAttributes, arguments, environ) == 0;
 		}
 
 		// What spawned programs share, prepared at Install (setting it up allocates): signals as a new process has them
@@ -508,21 +506,20 @@ namespace Basalt {
 
 		void PrepareSymbolizer()
 		{
-			constexpr const char* Program = "/usr/bin/addr2line";
-			const std::string executable = FileSystem::PathToUtf8(FileSystem::GetExecutablePath());
-			if (access(Program, X_OK) != 0 || executable.size() > MaxPathLength || !s_SpawnPrepared)
+			if (access(Addr2LineProgram, X_OK) != 0)
+			{
+				BS_CORE_INFO("Crash reports: no {}, so frames stay module and offset", Addr2LineProgram);
 				return;
+			}
+			const std::string executable = FileSystem::PathToUtf8(FileSystem::GetExecutablePath());
 			dl_iterate_phdr(&FindExecutableImage, nullptr);
 			s_SymbolizeOutput = open("/dev/null", O_WRONLY | O_CLOEXEC);
-			if (s_SymbolizeOutput < 0 || s_ImageBegin == 0)
-				return;
-			if (posix_spawn_file_actions_init(&s_SymbolizeActions) != 0 || posix_spawn_file_actions_addopen(&s_SymbolizeActions, 0, "/dev/null", O_RDONLY, 0) != 0 || posix_spawn_file_actions_adddup2(&s_SymbolizeActions, s_SymbolizeOutput, 1) != 0 || posix_spawn_file_actions_addopen(&s_SymbolizeActions, 2, "/dev/null", O_WRONLY, 0) != 0 || !AddCloseOthers(s_SymbolizeActions))
+			if (executable.size() > MaxPathLength || s_ImageBegin == 0 || s_SymbolizeOutput < 0 || posix_spawn_file_actions_init(&s_SymbolizeActions) != 0 || posix_spawn_file_actions_addopen(&s_SymbolizeActions, 0, "/dev/null", O_RDONLY, 0) != 0 || posix_spawn_file_actions_adddup2(&s_SymbolizeActions, s_SymbolizeOutput, 1) != 0 || posix_spawn_file_actions_addopen(&s_SymbolizeActions, 2, "/dev/null", O_WRONLY, 0) != 0 || !AddCloseOthers(s_SymbolizeActions))
 			{
 				BS_CORE_WARN("Crash reports: no source lines (cannot prepare addr2line's process)");
 				return;
 			}
 			CopyText(s_Executable, MaxPathLength, executable);
-			CopyText(s_Addr2Line, MaxPathLength, Program);
 		}
 
 		uint64_t MonotonicSeconds()
@@ -534,52 +531,56 @@ namespace Basalt {
 
 		// Names the frames inside the executable (the engine and game code; it is static) into the report. Runs last, so a
 		// slow or stuck addr2line costs only this section. Other modules' frames are in the stack trace as module + offset.
-		void AppendSourceLines(int fd, void* const* frames, int count)
+		// False when something could not be written to the report.
+		bool AppendSourceLines(int fd, void* const* frames, int count)
 		{
-			if (s_Addr2Line[0] == '\0')
-				return;
-			static char s_Addresses[MaxStackFrames][20];
+			if (s_Executable[0] == '\0')
+				return true;
+			static BasicCrashText<18> s_Addresses[MaxStackFrames];
 			static char* s_Arguments[MaxStackFrames + 9];
 			size_t argumentCount = 0;
 			for (const char* text : { "addr2line", "-a", "-f", "-C", "-i", "-p", "-e", static_cast<const char*>(s_Executable) })
 				s_Arguments[argumentCount++] = const_cast<char*>(text);
 			const size_t firstAddress = argumentCount;
-			for (int i = 0; i < count && i < static_cast<int>(MaxStackFrames); i++)
+			for (int i = 0; i < count; i++)
 			{
 				const auto address = reinterpret_cast<uintptr_t>(frames[i]);
 				if (address <= s_ImageBegin || address > s_ImageEnd)
 					continue;
 				// A return address: the call is the instruction before it.
-				BasicCrashText<19> text;
+				BasicCrashText<18>& text = s_Addresses[argumentCount - firstAddress];
+				text.Clear();
 				text.AppendHex(address - 1 - s_ImageBias);
-				char* slot = s_Addresses[argumentCount - firstAddress];
-				CopyText(slot, sizeof(s_Addresses[0]) - 1, text.View());
-				s_Arguments[argumentCount++] = slot;
+				s_Arguments[argumentCount++] = const_cast<char*>(text.CStr());
 			}
 			s_Arguments[argumentCount] = nullptr;
-			if (argumentCount == firstAddress || dup3(fd, s_SymbolizeOutput, O_CLOEXEC) < 0 || !WriteAll(fd, SourceLinesHeading))
-				return;
+			if (argumentCount == firstAddress)
+				return true;
+			if (!WriteAll(fd, SourceLinesHeading))
+				return false;
+			alarm(ReportTimeoutSeconds);
 			pid_t child = 0;
-			if (posix_spawn(&child, s_Addr2Line, &s_SymbolizeActions, &s_SpawnAttributes, s_Arguments, environ) != 0)
-			{
-				WriteAll(fd, "(addr2line could not start)\n");
-				return;
-			}
+			if (dup3(fd, s_SymbolizeOutput, O_CLOEXEC) < 0 || posix_spawn(&child, Addr2LineProgram, &s_SymbolizeActions, &s_SpawnAttributes, s_Arguments, environ) != 0)
+				return WriteAll(fd, "(addr2line could not start)\n");
 			const uint64_t deadline = MonotonicSeconds() + SymbolizeTimeoutSeconds;
 			for (;;)
 			{
-				const pid_t finished = waitpid(child, nullptr, WNOHANG);
-				if (finished == child || (finished < 0 && errno != EINTR))
-					return;
+				int status = 0;
+				const pid_t finished = waitpid(child, &status, WNOHANG);
+				if (finished == child)
+					return WIFEXITED(status) && WEXITSTATUS(status) == 0 ? true : WriteAll(fd, "(addr2line failed)\n");
+				// With SIGCHLD ignored there is nothing to wait for.
+				if (finished < 0 && errno != EINTR)
+					return true;
 				if (MonotonicSeconds() >= deadline)
 				{
 					kill(child, SIGKILL);
 					waitpid(child, nullptr, 0);
-					WriteAll(fd, SymbolizeTimeoutNote);
-					return;
+					return WriteAll(fd, SymbolizeTimeoutNote);
 				}
-				const timespec pauseTime = { 0, 20 * 1000 * 1000 };
-				nanosleep(&pauseTime, nullptr);
+				constexpr long PollNanoseconds = 20L * 1000 * 1000;
+				const timespec pollTime = { 0, PollNanoseconds };
+				nanosleep(&pollTime, nullptr);
 			}
 		}
 	#endif
@@ -641,8 +642,8 @@ namespace Basalt {
 				complete = WriteAll(fd, s_Text.View());
 				complete = WriteTruncationNote(fd, s_Text) && complete;
 	#if defined(BS_CRASH_BACKTRACE)
-				void* frames[128];
-				const int count = backtrace(frames, 128);
+				void* frames[MaxStackFrames];
+				const int count = backtrace(frames, MaxStackFrames);
 				backtrace_symbols_fd(frames, count, fd);
 	#else
 				complete = WriteAll(fd, "(not available on this platform)\n") && complete;
@@ -653,12 +654,12 @@ namespace Basalt {
 				complete = WriteAll(fd, s_Text.View()) && complete;
 				complete = WriteTruncationNote(fd, s_Text) && complete;
 	#if defined(BS_CRASH_SYMBOLIZE)
-				AppendSourceLines(fd, frames, count);
+				complete = AppendSourceLines(fd, frames, count) && complete;
 	#endif
 				complete = close(fd) == 0 && complete;
 			}
 			// What the player and stderr are told.
-			static CrashText s_Summary;
+			static DialogText s_Summary;
 			s_Summary.Clear();
 			AppendSummaryOpening(s_Summary, reason, written, complete);
 			if (written)
@@ -676,7 +677,8 @@ namespace Basalt {
 			s_Title.Clear();
 			s_Title.Append(s_Application);
 			s_Title.Append(" crashed");
-			ShowDialog(s_Title.CStr(), s_Summary, written ? s_Path.CStr() : "");
+			if (s_DialogEnabled && s_DialogProgram[0] != '\0' && !ShowDialog(s_Title.CStr(), s_Summary, written ? s_Path.CStr() : ""))
+				WriteAll(STDERR_FILENO, "The crash dialog could not be shown.\n");
 			ResetAndRaise(signal);
 		}
 
@@ -684,6 +686,20 @@ namespace Basalt {
 		{
 			for (size_t i = 0; i < count; i++)
 				sigaction(HandledSignals[i], &s_PreviousActions[i], nullptr);
+		}
+
+		void UseDialogTools(const CrashDialogTools& tools)
+		{
+			const std::string program = FileSystem::PathToUtf8(tools.Program);
+			const std::string opener = FileSystem::PathToUtf8(tools.Opener);
+			if (program.size() > MaxPathLength || opener.size() > MaxPathLength || access(program.c_str(), X_OK) != 0)
+			{
+				BS_CORE_WARN("Crash reports: no crash dialog ('{}' cannot be used)", program);
+				return;
+			}
+			CopyText(s_DialogProgram, MaxPathLength, program);
+			CopyText(s_Opener, MaxPathLength, opener);
+			s_DialogKind = tools.Kind;
 		}
 
 		void FindDialogProgram()
@@ -698,6 +714,8 @@ namespace Basalt {
 			// Only with a display to show it on.
 			if (!Platform::GetEnvVar("DISPLAY") && !Platform::GetEnvVar("WAYLAND_DISPLAY"))
 				return;
+			if (access("/usr/bin/xdg-open", X_OK) == 0)
+				CopyText(s_Opener, MaxPathLength, "/usr/bin/xdg-open");
 			for (const auto& [program, kind] : { std::pair{ "/usr/bin/zenity", CrashDialogKind::Zenity }, std::pair{ "/usr/bin/kdialog", CrashDialogKind::KDialog }, std::pair{ "/usr/bin/xmessage", CrashDialogKind::XMessage } })
 			{
 				if (access(program, X_OK) == 0)
@@ -707,8 +725,6 @@ namespace Basalt {
 					break;
 				}
 			}
-			if (access("/usr/bin/xdg-open", X_OK) == 0)
-				CopyText(s_Opener, MaxPathLength, "/usr/bin/xdg-open");
 	#endif
 		}
 
@@ -731,21 +747,18 @@ namespace Basalt {
 			void* warmUp[4];
 			backtrace(warmUp, 4);
 	#endif
-			s_SpawnPrepared = PrepareSpawnAttributes();
-			if (!s_SpawnPrepared)
+			const bool spawnPrepared = PrepareSpawnAttributes();
+			if (!spawnPrepared)
 				BS_CORE_WARN("Crash reports: no crash dialog or source lines (cannot prepare their processes)");
 	#if defined(BS_CRASH_SYMBOLIZE)
-			PrepareSymbolizer();
+			if (spawnPrepared)
+				PrepareSymbolizer();
 	#endif
 			if (options.DialogTools)
-			{
-				CopyText(s_DialogProgram, MaxPathLength, FileSystem::PathToUtf8(options.DialogTools->Program));
-				CopyText(s_Opener, MaxPathLength, FileSystem::PathToUtf8(options.DialogTools->Opener));
-				s_DialogKind = options.DialogTools->Kind;
-			}
+				UseDialogTools(*options.DialogTools);
 			else
 				FindDialogProgram();
-			if (s_DialogProgram[0] != '\0' && (!s_SpawnPrepared || !PrepareDialogActions()))
+			if (s_DialogProgram[0] != '\0' && (!spawnPrepared || !PrepareDialogActions()))
 			{
 				BS_CORE_WARN("Crash reports: no crash dialog (cannot prepare its process)");
 				s_DialogProgram[0] = '\0';
@@ -786,25 +799,29 @@ namespace Basalt {
 		constexpr DWORD DumpTimeoutMilliseconds = 20000;
 		constexpr DWORD OpenTimeoutMilliseconds = 5000;
 
-		// Work for the watchdog thread, which is what the crashed thread cannot do itself: writing a minidump takes more stack
-		// than a stack overflow leaves, and starting a process takes the process heap, which a crash may have left locked.
-		// It waits from Install on; these are written before s_WatchdogWake is set and read after s_WatchdogDone is.
-		enum class WatchdogTask
+		// Work the crashed thread must not do itself: writing a minidump takes more stack than a stack overflow leaves, and
+		// starting a process takes the process heap, which a crash may have left locked, so it runs where a timeout can
+		// abandon it. The watchdog waits from Install on; a request is written before s_WatchdogWake is set, and its outputs
+		// are read after s_WatchdogDone is.
+		struct WatchdogDump
 		{
-			WriteDump,
-			OpenFile
-		};
-		struct WatchdogRequest
-		{
-			WatchdogTask Task = WatchdogTask::WriteDump;
-			HANDLE Dump = INVALID_HANDLE_VALUE;
+			HANDLE File = INVALID_HANDLE_VALUE;
 			EXCEPTION_POINTERS* Exception = nullptr;
 			DWORD ThreadId = 0;
-			const wchar_t* File = nullptr;
-			bool Dumped = false;
+			bool Written = false;
 			DWORD Error = 0;
 		};
-		WatchdogRequest s_Request;
+		struct WatchdogOpen
+		{
+			const wchar_t* File = nullptr;
+		};
+		std::variant<WatchdogDump, WatchdogOpen> s_Request;
+		// Set with s_WatchdogWake for a request; that event alone also starts the report's deadline.
+		std::atomic<bool> s_RequestPending = false;
+		// When the report began (GetTickCount64); 0 while there is none. POSIX reports have their alarm; this is the watchdog's.
+		std::atomic<uint64_t> s_ReportStart = 0;
+		// How the process ends if the report does not finish.
+		std::atomic<DWORD> s_CrashExitCode = 3;
 		HANDLE s_WatchdogWake = nullptr;
 		HANDLE s_WatchdogDone = nullptr;
 		HANDLE s_WatchdogThread = nullptr;
@@ -907,12 +924,12 @@ namespace Basalt {
 			}
 		}
 
-		// A minidump of the process with threadId as the crashed thread (with the exception's context when there is one).
-		void WriteDump(WatchdogRequest& request)
+		// A minidump of the process; with an exception, request.ThreadId is the crashed thread and the dump holds its context.
+		void WriteDump(WatchdogDump& request)
 		{
 			MINIDUMP_EXCEPTION_INFORMATION information = { request.ThreadId, request.Exception, FALSE };
-			request.Dumped = MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(), request.Dump, static_cast<MINIDUMP_TYPE>(MiniDumpNormal | MiniDumpWithThreadInfo), request.Exception ? &information : nullptr, nullptr, nullptr) != FALSE;
-			if (!request.Dumped)
+			request.Written = MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(), request.File, static_cast<MINIDUMP_TYPE>(MiniDumpNormal | MiniDumpWithThreadInfo), request.Exception ? &information : nullptr, nullptr, nullptr) != FALSE;
+			if (!request.Written)
 				request.Error = GetLastError();
 		}
 
@@ -934,38 +951,96 @@ namespace Basalt {
 			}
 		}
 
+		void RunRequest()
+		{
+			if (auto* dumpRequest = std::get_if<WatchdogDump>(&s_Request))
+				WriteDump(*dumpRequest);
+			else if (const auto* openRequest = std::get_if<WatchdogOpen>(&s_Request))
+				OpenWithDefaultProgram(openRequest->File);
+		}
+
+		// How long the watchdog waits for work: until the report's deadline while one is being written (a dialog after it may
+		// wait for the player), for ever otherwise.
+		DWORD GetWatchdogWait()
+		{
+			const uint64_t start = s_ReportStart;
+			if (start == 0 || s_ReportWritten)
+				return INFINITE;
+			const uint64_t elapsed = GetTickCount64() - start;
+			const uint64_t limit = uint64_t{ ReportTimeoutSeconds } * 1000;
+			return elapsed < limit ? static_cast<DWORD>(limit - elapsed) : 0;
+		}
+
 		DWORD WINAPI RunWatchdog(void*)
 		{
 			for (;;)
 			{
-				if (WaitForSingleObject(s_WatchdogWake, INFINITE) != WAIT_OBJECT_0)
+				const DWORD woken = WaitForSingleObject(s_WatchdogWake, GetWatchdogWait());
+				if (woken == WAIT_TIMEOUT)
+				{
+					// The report's thread is stuck (symbol files on a dead share, a lock the crash left held).
+					if (!s_ReportWritten)
+						TerminateProcess(GetCurrentProcess(), s_CrashExitCode);
+					continue;
+				}
+				if (woken != WAIT_OBJECT_0)
 					return 1;
-				if (s_Request.Task == WatchdogTask::WriteDump)
-					WriteDump(s_Request);
-				else
-					OpenWithDefaultProgram(s_Request.File);
-				SetEvent(s_WatchdogDone);
+				if (s_RequestPending.exchange(false))
+				{
+					RunRequest();
+					SetEvent(s_WatchdogDone);
+				}
 			}
 		}
 
-		// False when the watchdog did not finish in time, and it is then ended: a request may still be running on it. Without
-		// a watchdog (it could not start, or an earlier request ended it) the request runs on this thread.
+		// False when the watchdog did not finish in time, and it is then ended: it holds what it was doing, and its request
+		// must not be read. A request runs on this thread only when no watchdog ever started.
 		bool RunOnWatchdog(DWORD timeoutMilliseconds)
 		{
 			if (!s_WatchdogThread)
 			{
-				if (s_Request.Task == WatchdogTask::WriteDump)
-					WriteDump(s_Request);
-				else
-					OpenWithDefaultProgram(s_Request.File);
+				RunRequest();
 				return true;
 			}
+			s_RequestPending = true;
 			SetEvent(s_WatchdogWake);
 			if (WaitForSingleObject(s_WatchdogDone, timeoutMilliseconds) == WAIT_OBJECT_0)
 				return true;
 			TerminateThread(s_WatchdogThread, 1);
+			WaitForSingleObject(s_WatchdogThread, OpenTimeoutMilliseconds);
 			s_WatchdogThread = nullptr;
 			return false;
+		}
+
+		void StartWatchdogDeadline()
+		{
+			s_ReportStart = GetTickCount64();
+			if (s_WatchdogThread)
+				SetEvent(s_WatchdogWake);
+		}
+
+		// A dump for this report: its result, or why there is none in outError. Takes what is left of the report's time, so
+		// threads crashing meanwhile, which wait as long, do not end the process in the middle of it.
+		bool RequestDump(HANDLE dump, EXCEPTION_POINTERS* exception, DWORD& outError, bool& outTimedOut)
+		{
+			// Without a watchdog the dump runs on this thread, which has no stack for it after an overflow.
+			if (!s_WatchdogThread && exception && exception->ExceptionRecord->ExceptionCode == EXCEPTION_STACK_OVERFLOW)
+			{
+				outError = ERROR_STACK_OVERFLOW;
+				return false;
+			}
+			s_Request = WatchdogDump{ dump, exception, GetCurrentThreadId() };
+			const uint64_t elapsed = GetTickCount64() - s_ReportStart;
+			const uint64_t limit = uint64_t{ ReportTimeoutSeconds } * 1000;
+			const DWORD left = elapsed + DumpTimeoutMilliseconds < limit ? DumpTimeoutMilliseconds : static_cast<DWORD>(elapsed < limit ? limit - elapsed : 0);
+			if (!RunOnWatchdog(left))
+			{
+				outTimedOut = true;
+				return false;
+			}
+			const auto* result = std::get_if<WatchdogDump>(&s_Request);
+			outError = result ? result->Error : 0;
+			return result && result->Written;
 		}
 
 		// Writes the text report and a minidump (with the exception's context when there is one), tells stderr and, when
@@ -999,31 +1074,26 @@ namespace Basalt {
 			bool complete = true;
 			if (written)
 			{
-				// The text first: the dump writer needs the most stack, and a fault inside it must not cost the report.
+				// The text first: the dump can fail or time out, and that must not cost the report. The header goes out on its
+				// own, because naming frames may load symbol files, which can hang.
 				s_Text.Clear();
 				CrashReporter::FormatHeader(s_Text, reason, address, unixTime, processId);
 				s_Text.Append(StackTraceHeading);
+				complete = WriteAll(file, s_Text.View());
+				complete = WriteTruncationNote(file, s_Text) && complete;
+				s_Text.Clear();
 				AppendStackTrace(s_Text);
 				s_Text.Append(LogHeading);
 				CrashReporter::FormatLogLines(s_Text);
-				complete = WriteAll(file, s_Text.View());
+				complete = WriteAll(file, s_Text.View()) && complete;
 				complete = WriteTruncationNote(file, s_Text) && complete;
 				bool dumped = false;
+				bool timedOut = false;
 				const HANDLE dump = CreateReportFile(s_Base, L".dmp", s_DumpPath, std::size(s_DumpPath) - 1);
 				DWORD dumpError = dump == INVALID_HANDLE_VALUE ? GetLastError() : 0;
 				if (dump != INVALID_HANDLE_VALUE)
 				{
-					s_Request.Task = WatchdogTask::WriteDump;
-					s_Request.Dump = dump;
-					s_Request.Exception = exception;
-					s_Request.ThreadId = GetCurrentThreadId();
-					if (RunOnWatchdog(DumpTimeoutMilliseconds))
-					{
-						dumped = s_Request.Dumped;
-						dumpError = s_Request.Error;
-					}
-					else
-						dumpError = WAIT_TIMEOUT;
+					dumped = RequestDump(dump, exception, dumpError, timedOut);
 					CloseHandle(dump);
 					// No empty or partial dump beside the report.
 					if (!dumped)
@@ -1035,6 +1105,8 @@ namespace Basalt {
 					s_Text.Append("\nMinidump: ");
 					AppendUtf8(s_Text, s_DumpPath);
 				}
+				else if (timedOut)
+					s_Text.Append("\nMinidump: not written (the watchdog thread did not finish in time)");
 				else
 				{
 					s_Text.Append("\nMinidump: not written (error ");
@@ -1045,7 +1117,7 @@ namespace Basalt {
 				complete = WriteAll(file, s_Text.View()) && complete;
 				complete = CloseHandle(file) != FALSE && complete;
 			}
-			static CrashText s_Summary;
+			static DialogText s_Summary;
 			s_Summary.Clear();
 			AppendSummaryOpening(s_Summary, reason, written, complete);
 			if (written)
@@ -1060,6 +1132,8 @@ namespace Basalt {
 			s_ReportWritten = true;
 			if (s_DialogEnabled)
 			{
+				// Opening needs the watchdog: on this thread it could hang on a lock the crash left held.
+				const bool offerReport = written && s_WatchdogThread;
 				static wchar_t s_Message[MaxPathLength + 512];
 				s_Message[0] = L'\0';
 				AppendWide(s_Message, std::size(s_Message) - 1, s_WideApplication);
@@ -1068,15 +1142,15 @@ namespace Basalt {
 				{
 					AppendWide(s_Message, std::size(s_Message) - 1, complete ? L"\n\nA crash report was saved to:\n" : L"\n\nAn incomplete crash report was saved to:\n");
 					AppendWide(s_Message, std::size(s_Message) - 1, s_TextPath);
-					AppendWide(s_Message, std::size(s_Message) - 1, L"\n\nOpen the report?");
+					if (offerReport)
+						AppendWide(s_Message, std::size(s_Message) - 1, L"\n\nOpen the report?");
 				}
 				else
 					AppendWide(s_Message, std::size(s_Message) - 1, L"\n\nNo crash report could be written.");
-				const int answer = MessageBoxW(nullptr, s_Message, s_WideApplication, (written ? MB_YESNO : MB_OK) | MB_ICONERROR | MB_TASKMODAL);
-				if (answer == IDYES)
+				const int answer = MessageBoxW(nullptr, s_Message, s_WideApplication, (offerReport ? MB_YESNO : MB_OK) | MB_ICONERROR | MB_TASKMODAL);
+				if (answer == IDYES && s_WatchdogThread)
 				{
-					s_Request.Task = WatchdogTask::OpenFile;
-					s_Request.File = s_TextPath;
+					s_Request = WatchdogOpen{ s_TextPath };
 					RunOnWatchdog(OpenTimeoutMilliseconds);
 				}
 			}
@@ -1087,6 +1161,7 @@ namespace Basalt {
 			const EXCEPTION_RECORD& record = *exception->ExceptionRecord;
 			// The C runtime's own filter turns an uncaught C++ exception into std::terminate, where OnTerminate keeps its
 			// message and abort then reports (HandleAbort).
+			s_CrashExitCode = record.ExceptionCode;
 			if (record.ExceptionCode == CppExceptionCode && s_PreviousFilter && !s_Handling)
 			{
 				// A filter that handles the exception itself (EXECUTE_HANDLER) still ends the process, so that is reported
@@ -1173,7 +1248,8 @@ namespace Basalt {
 			_set_invalid_parameter_handler(&HandleInvalidParameter);
 			_set_purecall_handler(&HandlePureCall);
 			ULONG guarantee = StackGuarantee;
-			SetThreadStackGuarantee(&guarantee);
+			if (!SetThreadStackGuarantee(&guarantee))
+				BS_CORE_WARN("Crash reports: no stack guarantee on this thread (error {}); its stack overflow may not be reported", GetLastError());
 			StartWatchdog();
 			// Replaces any earlier filter (a C runtime's, or a third party's crash handler); only C++ exceptions are passed back
 			// to it, so the C runtime turns them into std::terminate with their message.
@@ -1223,6 +1299,10 @@ namespace Basalt {
 	{
 		if (!s_InstallResult)
 			return;
+		// The installing thread's, or an outer ThreadStack's: destroying this one must not take it away.
+		stack_t current = {};
+		if (sigaltstack(nullptr, &current) == 0 && (current.ss_flags & SS_DISABLE) == 0)
+			return;
 		void* memory = mmap(nullptr, AlternateStackSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
 		stack_t stack = {};
 		stack.ss_sp = memory;
@@ -1249,10 +1329,18 @@ namespace Basalt {
 
 	void CrashReporter::ShowErrorDialog(std::string_view message)
 	{
-		static CrashText s_Message;
+		if (!s_DialogEnabled)
+			return;
+		if (s_DialogProgram[0] == '\0')
+		{
+			BS_CORE_WARN("No dialog program to show this with: {}", message);
+			return;
+		}
+		static DialogText s_Message;
 		s_Message.Clear();
 		s_Message.Append(message);
-		ShowDialog(s_Application, s_Message, "");
+		if (!ShowDialog(s_Application, s_Message, ""))
+			BS_CORE_WARN("The dialog program '{}' could not start", s_DialogProgram);
 	}
 #else
 	CrashReporter::ThreadStack::ThreadStack()

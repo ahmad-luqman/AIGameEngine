@@ -56,7 +56,7 @@ namespace Basalt {
 			if (!m_Renderer->Initialize())
 			{
 				m_Renderer.reset();
-				fail("the renderer could not start");
+				fail("the renderer could not start: " + Log::GetHistory().GetLastError().value_or("it reported no reason"));
 				return;
 			}
 			m_CommandList = device->GetDevice()->createCommandList();

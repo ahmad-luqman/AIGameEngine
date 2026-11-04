@@ -98,42 +98,43 @@ folder. The project file and `Input.binput` stay loose, so every layout above (f
 apart from that one file, and the runtime finds the project as before. Switching between the two forms removes the
 other one from the output, so a game never carries both. `archive.inspect` lists an archive (and with `verify: true`
 reads every entry and checks its hash); the result of `project.export` reports `archive: {files, compressed (files kept
-compressed), size (uncompressed bytes), archiveSize (bytes on disk)}`.
+compressed), size (uncompressed bytes), archiveSize (bytes on disk), omitted (original images left out)}`.
 
 ```bash
 basalt archive.inspect '{"path": "Dist/MyGame/Assets.bpak", "verify": true}'
 ```
 
-- **Contents.** Every file under `Assets/` except the `.meta` sidecars. Each entry carries its asset's UUID in the
+- **Contents.** Every file under `Assets/` except the `.meta` sidecars and the compressed texture originals below. Each entry carries its asset's UUID in the
   index instead, so references stored as UUIDs (scenes, prefabs, materials, the start scene, the icon) resolve exactly
   as they do in the project. An asset whose sidecar is broken goes in without its UUID, and the export warns
   (`project.validate`, which runs first unless `validate: false`, reports it as an error). A linked folder or a broken
   link inside `Assets/`, or a path an archive cannot hold (a `:` or `\` in a name, or over 1024 bytes), stops the
   export. An archive holds at most 2^20 files of at most 4 GiB each.
 - **Compressed texture originals.** A PNG, JPEG, TGA or BMP stays out when a `.ktx2` of the same name sits beside it
-  (`Wall.ktx2` next to `Wall.png`) and no other file mentions it: neither the project file nor any asset except media
-  contains its file name (also as a glTF URI spells it) or its UUID. The search reads bytes, so a script's
-  string, a script property or a glTF URI keeps a file, and a false match only keeps it too. `project.export` lists what
-  it left out in `archive.omitted`. A script that builds such a name at run time would no longer find the file: pass
-  `"keepOriginals": true` to keep every original. Folder exports copy every file.
-- **Compression.** Each file is compressed with zstd (level 9) on the job system, up to 256 MiB of files at a time, and
-  kept compressed only when that makes it smaller. Files are written in path order, so the same files give the same bytes
-  on any machine.
-  PNG/JPEG images and Ogg/MP3 audio usually end up stored as they are; `.ktx2` textures without supercompression (BC7
-  from `asset.compress_texture`, plain UASTC) usually shrink further, while ETC1S and Zstandard-supercompressed UASTC do
-  not.
+  (`Wall.ktx2` next to `Wall.png`) and neither the project file nor any asset except media contains its file name or its
+  UUID, as written or with percent, JSON or Lua escapes undone. So a script's string, a script property, a material or a
+  glTF URI keeps a file, and a false match only keeps it too. A `.ktx2` elsewhere is not recognized, so that image stays.
+  `project.export` lists what it left out in `archive.omitted` and `warnings`. A script that builds such a name at run
+  time would no longer find the file: pass `"keepOriginals": true` (a checkbox in the editor's export prompt) to keep every
+  original. Folder exports copy every file.
+- **Compression.** Each file is compressed with zstd (level 9) on the job system, up to 256 files or 256 MiB of them at a
+  time (a larger file goes alone), and kept compressed only when that makes it smaller. Files are written in path order,
+  so the same files and Basalt build give the same bytes however many cores the machine has. PNG/JPEG images usually end
+  up stored as they are, and Ogg, MP3, FLAC and Opus audio always do, because streaming needs them stored and zstd saves
+  so little of them. `.ktx2` textures without supercompression (BC7 from `asset.compress_texture`, plain UASTC) usually
+  shrink further, while ETC1S and Zstandard-supercompressed UASTC do not.
 - **Loading.** The runtime mounts the archive over the project folder before it loads the project. A file the archive
   holds (scenes, prefabs, scripts and `require`d modules, models and their buffers, textures, materials, animation
   graphs, fonts, audio clips) is read only from it; anything else, such as loose files placed beside the archive, comes
   from disk (their sidecars are ignored: UUIDs come from the index). Paths match exactly, letter case included, as on
   Linux (`project.validate` reports references whose case differs from the file). An archive that fails its checks when
   it opens (header, layout, index hash) stops the game at start with exit code 1 and the reason; a damaged file fails
-  only its own load, never falling back to a disk copy. Scene, prefab, script, material, texture, animation graph, font
-  and model loads and `require` put the reason in their error; audio clips log it. An audio clip stored uncompressed
-  (Ogg and MP3 usually are) is read from the archive as it decodes, so a long streamed clip stays out of memory; such a
-  clip skips the hash check, since a part of a file cannot be checked (reads stay inside its entry, and damage plays as
-  noise or fails to decode; `archive.inspect` with `verify: true` finds it). One that zstd shrinks (usually WAV) is read
-  into memory whole when the clip opens, and streaming decodes page by page from that copy.
+  only its own load (a long stored audio clip may not fail at all, see below), never falling back to a disk copy. Scene, prefab, script, material, texture, animation graph, font
+  and model loads and `require` put the reason in their error; audio clips log it. An audio clip of at least 1 MiB
+  stored uncompressed is read from the archive as it decodes, so a long streamed clip stays out of memory. Such a clip
+  skips the hash check, since a part of a file cannot be checked: reads stay inside its entry, damage plays as noise or
+  fails to decode, and `archive.inspect` with `verify: true` finds it. Any other clip, such as a WAV that zstd shrinks, is
+  read into memory whole when it opens, hash checked, and streaming decodes page by page from that copy.
 - **Format** (`Core/PackArchive`, little-endian): a 40-byte header (`BPAK`, format version u32 = 1, flags u32 = 0, entry
   count u32, index offset u64, index size u64, index hash u64), the files' bytes, then the index, which must end the
   file exactly. Each index entry is the path's length (u32) and UTF-8 bytes (normalized, `/`-separated, sorted
@@ -179,8 +180,8 @@ parameters and pure virtual calls there. A report holds:
 - the last 64 log lines;
 - on Linux with `/usr/bin/addr2line`, the executable's frames with their function names (and files and lines when the
   binary has debug information), last, so that a slow `addr2line` costs only this section: it is stopped after 15
-  seconds. A player's machine rarely has it; a report from one still gives each frame's offset, for `addr2line -e` on the
-  same build.
+  seconds, with a note saying so. A player's machine rarely has it; a report from one still gives each frame's offset,
+  for `addr2line -e` on the same build.
 
 Reports go to `<user data>/<application>/Crashes/crash-<unix time>-<process>.txt` (the per-user data directory that
 save data uses, `BASALT_USER_DATA_DIR` included), so a signed `.app` or a read-only install is normally left alone. Only
@@ -193,14 +194,15 @@ The process then ends: by the same signal on macOS and Linux, with the exception
 the runtime would otherwise fail fast with 0xC0000409. `project.smoke_test` reports the first two as `crashed`; Windows
 exit code 3 shows up as `exited` with exit code 3 ("the game aborted"). If another thread crashes while a report is
 being written, it waits for the report; a report that is not finished within 30 seconds (a lock the crash left held)
-ends the process anyway, by SIGALRM on macOS and Linux.
+ends the process anyway, by SIGALRM on macOS and Linux (which `addr2line`'s section restarts) and from the watchdog
+thread on Windows. Each report's header is written first, so even then it says what crashed.
 
 The windowed runtime also shows a message box with the report's path, offering to open the report: a task-modal Windows
 message box (the process ends when it is closed); osascript on macOS, or zenity, kdialog or xmessage from `/usr/bin` on
 Linux when a display is set, started as a separate process (the crashed process ends at once; on Linux the offer needs
-`/usr/bin/xdg-open`). Reports are not sent anywhere: the engine has no network client and no destination for them. A
-failed start that is no crash (an archive that does not open, a project or start scene that does not load, no window or
-graphics device) shows its reason the same way before the exit code 1. The CLI, the editor, and headless, offscreen and
+`/usr/bin/xdg-open`, and on Windows the watchdog thread). Reports are not sent anywhere: the engine has no network client
+and no destination for them. A failed start that is no crash (an archive that does not open, a project or start scene
+that does not load, no window or graphics device) shows its reason the same way before the exit code 1, cut at 4 KiB. The CLI, the editor, and headless, offscreen and
 `--frames` runs never show one. AddressSanitizer builds leave crashes to AddressSanitizer.
 
 On macOS and Linux the handler formats into fixed buffers, allocates nothing and never forks: the dialog and `addr2line`
@@ -209,8 +211,9 @@ is loaded at install. It runs on an alternate stack, so stack overflows are repo
 thread holding a `CrashReporter::ThreadStack`: the job workers, the file watcher and the automation server. On Windows it
 uses static buffers and writes the text first, and those threads keep a 128 KiB stack guarantee (taken from their 1 MiB
 stacks); dbghelp may load symbol files while it names frames. A watchdog thread waiting from install on writes the
-minidump, with its own stack, and opens the report; if it has not finished after 20 seconds (a lock the crash left held)
-the report says so and no partial dump stays. Threads the engine does not start (miniaudio's, a graphics driver's) have
+minidump, with its own stack, and opens the report. If it has not finished after 20 seconds, or what is left of the 30
+(a lock the crash left held), the report says so and no partial dump stays; should the dump writer suspend the waiting
+thread too, this limit cannot fire, as nothing could then. Threads the engine does not start (miniaudio's, a graphics driver's) have
 neither, so their stack overflows end the process without a report.
 
 ## Releasing Basalt

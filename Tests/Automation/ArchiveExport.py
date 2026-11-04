@@ -6,7 +6,9 @@ asset references (and the start scene) by UUID, so the archived game must resolv
 exports run headless for the same frames; their log lines (timestamps stripped, the export path replaced) must match,
 each as often, apart from the archive's mount message, so any loader that bypassed the archive (and logged a failed
 load while the game still exited) shows up as a difference. Script errors fail either run (--fail-on-script-errors),
-so a module that fails to load from both exports alike does not pass unnoticed.
+so a module that fails to load from both exports alike does not pass unnoticed. The project first gains a Replaced.png
+beside its compressed Replaced.ktx2: the archive must report it as omitted and the folder must copy it. A third export
+with keepOriginals must omit nothing, and that archive, once broken, must stop the game with exit code 1 and the reason.
 
 Usage: ArchiveExport.py <basalt CLI> <feature test project>
 """
@@ -57,11 +59,12 @@ def main():
         if '"UUID"' not in (project / "Assets" / "Prefabs" / "LampPair.bprefab").read_text() or '"UUID"' not in (project / "Assets" / "Scenes" / "FeatureTest.bscene").read_text() or '"UUID"' not in (project / "Project.bproject").read_text():
             fail("the saved scene or project holds no UUID references")
 
-        # A compressed replacement beside an image nothing mentions: the archive leaves the image out, and the game must not
-        # miss it. The folder form still copies every file.
-        for name, content in (("Replaced.png", "original"), ("Replaced.ktx2", "replacement")):
-            (project / "Assets" / "Textures").mkdir(exist_ok=True)
-            (project / "Assets" / "Textures" / name).write_text(content)
+        # A real compressed replacement beside an image nothing mentions: the archive leaves the image out, and the game must
+        # not miss it. The folder form still copies every file.
+        shutil.copyfile(project / "Assets" / "Textures" / "UIPanel.png", project / "Assets" / "Textures" / "Replaced.png")
+        compressed = subprocess.run([str(cli), "--project", str(project), "asset.compress_texture", json.dumps({"path": "Assets/Textures/Replaced.png", "output": "Assets/Textures/Replaced.ktx2"})], capture_output=True, text=True, timeout=300, env=env)
+        if compressed.returncode != 0:
+            fail(f"compressing the replacement failed: {compressed.stdout}{compressed.stderr}")
         replaced = "Assets/Textures/Replaced.png"
 
         logs = {}

@@ -15,6 +15,7 @@
 #include <functional>
 #include <new>
 #include <numeric>
+#include <span>
 #include <system_error>
 
 namespace Basalt {
@@ -116,25 +117,31 @@ namespace Basalt {
 			return reason != 0 ? ": " + std::generic_category().message(reason) : std::string();
 		}
 
-		// An entry ready to write, made on a job: its bytes and what its index record needs.
+		// An entry ready to write, made on a job.
 		struct PreparedEntry
 		{
-			// Set when the job finished; a job that never ran leaves it false.
-			bool Finished = false;
-			// Why the entry cannot be written; empty when it can.
-			std::string Error;
-			// The compressed bytes, or the file read from disk; empty when the writer's own bytes (AddData) are stored as is.
-			std::vector<uint8_t> Owned;
-			// The bytes to write: Owned's, or the writer's own.
-			const uint8_t* Stored = nullptr;
-			size_t StoredSize = 0;
+			// The bytes to store, unless they are the writer's own (AddData) as they stand.
+			std::optional<std::vector<uint8_t>> Owned;
 			uint64_t Size = 0;
 			uint64_t Hash = 0;
-			bool UseZstd = false;
+			PackArchive::Method Compression = PackArchive::Method::Store;
+
+			std::span<const uint8_t> GetBytes(const std::vector<uint8_t>& pendingData) const
+			{
+				return Owned ? std::span<const uint8_t>(*Owned) : std::span<const uint8_t>(pendingData);
+			}
 		};
 
-		// One entry's job: reads source, or takes pendingData when source is empty, and compresses it.
-		void PrepareEntry(PreparedEntry& out, const std::string& path, const std::filesystem::path& source, const std::vector<uint8_t>& pendingData, int level)
+		// What a job left: an entry or why not. Neither means the job never ran.
+		struct PrepareSlot
+		{
+			std::optional<PreparedEntry> Entry;
+			std::string Error;
+		};
+
+		// Reads source, or takes pendingData when source is empty, and compresses it unless told to store it. A compressor
+		// failure stops the export rather than storing the file: the bytes would then depend on memory at that moment.
+		std::optional<PreparedEntry> PrepareEntry(const std::string& path, const std::filesystem::path& source, const std::vector<uint8_t>& pendingData, bool storeUncompressed, int level, std::string& outError)
 		{
 			std::optional<std::vector<uint8_t>> read;
 			if (!source.empty())
@@ -143,35 +150,33 @@ namespace Basalt {
 				read = ReadSource(source, readError);
 				if (!read)
 				{
-					out.Error = "cannot read '" + FileSystem::PathToUtf8(source) + "' (" + readError + ")";
-					return;
+					outError = "cannot read '" + FileSystem::PathToUtf8(source) + "' (" + readError + ")";
+					return std::nullopt;
 				}
 			}
 			const std::vector<uint8_t>& data = read ? *read : pendingData;
-			if (data.size() > PackArchive::MaxEntrySize)
+			PreparedEntry entry;
+			entry.Size = data.size();
+			entry.Hash = HashBytes64(data.data(), data.size());
+			if (!storeUncompressed)
 			{
-				out.Error = "'" + path + "' is larger than an archive entry may be (" + std::to_string(PackArchive::MaxEntrySize) + " bytes)";
-				return;
+				std::vector<uint8_t> compressed(ZSTD_compressBound(data.size()));
+				const size_t compressedSize = ZSTD_compress(compressed.data(), compressed.size(), data.data(), data.size(), level);
+				if (ZSTD_isError(compressedSize))
+				{
+					outError = "cannot compress '" + path + "' (" + ZSTD_getErrorName(compressedSize) + ")";
+					return std::nullopt;
+				}
+				if (compressedSize < data.size())
+				{
+					compressed.resize(compressedSize);
+					entry.Owned = std::move(compressed);
+					entry.Compression = PackArchive::Method::Zstd;
+					return entry;
+				}
 			}
-			std::vector<uint8_t> compressed(ZSTD_compressBound(data.size()));
-			const size_t compressedSize = ZSTD_compress(compressed.data(), compressed.size(), data.data(), data.size(), level);
-			// Still a valid archive (the file is stored), but a failing compressor is worth knowing about.
-			if (ZSTD_isError(compressedSize))
-				BS_CORE_WARN("Archive: cannot compress '{}' ({}); storing it uncompressed", path, ZSTD_getErrorName(compressedSize));
-			out.UseZstd = !ZSTD_isError(compressedSize) && compressedSize < data.size();
-			out.Size = data.size();
-			out.Hash = HashBytes64(data.data(), data.size());
-			if (out.UseZstd)
-			{
-				compressed.resize(compressedSize);
-				out.Owned = std::move(compressed);
-			}
-			else if (read)
-				out.Owned = std::move(*read);
-			const std::vector<uint8_t>& stored = out.UseZstd || !source.empty() ? out.Owned : pendingData;
-			out.Stored = stored.data();
-			out.StoredSize = stored.size();
-			out.Finished = true;
+			entry.Owned = std::move(read);
+			return entry;
 		}
 
 	}
@@ -533,14 +538,14 @@ namespace Basalt {
 		return true;
 	}
 
-	bool PackArchiveWriter::AddFile(std::string path, std::filesystem::path source, uint64_t assetID, std::string& outError)
+	bool PackArchiveWriter::AddFile(std::string path, std::filesystem::path source, uint64_t assetID, std::string& outError, bool storeUncompressed)
 	{
 		if (source.empty())
 		{
 			outError = "no source file for '" + path + "'";
 			return false;
 		}
-		return AddPending({ std::move(path), std::move(source), {}, assetID }, outError);
+		return AddPending({ std::move(path), std::move(source), {}, assetID, storeUncompressed }, outError);
 	}
 
 	bool PackArchiveWriter::AddData(std::string path, std::vector<uint8_t> data, uint64_t assetID, std::string& outError)
@@ -550,7 +555,21 @@ namespace Basalt {
 			outError = "'" + path + "' is larger than an archive entry may be (" + std::to_string(PackArchive::MaxEntrySize) + " bytes)";
 			return false;
 		}
-		return AddPending({ std::move(path), {}, std::move(data), assetID }, outError);
+		return AddPending({ std::move(path), {}, std::move(data), assetID, false }, outError);
+	}
+
+	size_t PackArchiveWriter::FindBatchEnd(std::span<const uint64_t> sizes, size_t begin, uint64_t batchBytes)
+	{
+		size_t end = begin;
+		uint64_t held = 0;
+		while (end < sizes.size() && end - begin < MaxBatchEntries)
+		{
+			// Compared this way round so that a large size cannot wrap.
+			if (end > begin && sizes[end] > batchBytes - std::min(held, batchBytes))
+				break;
+			held += sizes[end++];
+		}
+		return end;
 	}
 
 	std::optional<PackArchiveWriter::Statistics> PackArchiveWriter::Write(const std::filesystem::path& file, std::string& outError, int compressionLevel, uint64_t batchBytes) const
@@ -591,63 +610,56 @@ namespace Basalt {
 		Statistics statistics;
 		uint64_t offset = PackArchive::HeaderSize;
 		std::vector<uint8_t> index;
+		// Sizes only plan the batches: a file that cannot be sized here fails with its reason on its job.
+		std::vector<uint64_t> sizes(order.size());
+		for (size_t i = 0; i < order.size(); i++)
+		{
+			const Pending& pending = m_Pending[order[i]];
+			std::error_code sizeError;
+			const uint64_t size = pending.Source.empty() ? pending.Data.size() : std::filesystem::file_size(pending.Source, sizeError);
+			sizes[i] = sizeError ? 0 : size;
+		}
+		const auto writeFailed = [&]() { return fail("failed writing '" + FileSystem::PathToUtf8(temporary) + "' (disk full?)"); };
 		for (size_t begin = 0; begin < order.size();)
 		{
-			// Sizes only plan the batch: a file that cannot be sized here fails with its reason on its job.
-			size_t end = begin;
-			uint64_t held = 0;
-			while (end < order.size() && end - begin < MaxBatchEntries)
-			{
-				const Pending& pending = m_Pending[order[end]];
-				std::error_code sizeError;
-				const uint64_t onDisk = pending.Source.empty() ? pending.Data.size() : std::filesystem::file_size(pending.Source, sizeError);
-				const uint64_t size = sizeError ? 0 : onDisk;
-				if (end > begin && size > batchBytes - std::min(held, batchBytes))
-					break;
-				held += size;
-				end++;
-			}
-
+			const size_t end = FindBatchEnd(sizes, begin, batchBytes);
 			const auto count = static_cast<uint32_t>(end - begin);
-			std::vector<PreparedEntry> prepared(count);
-			JobSystem::Get().ParallelFor(count, 1, [&](uint32_t first, uint32_t last) {
+			std::vector<PrepareSlot> slots(count);
+			// Failures are in the slots, which also show a job that never ran.
+			(void)JobSystem::Get().ParallelFor(count, 1, [&](uint32_t first, uint32_t last) {
 				for (uint32_t i = first; i < last; i++)
 				{
 					const Pending& pending = m_Pending[order[begin + i]];
-					try
-					{
-						PrepareEntry(prepared[i], pending.Path, pending.Source, pending.Data, level);
-					}
-					catch (const std::exception& exception)
-					{
-						prepared[i].Error = "cannot prepare '" + pending.Path + "': " + exception.what();
-					}
+					slots[i].Entry = PrepareEntry(pending.Path, pending.Source, pending.Data, pending.StoreUncompressed, level, slots[i].Error);
 				}
 			});
 			// The first failure in path order, whichever job met one first.
 			for (uint32_t i = 0; i < count; i++)
 			{
 				const Pending& pending = m_Pending[order[begin + i]];
-				const PreparedEntry& entry = prepared[i];
-				if (!entry.Error.empty())
-					return fail(entry.Error);
-				if (!entry.Finished)
-					return fail("the job for '" + pending.Path + "' did not run");
-				stream.write(reinterpret_cast<const char*>(entry.Stored), static_cast<std::streamsize>(entry.StoredSize));
+				const PrepareSlot& slot = slots[i];
+				if (!slot.Entry)
+					return fail(!slot.Error.empty() ? slot.Error : "'" + pending.Path + "' could not be prepared (the log says why)");
+				const PreparedEntry& entry = *slot.Entry;
+				const std::span<const uint8_t> stored = entry.GetBytes(pending.Data);
+				stream.write(reinterpret_cast<const char*>(stored.data()), static_cast<std::streamsize>(stored.size()));
 
 				PutU32(index, static_cast<uint32_t>(pending.Path.size()));
 				index.insert(index.end(), pending.Path.begin(), pending.Path.end());
 				PutU64(index, pending.AssetID);
 				PutU64(index, offset);
-				PutU64(index, entry.StoredSize);
+				PutU64(index, stored.size());
 				PutU64(index, entry.Size);
-				index.push_back(static_cast<uint8_t>(entry.UseZstd ? PackArchive::Method::Zstd : PackArchive::Method::Store));
+				index.push_back(static_cast<uint8_t>(entry.Compression));
 				PutU64(index, entry.Hash);
-				offset += entry.StoredSize;
+				offset += stored.size();
 				statistics.Entries++;
-				statistics.CompressedEntries += entry.UseZstd ? 1 : 0;
+				statistics.CompressedEntries += entry.Compression == PackArchive::Method::Zstd ? 1 : 0;
 				statistics.UncompressedSize += entry.Size;
 			}
+			// A full disk stops here rather than after compressing every batch that is left.
+			if (!stream)
+				return writeFailed();
 			begin = end;
 		}
 		stream.write(reinterpret_cast<const char*>(index.data()), static_cast<std::streamsize>(index.size()));
@@ -658,7 +670,7 @@ namespace Basalt {
 		stream.flush();
 		stream.close();
 		if (stream.fail())
-			return fail("failed writing '" + FileSystem::PathToUtf8(temporary) + "' (disk full?)");
+			return writeFailed();
 		if (!FileSystem::RenameReplacing(temporary, file, outError))
 			return std::nullopt;
 		statistics.ArchiveSize = offset + index.size();

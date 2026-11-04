@@ -12,7 +12,9 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <map>
 #include <optional>
+#include <span>
 #include <string_view>
 #include <system_error>
 #include <unordered_set>
@@ -80,7 +82,6 @@ namespace Basalt {
 			return false;
 		}
 
-		// A file bound for the archive.
 		struct ArchiveFile
 		{
 			std::string Key;
@@ -88,67 +89,169 @@ namespace Basalt {
 			uint64_t AssetID = 0;
 		};
 
-		// Whether a file is media, which cannot name another asset: everything else (scenes, scripts, models, unknown types)
-		// is searched for mentions.
-		bool IsMediaFile(const std::filesystem::path& file)
+		// What an archive export wrote.
+		struct WrittenArchive
 		{
-			static constexpr std::string_view MediaExtensions[] = { ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".hdr", ".ktx2", ".wav", ".ogg", ".mp3", ".flac", ".ttf", ".otf" };
-			const std::string extension = FileSystem::GetLowercaseExtension(file);
-			return std::find(std::begin(MediaExtensions), std::end(MediaExtensions), extension) != std::end(MediaExtensions);
+			PackArchiveWriter::Statistics Statistics;
+			// Sorted: the omitted original images.
+			std::vector<std::string> Omitted;
+		};
+
+		constexpr std::string_view ReplaceableImageExtensions[] = { ".png", ".jpg", ".jpeg", ".tga", ".bmp" };
+		// Files that cannot name another asset, besides those images.
+		constexpr std::string_view OtherMediaExtensions[] = { ".hdr", ".ktx2", ".wav", ".ogg", ".mp3", ".flac", ".opus", ".ttf", ".otf", ".bin" };
+		// Stored so they can stream (PackArchive::ReadStored): they are compressed already, and zstd saves 0.1 to 5% of them,
+		// which would cost a clip its streaming for that saving.
+		constexpr std::string_view EncodedAudioExtensions[] = { ".ogg", ".mp3", ".flac", ".opus" };
+
+		bool IsListed(std::span<const std::string_view> extensions, std::string_view extension)
+		{
+			return std::find(extensions.begin(), extensions.end(), extension) != extensions.end();
 		}
 
-		// How a glTF URI spells a file name: spaces and the like as %XX.
-		std::string PercentEncode(std::string_view name)
+		std::optional<uint32_t> ParseHex(std::string_view text)
 		{
-			static constexpr char Digits[] = "0123456789ABCDEF";
-			std::string encoded;
-			for (const char c : name)
+			uint32_t value = 0;
+			if (text.empty() || text.size() > 6)
+				return std::nullopt;
+			for (const char c : text)
 			{
 				const auto byte = static_cast<unsigned char>(c);
-				if (std::isalnum(byte) != 0 || std::string_view("-._~").find(c) != std::string_view::npos)
-					encoded += c;
-				else
-					encoded.append({ '%', Digits[byte >> 4], Digits[byte & 15] });
+				if (std::isxdigit(byte) == 0)
+					return std::nullopt;
+				value = value * 16 + static_cast<uint32_t>(std::isdigit(byte) != 0 ? c - '0' : std::tolower(byte) - 'a' + 10);
 			}
-			return encoded;
+			return value;
 		}
 
-		// The images that compressed replacements make unnecessary: an image with a .ktx2 of the same name beside it (what
-		// asset.compress_texture is told to write; KTX2 files do not record their source), whose path, file name and UUID
-		// no other file mentions. A search of the bytes rather than a walk of the declared asset fields, because a script's
-		// string, a script property or a glTF URI can name a file too; a false match only keeps the file.
+		void AppendUtf8(std::string& out, uint32_t code)
+		{
+			if (code < 0x80)
+				out += static_cast<char>(code);
+			else if (code < 0x800)
+				out.append({ static_cast<char>(0xC0 | (code >> 6)), static_cast<char>(0x80 | (code & 63)) });
+			else if (code < 0x10000)
+				out.append({ static_cast<char>(0xE0 | (code >> 12)), static_cast<char>(0x80 | ((code >> 6) & 63)), static_cast<char>(0x80 | (code & 63)) });
+			else
+				out.append({ static_cast<char>(0xF0 | (code >> 18)), static_cast<char>(0x80 | ((code >> 12) & 63)), static_cast<char>(0x80 | ((code >> 6) & 63)), static_cast<char>(0x80 | (code & 63)) });
+		}
+
+		// text with the escapes undone that can spell a file name: a glTF URI's %XX (either case, escaping as little as the
+		// writer liked), JSON's \uXXXX with surrogate pairs, and Lua's \xXX, \ddd and \u{X...}. Anything else stays as it
+		// is, so it works on any file, binary ones included.
+		std::string DecodeEscapes(std::string_view text)
+		{
+			std::string decoded;
+			decoded.reserve(text.size());
+			const auto hexAt = [&](size_t at, size_t count) { return at + count <= text.size() ? ParseHex(text.substr(at, count)) : std::nullopt; };
+			for (size_t i = 0; i < text.size();)
+			{
+				const char next = i + 1 < text.size() ? text[i + 1] : '\0';
+				if (text[i] == '%')
+				{
+					if (const auto byte = hexAt(i + 1, 2))
+					{
+						decoded += static_cast<char>(*byte);
+						i += 3;
+						continue;
+					}
+				}
+				else if (text[i] == '\\' && next == '\\')
+				{
+					// An escaped backslash, so what follows it is no escape.
+					decoded += '\\';
+					i += 2;
+					continue;
+				}
+				else if (text[i] == '\\' && next == 'x')
+				{
+					if (const auto byte = hexAt(i + 2, 2))
+					{
+						decoded += static_cast<char>(*byte);
+						i += 4;
+						continue;
+					}
+				}
+				else if (text[i] == '\\' && next == 'u' && i + 2 < text.size() && text[i + 2] == '{')
+				{
+					const size_t close = text.find('}', i + 3);
+					const auto code = close != std::string_view::npos ? ParseHex(text.substr(i + 3, close - i - 3)) : std::nullopt;
+					if (code && *code <= 0x10FFFF)
+					{
+						AppendUtf8(decoded, *code);
+						i = close + 1;
+						continue;
+					}
+				}
+				else if (text[i] == '\\' && next == 'u')
+				{
+					if (auto code = hexAt(i + 2, 4))
+					{
+						i += 6;
+						if (*code >= 0xD800 && *code < 0xDC00 && text.substr(i, 2) == "\\u")
+						{
+							const auto low = hexAt(i + 2, 4);
+							if (low && *low >= 0xDC00 && *low < 0xE000)
+							{
+								code = 0x10000 + ((*code - 0xD800) << 10) + (*low - 0xDC00);
+								i += 6;
+							}
+						}
+						AppendUtf8(decoded, *code);
+						continue;
+					}
+				}
+				else if (text[i] == '\\' && std::isdigit(static_cast<unsigned char>(next)) != 0)
+				{
+					size_t digits = 0;
+					uint32_t byte = 0;
+					while (digits < 3 && i + 1 + digits < text.size() && std::isdigit(static_cast<unsigned char>(text[i + 1 + digits])) != 0)
+						byte = byte * 10 + static_cast<uint32_t>(text[i + 1 + digits++] - '0');
+					if (byte <= 255)
+					{
+						decoded += static_cast<char>(byte);
+						i += 1 + digits;
+						continue;
+					}
+				}
+				decoded += text[i++];
+			}
+			return decoded;
+		}
+
+		// The images that compressed replacements make unnecessary: an image with a .ktx2 of the same name beside it (the
+		// usual asset.compress_texture output; KTX2 files do not record their source) whose file name and UUID neither the
+		// project file nor any file but media contains, as written or with its escapes undone. A search of the bytes rather
+		// than a walk of the declared asset fields, because a script's string, a script property or a glTF URI can name a file
+		// too. Dropping a file a game uses is the failure to avoid: a false match only keeps one.
 		std::vector<std::string> FindReplacedOriginals(const Project& project, const std::vector<ArchiveFile>& files, std::vector<std::string>& outWarnings)
 		{
 			std::unordered_set<std::string> keys;
 			for (const ArchiveFile& file : files)
 				keys.insert(file.Key);
-			struct Candidate
-			{
-				std::string Key;
-				std::vector<std::string> Mentions;
-			};
-			std::vector<Candidate> candidates;
+			// Key -> what would mention it. Ordered, so the result comes out sorted.
+			std::map<std::string, std::vector<std::string>> candidates;
 			for (const ArchiveFile& file : files)
 			{
 				const std::filesystem::path path = FileSystem::PathFromUtf8(file.Key);
 				const std::string extension = FileSystem::GetLowercaseExtension(path);
-				if (extension != ".png" && extension != ".jpg" && extension != ".jpeg" && extension != ".tga" && extension != ".bmp")
+				if (!IsListed(ReplaceableImageExtensions, extension) || !keys.contains(file.Key.substr(0, file.Key.size() - extension.size()) + ".ktx2"))
 					continue;
-				if (!keys.contains(file.Key.substr(0, file.Key.size() - extension.size()) + ".ktx2"))
-					continue;
-				const std::string name = FileSystem::PathToUtf8(path.filename());
-				Candidate candidate{ file.Key, { name, PercentEncode(name) } };
+				std::vector<std::string>& mentions = candidates[file.Key];
+				mentions.push_back(FileSystem::PathToUtf8(path.filename()));
 				if (file.AssetID != 0)
-					candidate.Mentions.push_back(std::to_string(file.AssetID));
-				candidates.push_back(std::move(candidate));
+					mentions.push_back(std::to_string(file.AssetID));
 			}
 			if (candidates.empty())
 				return {};
 
 			std::vector<std::filesystem::path> searched = { project.GetProjectFilePath() };
 			for (const ArchiveFile& file : files)
-				if (!IsMediaFile(file.Source))
+			{
+				const std::string extension = FileSystem::GetLowercaseExtension(file.Source);
+				if (!IsListed(ReplaceableImageExtensions, extension) && !IsListed(OtherMediaExtensions, extension))
 					searched.push_back(file.Source);
+			}
 			for (const std::filesystem::path& file : searched)
 			{
 				std::string readError;
@@ -159,25 +262,37 @@ namespace Basalt {
 					return {};
 				}
 				const std::string_view text(reinterpret_cast<const char*>(bytes->data()), bytes->size());
-				std::erase_if(candidates, [&](const Candidate& candidate) {
-					return std::any_of(candidate.Mentions.begin(), candidate.Mentions.end(), [&](const std::string& mention) { return text.find(mention) != std::string_view::npos; });
+				const std::string decoded = DecodeEscapes(text);
+				std::erase_if(candidates, [&](const auto& candidate) {
+					return std::any_of(candidate.second.begin(), candidate.second.end(), [&](const std::string& mention) { return text.find(mention) != std::string_view::npos || decoded.find(mention) != std::string::npos; });
 				});
 				if (candidates.empty())
 					return {};
 			}
 			std::vector<std::string> replaced;
 			replaced.reserve(candidates.size());
-			for (const Candidate& candidate : candidates)
-				replaced.push_back(candidate.Key);
-			std::sort(replaced.begin(), replaced.end());
+			for (const auto& [key, mentions] : candidates)
+				replaced.push_back(key);
 			return replaced;
 		}
 
+		// Tells whoever exports what is gone: a script that builds one of these names at run time will not find it.
+		std::string DescribeOmitted(const std::vector<std::string>& omitted)
+		{
+			constexpr size_t MaxNamed = 5;
+			std::string text = "left out of the archive, each replaced by the .ktx2 beside it (keepOriginals keeps them):";
+			for (size_t i = 0; i < std::min(omitted.size(), MaxNamed); i++)
+				text.append(" '").append(omitted[i]).append("'");
+			if (omitted.size() > MaxNamed)
+				text.append(" and ").append(std::to_string(omitted.size() - MaxNamed)).append(" more");
+			return text;
+		}
+
 		// Packs the project's Assets into archive: every file except the .meta sidecars, whose UUIDs go into the index, and
-		// (unless keepOriginals) the originals of compressed textures nothing else mentions, listed in outOmitted.
+		// (unless keepOriginals) the originals of compressed textures nothing else mentions.
 		// Assets whose sidecar is broken go in without a UUID, so references to them will not resolve: outWarnings says so
 		// (project.validate reports them as errors, so only an export with validation off gets here).
-		std::optional<PackArchiveWriter::Statistics> WriteAssetArchive(const Project& project, const std::filesystem::path& archive, bool keepOriginals, std::vector<std::string>& outOmitted, std::vector<std::string>& outWarnings, std::string& outError)
+		std::optional<WrittenArchive> WriteAssetArchive(const Project& project, const std::filesystem::path& archive, bool keepOriginals, std::vector<std::string>& outWarnings, std::string& outError)
 		{
 			// A fresh scan: the project's own registry may predate files written since it loaded.
 			AssetRegistry registry(project.GetDirectory());
@@ -238,21 +353,30 @@ namespace Basalt {
 				outError = "cannot list '" + FileSystem::PathToUtf8(assets) + "': " + error.message();
 				return std::nullopt;
 			}
+			WrittenArchive written;
 			if (!keepOriginals)
-				outOmitted = FindReplacedOriginals(project, files, outWarnings);
-			if (!outOmitted.empty())
-				BS_CORE_INFO("Exporter: left out {} original image(s) that a .ktx2 replaces", outOmitted.size());
+				written.Omitted = FindReplacedOriginals(project, files, outWarnings);
+			if (!written.Omitted.empty())
+				outWarnings.push_back(DescribeOmitted(written.Omitted));
 			PackArchiveWriter writer;
 			for (ArchiveFile& file : files)
-				if (!std::binary_search(outOmitted.begin(), outOmitted.end(), file.Key) && !writer.AddFile(std::move(file.Key), std::move(file.Source), file.AssetID, outError))
+			{
+				if (std::binary_search(written.Omitted.begin(), written.Omitted.end(), file.Key))
+					continue;
+				const bool storeUncompressed = IsListed(EncodedAudioExtensions, FileSystem::GetLowercaseExtension(file.Source));
+				if (!writer.AddFile(std::move(file.Key), std::move(file.Source), file.AssetID, outError, storeUncompressed))
 					return std::nullopt;
-			return writer.Write(archive, outError);
+			}
+			std::optional<PackArchiveWriter::Statistics> statistics = writer.Write(archive, outError);
+			if (!statistics)
+				return std::nullopt;
+			written.Statistics = *statistics;
+			return written;
 		}
 
-		// Copies the project file and its input actions into directory with its Assets (a folder, or with archive an
-		// Assets.bpak whose statistics go to outArchive and whose left out originals to outOmitted), replacing a previous
-		// export's.
-		bool CopyProjectFiles(const Project& project, const std::filesystem::path& directory, const ExportOptions& options, std::optional<PackArchiveWriter::Statistics>& outArchive, std::vector<std::string>& outOmitted, std::vector<std::string>& outWarnings, std::string& outError)
+		// Copies the project file and its input actions into directory with its Assets (a folder, or with options.Archive an
+		// Assets.bpak that outArchive reports), replacing a previous export's.
+		bool CopyProjectFiles(const Project& project, const std::filesystem::path& directory, const ExportOptions& options, std::optional<WrittenArchive>& outArchive, std::vector<std::string>& outWarnings, std::string& outError)
 		{
 			std::error_code error;
 			// Assets the project no longer has must not survive from the previous export, in either form: the runtime would
@@ -274,7 +398,7 @@ namespace Basalt {
 			}
 			if (options.Archive)
 			{
-				outArchive = WriteAssetArchive(project, directory / Project::ArchiveFileName, options.KeepOriginals, outOmitted, outWarnings, outError);
+				outArchive = WriteAssetArchive(project, directory / Project::ArchiveFileName, options.KeepOriginals, outWarnings, outError);
 				if (!outArchive)
 				{
 					outError = "cannot write " + std::string(Project::ArchiveFileName) + ": " + outError;
@@ -562,6 +686,11 @@ namespace Basalt {
 		ExportResult result;
 		std::error_code error;
 
+		if (options.KeepOriginals && !options.Archive)
+		{
+			result.Error = "keepOriginals needs archive: true (a folder export copies every file)";
+			return result;
+		}
 		const ProjectConfig& config = project.GetConfig();
 		if (config.StartScene.empty())
 		{
@@ -675,8 +804,8 @@ namespace Basalt {
 				result.Error += " (the export in '" + FileSystem::PathToUtf8(output) + "' is incomplete; export again once this is fixed)";
 			return result;
 		};
-		std::optional<PackArchiveWriter::Statistics> archive;
-		if (!CopyProjectFiles(project, projectDirectory, options, archive, result.ArchiveOmitted, result.Warnings, result.Error))
+		std::optional<WrittenArchive> archive;
+		if (!CopyProjectFiles(project, projectDirectory, options, archive, result.Warnings, result.Error))
 			return fail();
 
 		std::filesystem::path executable = executableDirectory / ExecutableFileName(executableName);
@@ -712,7 +841,11 @@ namespace Basalt {
 #endif
 
 		result.Success = true;
-		result.ArchiveStatistics = archive;
+		if (archive)
+		{
+			result.ArchiveStatistics = archive->Statistics;
+			result.ArchiveOmitted = std::move(archive->Omitted);
+		}
 		result.PackagePath = std::move(packagePath);
 		result.ExecutablePath = std::move(executable);
 		result.FileCount = CountFiles(output);

@@ -103,7 +103,7 @@ namespace Basalt {
 				// 0) is read once, and cgltf keeps its own copy.
 				if (mounted && *size != 0)
 				{
-					// Archive entries are read whole (a compressed one cannot be read in part).
+					// Archive entries are read whole, which checks their hash.
 					auto it = cache.Files.find(path);
 					if (it == cache.Files.end())
 					{

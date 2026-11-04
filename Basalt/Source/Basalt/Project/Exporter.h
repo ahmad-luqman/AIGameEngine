@@ -27,8 +27,8 @@ namespace Basalt {
 		// the asset UUIDs in its index instead of .meta files. The project and input files stay beside it. Docs/Shipping.md
 		// lists what the archive leaves out.
 		bool Archive = false;
-		// Keep every original image in the archive. By default one with a compressed replacement beside it (Wall.ktx2 next
-		// to Wall.png) that no file mentions stays out; a script that builds such a name at run time needs this.
+		// Needs Archive: keep every original image in it. By default one with a compressed replacement beside it (Wall.ktx2
+		// next to Wall.png) that no file mentions stays out; a script that builds such a name at run time needs this.
 		bool KeepOriginals = false;
 	};
 
@@ -40,12 +40,13 @@ namespace Basalt {
 		// What to distribute: the .app bundle, the .AppImage file (the AppDir when appimagetool was not found), or the
 		// output directory (folder exports and Windows packages).
 		std::filesystem::path PackagePath;
-		// Problems that did not stop the export (no project icon, no appimagetool, assets archived without their UUID).
+		// Problems that did not stop the export (no project icon, no appimagetool, assets archived without their UUID), and
+		// what an archive left out or kept for want of a search.
 		std::vector<std::string> Warnings;
 		uint32_t FileCount = 0;
 		// What ExportOptions::Archive packed; set only on success.
 		std::optional<PackArchiveWriter::Statistics> ArchiveStatistics;
-		// The original images ExportOptions::Archive left out (project-relative, sorted).
+		// The original images ExportOptions::Archive left out (project-relative, sorted); set only on success.
 		std::vector<std::string> ArchiveOmitted;
 	};
 
