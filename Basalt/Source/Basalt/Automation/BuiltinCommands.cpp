@@ -1555,7 +1555,8 @@ namespace Basalt {
 				const auto text = FileSystem::ReadTextFile(Project::ResolvePath(path));
 				if (!text)
 					throw CommandError("cannot read asset references in '" + path + "'");
-				json data = ParseJson(*text, error);
+				const std::string& fileText = *text;
+				json data = ParseJson(fileText, error);
 				const bool material = MaterialAsset::IsMaterialFile(path);
 				if (data.is_discarded() || !data.is_object())
 				{
@@ -1594,7 +1595,7 @@ namespace Basalt {
 					}
 					data["Version"] = SceneSerializer::FormatVersion;
 				}
-				migrations.push_back({ path, *text, data.dump(1, '\t') });
+				migrations.push_back({ path, fileText, data.dump(1, '\t') });
 			}
 			if (movesStartScene || movesIcon)
 			{
