@@ -58,11 +58,11 @@ namespace Basalt {
 		}
 		float RootYaw(const glm::mat4& frame)
 		{
-			return std::atan2(frame[2].x, frame[2].z);
+			return Math::Atan2(frame[2].x, frame[2].z);
 		}
 		glm::mat4 YawTransform(glm::vec3 position, float yaw)
 		{
-			return Math::ComposeTransform(position, glm::vec3(0, yaw, 0), glm::vec3(1));
+			return Math::ComposeTransform(position, Math::YawRotation(yaw), glm::vec3(1));
 		}
 		// Swing-twist decomposition around model Y remains stable when the authored +Z points vertically.
 		// A 180 degree swing, or one very close to it, has no reliable twist; callers keep the authored pose and skip extraction then.
@@ -72,7 +72,7 @@ namespace Basalt {
 			glm::quat rotation;
 			if (!Math::DecomposeTransform(frame, position, rotation, scale) || rotation.w * rotation.w + rotation.y * rotation.y < 1e-10f)
 				return false;
-			out = YawTransform({ position.x, 0, position.z }, 2 * std::atan2(rotation.y, rotation.w));
+			out = YawTransform({ position.x, 0, position.z }, 2 * Math::Atan2(rotation.y, rotation.w));
 			return Math::IsFinite(out);
 		}
 		// Correction is rigid, so authored TRS roots stay representable, including zero-scale helpers.
@@ -204,6 +204,16 @@ namespace Basalt {
 			return;
 		(playback.*overlay).clear();
 		Finish(playback);
+	}
+
+	void AnimationSystem::ApplyOverlay(AnimationLocalPose& pose, const std::vector<OverlayEntry>& overlay)
+	{
+		for (const auto& [node, transform] : overlay)
+		{
+			// The overlays are cleared with the playback whenever Source changes.
+			BS_CORE_ASSERT(node < pose.Nodes.size());
+			pose.Nodes[node] = transform;
+		}
 	}
 
 	void AnimationSystem::StoreOverlay(Playback& playback, Overlay overlay, std::vector<uint32_t>& nodes, const AnimationLocalPose& pose, const std::vector<glm::mat4>& globals)
@@ -627,12 +637,7 @@ namespace Basalt {
 			AnimationLocalPose pose = playback.Pose;
 			// Spring bones include IK on their nodes; ragdoll physics replaces both. Apply in that order.
 			for (const auto* overlay : { &playback.IKOverlay, &playback.SpringOverlay, &playback.RagdollOverlay })
-				for (const auto& [node, transform] : *overlay)
-				{
-					// The overlays are cleared with the playback whenever Source changes.
-					BS_CORE_ASSERT(node < pose.Nodes.size());
-					pose.Nodes[node] = transform;
-				}
+				ApplyOverlay(pose, *overlay);
 			valid = composes(pose);
 			if (valid)
 				playback.OverlayDropped = false;
@@ -965,7 +970,8 @@ namespace Basalt {
 		// Ragdolls and attachments wait for Play in a preview (attachments would move edit entities).
 		if (!m_Preview)
 			ApplyRagdolls();
-		// After the ragdolls: hair on a head a partial rig simulates hangs from the physical head.
+		// After the ragdolls: a chain on nodes below a partial rig (hair off the skin on a simulated head) hangs from the
+		// physical joint.
 		if (validStep)
 			SolveSprings(seconds);
 		if (!m_Preview)
@@ -1377,7 +1383,7 @@ namespace Basalt {
 		const float yaw = RootYaw(delta);
 		auto* physics = m_Scene.GetPhysicsWorld();
 		const bool character = physics && entity.HasComponent<CharacterControllerComponent>();
-		const glm::mat4 world = Math::ComposeTransform(character ? position : position + displacement, rotation * glm::angleAxis(yaw, glm::vec3(0, 1, 0)), scale);
+		const glm::mat4 world = Math::ComposeTransform(character ? position : position + displacement, rotation * Math::YawRotation(yaw), scale);
 		glm::mat4 local = world;
 		if (const Entity parent = entity.GetParent())
 			local = glm::inverse(m_Scene.GetWorldTransform(parent)) * world;

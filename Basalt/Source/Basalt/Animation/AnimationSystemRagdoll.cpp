@@ -62,11 +62,10 @@ namespace Basalt {
 				physics->RejectRagdollPose(entity);
 			};
 			AnimationLocalPose physical = playback.Pose;
-			// A rig below an animated root hangs from it, IK included.
-			if (!ownsRoot)
-				for (const auto& [node, transform] : playback.IKOverlay)
-					physical.Nodes[node] = transform;
-			const AnimationLocalPose animated = physical;
+			// A rig below an animated root hangs from it and blends back to it, IK included (a rig that owns its root just
+			// cleared IK).
+			ApplyOverlay(physical, playback.IKOverlay);
+			const AnimationLocalPose animated = weight < 1.0f ? physical : AnimationLocalPose{};
 			std::vector<glm::mat4> globals;
 			if (!ComposeAnimationPose(*playback.Source, physical, globals))
 			{

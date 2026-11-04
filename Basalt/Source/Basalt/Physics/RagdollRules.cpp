@@ -1,6 +1,5 @@
 #include "Basalt/Physics/RagdollRules.h"
 
-#include "Basalt/Animation/AnimationSystem.h"
 #include "Basalt/Math/Math.h"
 #include "Basalt/Physics/JoltUtils.h"
 
@@ -46,12 +45,11 @@ namespace Basalt {
 		return structural != built;
 	}
 
-	bool IsRagdollTeleport(const glm::vec3& offset, const glm::quat& to, const glm::quat& from, float seconds, float fixedStep)
+	bool IsRagdollTeleport(const glm::vec3& offset, const glm::quat& to, const glm::quat& from, float fixedStep)
 	{
-		const double window = std::max(static_cast<double>(seconds), static_cast<double>(fixedStep));
 		// |cos(half the turn)| at a quarter turn.
 		constexpr float QuarterTurn = 0.70710678f;
-		return static_cast<double>(glm::length(offset)) > AnimationSystem::TeleportSpeed * window || std::abs(glm::dot(to, from)) < QuarterTurn;
+		return glm::length(offset) > RagdollRootMaxSpeed * fixedStep || std::abs(glm::dot(to, from)) < QuarterTurn;
 	}
 
 	std::string ValidateRagdoll(const RagdollComponent& c)
@@ -67,20 +65,20 @@ namespace Basalt {
 			return "Layer must not be empty";
 		if (!range(c.MotorStrength, 0, 1))
 			return "MotorStrength must be finite and in 0..1";
-		if (!range(c.MotorFrequency, 0.1f, RagdollComponent::MaxMotorFrequency))
-			return fmt::format("MotorFrequency must be finite and in 0.1..{} Hz", RagdollComponent::MaxMotorFrequency);
+		if (!range(c.MotorFrequency, RagdollComponent::MinMotorFrequency, RagdollComponent::MaxMotorFrequency))
+			return fmt::format("MotorFrequency must be finite and in {}..{} Hz", RagdollComponent::MinMotorFrequency, RagdollComponent::MaxMotorFrequency);
 		if (!range(c.MotorDamping, 0, RagdollComponent::MaxMotorDamping))
 			return fmt::format("MotorDamping must be finite and in 0..{}", RagdollComponent::MaxMotorDamping);
 		if (!range(c.MotorTorque, 0, RagdollComponent::MaxMotorTorque))
 			return fmt::format("MotorTorque must be finite and in 0..{} N·m", RagdollComponent::MaxMotorTorque);
 		if (!range(c.BalanceStrength, 0, 1))
 			return "BalanceStrength must be finite and in 0..1";
-		if (!range(c.BalanceFrequency, 0.1f, RagdollComponent::MaxMotorFrequency))
-			return fmt::format("BalanceFrequency must be finite and in 0.1..{} Hz", RagdollComponent::MaxMotorFrequency);
+		if (!range(c.BalanceFrequency, RagdollComponent::MinMotorFrequency, RagdollComponent::MaxMotorFrequency))
+			return fmt::format("BalanceFrequency must be finite and in {}..{} Hz", RagdollComponent::MinMotorFrequency, RagdollComponent::MaxMotorFrequency);
 		if (!range(c.BalanceDamping, 0, RagdollComponent::MaxMotorDamping))
 			return fmt::format("BalanceDamping must be finite and in 0..{}", RagdollComponent::MaxMotorDamping);
-		if (!range(c.BalanceMaxTilt, 0, RagdollComponent::MaxTilt))
-			return fmt::format("BalanceMaxTilt must be finite and in 0..{} degrees", RagdollComponent::MaxTilt);
+		if (!range(c.BalanceMaxTilt, 0, RagdollComponent::MaxTiltLimit))
+			return fmt::format("BalanceMaxTilt must be finite and in 0..{} degrees", RagdollComponent::MaxTiltLimit);
 		if (c.Bones.size() > RagdollComponent::MaxBones)
 			return "Bones exceeds MaxBones (" + std::to_string(RagdollComponent::MaxBones) + ")";
 		std::unordered_set<std::string> joints;

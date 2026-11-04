@@ -55,8 +55,6 @@ namespace Basalt {
 		// axis leaves across `bone` (its bone's direction), which keeps it near its bone length.
 		std::optional<glm::vec3> PushOut(const SpringCollisionShape& shape, const glm::vec3& point, float radius, const glm::vec3& bone)
 		{
-			const glm::vec3 axis = shape.B - shape.A;
-			const float lengthSquared = glm::dot(axis, axis);
 			const glm::vec3 closest = ClosestOnAxis(shape, point);
 			const float reach = shape.Radius + radius;
 			glm::vec3 offset = point - closest;
@@ -65,6 +63,8 @@ namespace Basalt {
 				return std::nullopt;
 			if (distance < Epsilon)
 			{
+				const glm::vec3 axis = shape.B - shape.A;
+				const float lengthSquared = glm::dot(axis, axis);
 				// Across both the bone and a capsule's axis; failing that (parallel or vanishing), any direction across
 				// whichever of the two is there.
 				offset = AcrossIfVanished(lengthSquared > 0 ? glm::cross(axis, bone) : glm::vec3(0), lengthSquared > 0 ? axis : bone);
@@ -76,8 +76,8 @@ namespace Basalt {
 
 		// Where a sphere of `radius` moving from `from` to `to` first touches the shape, by sphere tracing: the distance to
 		// the surface is a step that cannot overshoot it, however thin the shape. Like the world's sweeps it does not
-		// stop a sphere that starts inside and moves out. A sphere still grazing after the last step counts as clear, and
-		// PushOut has the final word on where it ends.
+		// stop a sphere that starts inside and moves out. A sphere still grazing after the last step counts as clear: it ends
+		// where the constraints put it, and the next substep's PushOut takes care of any overlap.
 		std::optional<SpringSweepHit> SweepShape(const SpringCollisionShape& shape, float radius, const glm::vec3& from, const glm::vec3& to)
 		{
 			constexpr uint32_t Steps = 32;
@@ -91,10 +91,11 @@ namespace Basalt {
 			{
 				const glm::vec3 point = from + direction * travelled;
 				const glm::vec3 offset = point - ClosestOnAxis(shape, point);
-				const float gap = glm::length(offset) - reach;
+				const float separation = glm::length(offset);
+				const float gap = separation - reach;
 				if (gap <= SpringContactGap)
 				{
-					const glm::vec3 normal = glm::length(offset) < Epsilon ? -direction : glm::normalize(offset);
+					const glm::vec3 normal = separation < Epsilon ? -direction : offset / separation;
 					if (glm::dot(direction, normal) >= 0)
 						return std::nullopt;
 					return SpringSweepHit{ .Fraction = travelled / distance, .Normal = normal };
@@ -157,6 +158,7 @@ namespace Basalt {
 		BS_CORE_ASSERT(count <= SpringChain::MaxChainLength, "chains have at most MaxChainLength joints");
 		BS_CORE_ASSERT(request.Stiffness >= 0 && request.Stiffness <= SpringChain::MaxStiffness && request.Damping >= 0 && request.Radius >= 0, "settings outside their ranges add energy or overflow");
 		BS_CORE_ASSERT(request.MaxAngle >= 0 && request.MaxAngle <= std::numbers::pi_v<float>, "MaxAngle is between 0 and pi");
+		BS_CORE_ASSERT(!request.Continuous || !request.World || request.WorldSweep, "a world that points are kept out of must also stop them");
 		constexpr float longest = static_cast<float>(MaxSpringSteps) / SpringStepRate;
 		// The buffers below hold MaxChainLength joints: a longer chain (only C++ callers past the assert) is not
 		// simulated.

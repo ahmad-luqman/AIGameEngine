@@ -51,8 +51,8 @@ namespace Basalt {
 		// A rig's limbs and the character it belongs to overlap by design. (On one entity the collision filter tells limbs
 		// from the entity's own body; this pair is a controller on an ancestor.)
 		for (const auto& [uuid, record] : Ragdolls)
-			if (record.Doll && record.Owner != 0 && record.Owner != uuid)
-				pairs.emplace(std::min<uint64_t>(uuid, record.Owner), std::max<uint64_t>(uuid, record.Owner));
+			if (record.Doll && record.Live.Character != 0 && record.Live.Character != uuid)
+				pairs.emplace(std::min<uint64_t>(uuid, record.Live.Character), std::max<uint64_t>(uuid, record.Live.Character));
 		// Jolt replays cached contacts for bodies that have not moved (and skips sleeping ones), bypassing
 		// the pair filter. Bodies whose pair starts or stops being ignored lose that cache and wake, so two
 		// resting bodies stop (or start) colliding at once.
@@ -64,12 +64,20 @@ namespace Basalt {
 		{
 			for (uint64_t uuid : { a, b })
 			{
-				auto* body = FindBody(uuid);
-				if (body == nullptr)
-					continue;
-				bodies.InvalidateContactCache(body->ID);
-				if (body->Type == RigidBodyType::Dynamic)
-					bodies.ActivateBody(body->ID);
+				if (auto* body = FindBody(uuid); body != nullptr)
+				{
+					bodies.InvalidateContactCache(body->ID);
+					if (body->Type == RigidBodyType::Dynamic)
+						bodies.ActivateBody(body->ID);
+				}
+				if (const auto character = Characters.find(uuid); character != Characters.end())
+					bodies.InvalidateContactCache(character->second.Character->GetInnerBodyID());
+				if (const auto rig = Ragdolls.find(uuid); rig != Ragdolls.end() && rig->second.Doll)
+					for (const JPH::BodyID part : rig->second.Doll->GetBodyIDs())
+					{
+						bodies.InvalidateContactCache(part);
+						bodies.ActivateBody(part);
+					}
 			}
 		}
 	}

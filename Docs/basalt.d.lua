@@ -579,7 +579,7 @@ function Entity:ClearMorphWeight(target) end
 ---@return string[]
 function Entity:GetMorphTargets() end
 
----Requires Play/Simulate. Activates passive skeleton physics. Inherits linear and rigid-body angular motion; impulse is total world impulse in N*s.
+---Requires Play/Simulate. Activates skeleton physics. Inherits linear and rigid-body angular motion; impulse is total world impulse in N*s.
 ---Returns false and logs invalid rigs/settings/values or callback cancellation. Missing Ragdoll or a wrong impulse type raises.
 ---@param impulse? Vec3
 ---@return boolean
@@ -587,18 +587,18 @@ function Entity:ActivateRagdoll(impulse) end
 
 ---Requires Play/Simulate and Ragdoll (raises if missing). Removes bodies and blends back to animation; zero is immediate.
 ---Empty clip keeps current playback. Rejected requests preserve the active ragdoll and animation playback.
----Moves the entity horizontally with the fall; gameplay places its height for a different ground level.
+---Moves the entity horizontally with the fall (a KinematicRoot entity stays); gameplay places its height for a different ground level.
 ---@param clip string
 ---@param seconds number # 0..60
 ---@return boolean
 function Entity:RecoverRagdoll(clip, seconds) end
 
----True while physical bodies drive this entity, including sleeping bodies; false during recovery.
+---True while the ragdoll simulates, including sleeping bodies; false during recovery.
 ---@return boolean
 function Entity:IsRagdollActive() end
 
----Whether active balance held the rig up in the last physics step: false when it is off, with nothing below the rig's
----center of mass, or past BalanceMaxTilt.
+---Whether active balance held the rig up in the last physics step: false when it is off, without gravity, with nothing
+---below the rig's center of mass to stand on, or past BalanceMaxTilt.
 ---@return boolean
 function Entity:IsRagdollBalanced() end
 

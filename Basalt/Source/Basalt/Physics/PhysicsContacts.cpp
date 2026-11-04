@@ -15,6 +15,17 @@ namespace Basalt {
 
 	using namespace PhysicsInternal;
 
+	namespace {
+		// A contact's token holds its body (index and sequence number) in the upper half, its sub-shape in the lower.
+		uint32_t ContactBody(uint64_t token)
+		{
+			return static_cast<uint32_t>(token >> 32);
+		}
+
+		// How squarely a surface must face up to stand on: cosine of 60 degrees. Steeper is a wall.
+		constexpr float MinSupportFacing = 0.5f;
+	}
+
 	// Tracks body/sub-shape contacts while exposing one begin/end per entity pair. Sleeping bodies retain
 	// suspended contacts until both bodies wake and Jolt can confirm whether they still touch.
 	struct PhysicsWorld::Impl::ContactState
@@ -22,7 +33,8 @@ namespace Basalt {
 		// Lower entity UUID, its body/sub-shape token, higher entity UUID, its token.
 		// A ragdoll has several bodies for one entity: sub-shape IDs alone would alias its limbs.
 		using ContactKey = std::tuple<uint64_t, uint64_t, uint64_t, uint64_t>;
-		std::set<ContactKey> ActiveContacts;
+		// With the direction that pushes the lower entity out of the higher one, as when they first touched.
+		std::map<ContactKey, glm::vec3> ActiveContacts;
 		// Number of active body/sub-shape tokens for each entity pair.
 		std::map<EntityPair, int> PairCounts;
 		// A subset of ActiveContacts: Jolt removes sleeping contacts without physical separation.
@@ -30,10 +42,10 @@ namespace Basalt {
 		// EnTT destruction signals must finish popping components before user callbacks can remove them again.
 		std::vector<std::pair<EntityPair, ContactEventType>> DeferredEnds;
 
-		void Acquire(const ContactKey& key)
+		void Acquire(const ContactKey& key, const glm::vec3& normal)
 		{
 			SuspendedContacts.erase(key);
-			if (ActiveContacts.insert(key).second)
+			if (ActiveContacts.insert_or_assign(key, normal).second)
 				PairCounts[EntityPair(std::get<0>(key), std::get<2>(key))]++;
 		}
 
@@ -69,29 +81,36 @@ namespace Basalt {
 
 	PhysicsWorld::Impl::~Impl() = default;
 
+	bool PhysicsWorld::Impl::BodyPairFilter::ShouldCollide(const JPH::Body& body1, const JPH::Shape*, const JPH::SubShapeID&, const JPH::Body& body2, const JPH::Shape*, const JPH::SubShapeID&) const
+	{
+		const uint64_t a = body1.GetUserData();
+		const uint64_t b = body2.GetUserData();
+		// One entity's bodies in different groups: a rig's limb and the body it left in place. Limbs of one rig share a group
+		// and do collide, so this cannot be an ignored pair.
+		if (a == b && body1.GetCollisionGroup().GetGroupID() != body2.GetCollisionGroup().GetGroupID())
+			return false;
+		return m_Owner.IgnoredPairs.empty() || !m_Owner.IgnoredPairs.contains({ std::min(a, b), std::max(a, b) });
+	}
+
 	bool PhysicsWorld::Impl::IsTrigger(UUID uuid) const
 	{
 		auto* body = FindBody(uuid);
 		return body != nullptr && body->IsTrigger;
 	}
 
-	void PhysicsWorld::Impl::EndContacts(UUID uuid, bool trigger, bool defer, const std::vector<uint32_t>& bodies)
+	void PhysicsWorld::Impl::EndContacts(UUID uuid, std::span<const uint32_t> bodies, bool trigger, bool defer)
 	{
 		const uint64_t id = static_cast<uint64_t>(uuid);
+		const auto lost = [&](uint64_t entity, uint64_t token) { return entity == id && std::ranges::find(bodies, ContactBody(token)) != bodies.end(); };
 		std::set<EntityPair> ended;
-		// Tokens hold the body in their upper half.
-		const auto goes = [&](uint64_t token) { return bodies.empty() || std::ranges::find(bodies, static_cast<uint32_t>(token >> 32)) != bodies.end(); };
-		for (auto key = Contacts->ActiveContacts.begin(); key != Contacts->ActiveContacts.end();)
+		for (auto contact = Contacts->ActiveContacts.begin(); contact != Contacts->ActiveContacts.end();)
 		{
-			if (!(std::get<0>(*key) == id && goes(std::get<1>(*key))) && !(std::get<2>(*key) == id && goes(std::get<3>(*key))))
-			{
-				++key;
+			const ContactState::ContactKey key = contact->first;
+			++contact;
+			if (!lost(std::get<0>(key), std::get<1>(key)) && !lost(std::get<2>(key), std::get<3>(key)))
 				continue;
-			}
-			const EntityPair pair(std::get<0>(*key), std::get<2>(*key));
-			const auto removed = *key++;
-			if (Contacts->Release(removed))
-				ended.insert(pair);
+			if (Contacts->Release(key))
+				ended.emplace(std::get<0>(key), std::get<2>(key));
 		}
 
 		for (const EntityPair& pair : ended)
@@ -110,20 +129,25 @@ namespace Basalt {
 		}
 	}
 
-	bool PhysicsWorld::Impl::HasRagdollSupport(UUID uuid, const RagdollRecord& record, JPH::RVec3Arg center, JPH::Vec3Arg up) const
+	std::optional<JPH::Vec3> PhysicsWorld::Impl::FindRagdollSupport(UUID uuid, const RagdollRecord& record, JPH::RVec3Arg center, JPH::Vec3Arg up) const
 	{
 		const uint64_t id = static_cast<uint64_t>(uuid);
 		const JPH::BodyInterface& bodies = System->GetBodyInterface();
-		for (const auto& [first, firstToken, second, secondToken] : Contacts->ActiveContacts)
+		for (const auto& [key, normal] : Contacts->ActiveContacts)
 		{
+			const auto& [first, firstToken, second, secondToken] = key;
 			if (first != id && second != id)
 				continue;
-			const JPH::BodyID body(static_cast<uint32_t>((first == id ? firstToken : secondToken) >> 32));
-			const auto& parts = record.Doll->GetBodyIDs();
-			if (!IsTrigger(UUID(first == id ? second : first)) && std::ranges::find(parts, body) != parts.end() && JPH::Vec3(bodies.GetCenterOfMassPosition(body) - center).Dot(up) < 0)
-				return true;
+			// The normal pushes the first entity out; this is what it does to the rig.
+			const float facing = ToJolt(normal).Dot(up) * (first == id ? 1.0f : -1.0f);
+			const JPH::BodyID part(ContactBody(first == id ? firstToken : secondToken));
+			if (facing < MinSupportFacing || IsTrigger(UUID(first == id ? second : first)) || !record.HasPart(part))
+				continue;
+			const JPH::RVec3 position = bodies.GetCenterOfMassPosition(part);
+			if (JPH::Vec3(position - center).Dot(up) < 0)
+				return bodies.GetPointVelocity(JPH::BodyID(ContactBody(first == id ? secondToken : firstToken)), position);
 		}
-		return false;
+		return std::nullopt;
 	}
 
 	void PhysicsWorld::Impl::DispatchContact(ContactEventType type, Entity first, Entity second, const std::optional<ContactInfo>& contact)
@@ -210,14 +234,14 @@ namespace Basalt {
 		};
 		const auto& bodies = System->GetBodyInterface();
 		auto sleeping = [&](uint64_t token) {
-			const JPH::BodyID id(static_cast<uint32_t>(token >> 32));
+			const JPH::BodyID id(ContactBody(token));
 			const auto owner = BodyToEntity.find(id.GetIndexAndSequenceNumber());
 			if (owner == BodyToEntity.end() || bodies.IsActive(id))
 				return false;
 			if (const auto* body = FindBody(owner->second); body && body->ID == id)
 				return body->Type != RigidBodyType::Static;
 			const auto rig = Ragdolls.find(owner->second);
-			return rig != Ragdolls.end() && rig->second.Doll != nullptr && std::ranges::find(rig->second.Doll->GetBodyIDs(), id) != rig->second.Doll->GetBodyIDs().end();
+			return rig != Ragdolls.end() && rig->second.HasPart(id);
 		};
 		std::map<Impl::EntityPair, PairChange> touched;
 		for (const RawContactEvent& event : events)
@@ -258,7 +282,7 @@ namespace Basalt {
 			{
 				if (!change.Begin || contact.Impulse > change.Begin->Impulse)
 					change.Begin = contact;
-				Contacts->Acquire(key);
+				Contacts->Acquire(key, contact.Normal);
 			}
 			else
 			{

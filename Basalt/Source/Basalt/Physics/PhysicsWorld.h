@@ -29,7 +29,7 @@ namespace Basalt {
 		float Radius = 0;
 	};
 
-	// An owned, read-only snapshot of physical joints in the entity's model space.
+	// An owned, read-only snapshot of physical joints in the entity's model space, the rig's root first.
 	struct RagdollPose
 	{
 		Ref<MeshSource> Source;
@@ -73,7 +73,8 @@ namespace Basalt {
 	class PhysicsShapeSnapshot
 	{
 	public:
-		// Bodies kept at most; CollectShapes keeps the ones nearest the region's center.
+		// Bodies kept at most; CollectShapes keeps the ones nearest the region's center. A snapshot must not outlive the last
+		// PhysicsWorld or StaticPhysicsShapes: it is meant for one frame's queries.
 		static constexpr uint32_t MaxShapes = 32;
 		// Spheres smaller than this (meters) query as this size: physics shapes need a radius.
 		static constexpr float MinRadius = 0.001f;
@@ -249,7 +250,8 @@ namespace Basalt {
 		// overflowing impulses or cancellation by contact callbacks. Repeated activation adds the impulse.
 		bool ActivateRagdoll(Entity entity, const glm::vec3& impulse = glm::vec3(0));
 		// Freezes the physical pose, removes its bodies, optionally starts a get-up clip, and blends over seconds.
-		// Aligns the incoming animation root horizontally with the fall; callers place height for a different ground level.
+		// Aligns the incoming animation root horizontally with the fall; callers place height for a different ground level. A
+		// KinematicRoot entity is left where it is.
 		bool RecoverRagdoll(Entity entity, const std::string& clip, float seconds);
 		bool IsRagdollActive(Entity entity) const;
 		// Fades the motor strength (0..1, scaling MotorTorque) linearly over seconds (0: at once); a changed MotorStrength
@@ -266,8 +268,8 @@ namespace Basalt {
 		// True while the ragdoll carries the whole rig during simulation or recovery, so animation leaves root motion, IK
 		// and springs to it. False for a KinematicRoot rig, whose root follows the animation.
 		bool RagdollOwnsRoot(Entity entity) const;
-		// Whether balance held the rig up in the last physics step: false when it is off, nothing supports the rig or the
-		// rig tilted past BalanceMaxTilt.
+		// Whether balance held the rig up in the last physics step: false when it is off, without gravity, when nothing
+		// supports the rig or when it tilted past BalanceMaxTilt.
 		bool IsRagdollBalanced(Entity entity) const;
 		// Model-space joint transforms and physical weight, with their owning source for identity checks after reload.
 		std::optional<RagdollPose> GetRagdollPose(Entity entity) const;
@@ -287,7 +289,7 @@ namespace Basalt {
 		std::vector<RaycastHit> BoxCastAll(const glm::vec3& origin, const glm::vec3& halfExtents, const glm::quat& rotation, const glm::vec3& direction, float maxDistance, const PhysicsQueryFilter& filter = {}) const;
 		std::vector<UUID> OverlapSphere(const glm::vec3& center, float radius, const PhysicsQueryFilter& filter = {}) const;
 		std::vector<UUID> OverlapBox(const glm::vec3& center, const glm::vec3& halfExtents, const glm::quat& rotation, const PhysicsQueryFilter& filter = {}) const;
-		// The bodies whose bounds touch the box [min, max], for PushOut queries of spheres of `radius` (at least
+		// The bodies whose bounds touch the box [min, max], for PushOut and Sweep queries of spheres of `radius` (at least
 		// PhysicsShapeSnapshot::MinRadius), seen through `filter` and, when given, `accept` (by entity UUID; called with no
 		// body locked, so it may query this world). Non-finite or inverted bounds, or a radius that is not finite and
 		// nonnegative, gather nothing, as other queries return nothing for invalid input.

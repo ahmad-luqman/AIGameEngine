@@ -70,10 +70,10 @@ below extend character movement, in order of impact.
 - **IK and layer follow-ups II — S each.** Joint limits for FABRIK chains (cones and twist ranges), a mask editor in the
   editor (masks are authored as `.banimmask` JSON through `asset.write` today), layer graph events and per-layer
   parameters that the base graph does not share, and edit-mode ground placement against static colliders.
-- **Spring bone follow-ups III — S.** Sweeping whole bones as well as their points, a layer picker for chains in the
-  inspector, and kinematic bodies in the edit preview where they stay at their authored place.
-- **Powered ragdoll follow-ups II — M.** Balance that steps (replanting feet toward the center of mass after a push) and a
-  brake relative to moving ground; several kinematic roots (both legs walking and a free spine between them).
+- **Spring bone follow-ups III — S.** Sweeping whole bones as well as their points, and kinematic bodies in the edit preview
+  where they stay at their authored place.
+- **Powered ragdoll follow-ups II — M.** Balance that steps (replanting feet toward the center of mass after a push), and
+  several kinematic roots (both legs walking and a free spine between them).
 - **Retargeting follow-ups II — S.** A joint map editor in the editor (`.bjointmap` files are authored as JSON through
   `asset.write` today) and reference poses built from per-joint rotation offsets, for libraries without a frame in the
   model's rest style.

@@ -12,12 +12,13 @@ namespace Basalt {
 	// Shared by the registry and physics: C++ component writes meet the same rules as JSON/Lua edits.
 	std::string ValidateRagdoll(const RagdollComponent& component);
 
-	// Whether a live rig built from `built` must be rebuilt for `current`: only structural settings count. Control
-	// (Enabled, RecoveryTime) and motor settings apply live.
+	// Whether a live rig built from `built` must be rebuilt for `current`: only structural settings count. Control (Enabled,
+	// RecoveryTime), motor and balance settings and each bone's MotorStrength apply live.
 	bool RagdollNeedsRebuild(const RagdollComponent& built, const RagdollComponent& current);
-	// Whether an entity that moved by `offset` and turned from `from` to `to` over `seconds` was placed there rather than
-	// walked: faster than AnimationSystem::TeleportSpeed (over at least one fixed step, as physics moves bodies at most once
-	// per step), or by more than a quarter turn at once. A root following either would fling what hangs from it.
-	bool IsRagdollTeleport(const glm::vec3& offset, const glm::quat& to, const glm::quat& from, float seconds, float fixedStep);
+	// How fast a KinematicRoot rig's root may be sent (m/s): past it the whole rig is carried along instead of swinging.
+	inline constexpr float RagdollRootMaxSpeed = 30.0f;
+	// Whether a root going by `offset` and from one rotation to the other in one fixed step was placed there rather than
+	// walked: faster than RagdollRootMaxSpeed, or by more than a quarter turn at once. Following it would fling the limbs.
+	bool IsRagdollTeleport(const glm::vec3& offset, const glm::quat& to, const glm::quat& from, float fixedStep);
 
 }

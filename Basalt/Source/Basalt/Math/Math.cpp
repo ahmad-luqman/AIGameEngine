@@ -146,6 +146,16 @@ namespace Basalt::Math {
 		return glm::eulerAngles(rotation);
 	}
 
+	float Atan2(float y, float x)
+	{
+		return JPH::ATan2(y, x);
+	}
+
+	glm::quat YawRotation(float yaw)
+	{
+		return glm::quat(JPH::Cos(0.5f * yaw), 0, JPH::Sin(0.5f * yaw), 0);
+	}
+
 	glm::quat Slerp(const glm::quat& from, const glm::quat& to, float weight)
 	{
 		const JPH::Quat result = JPH::Quat(from.x, from.y, from.z, from.w).SLERP(JPH::Quat(to.x, to.y, to.z, to.w), weight);
