@@ -229,6 +229,8 @@ read the file as it is then. Prefab files need unique nonzero entity IDs and a s
 A prefab may hold instances of other prefabs, and a variant inherits one (`prefab.variant`). Spawning reads each file
 they name, so a spawn costs what the whole tree costs. The instance is flat: the root's `Members` lists every entity,
 and a nested instance's root carries a `Prefab` component with `Prefab` alone, which says what it is an instance of.
+What reading finds (see `prefab.info`) is logged once per prefab in each scene, not raised. A variant's root starts where
+its base's does unless `position` is given.
 
 ### Switching scenes
 

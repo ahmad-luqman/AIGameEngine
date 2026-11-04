@@ -1,0 +1,5 @@
+{ "Format": "BasaltPrefab", "Version": 4, "Entities": [
+	{ "ID": 1, "Name": "Pair", "Parent": 0, "Components": {} },
+	{ "ID": 2, "Parent": 1, "Components": { "Prefab": { "Prefab": "Assets/Prefabs/Nest.bprefab", "Overrides": { "2": { "Name": "Left", "Components": { "Transform": { "Translation": [1, 0, 0] } } }, "12345": null } } } },
+	{ "ID": 3, "Parent": 2, "Name": "Added", "Components": { "BoneAttachment": { "Target": 2 } } }
+] }

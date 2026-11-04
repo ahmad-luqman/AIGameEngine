@@ -30,7 +30,8 @@ not rewritten or assigned IDs by scene persistence.
 
 A prefab's nested records (format 4) name their prefab the same way, and their `Overrides` store asset fields the same
 way too. A nested or base prefab that is missing fails the read with its identity or path named; instances keep their
-state and report it, and `project.validate` lists the prefab holding it as not loading.
+state and report it, and `project.validate` lists the prefab holding it as not loading. A `Prefab` component in a prefab
+declaring an older format, or none, is ignored, and a move that upgrades such a file removes it and warns.
 
 Use `asset.resolve {"uuid":"123456789"}` to look up the current path. `asset.move` and `asset.rename`
 both take full project-relative `from` and `to` paths, move one file with its sidecar, upgrade legacy

@@ -12,6 +12,7 @@
 #include "Basalt/Scene/Prefab.h"
 
 #include <cmath>
+#include <algorithm>
 #include <ranges>
 #include <set>
 #include <system_error>
@@ -662,19 +663,22 @@ namespace Basalt {
 		return saved;
 	}
 
-	bool SceneSerializer::SavePrefabEntities(json entities, const std::filesystem::path& path, std::string& outError, PrefabFileRoot root, std::vector<std::string>* outWarnings)
+	bool SceneSerializer::SavePrefabEntities(json entities, const std::filesystem::path& path, std::string& outError, PrefabFileRoot rootKind, std::vector<std::string>* outWarnings)
 	{
 		std::vector<std::string> warnings;
 		json data;
 		data["Format"] = "BasaltPrefab";
 		data["Version"] = FormatVersion;
-		if (!Prefab::ToFileEntities(std::move(entities), path, root, data["Entities"], warnings, outError))
+		if (!Prefab::ToFileEntities(std::move(entities), path, rootKind, data["Entities"], warnings, outError))
 			return false;
-		// What the file says now and this write stops saying (overrides of entities their prefab dropped).
+		// What reading the file being replaced reports, such as the overrides of entities their prefab dropped, which this
+		// write forgets.
 		json previous;
 		Prefab::ReadReport report;
 		if (std::string ignored; Prefab::ReadFile(path, previous, ignored, &report))
-			warnings.insert(warnings.end(), report.Warnings.begin(), report.Warnings.end());
+			for (const std::string& warning : report.Warnings)
+				if (std::find(warnings.begin(), warnings.end(), warning) == warnings.end())
+					warnings.push_back(warning);
 		if (Project::GetActive() && !Project::GetActive()->GetAssets().Refresh(outError))
 			return false;
 		if (!EncodeAssetReferences(data, outError))

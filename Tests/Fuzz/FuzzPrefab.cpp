@@ -28,6 +28,10 @@ namespace {
 			{ "ID": 1, "Name": "Base", "Parent": 0, "Components": { "PointLight": { "Intensity": 1 } } },
 			{ "ID": 2, "Name": "Child", "Parent": 1, "Components": { "BoneAttachment": { "Target": 1 } } }
 		] })");
+		Basalt::FileSystem::WriteTextFile(directory / "Assets/Prefabs/Nest.bprefab", R"({ "Format": "BasaltPrefab", "Version": 4, "Entities": [
+			{ "ID": 1, "Name": "Nest", "Parent": 0, "Components": {} },
+			{ "ID": 2, "Parent": 1, "Components": { "Prefab": { "Prefab": "Assets/Prefabs/Base.bprefab" } } }
+		] })");
 		return directory;
 	}
 
@@ -50,11 +54,12 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 	const auto root = entities[0]["Components"].contains("Prefab") ? Basalt::PrefabFileRoot::Variant : Basalt::PrefabFileRoot::Plain;
 	if (!Basalt::Prefab::ToFileEntities(entities, path, root, file, warnings, error))
 		return 0;
-	// What a prefab reads as, it writes as the same entities: an ID lost here is an entity lost from every instance.
+	// What a prefab reads as, it writes as the same entities, and what it writes it can read: an ID lost here is an entity
+	// lost from every instance.
 	const nlohmann::json document = { { "Format", "BasaltPrefab" }, { "Version", Basalt::SceneSerializer::FormatVersion }, { "Entities", std::move(file) } };
 	nlohmann::json reread;
-	if (!Basalt::Prefab::ReadText(document.dump(), path, reread, error))
-		return 0;
+	if (!Basalt::Prefab::ReadText(document.dump(), path, reread, error) || !Basalt::Prefab::Normalize(reread, "Fuzz.bprefab", error))
+		abort();
 	const auto ids = [](const nlohmann::json& records) {
 		std::set<uint64_t> found;
 		for (const nlohmann::json& record : records)

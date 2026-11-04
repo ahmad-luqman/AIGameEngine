@@ -13,6 +13,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace Basalt {
@@ -28,8 +29,8 @@ namespace Basalt {
 	// A prefab file may hold nested instances: a record whose Prefab component names another prefab stands for that
 	// prefab's whole tree, and its Overrides (a JSON merge patch keyed by the entities' IDs in this file) hold only what
 	// differs. A variant is a prefab whose root is such a record. Reading expands them into flat records, so instances
-	// merge through the same three-way path and an inner prefab's edit reaches every instance of the prefabs holding it
-	// without rewriting those files. An instance's root owns all of its flat records; the roots of the nested instances
+	// merge through the same three-way path and an inner prefab's edit reaches the tracked instances of the prefabs holding
+	// it without rewriting those files. An instance's root owns all of its flat records; the roots of the nested instances
 	// inside it keep their Prefab component as a marker with the path alone, which says what is nested and survives
 	// unpacking. While they stay nested, only an open prefab tracks its outermost ones, like any scene's instances.
 	class Prefab
@@ -41,7 +42,7 @@ namespace Basalt {
 		// each other many times would otherwise multiply. The file's own records do not count.
 		static constexpr size_t MaxExpandedEntities = 100000;
 		// The first format version whose files can nest. A Prefab component in an older file, or one without a version, is
-		// ignored.
+		// ignored, with a warning.
 		static constexpr int NestingVersion = 4;
 
 		struct NestedInstance
@@ -51,27 +52,49 @@ namespace Basalt {
 			std::string Prefab;
 		};
 
-		// What reading a prefab file found besides its entities. A read adds to it, so use a fresh one each time; after a
-		// failed read only Files is complete.
+		// What reading a prefab file found besides its entities. A read starts it over. After a failed read, the rest is what
+		// was found before the failure.
 		struct ReadReport
 		{
 			// The nested instances the file holds directly. The root's is the variant's base, also in Base.
 			std::vector<NestedInstance> Nested;
 			std::string Base;
-			// Every prefab file reading went through, this one included, as FileKey -> name: this file's source changes with
-			// any of them. A file named but not read (a failed read stops at the first problem) is missing.
+			// Every prefab file reading reached, read or not, this one included, as FileKey -> name: this file's source
+			// changes with any of them. A failed read names the file it stopped at, and none after it.
 			std::map<std::string, std::string> Files;
 			// What goes on working without being what the file says: overrides of entities their prefab no longer has,
-			// entities moved to the root because their parent is gone, fields a nested record ignores.
+			// entities moved to the root because their parent is gone, fields a nested record ignores, records replacing
+			// a nested prefab's, and Prefab components ignored in a file too old to nest.
 			std::vector<std::string> Warnings;
 		};
 
-		// What ReadReport::Files is keyed by: one spelling per file, whichever spelled it.
+		// A prefab read for several uses at once: an operation over many instances reads each file once.
+		struct Source
+		{
+			// FileKey of the file.
+			std::string Key;
+			bool Readable = false;
+			// ReadSource's result; Error says why when Readable is false.
+			nlohmann::json Records;
+			std::string Error;
+			ReadReport Report;
+		};
+
+		// Lives for one operation, so it never outlasts a change to a file.
+		class SourceCache
+		{
+		public:
+			const Source& Read(const std::string& projectPath);
+
+		private:
+			std::unordered_map<std::string, Source> m_Sources;
+		};
+
+		// What ReadReport::Files is keyed by: one spelling per file, whichever spelled it. Ignores ASCII case on Windows and
+		// macOS, whose disks usually do.
 		static std::string FileKey(const std::filesystem::path& absolutePath);
 		static std::string FileKeyOf(const std::string& projectPath);
-		// Whether a Prefab component tracks entities itself, rather than being a nested root or untracked. Instances created
-		// during Play do, without being IsTracked.
-		static bool ListsMembers(const PrefabComponent& link);
+		static bool SameFile(const std::string& projectPath, const std::string& otherPath);
 
 		enum class RefreshMode
 		{
@@ -117,34 +140,36 @@ namespace Basalt {
 		// and rotation are never written: they follow the base. Fails when a nested prefab cannot be read or holds the file
 		// at path. Differences from what the nested prefabs say now become overrides, so a tree must have merged them first
 		// (MergeOutdatedNested).
-		static bool ToFileEntities(nlohmann::json entities, const std::filesystem::path& path, PrefabFileRoot root, nlohmann::json& outEntities, std::vector<std::string>& outWarnings, std::string& outError);
-		// Merges the prefabs of the tracked instances in a tree about to be saved as prefabPath: these are the nested
-		// instances, a variant's root, and an instance of that very file if it nests others. Sets outChanged when the scene
-		// changed, even on failure. A tree in a running scene is left as it is. False when one cannot merge.
-		static bool MergeOutdatedNested(Entity root, const std::string& prefabPath, PrefabFileRoot rootKind, bool& outChanged, std::string& outError);
+		static bool ToFileEntities(nlohmann::json entities, const std::filesystem::path& path, PrefabFileRoot rootKind, nlohmann::json& outEntities, std::vector<std::string>& outWarnings, std::string& outError);
+		// Catches up the tree about to be saved as prefabPath with what its prefabs say now: its tracked instances, the root
+		// (unless it is a plain prefab written over itself), and the instance around it. Reads everything first, so a prefab
+		// that cannot be read leaves the scene as it was. Sets outChanged when the scene changed, even on failure, and root
+		// may be gone after that. A running scene cannot merge, so what it would have is in outWarnings. False when an
+		// instance cannot read or merge its prefab.
+		static bool MergeOutdatedNested(Entity root, const std::string& prefabPath, PrefabFileRoot rootKind, bool& outChanged, std::vector<std::string>& outWarnings, std::string& outError);
 		// Writes a tree whose entity IDs are the file's own (an open prefab, say), keeping its nested instances, and for a
 		// variant the root's link as its base. Instances added since get their entities' file IDs.
 		static bool SaveTree(Entity root, const std::filesystem::path& path, PrefabFileRoot rootKind, std::vector<std::string>& outWarnings, std::string& outError);
 		// Writes a new variant of a prefab: its root is an instance of base without any override.
-		static bool CreateVariant(const std::string& basePath, const std::filesystem::path& path, std::string& outError);
+		static bool CreateVariant(const std::string& basePath, const std::filesystem::path& path, std::vector<std::string>& outWarnings, std::string& outError);
 		// Tracks the instances of a scene just made from ReadSource records against their own prefabs: the outermost nested
 		// ones, and those added under their entities. An open prefab then lists their overrides and takes their prefabs'
 		// edits. A nested prefab that cannot be read stays a marker and is reported in outWarnings.
 		static void TrackNestedInstances(Scene& scene, std::vector<std::string>& outWarnings);
-		// Starts tracking the nested instances that became top-level when root stopped being an instance (Unpack):
-		// formerLink, its component from before, says exactly which entities each holds, and what differs from their
-		// prefabs becomes their overrides. Those that cannot be read stay markers, named in outWarnings.
-		static void AdoptNestedInstances(Entity root, const PrefabComponent& formerLink, std::vector<std::string>& outWarnings);
+		// Makes an instance ordinary entities. A nested root's link goes, which is an override of the instance holding it.
+		// An outer instance first catches up with its prefab, then its nested instances become instances of their own: its
+		// link says exactly which entities each holds, and what differs from their prefabs becomes their overrides. Those
+		// that cannot be read stay markers. outWarnings names them.
+		static void Unpack(Entity root, std::vector<std::string>& outWarnings);
 
 		// Gives a tree that is about to be saved as prefabPath (entities as SerializeEntityTree wrote them) its source
 		// IDs, so the instances of an existing file keep merging. If the tree is an instance of that file, its members
 		// keep their source IDs; the other entities reuse the file's IDs where they match it by name (as adoption
 		// matches); the rest get fresh IDs that no scene entity has. Nested instances' entities take the IDs their nested
 		// root's ID derives. Entity references inside the tree follow. requested Variant keeps the root an instance of its
-		// prefab. Returns what the root is: an instance of an existing variant at prefabPath stays
-		// one. Nothing when that instance's file cannot be read (it may be a variant), or holds a nested root it unpacked
-		// that nests others. outWarnings says when another existing file could not be read, so its IDs are lost, and what
-		// nested instances that were not tracked lost.
+		// prefab. Returns what the root is: an instance of an existing variant at prefabPath stays one. Nothing when that
+		// instance's file cannot be read (it may be a variant). outWarnings says when another existing file could not be
+		// read, so its IDs are lost, and what nested instances without tracking lost.
 		static std::optional<PrefabFileRoot> AssignSourceIds(Entity root, const std::string& prefabPath, nlohmann::json& entities, PrefabFileRoot requested, std::vector<std::string>& outWarnings, std::string& outError);
 		// The instance root that tracks entity as one of its members, if any. A nested instance's root has one: it
 		// merges through that instance and is never merged on its own.
@@ -170,6 +195,11 @@ namespace Basalt {
 		static std::vector<std::string> SplitOverridePath(const std::string& path);
 		// Whether the instance has tracking (Members and Baseline); without it the next merge of its own prefab adopts it.
 		static bool IsTracked(const PrefabComponent& link);
+		// Whether a Prefab component tracks entities itself, rather than being a nested root or untracked. Instances created
+		// during Play do, without being IsTracked.
+		static bool ListsMembers(const PrefabComponent& link);
+		// What a tree saved from root is: a root that is an instance makes a variant.
+		static PrefabFileRoot FileRootOf(Entity root);
 		// The normalized form PrefabComponent::Prefab holds (unresolved asset keys stay as they are).
 		static std::string NormalizePath(const std::string& path);
 		// Whether a tracked instance's baseline differs from the source: the source changed since its last merge.
