@@ -479,9 +479,18 @@ namespace Basalt {
 		// the inspector's unnamed additions). Listed names that match no collider are warned about; when none matches, the
 		// chain collides with no collider.
 		std::vector<SpringChainCollider> Colliders;
-		// Play and Simulate only: also stays outside physics bodies (not triggers, nor the entity, its descendants or its
-		// character controller's entity and descendants). One way: the points never push the bodies.
+		// Also stays outside physics bodies (not triggers, nor the entity, its descendants or its character controller's
+		// entity and descendants). One way: the points never push the bodies. In Play and Simulate that is every body; the
+		// editor's preview, which has no physics world, sees the static ones.
 		bool CollidePhysics = false;
+		// With CollidePhysics, the physics layer the chain counts as: it meets the bodies on layers the collision matrix
+		// lets this one collide with. Empty: every layer. A name the project does not define counts as Default, as for a
+		// body.
+		std::string Layer;
+		// Each substep also checks the way a point moved, not only where it ended, so a fast point stops at a collider or
+		// body too thin to catch it there. Costs one sweep per point and substep; a point that an obstacle would part
+		// from its bone by more than half the bone's length lets go, so a chain whose head went past cannot hang behind.
+		bool Continuous = false;
 	};
 
 	// A sphere or capsule attached to a joint that keeps the chains of its SpringBone component outside it (a head under
@@ -700,6 +709,7 @@ namespace Basalt {
 		bool OverrideMaterial = false;
 		float Friction = 0.5f;
 		float Restitution = 0.0f;
+		bool operator==(const BoxColliderComponent&) const = default;
 	};
 
 	struct SphereColliderComponent
@@ -709,6 +719,7 @@ namespace Basalt {
 		bool OverrideMaterial = false;
 		float Friction = 0.5f;
 		float Restitution = 0.0f;
+		bool operator==(const SphereColliderComponent&) const = default;
 	};
 
 	// Capsule aligned with the local Y axis. Total height = 2 * (HalfHeight + Radius).
@@ -720,6 +731,7 @@ namespace Basalt {
 		bool OverrideMaterial = false;
 		float Friction = 0.5f;
 		float Restitution = 0.0f;
+		bool operator==(const CapsuleColliderComponent&) const = default;
 	};
 
 	// Collides by the triangles of a mesh asset (the entity also needs a RigidBodyComponent). Static and
@@ -739,6 +751,7 @@ namespace Basalt {
 		bool OverrideMaterial = false;
 		float Friction = 0.5f;
 		float Restitution = 0.0f;
+		bool operator==(const MeshColliderComponent&) const = default;
 	};
 
 	enum class JointType

@@ -726,6 +726,8 @@ namespace Basalt {
 			r.Field("MaxAngle", c.MaxAngle);
 			r.ListField("Colliders", c.Colliders, SpringBoneComponent::MaxColliders);
 			r.Field("CollidePhysics", c.CollidePhysics);
+			r.Field("Layer", c.Layer);
+			r.Field("Continuous", c.Continuous);
 		}
 
 		void Fields(FieldReader& r, SpringChainCollider& c)
@@ -1385,6 +1387,8 @@ namespace Basalt {
 				{ "MaxAngle", c.MaxAngle },
 				{ "Colliders", ListToJson(c.Colliders) },
 				{ "CollidePhysics", c.CollidePhysics },
+				{ "Layer", c.Layer },
+				{ "Continuous", c.Continuous },
 			};
 		}
 

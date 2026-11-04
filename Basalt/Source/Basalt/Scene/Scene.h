@@ -273,6 +273,8 @@ namespace Basalt {
 		// tools that run without a project). Empty means "use the project's". Not saved in scene files.
 		void SetPhysicsLayers(std::optional<PhysicsLayers> layers) { m_PhysicsLayers = std::move(layers); }
 		const std::optional<PhysicsLayers>& GetPhysicsLayers() const { return m_PhysicsLayers; }
+		// The collision layers a world of this scene filters with: its override, else the active project's, else Default alone.
+		PhysicsLayers ResolvePhysicsLayers() const;
 
 		entt::registry& GetRegistry() { return m_Registry; }
 		const entt::registry& GetRegistry() const { return m_Registry; }

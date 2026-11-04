@@ -335,6 +335,10 @@ namespace Basalt {
 					else if (named.Name.empty())
 						warnings.push_back(fmt::format("SpringBone chain '{}': Colliders[{}] has no Name, so it names no collider (a list without names keeps every collider)", chain.Name, i));
 				}
+				if (!chain.Layer.empty() && !chain.CollidePhysics)
+					warnings.push_back(fmt::format("SpringBone chain '{}': Layer has no effect without CollidePhysics", chain.Name));
+				else if (!chain.Layer.empty() && !entity.GetScene()->ResolvePhysicsLayers().Find(chain.Layer))
+					warnings.push_back(fmt::format("SpringBone chain '{}': the physics layer '{}' is not defined; it counts as Default", chain.Name, chain.Layer));
 				if (chain.Joint.empty())
 				{
 					warnings.push_back(fmt::format("SpringBone chain '{}': Joint is empty", chain.Name));

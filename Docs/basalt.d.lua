@@ -2027,6 +2027,8 @@ function BasaltScript:StopAllCoroutines() end
 ---@field MaxAngle number
 ---@field Colliders SpringChainCollider[]
 ---@field CollidePhysics boolean
+---@field Layer string
+---@field Continuous boolean
 
 ---An element of a component list field.
 ---@class SpringChainCollider

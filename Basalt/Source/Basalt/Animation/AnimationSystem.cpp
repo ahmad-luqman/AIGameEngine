@@ -11,6 +11,7 @@
 #include "Basalt/Core/Profiler.h"
 #include "Basalt/Math/Math.h"
 #include "Basalt/Physics/PhysicsWorld.h"
+#include "Basalt/Physics/StaticPhysicsShapes.h"
 #include "Basalt/Scene/Entity.h"
 #include "Basalt/Scene/Scene.h"
 

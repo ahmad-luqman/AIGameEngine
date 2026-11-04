@@ -548,6 +548,10 @@ namespace Basalt {
 		}
 		for (entt::entity handle : scene.GetAllEntitiesWith<CharacterControllerComponent>())
 			check(Entity(handle, &scene), scene.GetRegistry().get<CharacterControllerComponent>(handle).Layer);
+		for (entt::entity handle : scene.GetAllEntitiesWith<SpringBoneComponent>())
+			for (const SpringChain& chain : scene.GetRegistry().get<SpringBoneComponent>(handle).Chains)
+				if (!chain.Layer.empty())
+					check(Entity(handle, &scene), chain.Layer);
 		return result;
 	}
 

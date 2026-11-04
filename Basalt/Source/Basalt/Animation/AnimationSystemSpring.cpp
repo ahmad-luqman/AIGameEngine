@@ -6,6 +6,7 @@
 #include "Basalt/Core/Profiler.h"
 #include "Basalt/Math/Math.h"
 #include "Basalt/Physics/PhysicsWorld.h"
+#include "Basalt/Physics/StaticPhysicsShapes.h"
 #include "Basalt/Scene/Entity.h"
 #include "Basalt/Scene/Scene.h"
 
@@ -53,6 +54,7 @@ namespace Basalt {
 	void AnimationSystem::SolveSprings(float seconds)
 	{
 		BS_PROFILE_SCOPE("Spring bones");
+		m_StaticShapesFresh = false;
 		for (auto handle : m_Scene.GetAllEntitiesWith<SpringBoneComponent>())
 		{
 			Entity entity(handle, &m_Scene);
@@ -178,11 +180,21 @@ namespace Basalt {
 		std::vector<SpringCollisionShape>& colliders = m_SpringColliders;
 		std::vector<uint32_t>& colliderSources = m_SpringColliderSources;
 		ResolveSpringColliders(playback.Source, component, state, world, globals, colliders, colliderSources, problems);
-		// Physics bodies (Play and Simulate): the entity's own bodies are not obstacles, nor those of the character
-		// controller it belongs to (on it or an ancestor) and that controller's descendants, as for IK ground rays.
+		// Physics bodies: the entity's own bodies are not obstacles, nor those of the character controller it belongs to (on
+		// it or an ancestor) and that controller's descendants, as for IK ground rays. A preview has no physics world, so
+		// it reads the scene's static bodies and any controller above the entity.
 		PhysicsWorld* bodies = m_Preview ? nullptr : m_Scene.GetPhysicsWorld();
 		// `body` is the entity or an ancestor of it, so the entity and its descendants are below it.
-		const Entity body = bodies ? FindCharacter(entity, *bodies).value_or(entity) : entity;
+		Entity body = entity;
+		if (bodies)
+			body = FindCharacter(entity, *bodies).value_or(entity);
+		else if (m_Preview)
+			for (Entity holder = entity; holder; holder = holder.GetParent())
+				if (holder.HasComponent<CharacterControllerComponent>())
+				{
+					body = holder;
+					break;
+				}
 		const auto obstacle = [&](UUID id) {
 			const Entity hit = m_Scene.GetEntityByUUID(id);
 			return !hit || !(hit == body || m_Scene.IsDescendantOf(hit, body));
@@ -263,10 +275,21 @@ namespace Basalt {
 			}
 			else
 			{
-				SpringSimulationRequest request{ .Animated = animated, .PreviousAnimated = chain.Sim->Animated, .Colliders = chainColliders, .Stiffness = stiffness, .Damping = damping, .Radius = radius * entityScale, .MaxAngle = maxAngle, .Acceleration = acceleration, .Seconds = seconds };
+				SpringSimulationRequest request{ .Animated = animated, .PreviousAnimated = chain.Sim->Animated, .Colliders = chainColliders, .Continuous = config.Continuous, .Stiffness = stiffness, .Damping = damping, .Radius = radius * entityScale, .MaxAngle = maxAngle, .Acceleration = acceleration, .Seconds = seconds };
 				PhysicsShapeSnapshot nearby;
-				if (config.CollidePhysics && bodies)
+				const StaticPhysicsShapes* staticBodies = m_Preview && config.CollidePhysics ? &GetStaticShapes() : nullptr;
+				if (config.CollidePhysics && (bodies || staticBodies))
 				{
+					const PhysicsLayers& layers = bodies ? bodies->GetLayers() : staticBodies->GetLayers();
+					// Bodies are seen through the collision matrix; a name it does not know is Default, as for a body.
+					uint32_t mask = PhysicsQueryFilter{}.LayerMask;
+					if (!config.Layer.empty())
+					{
+						const auto layer = layers.Find(config.Layer);
+						if (!layer)
+							chainProblems.push_back(fmt::format("the physics layer '{}' is not defined; it counts as Default", config.Layer));
+						mask = layers.GetCollisionMask(layer.value_or(0));
+					}
 					// Every point stays within the chain's reach of its first joint, which moved from where it was at the last
 					// simulation to where it is now.
 					float reach = request.Radius;
@@ -274,7 +297,8 @@ namespace Basalt {
 						reach += glm::length(animated[i] - animated[i - 1]);
 					const glm::vec3 low = glm::min(animated.front(), chain.Sim->Animated.front()) - glm::vec3(reach);
 					const glm::vec3 high = glm::max(animated.front(), chain.Sim->Animated.front()) + glm::vec3(reach);
-					nearby = bodies->CollectShapes(low, high, request.Radius, {}, obstacle);
+					const PhysicsQueryFilter filter{ .LayerMask = mask };
+					nearby = bodies ? bodies->CollectShapes(low, high, request.Radius, filter, obstacle) : staticBodies->CollectShapes(low, high, request.Radius, filter, obstacle);
 					// Warned once per chain, outside its problem list: the count rises and falls as the character moves.
 					if (nearby.Truncated() && !chain.TruncationWarned)
 					{
@@ -283,7 +307,14 @@ namespace Basalt {
 					}
 					// CollectShapes was given the points' radius, so the bodies push spheres of it out.
 					if (!nearby.Empty())
+					{
 						request.World = [&nearby](const glm::vec3& point) { return nearby.PushOut(point); };
+						if (config.Continuous)
+							request.WorldSweep = [&nearby](const glm::vec3& from, const glm::vec3& to) -> std::optional<SpringSweepHit> {
+								const auto hit = nearby.Sweep(from, to);
+								return hit ? std::optional(SpringSweepHit{ .Fraction = hit->Fraction, .Normal = hit->Normal }) : std::nullopt;
+							};
+					}
 				}
 				SimulateSpringChain(request, chain.Sim->Points);
 				chain.Sim->Animated = animated;
@@ -343,6 +374,16 @@ namespace Basalt {
 		}
 		StoreOverlay(playback, &Playback::SpringOverlay, touched, pose, globals);
 		report();
+	}
+
+	StaticPhysicsShapes& AnimationSystem::GetStaticShapes()
+	{
+		if (!m_StaticShapes)
+			m_StaticShapes = CreateScope<StaticPhysicsShapes>(m_Scene);
+		if (!m_StaticShapesFresh)
+			m_StaticShapes->Refresh();
+		m_StaticShapesFresh = true;
+		return *m_StaticShapes;
 	}
 
 	bool AnimationSystem::ResetSpringBones(Entity entity)
