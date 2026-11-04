@@ -1061,7 +1061,8 @@ TEST_SUITE("Retargeting")
 		for (const auto& [text, message] : invalid)
 		{
 			CHECK_FALSE(AnimationJointMap::FromText(text, error));
-			CHECK_MESSAGE(error.find(message) != std::string::npos, (text + ": " + error));
+			CAPTURE(text);
+			CHECK_MESSAGE(error.find(message) != std::string::npos, error);
 		}
 		// An inline entry wins over map pairs that name either of its joints.
 		const AnimationClipLibrary entry{ .Joints = { { "mixamorig:LeftArm", "upperarm_l" }, { "mixamorig:Neck", "" } } };
