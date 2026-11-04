@@ -694,7 +694,8 @@ TEST_SUITE("Animation authoring")
 		for (const auto& [path, message] : rejected)
 		{
 			CHECK_FALSE(PropertyAnimation::ResolveField("Animator", path, &error));
-			CHECK_MESSAGE(error.find(message) != std::string::npos, (path + ": " + error));
+			CAPTURE(path);
+			CHECK_MESSAGE(error.find(message) != std::string::npos, error);
 		}
 
 		// The panel lists nested fields by their element's name.
