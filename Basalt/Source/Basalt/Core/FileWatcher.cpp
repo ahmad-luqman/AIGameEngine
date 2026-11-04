@@ -379,8 +379,8 @@ namespace Basalt {
 	void FileWatcher::RunWorker(const std::filesystem::path& root, const std::string& subdirectory, std::chrono::milliseconds interval)
 	{
 		const CrashReporter::ThreadStack crashStack;
-		// Only the scan runs here: no project access, and no logging but that setup's (Apply reports errors on the owner's
-		// thread).
+		// Only the scan runs here: no project access, and no logging but crashStack's warning (Apply reports errors on the
+		// owner's thread).
 		std::unique_lock lock(m_Mutex);
 		while (!m_Wake.wait_for(lock, interval, [this]() { return m_Stop; }))
 		{

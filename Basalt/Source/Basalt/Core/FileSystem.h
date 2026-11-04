@@ -36,7 +36,7 @@ namespace Basalt {
 		// A read-only archive over a directory: the runtime mounts an exported game's Assets.bpak over its project folder.
 		// ReadTextFile, ReadBinaryFile, Exists and GetRegularFileSize then answer for the files under root that the archive
 		// holds, and disk answers for the rest. Readers that bypass them look the mount up directly: cgltf's file callbacks,
-		// miniaudio's VFS (which streams long stored clips, unhashed) and font stamps through FindMounted, and
+		// miniaudio's VFS (which reads long stored clips in part, unhashed) and font stamps through FindMounted, and
 		// AssetRegistry::Refresh through GetMountedArchive (the
 		// whole index). Lua's require searcher reads through ReadBinaryFile and asks FindMounted only whether a module
 		// exists. Writes are never redirected: a file written under root that the archive also holds is still read from

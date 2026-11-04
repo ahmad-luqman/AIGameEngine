@@ -166,12 +166,12 @@ namespace Basalt {
 		// A line naming what was running, in every report from now on ("Project: Platformer 1.2.0"). Cut at 255 bytes, on
 		// a UTF-8 character boundary.
 		static void SetContext(std::string_view context);
-		// Allows message boxes: one after writing a report, with its path and an offer to open it (Linux needs xdg-open), and
-		// ShowErrorDialog's. The windowed runtime enables them; tools, headless and automated runs never show one (nobody
+		// Allows message boxes: one after a crash, with the report's path and an offer to open it (Linux needs xdg-open, Windows
+		// the watchdog thread), and ShowErrorDialog's. The windowed runtime enables them; tools, headless and automated runs never show one (nobody
 		// would close it).
 		static void SetDialogEnabled(bool enabled);
 		// Tells the player why the game cannot go on, for a failure that is no crash (a broken archive): a message box when
-		// dialogs are enabled, nothing otherwise; a warning in the log when the box cannot show. Text past 4 KiB is cut.
+		// dialogs are enabled, nothing otherwise; a warning in the log when the box cannot start. Text past 4 KiB is cut.
 		// Windows returns when it is closed; elsewhere it stays after the process ends.
 		static void ShowErrorDialog(std::string_view message);
 		// The folder reports go to; empty before Install, under AddressSanitizer and after a failed Install.

@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <charconv>
 #include <chrono>
 #include <map>
 #include <optional>
@@ -100,9 +101,9 @@ namespace Basalt {
 		constexpr std::string_view ReplaceableImageExtensions[] = { ".png", ".jpg", ".jpeg", ".tga", ".bmp" };
 		// Files that cannot name another asset, besides those images.
 		constexpr std::string_view OtherMediaExtensions[] = { ".hdr", ".ktx2", ".wav", ".ogg", ".mp3", ".flac", ".opus", ".ttf", ".otf", ".bin" };
-		// Stored so they can stream (PackArchive::ReadStored): they are compressed already, and zstd saves 0.1 to 5% of them,
-		// which would cost a clip its streaming for that saving.
-		constexpr std::string_view EncodedAudioExtensions[] = { ".ogg", ".mp3", ".flac", ".opus" };
+		// Stored without trying zstd, which saves 0.1 to 5% of them and would stop a long clip being read in part
+		// (PackArchive::ReadStored). The engine plays these, and WAV.
+		constexpr std::string_view EncodedAudioExtensions[] = { ".mp3", ".flac" };
 
 		bool IsListed(std::span<const std::string_view> extensions, std::string_view extension)
 		{
@@ -112,16 +113,8 @@ namespace Basalt {
 		std::optional<uint32_t> ParseHex(std::string_view text)
 		{
 			uint32_t value = 0;
-			if (text.empty() || text.size() > 6)
-				return std::nullopt;
-			for (const char c : text)
-			{
-				const auto byte = static_cast<unsigned char>(c);
-				if (std::isxdigit(byte) == 0)
-					return std::nullopt;
-				value = value * 16 + static_cast<uint32_t>(std::isdigit(byte) != 0 ? c - '0' : std::tolower(byte) - 'a' + 10);
-			}
-			return value;
+			const auto [parsed, error] = std::from_chars(text.data(), text.data() + text.size(), value, 16);
+			return !text.empty() && error == std::errc() && parsed == text.data() + text.size() ? std::optional(value) : std::nullopt;
 		}
 
 		void AppendUtf8(std::string& out, uint32_t code)
@@ -136,94 +129,115 @@ namespace Basalt {
 				out.append({ static_cast<char>(0xF0 | (code >> 18)), static_cast<char>(0x80 | ((code >> 12) & 63)), static_cast<char>(0x80 | ((code >> 6) & 63)), static_cast<char>(0x80 | (code & 63)) });
 		}
 
-		// text with the escapes undone that can spell a file name: a glTF URI's %XX (either case, escaping as little as the
-		// writer liked), JSON's \uXXXX with surrogate pairs, and Lua's \xXX, \ddd and \u{X...}. Anything else stays as it
-		// is, so it works on any file, binary ones included.
-		std::string DecodeEscapes(std::string_view text)
+		// Undoes the backslash escape text begins with into out; the characters it took, or 0 when it is none. text is not
+		// empty. The escapes of punctuation need none of this: comparisons skip punctuation (KeepNameCharacters).
+		size_t DecodeStringEscape(std::string_view text, std::string& out)
+		{
+			const auto hexAt = [&](size_t at, size_t count) { return at + count <= text.size() ? ParseHex(text.substr(at, count)) : std::nullopt; };
+			if (text[0] != '\\' || text.size() < 2)
+				return 0;
+			// Control characters, and Lua's \z with the spaces it skips, are no part of a name worth comparing.
+			if (std::string_view("abfnrtvz").find(text[1]) != std::string_view::npos)
+				return 2;
+			if (text[1] == '\\')
+			{
+				// An escaped backslash, so what follows it is no escape.
+				out += '\\';
+				return 2;
+			}
+			if (text[1] == 'x')
+			{
+				const auto byte = hexAt(2, 2);
+				if (byte)
+					out += static_cast<char>(*byte);
+				return byte ? 4 : 0;
+			}
+			if (text.starts_with("\\u{"))
+			{
+				// Lua allows any number of leading zeros, and a stray \u{ must not scan the rest of the file.
+				constexpr size_t MaxBraceDigits = 32;
+				const std::string_view braced = text.substr(3, MaxBraceDigits + 1);
+				const size_t close = braced.find('}');
+				const auto code = close != std::string_view::npos ? ParseHex(braced.substr(0, close)) : std::nullopt;
+				if (!code || *code > 0x10FFFF)
+					return 0;
+				AppendUtf8(out, *code);
+				return 3 + close + 1;
+			}
+			if (text[1] == 'u')
+			{
+				auto code = hexAt(2, 4);
+				if (!code)
+					return 0;
+				size_t length = 6;
+				if (*code >= 0xD800 && *code < 0xDC00 && text.substr(6, 2) == "\\u")
+				{
+					const auto low = hexAt(8, 4);
+					if (low && *low >= 0xDC00 && *low < 0xE000)
+					{
+						code = 0x10000 + ((*code - 0xD800) << 10) + (*low - 0xDC00);
+						length = 12;
+					}
+				}
+				AppendUtf8(out, *code);
+				return length;
+			}
+			const std::string_view digits = text.substr(1, 3);
+			uint32_t byte = 0;
+			const auto [end, error] = std::from_chars(digits.data(), digits.data() + digits.size(), byte);
+			if (error != std::errc() || byte > 255)
+				return 0;
+			out += static_cast<char>(byte);
+			return 1 + static_cast<size_t>(end - digits.data());
+		}
+
+		// JSON's and Lua's backslash escapes undone. Anything else stays as it is, so it works on any file, binary ones too.
+		std::string DecodeStringEscapes(std::string_view text)
 		{
 			std::string decoded;
 			decoded.reserve(text.size());
-			const auto hexAt = [&](size_t at, size_t count) { return at + count <= text.size() ? ParseHex(text.substr(at, count)) : std::nullopt; };
 			for (size_t i = 0; i < text.size();)
 			{
-				const char next = i + 1 < text.size() ? text[i + 1] : '\0';
-				if (text[i] == '%')
-				{
-					if (const auto byte = hexAt(i + 1, 2))
-					{
-						decoded += static_cast<char>(*byte);
-						i += 3;
-						continue;
-					}
-				}
-				else if (text[i] == '\\' && next == '\\')
-				{
-					// An escaped backslash, so what follows it is no escape.
-					decoded += '\\';
-					i += 2;
-					continue;
-				}
-				else if (text[i] == '\\' && next == 'x')
-				{
-					if (const auto byte = hexAt(i + 2, 2))
-					{
-						decoded += static_cast<char>(*byte);
-						i += 4;
-						continue;
-					}
-				}
-				else if (text[i] == '\\' && next == 'u' && i + 2 < text.size() && text[i + 2] == '{')
-				{
-					const size_t close = text.find('}', i + 3);
-					const auto code = close != std::string_view::npos ? ParseHex(text.substr(i + 3, close - i - 3)) : std::nullopt;
-					if (code && *code <= 0x10FFFF)
-					{
-						AppendUtf8(decoded, *code);
-						i = close + 1;
-						continue;
-					}
-				}
-				else if (text[i] == '\\' && next == 'u')
-				{
-					if (auto code = hexAt(i + 2, 4))
-					{
-						i += 6;
-						if (*code >= 0xD800 && *code < 0xDC00 && text.substr(i, 2) == "\\u")
-						{
-							const auto low = hexAt(i + 2, 4);
-							if (low && *low >= 0xDC00 && *low < 0xE000)
-							{
-								code = 0x10000 + ((*code - 0xD800) << 10) + (*low - 0xDC00);
-								i += 6;
-							}
-						}
-						AppendUtf8(decoded, *code);
-						continue;
-					}
-				}
-				else if (text[i] == '\\' && std::isdigit(static_cast<unsigned char>(next)) != 0)
-				{
-					size_t digits = 0;
-					uint32_t byte = 0;
-					while (digits < 3 && i + 1 + digits < text.size() && std::isdigit(static_cast<unsigned char>(text[i + 1 + digits])) != 0)
-						byte = byte * 10 + static_cast<uint32_t>(text[i + 1 + digits++] - '0');
-					if (byte <= 255)
-					{
-						decoded += static_cast<char>(byte);
-						i += 1 + digits;
-						continue;
-					}
-				}
-				decoded += text[i++];
+				const size_t taken = text[i] == '\\' ? DecodeStringEscape(text.substr(i), decoded) : 0;
+				if (taken == 0)
+					decoded += text[i++];
+				i += taken;
 			}
 			return decoded;
 		}
 
+		// A URI's %XX undone, in either case, however little the writer escaped.
+		std::string DecodePercentEscapes(std::string_view text)
+		{
+			std::string decoded;
+			decoded.reserve(text.size());
+			for (size_t i = 0; i < text.size(); i++)
+			{
+				const auto byte = text[i] == '%' && i + 2 < text.size() ? ParseHex(text.substr(i + 1, 2)) : std::nullopt;
+				decoded += byte ? static_cast<char>(*byte) : text[i];
+				i += byte ? 2 : 0;
+			}
+			return decoded;
+		}
+
+		// What two spellings of a name share: its letters, digits and non-ASCII bytes. Punctuation goes because it is what
+		// escapes and joins differ in (\' for ', a space for %20, "Wall" .. ".png").
+		std::string KeepNameCharacters(std::string_view text)
+		{
+			std::string kept;
+			kept.reserve(text.size());
+			for (const char c : text)
+				if (const auto byte = static_cast<unsigned char>(c); byte >= 0x80 || std::isalnum(byte) != 0)
+					kept += c;
+			return kept;
+		}
+
 		// The images that compressed replacements make unnecessary: an image with a .ktx2 of the same name beside it (the
 		// usual asset.compress_texture output; KTX2 files do not record their source) whose file name and UUID neither the
-		// project file nor any file but media contains, as written or with its escapes undone. A search of the bytes rather
-		// than a walk of the declared asset fields, because a script's string, a script property or a glTF URI can name a file
-		// too. Dropping a file a game uses is the failure to avoid: a false match only keeps one.
+		// project file nor any file but media contains. A search of the bytes rather than a walk of the declared asset fields,
+		// because a script's string, a script property or a glTF URI can name a file too, and a loose one, ignoring punctuation
+		// on each side after undoing escapes: dropping a file a game uses is the failure to avoid, and a false match only
+		// keeps one.
 		std::vector<std::string> FindReplacedOriginals(const Project& project, const std::vector<ArchiveFile>& files, std::vector<std::string>& outWarnings)
 		{
 			std::unordered_set<std::string> keys;
@@ -238,7 +252,7 @@ namespace Basalt {
 				if (!IsListed(ReplaceableImageExtensions, extension) || !keys.contains(file.Key.substr(0, file.Key.size() - extension.size()) + ".ktx2"))
 					continue;
 				std::vector<std::string>& mentions = candidates[file.Key];
-				mentions.push_back(FileSystem::PathToUtf8(path.filename()));
+				mentions.push_back(KeepNameCharacters(FileSystem::PathToUtf8(path.filename())));
 				if (file.AssetID != 0)
 					mentions.push_back(std::to_string(file.AssetID));
 			}
@@ -262,9 +276,13 @@ namespace Basalt {
 					return {};
 				}
 				const std::string_view text(reinterpret_cast<const char*>(bytes->data()), bytes->size());
-				const std::string decoded = DecodeEscapes(text);
+				// As written (a name that holds %41 itself), without and with URI escapes, which may be JSON-escaped in turn.
+				const std::string strings = DecodeStringEscapes(text);
+				const std::string spellings[] = { KeepNameCharacters(text), KeepNameCharacters(strings), KeepNameCharacters(DecodePercentEscapes(strings)) };
 				std::erase_if(candidates, [&](const auto& candidate) {
-					return std::any_of(candidate.second.begin(), candidate.second.end(), [&](const std::string& mention) { return text.find(mention) != std::string_view::npos || decoded.find(mention) != std::string::npos; });
+					return std::any_of(candidate.second.begin(), candidate.second.end(), [&](const std::string& mention) {
+						return std::any_of(std::begin(spellings), std::end(spellings), [&](const std::string& spelling) { return spelling.find(mention) != std::string::npos; });
+					});
 				});
 				if (candidates.empty())
 					return {};
@@ -363,8 +381,8 @@ namespace Basalt {
 			{
 				if (std::binary_search(written.Omitted.begin(), written.Omitted.end(), file.Key))
 					continue;
-				const bool storeUncompressed = IsListed(EncodedAudioExtensions, FileSystem::GetLowercaseExtension(file.Source));
-				if (!writer.AddFile(std::move(file.Key), std::move(file.Source), file.AssetID, outError, storeUncompressed))
+				const auto storage = IsListed(EncodedAudioExtensions, FileSystem::GetLowercaseExtension(file.Source)) ? PackArchiveWriter::Storage::Streamable : PackArchiveWriter::Storage::Smallest;
+				if (!writer.AddFile(std::move(file.Key), std::move(file.Source), file.AssetID, outError, storage))
 					return std::nullopt;
 			}
 			std::optional<PackArchiveWriter::Statistics> statistics = writer.Write(archive, outError);

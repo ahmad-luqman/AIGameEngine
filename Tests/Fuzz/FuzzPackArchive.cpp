@@ -26,9 +26,9 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 			(void)archive->Read(entry, error);
 		if (entry.Compression == Basalt::PackArchive::Method::Store)
 		{
-			// As a streaming reader goes: the start, the middle and past the last byte.
+			// As a streaming reader goes: the start, the middle, the end and past it.
 			std::array<uint8_t, 4096> part;
-			for (const uint64_t offset : { uint64_t{ 0 }, entry.Size / 2, entry.Size > 0 ? entry.Size - 1 : uint64_t{ 0 } })
+			for (const uint64_t offset : { uint64_t{ 0 }, entry.Size / 2, entry.Size > 0 ? entry.Size - 1 : uint64_t{ 0 }, entry.Size, UINT64_MAX })
 				(void)archive->ReadStored(entry, offset, part.data(), part.size(), error);
 		}
 	}

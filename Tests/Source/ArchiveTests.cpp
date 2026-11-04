@@ -140,18 +140,6 @@ namespace {
 		CHECK_FALSE(PackArchive::OpenMemory(std::move(bytes), error));
 		return error;
 	}
-
-	// Mounts an archive for the scope; FileSystem's mount is global, so a failing check must not leak it into other tests.
-	class ScopedMount
-	{
-	public:
-		ScopedMount(const std::filesystem::path& root, Ref<PackArchive> archive) { FileSystem::Mount(root, std::move(archive)); }
-		~ScopedMount() { FileSystem::Unmount(); }
-
-		ScopedMount(const ScopedMount&) = delete;
-		ScopedMount& operator=(const ScopedMount&) = delete;
-	};
-
 }
 
 TEST_SUITE("Archive")
@@ -436,7 +424,7 @@ TEST_SUITE("Archive")
 		CHECK_FALSE(FileSystem::ReadTextFile(root / "Assets" / "Packed.txt"));
 		{
 			// "Game/." is the same folder as "Game".
-			ScopedMount mount(root / ".", archive);
+			BasaltTest::ScopedMount mount(root / ".", archive);
 			CHECK(FileSystem::GetMountedArchive(root) == archive);
 			CHECK(FileSystem::GetMountedArchive(root / "") == archive);
 			CHECK_FALSE(FileSystem::GetMountedArchive(root / "Assets"));
@@ -487,7 +475,7 @@ TEST_SUITE("Archive")
 		bytes[static_cast<size_t>(shadowed->Offset)] ^= 1;
 		const Ref<PackArchive> damaged = PackArchive::OpenMemory(bytes, error);
 		REQUIRE(damaged);
-		ScopedMount mount(root, damaged);
+		BasaltTest::ScopedMount mount(root, damaged);
 		// Without a place for the reason, the log gets it; with one, the caller does (and logs it with its own context).
 		uint64_t since = Log::GetHistory().GetTotalCount();
 		CHECK_FALSE(FileSystem::ReadTextFile(root / "Assets" / "Shadowed.txt"));
@@ -517,7 +505,7 @@ TEST_SUITE("Archive")
 		std::string error;
 		const Ref<PackArchive> archive = PackArchive::Open(directory.GetPath() / "Assets.bpak", error);
 		REQUIRE_MESSAGE(archive, error);
-		ScopedMount mount(root, archive);
+		BasaltTest::ScopedMount mount(root, archive);
 
 		CHECK(FileSystem::ReadBinaryFilePrefix(root / "Assets" / "Disk.txt", 4) == Bytes("0123"));
 		CHECK(FileSystem::ReadBinaryFilePrefix(root / "Assets" / "Disk.txt", 10) == Bytes("0123456789"));
@@ -769,7 +757,7 @@ TEST_SUITE("Archive")
 			bytes[static_cast<size_t>(RequireEntry(*archive, path).Offset)] ^= 0x5A;
 		archive = PackArchive::OpenMemory(bytes, error);
 		REQUIRE_MESSAGE(archive, error);
-		ScopedMount mount(temp.GetDirectory(), archive);
+		BasaltTest::ScopedMount mount(temp.GetDirectory(), archive);
 		AssetManager::Clear();
 		CHECK_FALSE(AssetManager::GetTexture("Assets/Textures/T.png"));
 		CHECK_MESSAGE(AssetManager::GetError("Assets/Textures/T.png").find("damaged in the archive") != std::string::npos, AssetManager::GetError("Assets/Textures/T.png"));
@@ -943,7 +931,7 @@ TEST_SUITE("Archive")
 			return wav;
 		};
 		const std::filesystem::path file = temp.GetDirectory() / Project::ArchiveFileName;
-		std::vector<uint8_t> bytes = BuildArchive({ { "Assets/Audio/Noise.wav", Bytes(noiseWav(60.0f)), 0 }, { "Assets/Audio/Short.wav", Bytes(noiseWav(0.5f)), 0 } }, file);
+		std::vector<uint8_t> bytes = BuildArchive({ { "Assets/Audio/Noise.wav", Bytes(noiseWav(60.0f)), 0 }, { "Assets/Audio/Short.wav", Bytes(noiseWav(0.5f)), 0 }, { "Assets/Audio/Whole.wav", Bytes(noiseWav(0.5f)), 0 } }, file);
 		std::string error;
 		Ref<PackArchive> archive = PackArchive::Open(file, error);
 		REQUIRE_MESSAGE(archive, error);
@@ -963,7 +951,7 @@ TEST_SUITE("Archive")
 		CHECK_FALSE(archive->Read(RequireEntry(*archive, "Assets/Audio/Noise.wav"), error));
 		CHECK(error.find("hash mismatch") != std::string::npos);
 
-		const ScopedMount mount(temp.GetDirectory(), archive);
+		const BasaltTest::ScopedMount mount(temp.GetDirectory(), archive);
 		const Ref<Scene> scene = CreateRef<Scene>();
 		auto& decoded = scene->CreateEntity("Decoded").AddComponent<AudioSourceComponent>();
 		decoded.Clip = "Assets/Audio/Noise.wav";
@@ -977,10 +965,19 @@ TEST_SUITE("Archive")
 		auto& damaged = scene->CreateEntity("Damaged").AddComponent<AudioSourceComponent>();
 		damaged.Clip = "Assets/Audio/Short.wav";
 		damaged.PlayOnStart = true;
+		// As short and undamaged: what keeps the damaged clip's check from passing for some other reason.
+		auto& whole = scene->CreateEntity("Whole").AddComponent<AudioSourceComponent>();
+		whole.Clip = "Assets/Audio/Whole.wav";
+		whole.PlayOnStart = true;
 		scene->CreateEntity("Listener").AddComponent<AudioListenerComponent>();
 		const BasaltTest::HeadlessAudio audio;
+		const uint64_t logged = Log::GetHistory().GetTotalCount();
 		scene->OnRuntimeStart();
+		uint64_t next = 0;
+		const std::vector<LogMessage> messages = Log::GetHistory().GetMessagesSince(logged, next);
+		CHECK(std::any_of(messages.begin(), messages.end(), [](const LogMessage& message) { return message.Text.find("'Assets/Audio/Short.wav' is damaged in the archive (hash mismatch)") != std::string::npos; }));
 		REQUIRE(scene->GetAudioSystem());
+		CHECK(scene->GetAudioSystem()->IsPlaying(scene->FindEntityByName("Whole")));
 		CHECK(scene->GetAudioSystem()->IsPlaying(scene->FindEntityByName("Decoded")));
 		CHECK(scene->GetAudioSystem()->IsPlaying(scene->FindEntityByName("Streamed")));
 		CHECK(scene->GetAudioSystem()->IsStreaming(scene->FindEntityByName("Streamed")));
@@ -1039,7 +1036,7 @@ TEST_SUITE("Archive")
 
 	TEST_CASE("Batches hold what fits, never fewer than one entry")
 	{
-		const auto ends = [](std::vector<uint64_t> sizes, uint64_t batchBytes) {
+		const auto ends = [](const std::vector<uint64_t>& sizes, uint64_t batchBytes) {
 			std::vector<size_t> found;
 			for (size_t begin = 0; begin < sizes.size(); begin = found.back())
 				found.push_back(PackArchiveWriter::FindBatchEnd(sizes, begin, batchBytes));
@@ -1083,14 +1080,14 @@ TEST_SUITE("Archive")
 		CHECK(FileSystem::ReadBinaryFile(file) == expected);
 	}
 
-	TEST_CASE("A file told to stay uncompressed is stored, however well it compresses")
+	TEST_CASE("A streamable file is stored, however well it compresses")
 	{
 		BasaltTest::TempDirectory directory("ArchiveStoreUncompressed");
 		const std::vector<uint8_t> text = Repetitive(5000);
 		REQUIRE(FileSystem::WriteBinaryFile(directory.GetPath() / "Source", text.data(), text.size()));
 		PackArchiveWriter writer;
 		std::string error;
-		REQUIRE(writer.AddFile("Assets/Stored.bin", directory.GetPath() / "Source", 0, error, true));
+		REQUIRE(writer.AddFile("Assets/Stored.bin", directory.GetPath() / "Source", 0, error, PackArchiveWriter::Storage::Streamable));
 		REQUIRE(writer.AddFile("Assets/Zipped.bin", directory.GetPath() / "Source", 0, error));
 		REQUIRE_MESSAGE(writer.Write(directory.GetPath() / "Out.bpak", error), error);
 		const Ref<PackArchive> archive = PackArchive::Open(directory.GetPath() / "Out.bpak", error);
@@ -1136,8 +1133,18 @@ TEST_SUITE("Archive")
 			{ "Lua\xC3\xA9.png", "Assets/Scripts/Decimal.lua" },
 			{ "Hex\xC3\xA9.png", "Assets/Scripts/Hex.lua" },
 			{ "Brace\xC3\xA9.png", "Assets/Scripts/Brace.lua" },
-			// A name that looks escaped itself, written as it is.
+			// A name that looks escaped itself, written as it is, also beside a real escape.
 			{ "Sale%41.png", "Assets/Scripts/Literal.lua" },
+			// A backslash that escapes nothing: a Windows path in a note, where \t is no tab.
+			{ "test.png", "Assets/Notes.txt" },
+			{ "50%20off \xC3\xA9.png", "Assets/Scripts/Literal.lua" },
+			{ "Bob's Tile.png", "Assets/Scripts/Quoted.lua" },
+			{ "Say Hi.png", "Assets/Scripts/Quoted.lua" },
+			{ "Split.png", "Assets/Scripts/Quoted.lua" },
+			{ "Joined.png", "Assets/Scripts/Quoted.lua" },
+			{ "Tabbed Name.png", "Assets/Scripts/Quoted.lua" },
+			{ "Zeros.png", "Assets/Scripts/Quoted.lua" },
+			{ "Twice Over.png", "Assets/Materials/Twice.bmaterial" },
 		};
 		for (const auto& [image, mentionedBy] : mentioned)
 		{
@@ -1155,12 +1162,15 @@ TEST_SUITE("Archive")
 		temp.WriteFile("Assets/Scripts/Hex.lua", R"(return "Hex\xC3\xA9.png")");
 		temp.WriteFile("Assets/Scripts/Brace.lua", R"(return "Brace\u{E9}.png")");
 		// An escaped backslash ends the escape: this names no file of the project, so Not\xC3\xA9.png stays unmentioned.
-		temp.WriteFile("Assets/Scripts/Literal.lua", R"(return "Not\\u00e9.png", "Sale%41.png")");
+		temp.WriteFile("Assets/Scripts/Literal.lua", R"(return "Not\\u00e9.png", "Sale%41.png", "50%20off \u{E9}.png")");
+		temp.WriteFile("Assets/Notes.txt", R"(See Assets\Textures\test.png)");
+		temp.WriteFile("Assets/Scripts/Quoted.lua", R"(return 'Bob\'s Tile.png', "Say \"Hi\".png", "Spl\z
+			it.png", "Joined" .. ".png", "Tabbed\tName.png", "\u{00000000005A}eros.png")");
+		// A percent escape that is JSON-escaped in turn.
+		temp.WriteFile("Assets/Materials/Twice.bmaterial", R"({"Albedo":"Assets/Textures/Twice\u002520Over.png"})");
 		// Audio that is compressed already stays streamable, whatever zstd could still save; other audio is compressed.
-		temp.WriteFile("Assets/Audio/Music.ogg", std::string(5000, 'o'));
 		temp.WriteFile("Assets/Audio/Quiet.mp3", std::string(5000, 'm'));
 		temp.WriteFile("Assets/Audio/Lossless.FLAC", std::string(5000, 'f'));
-		temp.WriteFile("Assets/Audio/Voice.opus", std::string(5000, 'v'));
 		temp.WriteFile("Assets/Audio/Raw.wav", std::string(5000, 'w'));
 		const auto id = project->GetAssets().Ensure("Assets/Textures/ByUuid.png", error);
 		REQUIRE_MESSAGE(id, error);
@@ -1180,6 +1190,8 @@ TEST_SUITE("Archive")
 		ExportResult result;
 		Ref<PackArchive> archive;
 		const auto exportedPaths = [&]() {
+			// Windows will not replace a file that is open.
+			archive = nullptr;
 			result = Exporter::Export(*project, output, options);
 			REQUIRE_MESSAGE(result.Success, result.Error);
 			std::string openError;
@@ -1203,13 +1215,16 @@ TEST_SUITE("Archive")
 		for (const char* kept : { "Named.png", "ByUuid.png", "Icon.png", "Moved.png", "Lonely.png", "Upper.png" })
 			CHECK_MESSAGE(holds(paths, std::string("Assets/Textures/") + kept), kept);
 		for (const auto& [image, mentionedBy] : mentioned)
-			CHECK_MESSAGE(holds(paths, std::string("Assets/Textures/") + image), image, " mentioned by ", mentionedBy);
+		{
+			const std::string path = std::string("Assets/Textures/") + image + ", which " + mentionedBy + " mentions";
+			CHECK_MESSAGE(holds(paths, std::string("Assets/Textures/") + image), path);
+		}
 		// Whoever exports hears what is gone, and where a long list ends.
 		REQUIRE(result.Warnings.size() == 1);
 		CHECK(result.Warnings[0].find("keepOriginals") != std::string::npos);
 		CHECK(result.Warnings[0].find("Assets/Textures/Brick.jpg") != std::string::npos);
 		CHECK(result.Warnings[0].find("and 2 more") != std::string::npos);
-		for (const char* path : { "Assets/Audio/Music.ogg", "Assets/Audio/Quiet.mp3", "Assets/Audio/Lossless.FLAC", "Assets/Audio/Voice.opus" })
+		for (const char* path : { "Assets/Audio/Quiet.mp3", "Assets/Audio/Lossless.FLAC" })
 			CHECK_MESSAGE(RequireEntry(*archive, path).Compression == PackArchive::Method::Store, path);
 		CHECK(RequireEntry(*archive, "Assets/Audio/Raw.wav").Compression == PackArchive::Method::Zstd);
 
@@ -1225,8 +1240,43 @@ TEST_SUITE("Archive")
 		result = Exporter::Export(*project, output, options);
 		CHECK_FALSE(result.Success);
 		CHECK(result.Error.find("keepOriginals needs archive") != std::string::npos);
+		archive = nullptr;
 		std::filesystem::remove_all(output, removeError);
 	}
+
+#if !defined(_WIN32)
+	TEST_CASE("A file that cannot be searched keeps every original")
+	{
+		BasaltTest::TempProject temp("ArchiveUnsearchable");
+		REQUIRE(temp.IsValid());
+		const Ref<Project>& project = Project::GetActive();
+		temp.WriteFile("Assets/Scenes/Main.bscene", R"({"Entities":[]})");
+		temp.WriteFile("Assets/Textures/Wall.png", "original");
+		temp.WriteFile("Assets/Textures/Wall.ktx2", "replacement");
+		temp.WriteFile("Assets/Scripts/Secret.lua", "return 1");
+		temp.WriteFile("FakeRuntime", "binary");
+		const BasaltTest::ScopedFakeVulkanSdk sdk(temp);
+		project->GetConfig().StartScene = "Assets/Scenes/Main.bscene";
+		const std::filesystem::path secret = temp.GetDirectory() / "Assets" / "Scripts" / "Secret.lua";
+		std::filesystem::permissions(secret, std::filesystem::perms::none);
+		// Root reads anything, so there is nothing to see.
+		if (FileSystem::ReadBinaryFile(secret))
+			return;
+		ExportOptions options;
+		options.RuntimeExecutable = temp.GetDirectory() / "FakeRuntime";
+		options.Archive = true;
+		const std::filesystem::path output = temp.GetDirectory().parent_path() / "ArchiveUnsearchableOut";
+		const ExportResult result = Exporter::Export(*project, output, options);
+		std::filesystem::permissions(secret, std::filesystem::perms::owner_all);
+		std::error_code removeError;
+		std::filesystem::remove_all(output, removeError);
+		// The archive needs that file too, so the export fails; what matters is that nothing was judged unused without it.
+		CHECK_FALSE(result.Success);
+		REQUIRE_FALSE(result.Warnings.empty());
+		CHECK(result.Warnings[0].find("every original texture stays") != std::string::npos);
+		CHECK(result.ArchiveOmitted.empty());
+	}
+#endif
 
 	TEST_CASE("File archives read in parallel")
 	{
@@ -1281,7 +1331,7 @@ TEST_SUITE("Archive")
 		const Ref<PackArchive> archive = PackArchive::Open(directory.GetPath() / "Assets.bpak", error);
 		REQUIRE_MESSAGE(archive, error);
 		// Mounted through the link: the asset registry resolves its root, so the resolved spelling must answer too.
-		ScopedMount mount(link, archive);
+		BasaltTest::ScopedMount mount(link, archive);
 		CHECK(FileSystem::ReadTextFile(link / "Assets" / "Packed.txt") == "packed");
 		CHECK(FileSystem::ReadTextFile(std::filesystem::canonical(game) / "Assets" / "Packed.txt") == "packed");
 		CHECK(FileSystem::GetMountedArchive(link) == archive);

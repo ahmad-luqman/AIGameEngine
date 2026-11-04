@@ -122,25 +122,33 @@ namespace Basalt {
 		std::vector<uint32_t> m_ByAsset;
 	};
 
-	// Builds a .bpak file. Entries may be added in any order and are written sorted by path. Write compresses each
-	// entry with zstd and keeps the compressed form only when it is smaller, so files zstd cannot shrink (PNG, JPEG) are
-	// stored as they are, unless AddFile is told to store it anyway. The output is deterministic: the same entries, level
-	// and zstd version always give the same bytes.
+	// Builds a .bpak file. Entries may be added in any order and are written sorted by path. Write compresses each entry
+	// with zstd, unless AddFile was told Storage::Streamable, and keeps the compressed form only when it is smaller, so files
+	// zstd cannot shrink (PNG, JPEG) are stored as they are. The output is deterministic: the same entries, level and zstd
+	// version always give the same bytes.
 	class PackArchiveWriter
 	{
 	public:
 		using Statistics = PackArchiveStatistics;
 
+		enum class Storage : uint8_t
+		{
+			// zstd's form when that is smaller.
+			Smallest,
+			// As it is, without trying zstd, so that the entry can be read in part (PackArchive::ReadStored).
+			Streamable
+		};
+
 		// How many uncompressed bytes and entries Write takes on at once. Each job holds its compressed form too, so the
-		// peak is about twice the bytes. Only a single larger entry passes them, and 0 bytes gives every entry its own batch.
+		// peak is about twice the bytes. Only a single larger entry passes them, and 0 bytes gives every non-empty entry its
+		// own batch.
 		static constexpr uint64_t DefaultBatchBytes = uint64_t{ 256 } * 1024 * 1024;
 		static constexpr size_t MaxBatchEntries = 256;
 
 		// AddFile reads source when Write runs; AddData takes the bytes now. Both return false (outError set) for an
 		// invalid or duplicate path, a duplicate nonzero asset UUID, more than MaxEntries files, (AddData) more than
-		// MaxEntrySize bytes, or (AddFile) an empty source path (a missing file fails Write). With storeUncompressed the file
-		// stays readable in part (PackArchive::ReadStored), however little zstd could save.
-		bool AddFile(std::string path, std::filesystem::path source, uint64_t assetID, std::string& outError, bool storeUncompressed = false);
+		// MaxEntrySize bytes, or (AddFile) an empty source path (a missing file fails Write).
+		bool AddFile(std::string path, std::filesystem::path source, uint64_t assetID, std::string& outError, Storage storage = Storage::Smallest);
 		bool AddData(std::string path, std::vector<uint8_t> data, uint64_t assetID, std::string& outError);
 		// Writes the archive atomically (a temporary sibling renamed over the target), at a zstd level clamped to
 		// 1..ZSTD_maxCLevel() (22). Entries are read and compressed on the job system a batch at a time (batchBytes) and
@@ -158,7 +166,7 @@ namespace Basalt {
 			std::filesystem::path Source;
 			std::vector<uint8_t> Data;
 			uint64_t AssetID = 0;
-			bool StoreUncompressed = false;
+			Storage EntryStorage = Storage::Smallest;
 		};
 		bool AddPending(Pending pending, std::string& outError);
 
