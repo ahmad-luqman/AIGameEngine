@@ -27,6 +27,8 @@ import time
 
 WINDOWS = sys.platform == "win32"
 LINUX = sys.platform.startswith("linux")
+# The kinds whose addr2line finished in time.
+SOURCE_LINE_RUNS = []
 
 # Kind -> the reasons a report may name (the same fault can arrive as either signal, depending on CPU and OS).
 REASONS = {
@@ -38,6 +40,7 @@ REASONS = {
     "trap": ["EXCEPTION_BREAKPOINT"] if WINDOWS else ["SIGTRAP", "SIGILL"],
     "stackoverflow": ["EXCEPTION_STACK_OVERFLOW"] if WINDOWS else ["SIGSEGV", "SIGBUS"],
     "thread-segv": ["EXCEPTION_ACCESS_VIOLATION"] if WINDOWS else ["SIGSEGV", "SIGBUS"],
+    "nested-stackoverflow": ["EXCEPTION_STACK_OVERFLOW"] if WINDOWS else ["SIGSEGV", "SIGBUS"],
     "thread-stackoverflow": ["EXCEPTION_STACK_OVERFLOW"] if WINDOWS else ["SIGSEGV", "SIGBUS"],
     "job-stackoverflow": ["EXCEPTION_STACK_OVERFLOW"] if WINDOWS else ["SIGSEGV", "SIGBUS"],
     "two-thread-segv": ["EXCEPTION_ACCESS_VIOLATION"] if WINDOWS else ["SIGSEGV", "SIGBUS"],
@@ -53,13 +56,18 @@ def fail(message):
     sys.exit(1)
 
 
-def crash(tests, kind, user_data):
+def run_child(tests, arguments, user_data, timeout=120, **options):
     environment = dict(os.environ, BASALT_USER_DATA_DIR=str(user_data))
     environment.pop("BASALT_TEST_CHILD_ACTIONS", None)
-    run = subprocess.run([str(tests), "--basalt-child", "crash-report", kind], env=environment, capture_output=True, text=True, errors="replace", timeout=120)
+    run = subprocess.run([str(tests), "--basalt-child", *arguments], env=environment, capture_output=True, text=True, errors="replace", timeout=timeout, **options)
     if run.returncode == 77:
         print(run.stdout.strip())
         sys.exit(77)
+    return run
+
+
+def crash(tests, kind, user_data):
+    run = run_child(tests, ["crash-report", kind], user_data)
     if run.returncode == 0:
         fail(f"{kind}: the child exited cleanly")
     if not WINDOWS and run.returncode > 0:
@@ -103,8 +111,13 @@ def check_source_lines(kind, report):
     _, heading, section = report.partition("\nSource lines (addr2line):\n")
     if not heading:
         fail(f"{kind}: no source lines:\n{report}")
+    # A debug binary can outlast addr2line's limit on a loaded machine: some run must still finish.
+    if "did not finish" in section:
+        print(f"{kind}: addr2line ran out of time")
+        return
+    SOURCE_LINE_RUNS.append(kind)
     # "0x...: function at file:line", or "?? ??:0" for a frame addr2line cannot name.
-    named = [line for line in section.splitlines() if re.match(r"\s*(0x[0-9a-f]+: )?(?!\?\?)\S", line) and "did not finish" not in line and "failed" not in line]
+    named = [line for line in section.splitlines() if re.match(r"\s*(0x[0-9a-f]+: )?(?!\?\?)\S", line) and "failed" not in line]
     if not named:
         fail(f"{kind}: addr2line named no frame:\n{section}")
     if kind == "segv" and "CrashNow" not in section:
@@ -122,25 +135,21 @@ def wait_for(path, what):
         if time.monotonic() > deadline:
             fail(f"{what}: nothing appeared at {path}")
         time.sleep(0.02)
-    # The stand-ins write the file in one go, but the check must not race them.
-    time.sleep(0.2)
     return path.read_text()
 
 
-def run_dialog(tests, kind, mode, answer, folder, delay=0, opener=True, program=None):
-    """Runs a child with stand-in tools: the dialog logs its arguments and answers with exit code answer after delay seconds; the opener logs what it opens."""
+def run_dialog(tests, kind, mode, answer, folder, hold=None, opener=True, program=None):
+    """Runs a child with stand-in tools: the dialog logs its arguments (waiting first until the file hold exists) and answers with exit code answer; the opener logs what it opens."""
     log, opened = folder / "dialog.log", folder / "opened.log"
-    write_program(folder / "dialog", f'sleep {delay}\nfor argument in "$@"; do printf "%s\\n" "$argument"; done >> "{log}"\nexit {answer}\n')
-    write_program(folder / "opener", f'printf "%s" "$1" > "{opened}"\n')
+    # Written whole and moved into place, so that a reader never sees part of it; appended, as a run may show two.
+    wait = f'tries=0\nwhile [ ! -e "{hold}" ] && [ $tries -lt 2600 ]; do sleep 0.05; tries=$((tries + 1)); done\n' if hold else ""
+    write_program(folder / "dialog", f'{wait}cat "{log}" > "{log}.$$" 2>/dev/null\nfor argument in "$@"; do printf "%s\\n" "$argument"; done >> "{log}.$$"\nmv "{log}.$$" "{log}"\nexit {answer}\n')
+    write_program(folder / "opener", f'printf "%s" "$1" > "{opened}.$$"\nmv "{opened}.$$" "{opened}"\n')
+    opener_path = opener if isinstance(opener, str) else str(folder / "opener") if opener else ""
     # A quote, a space and a command substitution in the path: it reaches the tools only as an argument.
     user_data = folder / "it's $(touch injected) here"
-    environment = dict(os.environ, BASALT_USER_DATA_DIR=str(user_data))
-    environment.pop("BASALT_TEST_CHILD_ACTIONS", None)
-    run = subprocess.run([str(tests), "--basalt-child", "crash-dialog", kind, program or str(folder / "dialog"), str(folder / "opener") if opener else "", mode], env=environment, cwd=folder, capture_output=True, text=True, errors="replace", timeout=120)
-    if run.returncode == 77:
-        print(run.stdout.strip())
-        sys.exit(77)
-    if mode == "crash" and (WINDOWS or run.returncode >= 0):
+    run = run_child(tests, ["crash-dialog", kind, program or str(folder / "dialog"), opener_path, mode], user_data, cwd=folder)
+    if mode == "crash" and run.returncode >= 0:
         fail(f"{kind}: exit code {run.returncode}, not death by a signal; stderr: {run.stderr}")
     if mode != "crash" and run.returncode != 0:
         fail(f"{kind} {mode}: exit code {run.returncode}; stderr: {run.stderr}")
@@ -189,25 +198,45 @@ def check_dialogs(tests):
     # Without an opener the dialog only shows the path.
     with tempfile.TemporaryDirectory(prefix="BasaltCrash-") as directory:
         folder = pathlib.Path(directory)
-        run, log, opened, _ = run_dialog(tests, "zenity", "crash", 0, folder, opener=False)
-        arguments = wait_for(log, "dialog without an opener").splitlines()
-        if "--error" not in arguments or opened.exists():
+        run, log, opened, user_data = run_dialog(tests, "zenity", "crash", 0, folder, opener=False)
+        arguments = wait_for(log, "dialog without an opener")
+        reports = sorted((user_data / "CrashChild" / "Crashes").glob("crash-*.txt"))
+        if "--error\n" not in arguments or not reports or str(reports[0]) not in arguments:
             fail(f"unexpected dialog without an opener: {arguments}")
 
-    # A dialog program that cannot run costs nothing but the dialog.
+    # An opener that cannot run: the same, rather than a button that does nothing.
+    with tempfile.TemporaryDirectory(prefix="BasaltCrash-") as directory:
+        folder = pathlib.Path(directory)
+        (folder / "not-a-program").write_text("text")
+        run, log, opened, _ = run_dialog(tests, "zenity", "crash", 0, folder, opener=str(folder / "not-a-program"))
+        arguments = wait_for(log, "dialog with a bad opener")
+        if "--error\n" not in arguments or opened.exists():
+            fail(f"unexpected dialog with a bad opener: {arguments}")
+
+    # A dialog program refused at Install, or (a folder passes that check) that cannot start, costs nothing but the dialog.
     with tempfile.TemporaryDirectory(prefix="BasaltCrash-") as directory:
         folder = pathlib.Path(directory)
         run, _, _, user_data = run_dialog(tests, "zenity", "crash", 0, folder, program=str(folder / "missing"))
         check_one_report(run, user_data, "missing dialog program")
-
-    # The crashed process does not wait for the dialog, and leaves the test's pipes alone (subprocess.run returning shows it).
     with tempfile.TemporaryDirectory(prefix="BasaltCrash-") as directory:
         folder = pathlib.Path(directory)
-        run, log, _, user_data = run_dialog(tests, "zenity", "crash", 1, folder, delay=5)
-        if log.exists():
-            fail("the crashed process waited for its dialog")
-        check_one_report(run, user_data, "slow dialog")
-        wait_for(log, "slow dialog")
+        run, _, _, user_data = run_dialog(tests, "zenity", "crash", 0, folder, opener=False, program=directory)
+        check_one_report(run, user_data, "dialog program that cannot start")
+        if "could not be shown" not in run.stderr:
+            fail(f"no word of the dialog that could not start: {run.stderr}")
+    with tempfile.TemporaryDirectory(prefix="BasaltCrash-") as directory:
+        run, _, _, _ = run_dialog(tests, "zenity", "error", 0, pathlib.Path(directory), opener=False, program=directory)
+        if "could not start" not in run.stdout + run.stderr:
+            fail(f"no word of the error dialog that could not start: {run.stdout}{run.stderr}")
+
+    # The crashed process does not wait for the dialog, and leaves the test's pipes alone: subprocess.run returns while the
+    # dialog is held, or the run times out.
+    with tempfile.TemporaryDirectory(prefix="BasaltCrash-") as directory:
+        folder = pathlib.Path(directory)
+        run, log, _, user_data = run_dialog(tests, "zenity", "crash", 1, folder, hold=folder / "released")
+        (folder / "released").touch()
+        check_one_report(run, user_data, "held dialog")
+        wait_for(log, "held dialog")
 
     # The macOS kind, through a stand-in: never /usr/bin/osascript, which would show it.
     with tempfile.TemporaryDirectory(prefix="BasaltCrash-") as directory:
@@ -246,13 +275,11 @@ def check_one_report(run, user_data, what):
 def check_dialogs_off(tests):
     # On Windows too: a message box here would hang until this timeout, as it would hang any automated run.
     with tempfile.TemporaryDirectory(prefix="BasaltCrash-") as directory:
-        environment = dict(os.environ, BASALT_USER_DATA_DIR=directory)
-        environment.pop("BASALT_TEST_CHILD_ACTIONS", None)
         try:
-            run = subprocess.run([str(tests), "--basalt-child", "crash-dialog", "zenity", "unused", "unused", "off"], env=environment, capture_output=True, text=True, errors="replace", timeout=60)
+            run = run_child(tests, ["crash-dialog", "zenity", "unused", "unused", "off"], directory, timeout=60)
         except subprocess.TimeoutExpired:
             fail("a dialog is waiting while dialogs are off")
-        if run.returncode not in (0, 77):
+        if run.returncode != 0:
             fail(f"dialogs off: exit code {run.returncode}; stderr: {run.stderr}")
 
 
@@ -312,6 +339,8 @@ def main():
             check_fallback(tests, "fallback (report folder too long)", long_folder)
             if any(long_folder.rglob("crash-*")):
                 fail("long path: a report landed under the user data folder")
+    if LINUX and pathlib.Path("/usr/bin/addr2line").exists() and not SOURCE_LINE_RUNS:
+        fail("addr2line ran out of time on every run")
     check_dialogs_off(tests)
     if not WINDOWS:
         check_dialogs(tests)

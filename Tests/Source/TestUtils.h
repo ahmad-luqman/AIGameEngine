@@ -4,6 +4,7 @@
 #include <Basalt/Core/FileSystem.h>
 #include <Basalt/Core/Input.h>
 #include <Basalt/Core/Log.h>
+#include <Basalt/Core/PackArchive.h>
 #include <Basalt/Core/Platform.h>
 #include <Basalt/Project/Project.h>
 #include <Basalt/Scene/Entity.h>
@@ -190,6 +191,17 @@ namespace BasaltTest {
 	private:
 		TempDirectory m_Directory;
 		Basalt::Ref<Basalt::Project> m_Project;
+	};
+
+	// Mounts an archive for the scope; FileSystem's mount is global, so a failing check must not leak it into other tests.
+	class ScopedMount
+	{
+	public:
+		ScopedMount(const std::filesystem::path& root, Basalt::Ref<Basalt::PackArchive> archive) { Basalt::FileSystem::Mount(root, std::move(archive)); }
+		~ScopedMount() { Basalt::FileSystem::Unmount(); }
+
+		ScopedMount(const ScopedMount&) = delete;
+		ScopedMount& operator=(const ScopedMount&) = delete;
 	};
 
 	// macOS exports bundle the Vulkan loader and MoltenVK, which tests never load: stand-ins in <project>/FakeVulkanSDK,

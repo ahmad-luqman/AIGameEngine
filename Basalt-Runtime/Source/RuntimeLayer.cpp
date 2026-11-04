@@ -53,10 +53,13 @@ namespace Basalt {
 		if (GraphicsDevice* device = application.GetGraphicsDevice())
 		{
 			m_Renderer = CreateScope<SceneRenderer>(device->GetDevice(), SceneRendererSpecification{ .GpuTimers = device->SupportsTimerQueries(), .AsyncLoading = m_Options.MaxFrames == 0 });
+			const size_t errorsBefore = Log::GetHistory().GetErrorCount();
 			if (!m_Renderer->Initialize())
 			{
 				m_Renderer.reset();
-				fail("the renderer could not start: " + Log::GetHistory().GetLastError().value_or("it reported no reason"));
+				// Only what it logged itself: an older error would name something else.
+				const bool logged = Log::GetHistory().GetErrorCount() > errorsBefore;
+				fail("the renderer could not start: " + (logged ? Log::GetHistory().GetLastError().value_or("") : "it reported no reason"));
 				return;
 			}
 			m_CommandList = device->GetDevice()->createCommandList();

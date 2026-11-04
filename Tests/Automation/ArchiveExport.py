@@ -98,7 +98,8 @@ def main():
             fail("the exports' logs differ:\n  only archived:\n    " + "\n    ".join(only_archive) + "\n  only folder:\n    " + "\n    ".join(only_folder))
         kept = root / "kept"
         run = subprocess.run([str(cli), "--project", str(project), "--no-save", "project.export", json.dumps({"output": str(kept), "archive": True, "keepOriginals": True})], capture_output=True, text=True, timeout=300, env=env)
-        response = json.loads(run.stdout[run.stdout.find("{"):])
+        start = run.stdout.find("{")
+        response = json.loads(run.stdout[start:]) if start >= 0 else {}
         if not response.get("ok") or response["result"]["archive"]["omitted"]:
             fail(f"keepOriginals still left files out: {run.stdout}{run.stderr}")
         # An archive that does not open stops the game with the reason; automated runs never wait on a dialog for it.

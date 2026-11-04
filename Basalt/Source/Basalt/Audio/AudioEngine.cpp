@@ -61,7 +61,8 @@ namespace Basalt {
 
 		// The resource managers open clips through this VFS. A long file a mounted archive (FileSystem::Mount, an exported
 		// game's Assets.bpak) stores uncompressed is read from the archive as it decodes; any other is read whole and served
-		// from memory (a zstd frame cannot be read in part). Anything else goes to miniaudio's default VFS.
+		// from memory (a zstd frame cannot be read in part, and a short clip keeps its hash check). Anything else goes to
+		// miniaudio's default VFS.
 		struct ArchiveVfs
 		{
 			// First: miniaudio reads the callbacks through the ma_vfs pointer.

@@ -33,7 +33,7 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
 
 - **Asset identity.** Project-owned `AssetRegistry` reads `.meta` UUIDs. Scene/prefab disk saves encode declared
   `ComponentInfo::AssetFields` as UUID/path objects; runtime snapshots keep paths. `asset.move`/`asset.rename`
-  migrate legacy references and carry sidecars; loading never writes metadata. KTX2/BC7 imports use `asset.compress_texture` (separate output, content cache in `Cache/Textures`, originals retained in the project, and left out of archives when nothing else mentions them). Basis ETC1S/UASTC transcode in the texture load job; renderer uploads block mips. Material files (`.bmaterial`, `Asset/MaterialAsset`) hold the full `MaterialData` with texture references as UUID/path objects (engine-written) or paths, and migrate with moves; `Material.Material` names one or a model's `#material/N`, replacing the inline values, and inline overrides render through the same `MaterialData` path (`MaterialAsset::FromComponent`). Sub-asset keys split in `Asset/AssetKey.h`. See `Docs/AssetPipeline.md`.
+  migrate legacy references and carry sidecars; loading never writes metadata. KTX2/BC7 imports use `asset.compress_texture` (separate output, content cache in `Cache/Textures`, originals retained in the project, and left out of archives when a same-named `.ktx2` sits beside them and nothing else mentions them). Basis ETC1S/UASTC transcode in the texture load job; renderer uploads block mips. Material files (`.bmaterial`, `Asset/MaterialAsset`) hold the full `MaterialData` with texture references as UUID/path objects (engine-written) or paths, and migrate with moves; `Material.Material` names one or a model's `#material/N`, replacing the inline values, and inline overrides render through the same `MaterialData` path (`MaterialAsset::FromComponent`). Sub-asset keys split in `Asset/AssetKey.h`. See `Docs/AssetPipeline.md`.
 - **One data path.** Components are plain structs. `ComponentRegistry` gives each a strict JSON reader/
   writer that every consumer shares: scene and prefab files, Lua `GetComponent/SetComponent`, the
   automation commands and the editor inspector. Adding a component = one registry entry (see the
@@ -189,8 +189,8 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   process (re-raising the signal on POSIX; the exception code, or the C runtime's abort code 3, on Windows). A thread the
   engine starts holds a `CrashReporter::ThreadStack` for its life, so its stack overflow is reported too. Dialogs are the
   windowed runtime's only (`SetDialogEnabled`), which also shows failed starts through `ShowErrorDialog`. A `.bpak` Store
-  entry can be read in part (`PackArchive::ReadStored`, unhashed), which is how clips of 1 MiB or more stream from it, and
-  encoded audio is always stored for that; `PackArchiveWriter` compresses a batch at a time on the job system and writes
+  entry can be read in part (`PackArchive::ReadStored`, unhashed), which is how audio clips of 1 MiB or more are read from it, `AudioSource.Stream`
+  or not, and MP3 and FLAC are always stored for that; `PackArchiveWriter` compresses a batch at a time on the job system and writes
   in path order, so its bytes stay deterministic.
   Tags run `.github/workflows/release.yml` (`scripts/package_release.py`, `scripts/sign-macos.sh`). See
   `Docs/Shipping.md`.

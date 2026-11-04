@@ -168,6 +168,14 @@ namespace {
 			});
 			worker.join();
 		}
+		else if (kind == "nested-stackoverflow")
+		{
+			// A ThreadStack on the installing thread must leave its stack in place when it ends.
+			{
+				const Basalt::CrashReporter::ThreadStack stack;
+			}
+			CrashNow("stackoverflow");
+		}
 		else if (kind == "job-stackoverflow")
 		{
 			// Polled rather than waited for: a waiting thread helps run jobs, and this one must run on a worker.
@@ -205,8 +213,8 @@ namespace {
 	// SIGABRT elsewhere), trap (BS_DEBUGBREAK), args (prints every remaining argument on its own line), exit <code>,
 	// crash-report <kind> (installs the crash reporter as "CrashChild", then calls Install again from two threads at
 	// once, logs "crash-test sentinel 42", then crashes: kind is segv, abort, terminate, throw-int, purecall,
-	// invalid-parameter (Windows), trap, stackoverflow, thread-segv, thread-stackoverflow, job-stackoverflow or
-	// two-thread-segv; exits 77 when crash reports are unavailable, as under AddressSanitizer;
+	// invalid-parameter (Windows), trap, stackoverflow, nested-stackoverflow, thread-segv, thread-stackoverflow,
+	// job-stackoverflow or two-thread-segv; exits 77 when crash reports are unavailable, as under AddressSanitizer;
 	// Tests/Automation/CrashReport.py checks the report), crash-dialog <zenity|kdialog|xmessage|osascript> <program>
 	// <opener> <crash|error|long|disabled|off> (installs with those tools and dialogs on, then crashes with a report or
 	// shows an error, a long one with long; disabled shows an error with dialogs off, then one with them on; off only

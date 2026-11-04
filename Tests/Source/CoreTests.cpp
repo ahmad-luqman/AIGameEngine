@@ -84,6 +84,7 @@ TEST_SUITE("Core")
 		history.Push({ LogLevel::Warn, "Test", "a warning" });
 		CHECK_FALSE(history.GetLastError());
 		history.Push({ LogLevel::Error, "Test", "the first" });
+		CHECK(history.GetLastError() == "the first");
 		history.Push({ LogLevel::Critical, "Test", "the second" });
 		history.Push({ LogLevel::Warn, "Test", "a later warning" });
 		CHECK(history.GetLastError() == "the second");
