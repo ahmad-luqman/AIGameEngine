@@ -87,8 +87,11 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   that `Finish` applies after the IK one. Each substep limits a point's swing (`MaxAngle`), then pushes it out of the
   chain's colliders (all of the component's, or those its `Colliders` list names) and, with `CollidePhysics`
   (Play/Simulate only), out of the bodies a per-chain, per-frame `PhysicsShapeSnapshot` (`PhysicsWorld::CollectShapes`:
-  nearest 32, the character's own bodies skipped through `FindCharacter`, as for IK foot rays) gathered. The edit preview
-  swings springs too, without physics bodies.
+  nearest 32, the character's own bodies skipped through `FindCharacter`, as for IK foot rays, seen through the chain's
+  `Layer` and the collision matrix) gathered; `Continuous` chains then sweep each point's move (`PhysicsShapeSnapshot::Sweep`,
+  sphere tracing against colliders). The edit preview swings springs too, against the scene's static bodies:
+  `StaticPhysicsShapes` builds them from the components (`BuildColliderShape`) with no world, which would write `BodyRecord`s
+  into the edit registry, and yields the same snapshots (`PhysicsShapeSnapshot::FromCandidates`).
 - **Ragdolls.** `RagdollComponent` holds authored settings; `PhysicsWorld` owns the Jolt ragdoll, its selected skin
   joints and frozen recovery pose. Capsules and swing-twist frames derive from the rest skeleton, and activation starts
   on the current pose. Active ragdolls suspend the entity's body/controller and inherit the body's linear/angular motion (a controller's linear motion); live rebuilds preserve
@@ -97,10 +100,22 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   (strength x `MotorTorque` > 0; the strength is a per-entity `FadingWeight` in `PhysicsWorld`, configured from
   `MotorStrength`, faded by `SetRagdollMotorStrength`, surviving rebuilds) set swing-twist position
   motors toward the layered animation once per physics frame (`DriveRagdollMotors`, targets from the portable
-  decomposition, from clips sampled with the portable `Math::Slerp`); a rig never powered never touches its motors, and motor
-  settings never rebuild (`RagdollNeedsRebuild`). Recovery
+  decomposition, from clips sampled with the portable `Math::Slerp`; a `Bones` entry's `MotorStrength` scales its joint's
+  limit); a rig never powered never touches its motors, and motor and balance settings never rebuild
+  (`RagdollNeedsRebuild`). A `KinematicRoot` rig keeps the entity's body or character, root motion and IK: `RagdollOwnsRoot`, not
+  `HasRagdollPose`, is what makes animation yield. Its root part is a kinematic body moved each fixed step
+  (`StepRagdolls`, after characters move), the entity's move counts as walking unless `IsRagdollTeleport`, the overlay leaves
+  the root to the animation and places limbs relative to the root body (so a frame without a fixed step does not tear
+  them), and overlays run IK, ragdoll, springs (a chain on rig joints yields; one below hangs from the physical joint). A
+  limb against the entity's own body is filtered in the collide callback by collision group (never a `{uuid, uuid}` ignored
+  pair: limbs of one rig share a UUID and must collide), a controller on an ancestor through `RagdollRecord::Owner` in
+  `IgnoredPairs`, and each character's update filter skips its rig. `StopRagdollBodies` then ends only the limbs' contacts.
+  Balance (`BalanceRagdoll`, each fixed step, since Jolt clears forces) is rigid-body forces, not a joint: tilt
+  correction about the center of mass, a capped upward push toward the animated `StandHeight`, and a brake for the
+  grip the lift took off the feet, gated on `HasRagdollSupport` and `BalanceMaxTilt`. It uses no angles, so it needs no
+  libm: only Jolt's math and `DecomposeRagdollTransform`, as its forces reach the determinism hashes. Recovery
   removes the bodies, optionally starts a get-up clip, and blends local transforms from the frozen pose; gameplay
-  supplies the height when recovering onto a different ground level. Positive uniform transforms are required.
+  supplies the height when recovering onto a different ground level, and a `KinematicRoot` entity stays where it is. Positive uniform transforms are required.
   `scene.hash` includes physical joints and recovery weight; saves/copies contain configuration only. Ragdoll TRS
   decomposition avoids platform libm rounding, and recovery rotations and clip sampling and pose blends use Jolt's
   portable interpolation (`Math::Slerp`), so the layered poses ragdoll motors read agree across platforms (IK and root

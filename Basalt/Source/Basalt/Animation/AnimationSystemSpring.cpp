@@ -65,7 +65,7 @@ namespace Basalt {
 					m_Springs.erase(entity.GetUUID());
 					continue;
 				}
-			if (m_Scene.GetPhysicsWorld() && m_Scene.GetPhysicsWorld()->HasRagdollPose(entity))
+			if (m_Scene.GetPhysicsWorld() && m_Scene.GetPhysicsWorld()->RagdollOwnsRoot(entity))
 				continue;
 			const auto& component = entity.GetComponent<SpringBoneComponent>();
 			SpringState& state = SyncSprings(entity, component);
@@ -141,11 +141,12 @@ namespace Basalt {
 			report();
 		};
 
-		// From the layered pose with this frame's IK, never from the last spring solution, so a held pose does not
-		// accumulate it.
+		// From the layered pose with this frame's IK and any partial ragdoll, never from the last spring solution, so a held
+		// pose does not accumulate it.
 		AnimationLocalPose pose = playback.Pose;
-		for (const auto& [node, transform] : playback.IKOverlay)
-			pose.Nodes[node] = transform;
+		for (const auto* overlay : { &playback.IKOverlay, &playback.RagdollOverlay })
+			for (const auto& [node, transform] : *overlay)
+				pose.Nodes[node] = transform;
 		std::vector<glm::mat4>& globals = m_OverlayGlobals;
 		if (!ComposeAnimationPose(source, pose, globals))
 		{
@@ -247,6 +248,13 @@ namespace Basalt {
 				acceleration = glm::vec3(0);
 			}
 			const std::vector<uint32_t>& joints = chain.Resolved.Joints;
+			// A partial ragdoll's joints are its own, and it restarts the chain on them when it lets go.
+			if (std::ranges::any_of(std::span(joints).first(joints.size() - 1), [&](uint32_t joint) { return std::ranges::find(playback.RagdollOverlay, joint, &OverlayEntry::Node) != playback.RagdollOverlay.end(); }))
+			{
+				chain.Sim.reset();
+				reportChain();
+				continue;
+			}
 			animated.clear();
 			for (uint32_t joint : joints)
 				animated.emplace_back(world * globals[joint][3]);

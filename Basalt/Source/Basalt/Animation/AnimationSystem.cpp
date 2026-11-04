@@ -961,15 +961,15 @@ namespace Basalt {
 		// Update already reported an invalid step; attachments still follow the rigs.
 		const bool validStep = std::isfinite(seconds) && seconds >= 0;
 		if (validStep)
-		{
 			SolveIK(seconds);
-			SolveSprings(seconds);
-		}
 		// Ragdolls and attachments wait for Play in a preview (attachments would move edit entities).
-		if (m_Preview)
-			return;
-		ApplyRagdolls();
-		UpdateAttachments();
+		if (!m_Preview)
+			ApplyRagdolls();
+		// After the ragdolls: hair on a head a partial rig simulates hangs from the physical head.
+		if (validStep)
+			SolveSprings(seconds);
+		if (!m_Preview)
+			UpdateAttachments();
 	}
 
 	void AnimationSystem::AdvanceSpace(Playback& playback, SpaceState& state, const AnimatorComponent& component, double advance, UUID id, size_t& budget)
@@ -1352,7 +1352,7 @@ namespace Basalt {
 	void AnimationSystem::ApplyRootMotion(Entity entity, Playback& playback, const RootMotionFrame& motion, float seconds)
 	{
 		BS_CORE_ASSERT(!playback.IsLayer && !m_Preview, "layer graphs and previews leave the entity where it is");
-		if (seconds <= 0 || playback.RootNode < 0 || (m_Scene.GetPhysicsWorld() && m_Scene.GetPhysicsWorld()->HasRagdollPose(entity)))
+		if (seconds <= 0 || playback.RootNode < 0 || (m_Scene.GetPhysicsWorld() && m_Scene.GetPhysicsWorld()->RagdollOwnsRoot(entity)))
 			return;
 		auto report = [&](const std::string& problem) {
 			if (problem != playback.RootApplyProblem && !problem.empty())

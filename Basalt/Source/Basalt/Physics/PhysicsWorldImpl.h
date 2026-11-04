@@ -109,6 +109,28 @@ namespace Basalt {
 			// MotorTorque first exceeds 0, and are turned off (false) when it drops to 0 or no usable animated pose exists.
 			// Cleared with each new or removed Doll.
 			bool MotorsOn = false;
+			// RagdollComponent::KinematicRoot as built: the root body follows the animation and the entity keeps its body or
+			// character. Stays on the frozen record, so a recovering rig is still known to own nothing.
+			bool KinematicRoot = false;
+			// A KinematicRoot rig's character controller, on the entity or an ancestor (0: none), whose inner body and moves
+			// the limbs stay out of. Followed every frame.
+			UUID Owner = 0;
+			// Where the animation puts the root in model space, read once per physics frame; empty while it cannot say.
+			std::optional<glm::mat4> AnimatedRoot;
+			// BalanceRagdoll's settings for this frame in the terms it uses; empty while balance is off.
+			struct BalanceDrive
+			{
+				float Strength = 0;
+				// The spring's stiffness (1/s²) and damping (1/s).
+				float Stiffness = 0;
+				float Damping = 0;
+				float CosMaxTilt = 1;
+				// How far above its lowest part the animated pose holds the center of mass.
+				float StandHeight = 0;
+			};
+			std::optional<BalanceDrive> Balance;
+			// Whether the last step's balance held the rig up.
+			bool Balanced = false;
 			float Weight() const { return Doll ? 1.0f : (RecoveryDuration > 0 ? RecoveryLeft / RecoveryDuration : 0.0f); }
 		};
 		// A rebuild carries physical orientation and COM velocities by joint name; new joints follow their
@@ -147,6 +169,19 @@ namespace Basalt {
 		};
 		std::map<UUID, MotorStrength> RagdollStrength;
 		void SyncRagdolls(PhysicsWorld& world, float seconds);
+		// Once per fixed step, before Jolt's: root bodies follow the animation (the character has moved by now) and balance
+		// forces, which Jolt clears after each step, are applied.
+		void StepRagdolls(float fixedStep);
+		void FollowRagdollRoot(Entity entity, RagdollRecord& record, float fixedStep);
+		void BalanceRagdoll(Entity entity, RagdollRecord& record, float fixedStep);
+		// Whether a part of the rig below `center` along `up` touches a body that is no trigger.
+		bool HasRagdollSupport(UUID uuid, const RagdollRecord& record, JPH::RVec3Arg center, JPH::Vec3Arg up) const;
+		// Whether the entity's rig took over from its body or character (a KinematicRoot rig leaves them in place).
+		bool RagdollReplacesBody(UUID uuid) const;
+		// The character controller a rig on `entity` belongs to: on it or the nearest ancestor with one.
+		UUID FindRagdollOwner(Entity entity) const;
+		// Whether `body` is a part of a rig belonging to that character.
+		bool IsRagdollPartOf(const JPH::Body& body, UUID character) const;
 		// Advances motor strengths and turns every active rig's joint motors toward its animated pose (or off at strength 0).
 		void DriveRagdollMotors(float seconds);
 		void ApplyRagdollMotors(Entity entity, RagdollRecord& record, const RagdollComponent& component, float strength);
@@ -245,14 +280,17 @@ namespace Basalt {
 		class NonCharacterBodyFilter final : public JPH::BodyFilter
 		{
 		public:
-			explicit NonCharacterBodyFilter(const Impl& owner)
+			explicit NonCharacterBodyFilter(const Impl& owner, UUID character = 0)
 				: m_Owner(owner)
+				, m_Character(character)
 			{
 			}
-			bool ShouldCollideLocked(const JPH::Body& body) const override { return !m_Owner.IsCharacterBody(body); }
+			bool ShouldCollideLocked(const JPH::Body& body) const override { return !m_Owner.IsCharacterBody(body) && (m_Character == 0 || !m_Owner.IsRagdollPartOf(body, m_Character)); }
 
 		private:
 			const Impl& m_Owner;
+			// When set, this character's own rig is left out too: its limbs hang inside the character's shape.
+			UUID m_Character = 0;
 		};
 
 		std::unordered_map<UUID, CharacterRecord> Characters;
@@ -407,8 +445,9 @@ namespace Basalt {
 		// Removes a character and its inner body, ending its contacts like RemoveBody.
 		void RemoveCharacter(UUID uuid);
 
-		// Ends every contact of an entity whose body is gone and notifies the surviving entities.
-		void EndContacts(UUID uuid, bool trigger, bool defer = false);
+		// Ends the contacts of an entity whose body is gone and notifies the surviving entities: every contact, or only
+		// those of `bodies` (Jolt's index and sequence numbers) when it keeps others.
+		void EndContacts(UUID uuid, bool trigger, bool defer = false, const std::vector<uint32_t>& bodies = {});
 		// Reports one contact transition to the scene's event listener, then to the scripts.
 		void DispatchContact(ContactEventType type, Entity first, Entity second, const std::optional<ContactInfo>& contact);
 

@@ -760,11 +760,13 @@ namespace Basalt {
 			r.Field("SwingAngle", c.SwingAngle);
 			r.Field("TwistMin", c.TwistMin);
 			r.Field("TwistMax", c.TwistMax);
+			r.Field("MotorStrength", c.MotorStrength);
 		}
 		void Fields(FieldReader& r, RagdollComponent& c)
 		{
 			r.Field("Enabled", c.Enabled);
 			r.Field("RootJoint", c.RootJoint);
+			r.Field("KinematicRoot", c.KinematicRoot);
 			r.Field("Mass", c.Mass);
 			r.Field("RadiusRatio", c.RadiusRatio);
 			r.Field("Layer", c.Layer);
@@ -774,6 +776,10 @@ namespace Basalt {
 			r.Field("MotorFrequency", c.MotorFrequency);
 			r.Field("MotorDamping", c.MotorDamping);
 			r.Field("MotorTorque", c.MotorTorque);
+			r.Field("BalanceStrength", c.BalanceStrength);
+			r.Field("BalanceFrequency", c.BalanceFrequency);
+			r.Field("BalanceDamping", c.BalanceDamping);
+			r.Field("BalanceMaxTilt", c.BalanceMaxTilt);
 		}
 
 		void Fields(FieldReader& r, MaterialComponent& c)
@@ -1414,11 +1420,11 @@ namespace Basalt {
 
 		json Write(const RagdollBone& c)
 		{
-			return { { "Joint", c.Joint }, { "Radius", c.Radius }, { "Length", c.Length }, { "Mass", c.Mass }, { "SwingAngle", c.SwingAngle }, { "TwistMin", c.TwistMin }, { "TwistMax", c.TwistMax } };
+			return { { "Joint", c.Joint }, { "Radius", c.Radius }, { "Length", c.Length }, { "Mass", c.Mass }, { "SwingAngle", c.SwingAngle }, { "TwistMin", c.TwistMin }, { "TwistMax", c.TwistMax }, { "MotorStrength", c.MotorStrength } };
 		}
 		json Write(const RagdollComponent& c)
 		{
-			return { { "Enabled", c.Enabled }, { "RootJoint", c.RootJoint }, { "Mass", c.Mass }, { "RadiusRatio", c.RadiusRatio }, { "Layer", c.Layer }, { "RecoveryTime", c.RecoveryTime }, { "Bones", ListToJson(c.Bones) }, { "MotorStrength", c.MotorStrength }, { "MotorFrequency", c.MotorFrequency }, { "MotorDamping", c.MotorDamping }, { "MotorTorque", c.MotorTorque } };
+			return { { "Enabled", c.Enabled }, { "RootJoint", c.RootJoint }, { "KinematicRoot", c.KinematicRoot }, { "Mass", c.Mass }, { "RadiusRatio", c.RadiusRatio }, { "Layer", c.Layer }, { "RecoveryTime", c.RecoveryTime }, { "Bones", ListToJson(c.Bones) }, { "MotorStrength", c.MotorStrength }, { "MotorFrequency", c.MotorFrequency }, { "MotorDamping", c.MotorDamping }, { "MotorTorque", c.MotorTorque }, { "BalanceStrength", c.BalanceStrength }, { "BalanceFrequency", c.BalanceFrequency }, { "BalanceDamping", c.BalanceDamping }, { "BalanceMaxTilt", c.BalanceMaxTilt } };
 		}
 
 		json Write(const MaterialComponent& c)

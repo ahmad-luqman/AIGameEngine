@@ -808,6 +808,9 @@ namespace Basalt {
 			entityType["IsRagdollActive"] = [&context](const ScriptEntity& self) {
 				return RequirePhysics(context).IsRagdollActive(self.ResolveOrThrow());
 			};
+			entityType["IsRagdollBalanced"] = [&context](const ScriptEntity& self) {
+				return RequirePhysics(context).IsRagdollBalanced(self.ResolveOrThrow());
+			};
 			entityType["SetRagdollMotorStrength"] = [&context](const ScriptEntity& self, float strength, const sol::object& seconds) {
 				const Entity entity = RequireEntityWith<RagdollComponent>(self, "SetRagdollMotorStrength", "Ragdoll");
 				return RequirePhysics(context).SetRagdollMotorStrength(entity, strength, OptionalNumber(seconds, "SetRagdollMotorStrength: seconds", 0.0f));

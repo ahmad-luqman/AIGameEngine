@@ -49,20 +49,38 @@ namespace Basalt {
 					Finish(playback);
 				continue;
 			}
-			playback.IKOverlay.clear();
-			playback.SpringOverlay.clear();
-			ResetSpringBones(entity);
+			const bool ownsRoot = physics->RagdollOwnsRoot(entity);
+			if (ownsRoot)
+			{
+				playback.IKOverlay.clear();
+				playback.SpringOverlay.clear();
+				ResetSpringBones(entity);
+			}
 			auto rejectPose = [&] {
 				Finish(playback);
 				// Do not read playback after this: contact callbacks may remove its Animator or entity.
 				physics->RejectRagdollPose(entity);
 			};
 			AnimationLocalPose physical = playback.Pose;
+			// A rig below an animated root hangs from it, IK included.
+			if (!ownsRoot)
+				for (const auto& [node, transform] : playback.IKOverlay)
+					physical.Nodes[node] = transform;
+			const AnimationLocalPose animated = physical;
 			std::vector<glm::mat4> globals;
 			if (!ComposeAnimationPose(*playback.Source, physical, globals))
 			{
 				rejectPose();
 				continue;
+			}
+			if (!ownsRoot && !joints.empty())
+			{
+				// The root body is where the last fixed step put it and the entity may have moved on since, so the limbs are
+				// placed relative to it and hung from the animated root, which stays the animation's.
+				const glm::mat4 anchor = globals[joints.front().first] * glm::inverse(joints.front().second);
+				joints.erase(joints.begin());
+				for (auto& [node, matrix] : joints)
+					matrix = anchor * matrix;
 			}
 			const std::map<uint32_t, glm::mat4> simulated(joints.begin(), joints.end());
 			bool valid = true;
@@ -92,10 +110,10 @@ namespace Basalt {
 				for (const auto& [node, matrix] : joints)
 				{
 					auto& pose = physical.Nodes[node];
-					const auto& animated = playback.Pose.Nodes[node];
-					pose.Translation = glm::mix(animated.Translation, pose.Translation, weight);
-					pose.Scale = glm::mix(animated.Scale, pose.Scale, weight);
-					pose.Rotation = Math::Slerp(animated.Rotation, pose.Rotation, weight);
+					const auto& target = animated.Nodes[node];
+					pose.Translation = glm::mix(target.Translation, pose.Translation, weight);
+					pose.Scale = glm::mix(target.Scale, pose.Scale, weight);
+					pose.Rotation = Math::Slerp(target.Rotation, pose.Rotation, weight);
 				}
 			for (const auto& [node, matrix] : joints)
 				playback.RagdollOverlay.push_back({ node, physical.Nodes[node] });

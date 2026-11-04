@@ -11,7 +11,10 @@ another one. A passive two-joint ragdoll falls into the pile; the hashes include
 and bone-attachment markers additionally check the displayed pose (the Animator stays on its rest pose). A powered
 two-joint ragdoll away from the pile activates at the recovery checkpoint (after the scripted section, so the replay
 bodies keep their Jolt body IDs) and falls while its motors track a playing clip and its strength fades, so motor
-targets (built with the portable ragdoll decomposition) and Jolt's motors are hashed too. Between checkpoints the batch teleports and moves bodies, rebuilds colliders, rescales a body,
+targets (built with the portable ragdoll decomposition) and Jolt's motors are hashed too. A kinematic-root ragdoll on a
+walking character, with a half-strength joint, and a balancing ragdoll spawn at the same point (keeping the same body IDs
+before it) and run on for a final checkpoint, so root following, per-bone limits, and balance's forces (Jolt math and that
+decomposition, no libm) are hashed as well. Between checkpoints the batch teleports and moves bodies, rebuilds colliders, rescales a body,
 destroys bodies and spawns new ones (whose physics is added in a different order than they were created, so
 the rebuild order shows in the hash), changes a joint's axis and a character's collider.
 

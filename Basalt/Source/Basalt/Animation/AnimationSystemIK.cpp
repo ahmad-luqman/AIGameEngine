@@ -96,7 +96,7 @@ namespace Basalt {
 				}
 			const auto& component = entity.GetComponent<InverseKinematicsComponent>();
 			IKState& state = SyncIK(entity, component);
-			if (m_Scene.GetPhysicsWorld() && m_Scene.GetPhysicsWorld()->HasRagdollPose(entity))
+			if (m_Scene.GetPhysicsWorld() && m_Scene.GetPhysicsWorld()->RagdollOwnsRoot(entity))
 			{
 				state.ReleaseFootLocks();
 				continue;

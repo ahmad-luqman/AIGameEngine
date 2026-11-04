@@ -9,7 +9,6 @@
 #include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/Constraints/SwingTwistConstraint.h>
-#include <Jolt/Skeleton/SkeletonPose.h>
 
 #include <spdlog/fmt/fmt.h>
 
@@ -23,6 +22,10 @@ namespace Basalt {
 	using namespace PhysicsInternal;
 
 	namespace {
+		// The most balance lifts a sinking rig, in multiples of gravity's acceleration.
+		constexpr float MaxStandAcceleration = 2.0f;
+		constexpr float PartFriction = 0.5f;
+
 		// Visits a rig's swing-twist joints until `visit` returns true; whether one did.
 		template<typename Visit>
 		bool ForEachSwingTwist(JPH::Ragdoll& doll, const Visit& visit)
@@ -34,11 +37,45 @@ namespace Basalt {
 			return false;
 		}
 
+		// How far above its lowest part a rig's center of mass stands, from each part's height: what balance keeps at the
+		// animated pose's value, needing no idea where the ground is.
+		float StandingHeight(const JPH::Ragdoll& doll, const std::vector<float>& heights)
+		{
+			const auto& parts = doll.GetRagdollSettings()->mParts;
+			float weighted = 0, mass = 0;
+			for (size_t i = 0; i < parts.size(); i++)
+			{
+				weighted += heights[i] * parts[i].mMassPropertiesOverride.mMass;
+				mass += parts[i].mMassPropertiesOverride.mMass;
+			}
+			return weighted / mass - *std::ranges::min_element(heights);
+		}
+
 		bool UniformTransform(const glm::mat4& matrix, glm::vec3& position, glm::quat& rotation, glm::vec3& scale)
 		{
 			return DecomposeRagdollTransform(matrix, position, rotation, scale) && scale.x > 1e-5f &&
 				   std::abs(scale.y - scale.x) <= 1e-4f * scale.x && std::abs(scale.z - scale.x) <= 1e-4f * scale.x;
 		}
+	}
+
+	bool PhysicsWorld::Impl::RagdollReplacesBody(UUID uuid) const
+	{
+		const auto it = Ragdolls.find(uuid);
+		return it != Ragdolls.end() && it->second.Doll && !it->second.KinematicRoot;
+	}
+
+	UUID PhysicsWorld::Impl::FindRagdollOwner(Entity entity) const
+	{
+		for (Entity holder = entity; holder; holder = holder.GetParent())
+			if (Characters.contains(holder.GetUUID()))
+				return holder.GetUUID();
+		return 0;
+	}
+
+	bool PhysicsWorld::Impl::IsRagdollPartOf(const JPH::Body& body, UUID character) const
+	{
+		const auto it = Ragdolls.find(UUID(body.GetUserData()));
+		return it != Ragdolls.end() && it->second.Doll && it->second.Owner == character;
 	}
 
 	bool PhysicsWorld::Impl::BuildRagdoll(Entity entity, RagdollRecord& record, std::string& error, bool& cacheFailure)
@@ -197,11 +234,11 @@ namespace Basalt {
 			part.SetShape(new JPH::RotatedTranslatedShape(ToJolt(localDirection * (0.5f * length)), JPH::Quat::sFromTo(JPH::Vec3::sAxisY(), ToJolt(localDirection).Normalized()), capsule));
 			part.mPosition = ToJolt(restPosition);
 			part.mRotation = ToJolt(restRotation);
-			part.mMotionType = JPH::EMotionType::Dynamic;
+			part.mMotionType = component.KinematicRoot && parentIndex < 0 ? JPH::EMotionType::Kinematic : JPH::EMotionType::Dynamic;
 			part.mObjectLayer = MakeObjectLayer(true, *layer);
 			part.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
 			part.mMassPropertiesOverride.mMass = bone.Mass > 0 ? bone.Mass : component.Mass / static_cast<float>(selected.size());
-			part.mFriction = 0.5f;
+			part.mFriction = PartFriction;
 			if (parentIndex >= 0)
 			{
 				JPH::Ref<JPH::SwingTwistConstraintSettings> constraint = new JPH::SwingTwistConstraintSettings;
@@ -240,6 +277,7 @@ namespace Basalt {
 		}
 		record.World = world;
 		record.Settings = component;
+		record.KinematicRoot = component.KinematicRoot;
 		record.Doll->SetPose(JPH::RVec3::sZero(), initial.data());
 		return true;
 	}
@@ -345,18 +383,31 @@ namespace Basalt {
 	{
 		if (!record.Doll)
 			return;
+		std::vector<uint32_t> parts;
 		for (auto id : record.Doll->GetBodyIDs())
 		{
+			parts.push_back(id.GetIndexAndSequenceNumber());
 			BodyToEntity.erase(id.GetIndexAndSequenceNumber());
 			ContactListener.Materials[id.GetIndex()] = {};
 		}
 		record.Doll->RemoveFromPhysicsSystem();
 		record.Doll = nullptr;
 		record.MotorsOn = false;
+		record.AnimatedRoot.reset();
+		record.Balance.reset();
+		record.Balanced = false;
 		if (!ShuttingDown)
 		{
-			DirtyEntities.Insert(uuid);
-			EndContacts(uuid, false, deferContacts);
+			if (record.Owner != 0)
+			{
+				record.Owner = 0;
+				UpdateIgnoredPairs();
+			}
+			// A rig that left its entity's body in place ends its own contacts only, and has nothing to restore.
+			const bool kept = record.KinematicRoot;
+			if (!kept)
+				DirtyEntities.Insert(uuid);
+			EndContacts(uuid, false, deferContacts, kept ? parts : std::vector<uint32_t>{});
 			// Contact callbacks may erase record. Do not access it after dispatch.
 		}
 	}
@@ -436,8 +487,10 @@ namespace Basalt {
 			return reject("requires a Ragdoll component");
 		if (!IsFiniteVec(impulse))
 			return reject("impulse must be finite");
+		// A kinematic root takes no impulse, so the total goes to the parts that do.
+		const auto impulseShare = [&](const RagdollRecord& record) { return impulse / static_cast<float>(std::max<size_t>(record.Nodes.size() - (record.KinematicRoot ? 1 : 0), 1)); };
 		auto validateImpulse = [&](const RagdollRecord& record) {
-			const glm::vec3 perPart = impulse / static_cast<float>(record.Nodes.size());
+			const glm::vec3 perPart = impulseShare(record);
 			// Jolt clamps speed by its squared length. Reject an input that could overflow that intermediate.
 			const double safeSpeed = std::sqrt(static_cast<double>(std::numeric_limits<float>::max())) / 8;
 			for (const auto& part : record.Doll->GetRagdollSettings()->mParts)
@@ -449,7 +502,7 @@ namespace Basalt {
 		{
 			if (!validateImpulse(it->second))
 				return false;
-			it->second.Doll->AddImpulse(ToJolt(impulse / static_cast<float>(it->second.Nodes.size())));
+			it->second.Doll->AddImpulse(ToJolt(impulseShare(it->second)));
 			entity.GetComponent<RagdollComponent>().Enabled = true;
 			return true;
 		}
@@ -470,7 +523,10 @@ namespace Basalt {
 			SeedRagdoll(record, *motion);
 		const auto& bodies = System->GetBodyInterface();
 		const auto* original = FindBody(entity);
-		const glm::vec3 linear = world.GetLinearVelocity(entity);
+		// A rig on a character's child moves with that character.
+		record.Owner = record.KinematicRoot ? FindRagdollOwner(entity) : UUID(0);
+		const Entity owner = record.Owner != 0 ? ScenePtr->GetEntityByUUID(record.Owner) : entity;
+		const glm::vec3 linear = world.GetLinearVelocity(owner);
 		const glm::vec3 angular = original ? FromJolt(bodies.GetAngularVelocity(original->ID)) : glm::vec3(0);
 		const glm::vec3 center = original ? FromJolt(bodies.GetCenterOfMassPosition(original->ID)) : glm::vec3(ScenePtr->GetWorldTransform(entity)[3]);
 		// Complete the state before contact-end callbacks. A retained reference identifies this exact activation
@@ -513,14 +569,20 @@ namespace Basalt {
 			System->GetBodyInterface().SetLinearAndAngularVelocity(body, ToJolt(velocities[i].first), ToJolt(velocities[i].second));
 			BodyToEntity[body.GetIndexAndSequenceNumber()] = uuid;
 		}
-		created->AddImpulse(ToJolt(impulse / static_cast<float>(record.Nodes.size())));
+		created->AddImpulse(ToJolt(impulseShare(record)));
 		entity.GetComponent<RagdollComponent>().Enabled = true;
+		const bool replacesBody = !record.KinematicRoot;
 		const bool inserted = Ragdolls.emplace(uuid, std::move(record)).second;
 		BS_CORE_ASSERT(inserted, "Activation must replace only an erased recovery");
 		(void)inserted;
-		RemoveBody(uuid);
-		RemoveCharacter(uuid);
-		RootMotion.erase(uuid);
+		if (replacesBody)
+		{
+			RemoveBody(uuid);
+			RemoveCharacter(uuid);
+			RootMotion.erase(uuid);
+		}
+		else
+			UpdateIgnoredPairs();
 		const auto current = Ragdolls.find(uuid);
 		if (!entity || ScenePtr->IsEntityPendingDestruction(entity) || current == Ragdolls.end() || current->second.Doll != created || !entity.HasComponent<RagdollComponent>())
 		{
@@ -567,19 +629,24 @@ namespace Basalt {
 		std::vector<glm::mat4> target;
 		if (!animations->GetAnimatedPose(entity, *record.Source, target, clip))
 			return reject("get-up clip is missing or has no finite pose");
-		// Match the incoming clip's root, including authored rest offsets and animated root displacement.
-		// Gameplay supplies height for a different ground level; the blend keeps the physical pose at t=0.
-		const glm::vec3 targetRoot = glm::vec3(world * target[record.Nodes.front()] * glm::vec4(0, 0, 0, 1));
-		if (!Math::IsFinite(targetRoot))
-			return reject("get-up root is non-finite in world space");
-		const glm::vec3 delta = glm::vec3(frozen.front()[3]) - targetRoot;
-		world[3] += glm::vec4(delta.x, 0, delta.z, 0);
-		if (!Math::IsFinite(world))
-			return reject("get-up placement is non-finite");
+		// A kinematic root never left the animation, so the entity stays where it is.
+		if (!record.KinematicRoot)
+		{
+			// Match the incoming clip's root, including authored rest offsets and animated root displacement.
+			// Gameplay supplies height for a different ground level; the blend keeps the physical pose at t=0.
+			const glm::vec3 targetRoot = glm::vec3(world * target[record.Nodes.front()] * glm::vec4(0, 0, 0, 1));
+			if (!Math::IsFinite(targetRoot))
+				return reject("get-up root is non-finite in world space");
+			const glm::vec3 delta = glm::vec3(frozen.front()[3]) - targetRoot;
+			world[3] += glm::vec4(delta.x, 0, delta.z, 0);
+			if (!Math::IsFinite(world))
+				return reject("get-up placement is non-finite");
+		}
 		if (!clip.empty() && !animations->Play(entity, clip))
 			return false;
 		const JPH::Ref<JPH::Ragdoll> retiring = record.Doll;
-		impl.ScenePtr->SetWorldTransform(entity, world);
+		if (!record.KinematicRoot)
+			impl.ScenePtr->SetWorldTransform(entity, world);
 		record.World = impl.ScenePtr->GetWorldTransform(entity);
 		record.FrozenWorld = std::move(frozen);
 		entity.GetComponent<RagdollComponent>().Enabled = false;
@@ -605,6 +672,7 @@ namespace Basalt {
 		std::vector<UUID> invalid;
 		std::vector<UUID> unsupported;
 		std::map<UUID, std::vector<RagdollMotion>> rebuilds;
+		bool ownersChanged = false;
 		for (auto& [id, record] : Ragdolls)
 		{
 			Entity entity = ScenePtr->GetEntityByUUID(id);
@@ -613,6 +681,12 @@ namespace Basalt {
 			{
 				remove.push_back(id);
 				continue;
+			}
+			if (record.Doll && record.KinematicRoot)
+			{
+				const UUID owner = FindRagdollOwner(entity);
+				ownersChanged = ownersChanged || owner != record.Owner;
+				record.Owner = owner;
 			}
 			std::vector<glm::mat4> matrices;
 			if (!ReadRagdollWorld(record, matrices))
@@ -629,6 +703,10 @@ namespace Basalt {
 				continue;
 			}
 			const bool resized = std::abs(scale.x - previousScale.x) > 1e-4f * previousScale.x;
+			// A kinematic root walks with its entity, and what hangs from it follows through the joints, lagging as it
+			// should; only a teleport carries the whole rig along.
+			if (record.Doll && record.KinematicRoot && !IsRagdollTeleport(position - previousPosition, rotation, previousRotation, seconds, ScenePtr->GetFixedTimestep()))
+				record.World = currentWorld;
 			if (currentWorld != record.World)
 			{
 				// A live resize keeps the root at its physical position. Recovery is an entity-relative frozen
@@ -706,6 +784,8 @@ namespace Basalt {
 					remove.push_back(id);
 			}
 		}
+		if (ownersChanged)
+			UpdateIgnoredPairs();
 		for (UUID id : unsupported)
 			DisableRagdoll(id, "running rig requires a positive uniform world transform without shear");
 		for (UUID id : invalid)
@@ -806,6 +886,8 @@ namespace Basalt {
 			return std::isnan(value) ? fallback : std::clamp(value, low, high);
 		};
 		const RagdollComponent defaults;
+		record.AnimatedRoot.reset();
+		record.Balance.reset();
 		// The strength itself is already clamped (FadingWeight; a non-finite one is 0): only said so.
 		if (!std::isfinite(component.MotorStrength))
 			problems.emplace_back("MotorStrength must be finite; motors are off");
@@ -814,6 +896,18 @@ namespace Basalt {
 		const float frequency = setting(component.MotorFrequency, 0.1f, RagdollComponent::MaxMotorFrequency, defaults.MotorFrequency, "MotorFrequency");
 		const float damping = setting(component.MotorDamping, 0.0f, RagdollComponent::MaxMotorDamping, defaults.MotorDamping, "MotorDamping");
 		const float torque = setting(component.MotorTorque, 0.0f, RagdollComponent::MaxMotorTorque, defaults.MotorTorque, "MotorTorque") * strength;
+		const bool powered = torque > 0;
+		const float balance = setting(component.BalanceStrength, 0.0f, 1.0f, defaults.BalanceStrength, "BalanceStrength") * strength;
+		const float balanceFrequency = setting(component.BalanceFrequency, 0.1f, RagdollComponent::MaxMotorFrequency, defaults.BalanceFrequency, "BalanceFrequency");
+		const float balanceDamping = setting(component.BalanceDamping, 0.0f, RagdollComponent::MaxMotorDamping, defaults.BalanceDamping, "BalanceDamping");
+		const float maxTilt = setting(component.BalanceMaxTilt, 0.0f, RagdollComponent::MaxTilt, defaults.BalanceMaxTilt, "BalanceMaxTilt");
+		// Per part, in Jolt's part order; 1 unless a Bones entry says otherwise.
+		std::vector<float> boneStrength(record.Nodes.size(), 1.0f);
+		for (const RagdollBone& bone : component.Bones)
+			if (bone.MotorStrength != 1.0f)
+				for (size_t i = 0; i < record.Nodes.size(); i++)
+					if (record.Source->Nodes[record.Nodes[i]].Name == bone.Joint)
+						boneStrength[i] = setting(bone.MotorStrength, 0.0f, 1.0f, 1.0f, "Bones MotorStrength");
 		// Never touched while off, so a ragdoll that was never powered simulates exactly like a passive one.
 		const auto turnOff = [&] {
 			if (record.MotorsOn)
@@ -825,7 +919,7 @@ namespace Basalt {
 			record.MotorsOn = false;
 			MotorWarnings.Report(entity, problems);
 		};
-		if (!(torque > 0))
+		if (!powered && !record.KinematicRoot)
 			return turnOff();
 		// The layered animation before physical overlays: the pose the body tries to hold.
 		auto* animations = ScenePtr->GetAnimationSystem();
@@ -844,6 +938,9 @@ namespace Basalt {
 			problems.emplace_back(unavailable);
 			return turnOff();
 		}
+		record.AnimatedRoot = animated[record.Nodes.front()];
+		if (!powered)
+			return turnOff();
 		// Each body's rotation relative to its skeleton parent's, from the animated joints in world space. The portable
 		// decomposition keeps the targets identical on every platform.
 		const glm::mat4 world = ScenePtr->GetWorldTransform(entity);
@@ -854,36 +951,144 @@ namespace Basalt {
 			problems.emplace_back("the entity's world transform cannot be decomposed; motors are off");
 			return turnOff();
 		}
-		const JPH::Skeleton* skeleton = record.Doll->GetRagdollSettings()->GetSkeleton();
-		JPH::SkeletonPose pose;
-		pose.SetSkeleton(skeleton);
+		const JPH::RagdollSettings* rig = record.Doll->GetRagdollSettings();
+		const JPH::Skeleton* skeleton = rig->GetSkeleton();
 		std::vector<glm::quat> rotations(record.Nodes.size());
+		std::vector<glm::vec3> positions(record.Nodes.size());
 		for (size_t i = 0; i < record.Nodes.size(); i++)
 		{
-			if (!DecomposeRagdollTransform(world * animated[record.Nodes[i]], position, rotations[i], scale))
+			if (!DecomposeRagdollTransform(world * animated[record.Nodes[i]], positions[i], rotations[i], scale))
 			{
 				problems.push_back(fmt::format("the animated joint '{}' cannot be decomposed; motors are off", record.Source->Nodes[record.Nodes[i]].Name));
 				return turnOff();
 			}
 			const int parent = skeleton->GetJoint(static_cast<int>(i)).mParentJointIndex;
 			const glm::quat local = parent < 0 ? rotations[i] : glm::conjugate(rotations[static_cast<size_t>(parent)]) * rotations[i];
-			pose.GetJoint(static_cast<int>(i)).mRotation = ToJolt(local).Normalized();
-		}
-		ForEachSwingTwist(*record.Doll, [&](JPH::SwingTwistConstraint& joint) {
+			// The joint above this part: what Ragdoll::DriveToPoseUsingMotors does, with this part's own limit.
+			const int constraint = rig->GetConstraintIndexForBodyIndex(static_cast<int>(i));
+			if (constraint < 0 || record.Doll->GetConstraint(constraint)->GetSubType() != JPH::EConstraintSubType::SwingTwist)
+				continue;
+			auto& joint = *static_cast<JPH::SwingTwistConstraint*>(record.Doll->GetConstraint(constraint));
+			const float limit = torque * boneStrength[i];
 			for (JPH::MotorSettings* motor : { &joint.GetSwingMotorSettings(), &joint.GetTwistMotorSettings() })
 			{
 				motor->mSpringSettings.mMode = JPH::ESpringMode::FrequencyAndDamping;
 				motor->mSpringSettings.mFrequency = frequency;
 				motor->mSpringSettings.mDamping = damping;
-				motor->SetTorqueLimit(torque);
+				motor->SetTorqueLimit(limit);
 			}
-			return false;
-		});
-		record.Doll->DriveToPoseUsingMotors(pose);
+			const JPH::EMotorState state = limit > 0 ? JPH::EMotorState::Position : JPH::EMotorState::Off;
+			joint.SetSwingMotorState(state);
+			joint.SetTwistMotorState(state);
+			if (limit > 0)
+				joint.SetTargetOrientationBS(ToJolt(local).Normalized());
+		}
 		// A sleeping body ignores its motors: the animation keeps a powered rig awake.
 		record.Doll->Activate();
 		record.MotorsOn = true;
+		if (const JPH::Vec3 gravity = System->GetGravity(); balance > 0 && !record.KinematicRoot && !gravity.IsNearZero())
+		{
+			const float angular = 2.0f * JPH::JPH_PI * balanceFrequency;
+			RagdollRecord::BalanceDrive drive{ .Strength = balance, .Stiffness = angular * angular, .Damping = 2.0f * balanceDamping * angular, .CosMaxTilt = JPH::Cos(JPH::DegreesToRadians(maxTilt)) };
+			std::vector<float> heights;
+			for (const glm::vec3& joint : positions)
+				heights.push_back(-gravity.Normalized().Dot(ToJolt(joint)));
+			drive.StandHeight = StandingHeight(*record.Doll, heights);
+			record.Balance = drive;
+		}
 		MotorWarnings.Report(entity, problems);
+	}
+
+	void PhysicsWorld::Impl::StepRagdolls(float fixedStep)
+	{
+		for (auto& [id, record] : Ragdolls)
+		{
+			if (!record.Doll)
+				continue;
+			const Entity entity = ScenePtr->GetEntityByUUID(id);
+			if (!entity)
+				continue;
+			if (record.KinematicRoot)
+				FollowRagdollRoot(entity, record, fixedStep);
+			else
+				BalanceRagdoll(entity, record, fixedStep);
+		}
+	}
+
+	void PhysicsWorld::Impl::FollowRagdollRoot(Entity entity, RagdollRecord& record, float fixedStep)
+	{
+		JPH::BodyInterface& bodies = System->GetBodyInterface();
+		const JPH::BodyID root = record.Doll->GetBodyID(0);
+		glm::vec3 position, scale;
+		glm::quat rotation;
+		if (record.AnimatedRoot && DecomposeRagdollTransform(ScenePtr->GetWorldTransform(entity) * *record.AnimatedRoot, position, rotation, scale))
+			bodies.MoveKinematic(root, ToJolt(position), ToJolt(rotation).Normalized(), fixedStep);
+		// A kinematic body keeps its velocity: without a pose to follow it stops where it is.
+		else
+			bodies.SetLinearAndAngularVelocity(root, JPH::Vec3::sZero(), JPH::Vec3::sZero());
+	}
+
+	void PhysicsWorld::Impl::BalanceRagdoll(Entity entity, RagdollRecord& record, float fixedStep)
+	{
+		record.Balanced = false;
+		const JPH::Vec3 gravity = System->GetGravity();
+		glm::vec3 unusedPosition, unusedScale;
+		glm::quat animated;
+		// Gravity can have stopped since the frame began.
+		if (!record.Balance || !record.AnimatedRoot || gravity.IsNearZero() || !DecomposeRagdollTransform(ScenePtr->GetWorldTransform(entity) * *record.AnimatedRoot, unusedPosition, animated, unusedScale))
+			return;
+		JPH::BodyInterface& bodies = System->GetBodyInterface();
+		const JPH::Vec3 up = -gravity.Normalized();
+		const JPH::BodyID root = record.Doll->GetBodyID(0);
+		// Up in the animated root's frame, as the root body now carries it: upright when that is up again. No angles here
+		// (nor below): they would need libm, and these forces must agree across platforms.
+		const JPH::Vec3 carried = bodies.GetRotation(root) * (ToJolt(animated).Normalized().Conjugated() * up);
+		if (carried.Dot(up) < record.Balance->CosMaxTilt)
+			return;
+		const auto& parts = record.Doll->GetRagdollSettings()->mParts;
+		JPH::RVec3 weighted = JPH::RVec3::sZero();
+		JPH::Vec3 momentum = JPH::Vec3::sZero();
+		float mass = 0;
+		std::vector<float> heights;
+		for (size_t i = 0; i < parts.size(); i++)
+		{
+			const JPH::BodyID part = record.Doll->GetBodyID(static_cast<int>(i));
+			const float partMass = parts[i].mMassPropertiesOverride.mMass;
+			weighted += bodies.GetCenterOfMassPosition(part) * partMass;
+			momentum += bodies.GetLinearVelocity(part) * partMass;
+			mass += partMass;
+			heights.push_back(JPH::Vec3(bodies.GetPosition(part)).Dot(up));
+		}
+		const JPH::RVec3 center = weighted / mass;
+		if (!HasRagdollSupport(entity.GetUUID(), record, center, up))
+			return;
+		record.Balanced = true;
+		// A spring and damper on the tilt, integrated implicitly as Jolt's own springs are, so no frequency can overshoot a
+		// step. Spinning about up is the feet's business.
+		const RagdollRecord::BalanceDrive& drive = *record.Balance;
+		const JPH::Vec3 spin = bodies.GetAngularVelocity(root);
+		const JPH::Vec3 tilting = spin - up * spin.Dot(up);
+		const float implicit = drive.Strength / (1.0f + fixedStep * (drive.Damping + fixedStep * drive.Stiffness));
+		const JPH::Vec3 acceleration = implicit * (drive.Stiffness * carried.Cross(up) - drive.Damping * tilting);
+		// Standing: legs whose motors give way are pushed back to the animated pose's height. Only up, and at most
+		// MaxStandAcceleration times gravity's, as legs push: a rig that sank far must not leap.
+		const float rise = implicit * (drive.Stiffness * (drive.StandHeight - StandingHeight(*record.Doll, heights)) - drive.Damping * momentum.Dot(up) / mass);
+		const float liftAcceleration = std::clamp(rise, 0.0f, MaxStandAcceleration * gravity.Length());
+		// What the lift takes off the feet it also takes from their grip: the friction that weight would have given comes
+		// back as a brake, or a rig standing on nothing but balance would skate away from any push.
+		const JPH::Vec3 velocity = momentum / mass;
+		const JPH::Vec3 drift = velocity - up * velocity.Dot(up);
+		const float driftSpeed = drift.Length();
+		const JPH::Vec3 brake = driftSpeed > 1e-4f ? drift * (-std::min(driftSpeed / fixedStep, PartFriction * liftAcceleration) / driftSpeed) : JPH::Vec3::sZero();
+		const JPH::Vec3 lift = up * liftAcceleration + brake;
+		// The whole rig turns at this rate about its center of mass, as one rigid body does: every part gets what that takes,
+		// the turn's forces cancel out, and no joint has to transmit any of it.
+		for (size_t i = 0; i < parts.size(); i++)
+		{
+			const JPH::BodyID part = record.Doll->GetBodyID(static_cast<int>(i));
+			bodies.AddForce(part, parts[i].mMassPropertiesOverride.mMass * (lift + acceleration.Cross(JPH::Vec3(bodies.GetCenterOfMassPosition(part) - center))));
+			bodies.AddTorque(part, bodies.GetInverseInertia(part).Inversed3x3().Multiply3x3(acceleration));
+		}
 	}
 
 	bool PhysicsWorld::SetRagdollMotorStrength(Entity entity, float strength, float seconds)
@@ -933,6 +1138,16 @@ namespace Basalt {
 			return false;
 		const auto it = m_Impl->Ragdolls.find(entity.GetUUID());
 		return it != m_Impl->Ragdolls.end() && it->second.Doll != nullptr;
+	}
+
+	bool PhysicsWorld::RagdollOwnsRoot(Entity entity) const
+	{
+		return HasRagdollPose(entity) && !m_Impl->Ragdolls.at(entity.GetUUID()).KinematicRoot;
+	}
+
+	bool PhysicsWorld::IsRagdollBalanced(Entity entity) const
+	{
+		return IsRagdollActive(entity) && m_Impl->Ragdolls.at(entity.GetUUID()).Balanced;
 	}
 
 	bool PhysicsWorld::HasRagdollPose(Entity entity) const

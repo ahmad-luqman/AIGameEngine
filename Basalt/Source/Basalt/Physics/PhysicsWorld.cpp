@@ -143,13 +143,14 @@ namespace Basalt {
 		// Bodies joined by a joint do not collide with each other unless the joint asks for it.
 		m_Impl->System->SetSimCollideBodyVsBody([impl = m_Impl.get()](const JPH::Body& body1, const JPH::Body& body2, JPH::Mat44Arg transform1, JPH::Mat44Arg transform2,
 																	  JPH::CollideShapeSettings& settings, JPH::CollideShapeCollector& collector, const JPH::ShapeFilter& filter) {
-			if (!impl->IgnoredPairs.empty())
-			{
-				const uint64_t a = body1.GetUserData();
-				const uint64_t b = body2.GetUserData();
-				if (impl->IgnoredPairs.contains({ std::min(a, b), std::max(a, b) }))
-					return;
-			}
+			const uint64_t a = body1.GetUserData();
+			const uint64_t b = body2.GetUserData();
+			// One entity's bodies in different groups: a rig's limb and the body it left in place. Limbs of one rig share a
+			// group and do collide, so this cannot be an ignored pair.
+			if (a == b && body1.GetCollisionGroup().GetGroupID() != body2.GetCollisionGroup().GetGroupID())
+				return;
+			if (!impl->IgnoredPairs.empty() && impl->IgnoredPairs.contains({ std::min(a, b), std::max(a, b) }))
+				return;
 			JPH::PhysicsSystem::sDefaultSimCollideBodyVsBody(body1, body2, transform1, transform2, settings, collector, filter);
 		});
 		SetGravity(scene->GetPhysicsSettings().Gravity);
@@ -236,7 +237,7 @@ namespace Basalt {
 
 		// Removing a body dispatches contact exits, whose scripts can destroy the entity.
 		// A character controller replaces the body (RecreateCharacter reports the ignored RigidBody).
-		if (!entity || !entity.HasComponent<RigidBodyComponent>() || entity.HasComponent<CharacterControllerComponent>() || (Ragdolls.contains(entity.GetUUID()) && Ragdolls.at(entity.GetUUID()).Doll))
+		if (!entity || !entity.HasComponent<RigidBodyComponent>() || entity.HasComponent<CharacterControllerComponent>() || RagdollReplacesBody(entity.GetUUID()))
 			return;
 
 		const auto& rigidBody = entity.GetComponent<RigidBodyComponent>();
@@ -608,6 +609,7 @@ namespace Basalt {
 
 			// Characters move before the bodies step, as Jolt expects.
 			impl.UpdateCharacters(fixedStep);
+			impl.StepRagdolls(fixedStep);
 
 			impl.System->Update(fixedStep, 1, impl.TempAllocator.get(), impl.JobSystem);
 			impl.ValidateRagdollOutput();

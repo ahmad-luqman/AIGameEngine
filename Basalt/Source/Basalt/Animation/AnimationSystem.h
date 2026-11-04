@@ -167,13 +167,14 @@ namespace Basalt {
 		// crossed them, the current clip's before the outgoing one's (for a two-clip blend, the second clip's first).
 		std::vector<AnimationEventRecord> TakeEvents();
 
-	private:
 		// A move faster than this (units/s) between two updates is a teleport (respawn, Scene.Load, a script placing the
 		// entity), not movement, so it does not spike MatchVelocity or swing spring bones. MatchVelocity checks the
 		// entity's horizontal move, spring bones each chain's first joint in 3D; both compare the move against
 		// TeleportSpeed times the longer of the frame and one fixed step, because physics moves bodies once per step: at
-		// high frame rates most frames see no move.
+		// high frame rates most frames see no move. A KinematicRoot ragdoll takes its entity's move the same way.
 		static constexpr double TeleportSpeed = 100.0;
+
+	private:
 		// Why graph evaluation/parameter writes are enabled or disabled, independent of pose and pause state.
 		enum class GraphControl
 		{

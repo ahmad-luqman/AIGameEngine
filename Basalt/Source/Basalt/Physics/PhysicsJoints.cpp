@@ -48,6 +48,11 @@ namespace Basalt {
 			const uint64_t b = static_cast<uint64_t>(joint.Settings.ConnectedEntity);
 			pairs.emplace(std::min(a, b), std::max(a, b));
 		}
+		// A rig's limbs and the character it belongs to overlap by design. (On one entity the collision filter tells limbs
+		// from the entity's own body; this pair is a controller on an ancestor.)
+		for (const auto& [uuid, record] : Ragdolls)
+			if (record.Doll && record.Owner != 0 && record.Owner != uuid)
+				pairs.emplace(std::min<uint64_t>(uuid, record.Owner), std::max<uint64_t>(uuid, record.Owner));
 		// Jolt replays cached contacts for bodies that have not moved (and skips sleeping ones), bypassing
 		// the pair filter. Bodies whose pair starts or stops being ignored lose that cache and wake, so two
 		// resting bodies stop (or start) colliding at once.
