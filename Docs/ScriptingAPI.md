@@ -1183,20 +1183,35 @@ end
 
 ## Property animation
 
-`PropertyAnimation` stores timelines for scalar and 2–4 lane numeric fields on the same entity. The
-Property Animation editor panel lists existing components and numeric fields from `ComponentRegistry`.
-Capture Key records the current serialized value at the normalized timeline cursor; Sample/scrubbing
-applies the timeline to the current scene and supports editor Undo. The inspector exposes the same
-Duration, Speed, Looping, PlayOnStart, Tracks, Stepped and Keys fields. Key Value is a four-lane vector:
-scalars use X and vector fields use the first N lanes. Quaternion rotation fields are identified by registry
+`PropertyAnimation` stores timelines for fields of components on the same entity: numbers (scalars and 2–4 lane
+vectors), integers, booleans, strings and enums. The Property Animation editor panel lists every field it can animate
+from `ComponentRegistry`. Capture Key records the current serialized value at the normalized timeline cursor;
+Sample/scrubbing applies the timeline to the current scene and supports editor Undo. The inspector exposes the same
+Duration, Speed, Looping, PlayOnStart, Tracks, Stepped and Keys fields. Key Value is a four-lane vector: scalars use X
+and vector fields use the first N lanes; integer keys hold a whole number in X (0 to 16777216, which a float lane holds
+exactly; a larger value is not captured), boolean keys 0 or 1 in X, and string and enum keys use `Text` (at most 1024
+bytes; an enum key must be one of the field's values). Integer, boolean, string and enum tracks always step, whatever
+their `Stepped` says (Capture Key creates them Stepped). Quaternion rotation fields are identified by registry
 metadata (`quaternionRotations` in `component.types`): keys hold Euler degrees, but sampling uses shortest-arc
 quaternion slerp, including rotations beyond 90° and across ±180°. Use intermediate keys for turns exceeding
 180°. Stepped rotation tracks hold the preceding orientation. Scalar angles remain ordinary numeric tracks.
 Quaternion keys retain the registry's Euler serialization, including its existing limitations at exact gimbal lock (tracked in ROADMAP.md).
-Empty tracks do nothing; targets must exist when sampling. Integer, boolean, string, enum, entity, asset,
-object and nested list fields are excluded. The registry also excludes physics configuration components
-(RigidBody, all colliders, Joint and CharacterController): their update signals reconstruct physics objects
-and reset contacts. Animate Transform on a kinematic rigid body to move a physics platform or door.
+
+`Field` is a top-level field (`Translation`) or a path into list elements: `List[selector].Field`, nested as deep as
+the lists go (`Layers[Upper].Weight`, `Chains[Hair].Colliders[0].Name`). A selector of only digits is an index; any
+other selector picks the element whose unique name field (the `Name` of layers, chains and blend spaces) matches it, so
+`Layers[Upper]` keeps following the layer when layers are reordered (the panel picks elements by name when the name
+is usable: nonempty, not only digits, without `]` and used once; otherwise by index). A sample fails, naming the track,
+when the element is not there. Tracks into the same list compose, and each list is patched once per sample, with the
+component's own validation and update signals (a nested Animator layer weight, for instance, applies at once, as when a
+script sets it). Paths are compared as written: `Layers[0].Weight` and `Layers[Upper].Weight` are different tracks
+even when they reach the same field.
+
+Empty tracks do nothing; targets must exist when sampling. Entity, asset (including list elements' asset fields),
+object and list fields, the names that identify list elements, and per-axis enums are excluded. The registry also
+excludes physics configuration components (RigidBody, all colliders, Joint, CharacterController and Ragdoll): their
+update signals reconstruct physics objects and reset contacts. Animate Transform on a kinematic rigid body to move a
+physics platform or door.
 
 Keys use strictly increasing normalized Time in [0,1], with a maximum of 256 keys per track and 64
 tracks per entity. Repeated targets use the last nonempty track. Key capture edits that winning track,

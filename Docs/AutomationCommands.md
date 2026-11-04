@@ -66,13 +66,13 @@ Controls a PropertyAnimation in Play or Simulate. action is Play (restart at zer
 
 ### `animation.key`
 
-Captures an existing scalar/vector numeric component field into this entity's PropertyAnimation timeline at normalized time [0,1]. Creates the component/track as needed, inserts sorted keys and replaces an exact-time key. Unused Value lanes are zero. All writes use ComponentRegistry.
+Captures an existing component field into this entity's PropertyAnimation timeline at normalized time [0,1]: a number (up to 4 lanes), integer, boolean, string or enum, top-level or inside list elements picked by index or name ("Layers[Upper].Weight"). Creates the component/track as needed (Stepped for integer, boolean, string and enum fields, which always step), inserts sorted keys and replaces an exact-time key. Unused Value lanes are zero; strings and enums go in Text. All writes use ComponentRegistry.
 
 | Parameter | Type / description |
 |-----------|--------------------|
 | `component` | component name |
 | `entity` | ID or name |
-| `field` | numeric field |
+| `field` | field or path, e.g. Translation or Layers[Upper].Weight |
 | `time` | normalized time |
 
 <details><summary>Parameter JSON Schema</summary>
@@ -103,7 +103,7 @@ Captures an existing scalar/vector numeric component field into this entity's Pr
       "description": "ID or name"
     },
     "field": {
-      "description": "numeric field",
+      "description": "field or path, e.g. Translation or Layers[Upper].Weight",
       "minLength": 1,
       "type": "string"
     },
