@@ -100,15 +100,16 @@ namespace Basalt {
 		// Project-relative paths of every file under the asset directory that a key can name, with one of the extensions
 		// (lower-case, including the dot). Metadata is excluded. On an incomplete scan, returns the files found so far and sets
 		// *outError when provided; successful scans clear it. *outSkipped, when provided, is replaced by what those types
-		// left out for names no key can hold, as FileSystem::DescribePath text, with every such folder, since it may hold any
-		// type.
+		// left out for names no key can hold, as FileSystem::DescribePath text, with every such folder or entry that cannot be
+		// told from one, since it may hold any type.
 		static std::vector<std::string> ListAssets(const std::vector<std::string>& extensions = {}, std::string* outError = nullptr, std::set<std::string>* outSkipped = nullptr);
 
-		// One folder of the active project for browsing, as FileSystem::DescribePath text in Skipped.
+		// One folder of the active project, for browsing.
 		struct FolderListing
 		{
 			// Folders first, each kind by name. Metadata is excluded.
 			std::vector<std::filesystem::directory_entry> Entries;
+			// Project-relative FileSystem::DescribePath text.
 			std::set<std::string> Skipped;
 			// Set when the folder could not be listed completely (Entries is then partial).
 			std::string Error;

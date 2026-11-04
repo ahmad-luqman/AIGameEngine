@@ -75,7 +75,7 @@ namespace Basalt {
 		Scan result;
 		const std::filesystem::path base = FileSystem::PathFromUtf8(subdirectory);
 		const std::filesystem::path folder = root / base;
-		const auto describe = [](const std::filesystem::path& path, const std::error_code& error) { return "cannot read '" + FileSystem::PathToUtf8(path) + "': " + FileSystem::DescribeError(error); };
+		const auto describe = [](const std::filesystem::path& path, const std::error_code& error) { return "cannot read '" + FileSystem::DescribePath(path) + "': " + FileSystem::DescribeError(error); };
 		std::error_code error;
 		const std::filesystem::file_status status = std::filesystem::status(folder, error);
 		if (error && !IsMissing(error))
@@ -86,14 +86,14 @@ namespace Basalt {
 		// A missing folder, or a file where it should be: nothing is watched.
 		if (!std::filesystem::is_directory(status))
 			return result;
-		// Unreadable folders are errors, unlike names no key can hold: their files would look removed. An increment that fails was
-		// entering the last entry listed (a folder).
+		// An unreadable folder is an error, since its files would look removed; a name no key can hold is skipped, as its entry
+		// really has no key. An increment that fails was entering the last entry listed (a folder).
 		std::filesystem::path last = folder;
 		for (auto it = std::filesystem::recursive_directory_iterator(folder, error); !error && it != std::filesystem::recursive_directory_iterator(); it.increment(error))
 		{
+			last = it->path();
 			if (FileSystem::SkipNonUtf8Entry(it, root, result.Skipped))
 				continue;
-			last = it->path();
 			std::error_code entryError;
 			const bool regular = it->is_regular_file(entryError);
 			Stamp stamp;

@@ -411,8 +411,15 @@ namespace Basalt {
 		if (HasUtf8Form(entry.path().filename()))
 			return false;
 		std::filesystem::path relative = entry.path().lexically_relative(root);
-		if (GetLowercaseExtension(relative) == ".meta")
-			relative.replace_extension();
+		// One report for a file and its sidecar. An orphan, or a folder that only looks like a sidecar, keeps its own name.
+		std::error_code error;
+		if (GetLowercaseExtension(relative) == ".meta" && !entry.is_directory(error))
+		{
+			std::filesystem::path source = entry.path();
+			source.replace_extension();
+			if (std::filesystem::exists(std::filesystem::symlink_status(source, error)))
+				relative.replace_extension();
+		}
 		outSkipped.insert(DescribePath(relative));
 		return true;
 	}

@@ -258,9 +258,10 @@ namespace Basalt {
 				}
 				if (error)
 					m_Report.Add(ValidationSeverity::Error, Project::AssetDirectoryName, "cannot list all the assets (the walk stopped with: " + FileSystem::DescribeError(error) + "); the remaining files were not checked");
-				// Directory order differs between platforms; reports should not.
+				// Reported against Assets/: this text names no file, and agents read a path from File.
 				for (const std::string& entry : skipped)
 					m_Report.Add(ValidationSeverity::Warning, Project::AssetDirectoryName, "'" + entry + "': " + FileSystem::NonUtf8NameProblem);
+				// Directory order differs between platforms; reports should not.
 				for (auto* list : lists.All())
 					std::sort(list->begin(), list->end());
 				return lists;

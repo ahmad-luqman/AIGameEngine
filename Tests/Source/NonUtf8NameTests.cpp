@@ -8,6 +8,7 @@
 #include <Basalt/Core/FileWatcher.h>
 #include <Basalt/Core/Log.h>
 #include <Basalt/Core/PackArchive.h>
+#include <Basalt/Core/Platform.h>
 #include <Basalt/Core/TextEncoding.h>
 #include <Basalt/Project/Exporter.h>
 #include <Basalt/Project/Project.h>
@@ -17,6 +18,7 @@
 #include "TestUtils.h"
 
 #include <algorithm>
+#include <array>
 #include <set>
 #include <string>
 #include <string_view>
@@ -59,12 +61,19 @@ namespace {
 		return keys;
 	}
 
+	// What asset.list and asset.refresh say about an entry.
+	std::string SkippedWarning(const std::string& entry)
+	{
+		return "'" + entry + "': " + FileSystem::NonUtf8NameProblem;
+	}
+
 	// A valid name holding U+FFFD itself: that is not a sign of a bad one.
 	const std::string RealReplacementKey = "Assets/Real\xEF\xBF\xBD.png";
 
 	// A project holding keyed files beside every kind of entry no key can hold: a file with a sidecar that would index it,
 	// a document that is not even JSON, a folder with a file, a sidecar and a subfolder, two names whose U+FFFD text is the
-	// same, and a name with the other half of a surrogate pair.
+	// same, a name with (on Windows) the other half of a surrogate pair, a sidecar in capitals, a sidecar without a source,
+	// and a folder that only looks like a sidecar, beside a file with the name it would shorten to.
 	class NonUtf8Project
 	{
 	public:
@@ -91,15 +100,41 @@ namespace {
 			Write(assets / NonUtf8Name("Clash", ".txt", 0), "first");
 			Write(assets / NonUtf8Name("Clash", ".txt", 1), "second");
 			Write(assets / NonUtf8Name("Low", ".txt", 2), "third");
+			Write(assets / NonUtf8Name("Upper", ".png"), "image");
+			Write(assets / NonUtf8Name("Upper", ".png.META"), R"({"Version":1,"UUID":"2345678"})");
+			Write(assets / NonUtf8Name("Orphan", ".png.meta"), R"({"Version":1,"UUID":"3456789"})");
+			Write(assets / NonUtf8Name("Art"), "a file");
+			Write(assets / NonUtf8Name("Art", ".meta") / "Inside.png", "image");
 		}
 
 		const BasaltTest::TempProject& GetTemp() const { return m_Temp; }
 		std::filesystem::path GetAssets() const { return m_Temp.GetDirectory() / "Assets"; }
 
-		// Every entry skipped, as scans report it. A folder counts once, whatever it holds, and a sidecar as its source.
+		// Folders, which every filter reports, as they may hold anything.
+		static Entries Folders()
+		{
+			return { EscapedNonUtf8Name("Assets/Folder"), EscapedNonUtf8Name("Assets/Art", ".meta") };
+		}
+
+		static Entries Images()
+		{
+			return { EscapedNonUtf8Name("Assets/Bad", ".png"), EscapedNonUtf8Name("Assets/Upper", ".png") };
+		}
+
+		static Entries Texts()
+		{
+			return { EscapedNonUtf8Name("Assets/Clash", ".txt", 0), EscapedNonUtf8Name("Assets/Clash", ".txt", 1), EscapedNonUtf8Name("Assets/Low", ".txt", 2) };
+		}
+
+		// Every entry skipped, as scans report it. A folder counts once, whatever it holds, a sidecar beside its source as that
+		// source, and an orphan and the folder named like a sidecar as themselves.
 		static Entries Expected()
 		{
-			return { EscapedNonUtf8Name("Assets/Bad", ".png"), EscapedNonUtf8Name("Assets/Scenes/Broken", ".bscene"), EscapedNonUtf8Name("Assets/Folder"), EscapedNonUtf8Name("Assets/Clash", ".txt", 0), EscapedNonUtf8Name("Assets/Clash", ".txt", 1), EscapedNonUtf8Name("Assets/Low", ".txt", 2) };
+			Entries all = Folders();
+			all.merge(Images());
+			all.merge(Texts());
+			all.insert({ EscapedNonUtf8Name("Assets/Scenes/Broken", ".bscene"), EscapedNonUtf8Name("Assets/Orphan", ".png.meta"), EscapedNonUtf8Name("Assets/Art") });
+			return all;
 		}
 
 		bool Available = false;
@@ -124,6 +159,10 @@ TEST_SUITE("Unicode")
 		CHECK(Utf8SequenceLength("\xE8\xB3\x87", 0) == 3);
 		CHECK(Utf8SequenceLength("\xF4\x8F\xBF\xBF", 0) == 4); // U+10FFFF, the last there is.
 		CHECK(Utf8SequenceLength("a", 1) == 0);                // Past the end.
+		// Cut by the view, with the rest of a valid sequence still in memory behind it.
+		CHECK(Utf8SequenceLength(std::string_view("\xC3\xA9", 1), 0) == 0);
+		CHECK(Utf8SequenceLength(std::string_view("\xE8\xB3\x87", 2), 0) == 0);
+		CHECK(Utf8SequenceLength(std::string_view("\xF0\x9F\x8E\xAE", 3), 0) == 0);
 
 		// The first and last of each range of the standard's table of well-formed sequences.
 		for (const char* valid : { "\xC2\x80", "\xDF\xBF", "\xE0\xA0\x80", "\xE0\xBF\xBF", "\xE1\x80\x80", "\xEC\xBF\xBF", "\xED\x80\x80", "\xED\x9F\xBF", "\xEE\x80\x80", "\xEF\xBF\xBF", "\xF0\x90\x80\x80", "\xF0\xBF\xBF\xBF", "\xF1\x80\x80\x80", "\xF3\xBF\xBF\xBF", "\xF4\x80\x80\x80", "\xF4\x8F\xBF\xBF" })
@@ -164,24 +203,46 @@ TEST_SUITE("Unicode")
 		CHECK(TextEncoding::EscapeInvalidUtf8("\x80\x0A") == "\\x80\n");
 	}
 
-	TEST_CASE("Every pair of bytes follows the UTF-8 table, at run time")
+	TEST_CASE("Every lead and second byte follows the UTF-8 rules, at run time")
 	{
-		// Built at run time so no compiler can fold them, unlike the literals above; the table's rule is written differently
-		// on purpose.
+		// Built at run time so no compiler can fold them, unlike the literals above. The rule is decoded here, on purpose not as
+		// the table the code follows. Later bytes only need each side of the continuation range.
+		constexpr std::array<unsigned, 4> Tails = { 0x7F, 0x80, 0xBF, 0xC0 };
+		const auto continues = [](unsigned byte) { return (byte & 0xC0) == 0x80; };
+		const auto expectedLength = [&](unsigned lead, unsigned second, unsigned third, unsigned fourth) -> size_t {
+			if (lead < 0x80)
+				return 1;
+			if (lead >= 0xC2 && lead < 0xE0)
+				return continues(second) ? 2 : 0;
+			if (lead >= 0xE0 && lead < 0xF0 && continues(second) && continues(third))
+			{
+				const unsigned code = ((lead & 0x0F) << 12) | ((second & 0x3F) << 6) | (third & 0x3F);
+				return code >= 0x800 && (code < 0xD800 || code > 0xDFFF) ? 3 : 0;
+			}
+			if (lead >= 0xF0 && lead < 0xF8 && continues(second) && continues(third) && continues(fourth))
+			{
+				const unsigned code = ((lead & 0x07) << 18) | ((second & 0x3F) << 12) | ((third & 0x3F) << 6) | (fourth & 0x3F);
+				return code >= 0x10000 && code <= 0x10FFFF ? 4 : 0;
+			}
+			return 0;
+		};
+		std::string text(4, '\0');
 		std::string wrong;
 		for (unsigned lead = 0; lead < 256; lead++)
-			for (unsigned next = 0; next < 256; next++)
-			{
-				const std::string text = { static_cast<char>(lead), static_cast<char>(next) };
-				size_t expected = 0;
-				if (lead < 0x80)
-					expected = 1;
-				else if (lead >= 0xC2 && lead < 0xE0 && (next & 0xC0) == 0x80)
-					expected = 2;
-				if (TextEncoding::Utf8SequenceLength(text, 0) != expected && wrong.empty())
-					wrong = TextEncoding::EscapeInvalidUtf8(text) + " (bytes " + std::to_string(lead) + ", " + std::to_string(next) + ")";
-			}
-		CHECK_MESSAGE(wrong.empty(), "first wrong pair: ", wrong);
+			for (unsigned second = 0; second < 256; second++)
+				for (unsigned third : Tails)
+					for (unsigned fourth : Tails)
+					{
+						text[0] = static_cast<char>(lead);
+						text[1] = static_cast<char>(second);
+						text[2] = static_cast<char>(third);
+						text[3] = static_cast<char>(fourth);
+						const size_t expected = expectedLength(lead, second, third, fourth);
+						const bool valid = expected != 0 && TextEncoding::IsValidUtf8(std::string_view(text).substr(0, expected));
+						if ((TextEncoding::Utf8SequenceLength(text, 0) != expected || valid != (expected != 0)) && wrong.empty())
+							wrong = TextEncoding::EscapeInvalidUtf8(text);
+					}
+		CHECK_MESSAGE(wrong.empty(), "first wrong bytes: ", wrong);
 	}
 
 	TEST_CASE("UTF-16 surrogates count only in pairs")
@@ -236,9 +297,9 @@ TEST_SUITE("Unicode")
 		CHECK(skipped.empty());
 		CHECK(FileSystem::RecordNonUtf8Entry(entry(root / "Assets" / NonUtf8Name("Bad", ".png")), root, skipped));
 		CHECK(skipped == Entries{ EscapedNonUtf8Name("Assets/Bad", ".png") });
-		// A sidecar is its source, in either case and with or without one.
-		CHECK(FileSystem::RecordNonUtf8Entry(entry(root / "Assets" / NonUtf8Name("Bad", ".png.META")), root, skipped));
-		CHECK(skipped == Entries{ EscapedNonUtf8Name("Assets/Bad", ".png") });
+		// With no source beside it, a sidecar is only itself.
+		CHECK(FileSystem::RecordNonUtf8Entry(entry(root / "Assets" / NonUtf8Name("Bad", ".png.meta")), root, skipped));
+		CHECK(skipped == Entries{ EscapedNonUtf8Name("Assets/Bad", ".png"), EscapedNonUtf8Name("Assets/Bad", ".png.meta") });
 	}
 
 	TEST_CASE("The asset registry indexes what has a key and lists the rest")
@@ -254,8 +315,8 @@ TEST_SUITE("Unicode")
 		// inside a skipped folder.
 		CHECK(registry.GetProblems().empty());
 		CHECK(registry.GetOrphans().empty());
-		CHECK(registry.Find(UUID(1234567)).empty());
-		CHECK(registry.Find(UUID(7654321)).empty());
+		for (const uint64_t id : { 1234567, 2345678, 3456789, 7654321 })
+			CHECK(registry.Find(UUID(id)).empty());
 		// A keyed file still gets its identity beside them.
 		CHECK(registry.Ensure("Assets/Good.png", error).has_value());
 		CHECK(registry.Ensure(RealReplacementKey, error).has_value());
@@ -278,16 +339,17 @@ TEST_SUITE("Unicode")
 		std::string error;
 		const std::filesystem::path assets = project.GetAssets();
 
-		// The source alone: its old sidecar stays skipped and still names the problem, and the file is a new asset.
+		// The source alone: its old sidecar is now an orphan that names itself, and the file is a new asset.
 		Rename(assets / NonUtf8Name("Bad", ".png"), assets / "Fixed.png");
 		REQUIRE_MESSAGE(registry.Refresh(error), error);
-		CHECK(registry.GetSkipped().contains(EscapedNonUtf8Name("Assets/Bad", ".png")));
+		CHECK(registry.GetSkipped().contains(EscapedNonUtf8Name("Assets/Bad", ".png.meta")));
+		CHECK_FALSE(registry.GetSkipped().contains(EscapedNonUtf8Name("Assets/Bad", ".png")));
 		CHECK(registry.Find(UUID(1234567)).empty());
 
 		// Then the sidecar: the UUID every reference holds is back, and nothing is left to report.
 		Rename(assets / NonUtf8Name("Bad", ".png.meta"), assets / "Fixed.png.meta");
 		REQUIRE_MESSAGE(registry.Refresh(error), error);
-		CHECK_FALSE(registry.GetSkipped().contains(EscapedNonUtf8Name("Assets/Bad", ".png")));
+		CHECK_FALSE(registry.GetSkipped().contains(EscapedNonUtf8Name("Assets/Bad", ".png.meta")));
 		CHECK(registry.Find(UUID(1234567)) == "Assets/Fixed.png");
 
 		// A folder's contents come back the same way.
@@ -351,24 +413,52 @@ TEST_SUITE("Unicode")
 	}
 
 #if !defined(_WIN32)
+	namespace {
+
+		// Locks a folder for its scope, so that a failed check cannot leave it behind.
+		class LockedFolder
+		{
+		public:
+			explicit LockedFolder(std::filesystem::path path)
+				: m_Path(std::move(path))
+			{
+				std::filesystem::permissions(m_Path, std::filesystem::perms::none);
+			}
+			~LockedFolder() { Unlock(); }
+			LockedFolder(const LockedFolder&) = delete;
+			LockedFolder& operator=(const LockedFolder&) = delete;
+
+			void Unlock() const
+			{
+				std::error_code error;
+				std::filesystem::permissions(m_Path, std::filesystem::perms::owner_all, error);
+			}
+			// Running as root reads it anyway: nothing to test then.
+			bool Holds() const
+			{
+				std::error_code probe;
+				const std::filesystem::directory_iterator unreadable(m_Path, probe);
+				if (!probe)
+					MESSAGE("a locked folder can be read here (root?), so the test has nothing to do");
+				return static_cast<bool>(probe);
+			}
+
+		private:
+			std::filesystem::path m_Path;
+		};
+
+	}
+
 	TEST_CASE("A scan that cannot finish neither reports nor forgets skipped names")
 	{
 		NonUtf8Project project("NonUtf8PartialScan");
 		if (!project.Available)
 			return;
-		const std::filesystem::path root = project.GetTemp().GetDirectory();
-		const std::filesystem::path locked = project.GetAssets() / "Scenes";
 		FileWatcher watcher;
-		watcher.Watch(root);
-		std::filesystem::permissions(locked, std::filesystem::perms::none);
-		// Running as root reads it anyway: nothing to test then.
-		std::error_code probe;
-		std::filesystem::directory_iterator unreadable(locked, probe);
-		if (!probe)
-		{
-			std::filesystem::permissions(locked, std::filesystem::perms::owner_all);
+		watcher.Watch(project.GetTemp().GetDirectory());
+		LockedFolder locked(project.GetAssets() / "Scenes");
+		if (!locked.Holds())
 			return;
-		}
 		const uint64_t since = Log::GetHistory().GetTotalCount();
 		const std::string later = EscapedNonUtf8Name("Assets/Later", ".png");
 		Write(project.GetAssets() / NonUtf8Name("Later", ".png"), "image");
@@ -378,11 +468,30 @@ TEST_SUITE("Unicode")
 		CHECK(watcher.GetSkipped() == NonUtf8Project::Expected());
 		CHECK(CountMessages(since, later) == 0);
 
-		std::filesystem::permissions(locked, std::filesystem::perms::owner_all);
+		locked.Unlock();
 		CHECK(watcher.Refresh().empty());
 		CHECK(watcher.GetLastError().empty());
 		CHECK(watcher.GetSkipped().contains(later));
 		CHECK(CountMessages(since, later) == 1);
+	}
+
+	TEST_CASE("A late baseline reports what it skipped, as the first scan the watcher could read")
+	{
+		NonUtf8Project project("NonUtf8LateBaseline");
+		if (!project.Available)
+			return;
+		LockedFolder locked(project.GetAssets() / "Scenes");
+		if (!locked.Holds())
+			return;
+		const uint64_t since = Log::GetHistory().GetTotalCount();
+		FileWatcher watcher;
+		watcher.Watch(project.GetTemp().GetDirectory());
+		CHECK(watcher.GetSkipped().empty());
+		locked.Unlock();
+		CHECK(watcher.Refresh().empty());
+		CHECK(watcher.TakeLateBaselineNotice());
+		CHECK(watcher.GetSkipped() == NonUtf8Project::Expected());
+		CHECK(CountMessages(since, FileSystem::NonUtf8NameProblem) == NonUtf8Project::Expected().size());
 	}
 #endif
 
@@ -398,13 +507,26 @@ TEST_SUITE("Unicode")
 		CHECK(all == std::vector<std::string>{ "Assets/Good.png", RealReplacementKey, "Assets/Scenes/Main.bscene" });
 		CHECK(skipped == NonUtf8Project::Expected());
 
-		// The folder could hold anything; the image and the text files were not asked for.
+		// The folders could hold anything; what is not of the types asked for is not reported, an orphan sidecar included, and
+		// a file's type is its extension in any case.
+		Write(project.GetAssets() / NonUtf8Name("Shout", ".PNG"), "image");
 		CHECK(AssetManager::ListAssets({ ".bscene" }, &error, &skipped) == std::vector<std::string>{ "Assets/Scenes/Main.bscene" });
-		CHECK(skipped == Entries{ EscapedNonUtf8Name("Assets/Folder"), EscapedNonUtf8Name("Assets/Scenes/Broken", ".bscene") });
+		CHECK(error.empty());
+		Entries expected = NonUtf8Project::Folders();
+		expected.insert(EscapedNonUtf8Name("Assets/Scenes/Broken", ".bscene"));
+		CHECK(skipped == expected);
+
 		CHECK(AssetManager::ListAssets({ ".txt" }, &error, &skipped).empty());
-		CHECK(skipped == Entries{ EscapedNonUtf8Name("Assets/Folder"), EscapedNonUtf8Name("Assets/Clash", ".txt", 0), EscapedNonUtf8Name("Assets/Clash", ".txt", 1), EscapedNonUtf8Name("Assets/Low", ".txt", 2) });
+		CHECK(error.empty());
+		expected = NonUtf8Project::Folders();
+		expected.merge(NonUtf8Project::Texts());
+		CHECK(skipped == expected);
+
 		CHECK(AssetManager::ListAssets({ ".png" }, &error, &skipped).size() == 2);
-		CHECK(skipped == Entries{ EscapedNonUtf8Name("Assets/Folder"), EscapedNonUtf8Name("Assets/Bad", ".png") });
+		expected = NonUtf8Project::Folders();
+		expected.merge(NonUtf8Project::Images());
+		expected.insert(EscapedNonUtf8Name("Assets/Shout", ".PNG"));
+		CHECK(skipped == expected);
 		// The list can be had without them.
 		CHECK(AssetManager::ListAssets({ ".bscene" }).size() == 1);
 
@@ -423,6 +545,8 @@ TEST_SUITE("Unicode")
 		if (!project.Available)
 			return;
 		project.GetTemp().WriteFile("Assets/Good.png.meta", R"({"Version":1,"UUID":"99"})");
+		// Sidecars are files: a folder of that name is shown.
+		project.GetTemp().WriteFile("Assets/Shown.meta/Inside.png", "image");
 		const AssetManager::FolderListing listing = AssetManager::ListFolder(project.GetAssets());
 		std::vector<std::string> names;
 		names.reserve(listing.Entries.size());
@@ -430,12 +554,17 @@ TEST_SUITE("Unicode")
 			names.push_back(FileSystem::PathToUtf8(entry.path().filename()));
 		CHECK(listing.Error.empty());
 		// After the folders every project starts with.
-		REQUIRE(names.size() >= 3);
-		CHECK(std::is_sorted(names.begin(), names.end() - 2));
-		CHECK(std::find(names.begin(), names.end() - 2, "Scenes") != names.end() - 2);
-		CHECK(std::vector<std::string>(names.end() - 2, names.end()) == std::vector<std::string>{ "Good.png", "Real\xEF\xBF\xBD.png" });
+		REQUIRE(names.size() >= 4);
+		const auto files = names.end() - 2;
+		CHECK(std::is_sorted(names.begin(), files));
+		CHECK(std::find(names.begin(), files, "Scenes") != files);
+		CHECK(std::find(names.begin(), files, "Shown.meta") != files);
+		CHECK(std::vector<std::string>(files, names.end()) == std::vector<std::string>{ "Good.png", "Real\xEF\xBF\xBD.png" });
 		// Project-relative, as every other report, and only what this folder holds.
-		CHECK(listing.Skipped == Entries{ EscapedNonUtf8Name("Assets/Bad", ".png"), EscapedNonUtf8Name("Assets/Folder"), EscapedNonUtf8Name("Assets/Clash", ".txt", 0), EscapedNonUtf8Name("Assets/Clash", ".txt", 1), EscapedNonUtf8Name("Assets/Low", ".txt", 2) });
+		Entries expected = NonUtf8Project::Expected();
+		expected.erase(EscapedNonUtf8Name("Assets/Scenes/Broken", ".bscene"));
+		CHECK(listing.Skipped == expected);
+		CHECK(AssetManager::ListFolder(project.GetAssets() / "Scenes").Skipped == Entries{ EscapedNonUtf8Name("Assets/Scenes/Broken", ".bscene") });
 
 		const AssetManager::FolderListing missing = AssetManager::ListFolder(project.GetAssets() / "Nothing");
 		CHECK(missing.Entries.empty());
@@ -480,7 +609,7 @@ TEST_SUITE("Unicode")
 			}
 		Entries expected;
 		for (const std::string& entry : NonUtf8Project::Expected())
-			expected.insert("'" + entry + "': " + FileSystem::NonUtf8NameProblem);
+			expected.insert(SkippedWarning(entry));
 		CHECK(warned == expected);
 		// Inside the folder, the broken document would have been an error.
 		CHECK_MESSAGE(report.IsValid(), "errors: ", report.GetErrorCount());
@@ -541,7 +670,7 @@ TEST_SUITE("Unicode")
 		CommandRegistry registry;
 		AutomationSession session;
 		const json result = Run(registry, session, "project.export", { { "output", FileSystem::PathToUtf8(output) } });
-		CHECK(result["validation"]["warnings"].get<size_t>() >= NonUtf8Project::Expected().size());
+		CHECK(result.at("validation").at("warnings").get<size_t>() >= NonUtf8Project::Expected().size());
 	}
 
 	TEST_CASE("Links with such names are skipped before anything follows them")
@@ -555,6 +684,8 @@ TEST_SUITE("Unicode")
 		std::filesystem::create_directory_symlink(assets / "Scenes", assets / NonUtf8Name("LinkedFolder"), linkError);
 		if (linkError)
 		{
+			// A developer's Windows may not allow links; CI must, or this case would quietly stop running there.
+			REQUIRE_MESSAGE(!Platform::GetEnvVar("CI"), "links are needed here: ", FileSystem::DescribeError(linkError));
 			WARN_MESSAGE(false, "Symlink creation unavailable: ", FileSystem::DescribeError(linkError));
 			return;
 		}
@@ -562,19 +693,25 @@ TEST_SUITE("Unicode")
 		REQUIRE_FALSE(linkError);
 		std::filesystem::create_symlink(assets / "Nothing.png", assets / NonUtf8Name("Dangling", ".png"), linkError);
 		REQUIRE_FALSE(linkError);
+		// A link to itself has a type no call can read.
+		std::filesystem::create_symlink(assets / NonUtf8Name("Loop", ".png"), assets / NonUtf8Name("Loop", ".png"), linkError);
+		REQUIRE_FALSE(linkError);
 
 		Entries expected = NonUtf8Project::Expected();
-		for (const std::string& link : { EscapedNonUtf8Name("Assets/LinkedFolder"), EscapedNonUtf8Name("Assets/Linked", ".png"), EscapedNonUtf8Name("Assets/Dangling", ".png") })
-			expected.insert(link);
+		expected.insert({ EscapedNonUtf8Name("Assets/LinkedFolder"), EscapedNonUtf8Name("Assets/Linked", ".png"), EscapedNonUtf8Name("Assets/Dangling", ".png"), EscapedNonUtf8Name("Assets/Loop", ".png") });
 		CHECK(FileWatcher::ScanDirectory(temp.GetDirectory(), "Assets").Skipped == expected);
 		AssetRegistry registry(temp.GetDirectory());
 		std::string error;
 		REQUIRE_MESSAGE(registry.Refresh(error), error);
 		CHECK(registry.GetSkipped() == expected);
-		// A link to a folder may hold anything; a link to nothing is a file of its name's type.
+		// A link to a folder, or one whose type cannot be read, may hold anything; a link to nothing is a file of its name's
+		// type.
 		Entries skipped;
 		CHECK(AssetManager::ListAssets({ ".lua" }, &error, &skipped).empty());
-		CHECK(skipped == Entries{ EscapedNonUtf8Name("Assets/Folder"), EscapedNonUtf8Name("Assets/LinkedFolder") });
+		CHECK(error.empty());
+		Entries folders = NonUtf8Project::Folders();
+		folders.insert({ EscapedNonUtf8Name("Assets/LinkedFolder"), EscapedNonUtf8Name("Assets/Loop", ".png") });
+		CHECK(skipped == folders);
 
 		// A linked folder or a broken link would stop an archive, were they not skipped first.
 		temp.WriteFile("FakeRuntime", "binary");
@@ -586,6 +723,54 @@ TEST_SUITE("Unicode")
 		options.Archive = true;
 		const ExportResult result = Exporter::Export(*Project::GetActive(), output.GetPath() / "Build", options);
 		CHECK_MESSAGE(result.Success, result.Error);
+		// A folder copy follows links, whatever their names, so a broken one stops it.
+		options.Archive = false;
+		CHECK_FALSE(Exporter::Export(*Project::GetActive(), output.GetPath() / "Build", options).Success);
+	}
+
+	TEST_CASE("Links to nothing do not stop an asset list, and an unreadable one does not stop a folder listing")
+	{
+		BasaltTest::TempProject temp("BrokenLinkLists");
+		REQUIRE(temp.IsValid());
+		const std::filesystem::path assets = temp.GetDirectory() / "Assets";
+		temp.WriteFile("Assets/Good.png", "image");
+		std::error_code linkError;
+		std::filesystem::create_symlink(assets / "Nothing.png", assets / "Dangling.png", linkError);
+		if (linkError)
+		{
+			REQUIRE_MESSAGE(!Platform::GetEnvVar("CI"), "links are needed here: ", FileSystem::DescribeError(linkError));
+			WARN_MESSAGE(false, "Symlink creation unavailable: ", FileSystem::DescribeError(linkError));
+			return;
+		}
+		std::string error;
+		CHECK(AssetManager::ListAssets({ ".png" }, &error) == std::vector<std::string>{ "Assets/Good.png" });
+		CHECK(error.empty());
+
+		// A link to itself has a type no call can read: an asset list stops there and says where, and a folder listing shows it.
+		std::filesystem::create_symlink(assets / "Loop.png", assets / "Loop.png", linkError);
+		REQUIRE_FALSE(linkError);
+		const std::vector<std::string> partial = AssetManager::ListAssets({ ".png" }, &error);
+		CHECK(std::find(partial.begin(), partial.end(), "Assets/Loop.png") == partial.end());
+		CHECK(Contains(error, "Assets/Loop.png"));
+		AssetManager::FolderListing listing;
+		REQUIRE_NOTHROW(listing = AssetManager::ListFolder(assets));
+		CHECK(listing.Error.empty());
+		CHECK(std::any_of(listing.Entries.begin(), listing.Entries.end(), [](const std::filesystem::directory_entry& entry) { return entry.path().filename() == "Loop.png"; }));
+	}
+
+	TEST_CASE("asset.list says when it could not list everything")
+	{
+		BasaltTest::TempProject temp("AssetListNoFolder");
+		REQUIRE(temp.IsValid());
+		CommandRegistry registry;
+		AutomationSession session;
+		std::error_code error;
+		std::filesystem::remove_all(temp.GetDirectory() / "Assets", error);
+		REQUIRE_FALSE(error);
+		const json list = Run(registry, session, "asset.list");
+		CHECK(list.at("assets").empty());
+		REQUIRE(list.contains("warnings"));
+		CHECK(Contains(list.at("warnings").at(0).get<std::string>(), "cannot scan Assets/"));
 	}
 
 	TEST_CASE("A project under a folder with such a name keeps its keys")
@@ -625,13 +810,16 @@ TEST_SUITE("Unicode")
 		CHECK(list["assets"] == json::array({ "Assets/Good.png", RealReplacementKey, "Assets/Scenes/Main.bscene" }));
 		std::vector<std::string> expected;
 		for (const std::string& entry : NonUtf8Project::Expected())
-			expected.push_back("'" + entry + "': " + FileSystem::NonUtf8NameProblem);
+			expected.push_back(SkippedWarning(entry));
 		CHECK(warnings(list) == expected);
-		// Of a type nothing skipped has, only the folder is news: it could hold anything.
-		CHECK(warnings(Run(registry, session, "asset.list", { { "extensions", json::array({ ".md" }) } })) == std::vector<std::string>{ "'" + EscapedNonUtf8Name("Assets/Folder") + "': " + FileSystem::NonUtf8NameProblem });
+		// Of a type nothing skipped has, only the folders are news: they could hold anything.
+		std::vector<std::string> folders;
+		for (const std::string& entry : NonUtf8Project::Folders())
+			folders.push_back(SkippedWarning(entry));
+		CHECK(warnings(Run(registry, session, "asset.list", { { "extensions", json::array({ ".md" }) } })) == folders);
 
 		json refresh = Run(registry, session, "asset.refresh");
-		CHECK(refresh["changed"].empty());
+		CHECK(refresh.at("changed").empty());
 		CHECK(warnings(refresh) == expected);
 
 		// Refreshes follow what is there now.
@@ -644,8 +832,10 @@ TEST_SUITE("Unicode")
 
 		const json moved = Run(registry, session, "asset.move", { { "from", "Assets/Good.png" }, { "to", "Assets/Moved.png" } });
 		CHECK(FileSystem::Exists(project.GetTemp().GetDirectory() / "Assets/Moved.png"));
+		Entries documents = NonUtf8Project::Folders();
+		documents.insert(EscapedNonUtf8Name("Assets/Scenes/Broken", ".bscene"));
 		std::vector<std::string> expectedMove;
-		for (const Entries documents = { EscapedNonUtf8Name("Assets/Folder"), EscapedNonUtf8Name("Assets/Scenes/Broken", ".bscene") }; const std::string& entry : documents)
+		for (const std::string& entry : documents)
 			expectedMove.push_back("'" + entry + "' was not checked for references to this asset: " + FileSystem::NonUtf8NameProblem);
 		CHECK(warnings(moved) == expectedMove);
 	}

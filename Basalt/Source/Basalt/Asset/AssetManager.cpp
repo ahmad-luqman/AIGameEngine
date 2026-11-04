@@ -740,21 +740,26 @@ namespace Basalt {
 		}
 
 		const auto wanted = [&](const std::string& extension) { return extensions.empty() || std::find(extensions.begin(), extensions.end(), extension) != extensions.end(); };
-		std::set<std::string> entry;
+		const std::filesystem::path projectDirectory = root.parent_path();
+		std::filesystem::path last = root;
 		for (auto it = std::filesystem::recursive_directory_iterator(root, error); !error && it != std::filesystem::recursive_directory_iterator(); it.increment(error))
 		{
-			if (FileSystem::SkipNonUtf8Entry(it, root.parent_path(), entry))
+			last = it->path();
+			std::set<std::string> skippedEntry;
+			if (FileSystem::SkipNonUtf8Entry(it, projectDirectory, skippedEntry))
 			{
-				// A folder may hold files of any type, and an entry that cannot be told from one counts as one (a link to
-				// nothing can: it is no folder).
+				// A folder may hold files of any type, and an entry that cannot be told from one counts as one (a link to nothing
+				// is told apart: it is no folder).
 				std::error_code folderError;
 				const bool folder = it->is_directory(folderError) || (folderError && folderError != std::errc::no_such_file_or_directory);
 				if (outSkipped && (folder || wanted(FileSystem::GetLowercaseExtension(it->path()))))
-					outSkipped->merge(entry);
-				entry.clear();
+					outSkipped->merge(skippedEntry);
 				continue;
 			}
 			const bool regular = it->is_regular_file(error);
+			// A link to nothing is no file, and no reason to stop.
+			if (error == std::errc::no_such_file_or_directory)
+				error.clear();
 			if (error)
 				break;
 			if (!regular || FileSystem::GetLowercaseExtension(it->path()) == ".meta")
@@ -764,7 +769,7 @@ namespace Basalt {
 				result.push_back(path);
 		}
 		if (error && outError)
-			*outError = "cannot scan all asset files: " + FileSystem::DescribeError(error);
+			*outError = "cannot scan all asset files, stopping at '" + FileSystem::DescribePath(last.lexically_relative(projectDirectory)) + "': " + FileSystem::DescribeError(error);
 		std::sort(result.begin(), result.end());
 		return result;
 	}
@@ -773,20 +778,25 @@ namespace Basalt {
 	{
 		FolderListing listing;
 		const std::filesystem::path projectDirectory = Project::ResolvePath(Project::AssetDirectoryName).parent_path();
+		std::vector<std::filesystem::directory_entry> files;
 		std::error_code error;
 		for (auto it = std::filesystem::directory_iterator(folder, error); !error && it != std::filesystem::directory_iterator(); it.increment(error))
-			if (!FileSystem::RecordNonUtf8Entry(*it, projectDirectory, listing.Skipped) && FileSystem::GetLowercaseExtension(it->path()) != ".meta")
+		{
+			if (FileSystem::RecordNonUtf8Entry(*it, projectDirectory, listing.Skipped))
+				continue;
+			// Read once per entry: a link's target may change while the sort compares it.
+			std::error_code typeError;
+			if (it->is_directory(typeError))
 				listing.Entries.push_back(*it);
+			else if (FileSystem::GetLowercaseExtension(it->path()) != ".meta")
+				files.push_back(*it);
+		}
 		if (error)
 			listing.Error = "cannot list all of this folder: " + FileSystem::DescribeError(error);
-		std::sort(listing.Entries.begin(), listing.Entries.end(), [](const auto& a, const auto& b) {
-			std::error_code ignored;
-			const bool folderA = a.is_directory(ignored);
-			const bool folderB = b.is_directory(ignored);
-			if (folderA != folderB)
-				return folderA;
-			return a.path().filename() < b.path().filename();
-		});
+		const auto byName = [](const std::filesystem::directory_entry& a, const std::filesystem::directory_entry& b) { return a.path().filename() < b.path().filename(); };
+		std::sort(listing.Entries.begin(), listing.Entries.end(), byName);
+		std::sort(files.begin(), files.end(), byName);
+		listing.Entries.insert(listing.Entries.end(), files.begin(), files.end());
 		return listing;
 	}
 
