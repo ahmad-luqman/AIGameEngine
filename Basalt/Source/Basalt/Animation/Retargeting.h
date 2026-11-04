@@ -21,11 +21,23 @@ namespace Basalt {
 	// "joint map", "name", "humanoid" (or "none"), for diagnostics.
 	const char* ToString(RetargetMatch match);
 
-	// Model-space rest positions and rotations per node of one skeleton.
+	// Model-space rest positions and rotations per node of one skeleton. With a reference pose (RetargetReferences) the
+	// rotations are the reference's, the positions still the rest pose's.
 	struct RestPose
 	{
 		std::vector<glm::vec3> Positions;
 		std::vector<glm::quat> Rotations;
+	};
+
+	// Poses that stand in for a skeleton's rest orientations when the two skeletons were authored in different rest styles
+	// (AnimationClipLibrary::ReferenceClip, ModelReferenceClip): a clip of that skeleton's model sampled at a time. Null
+	// clips use the rest pose. The clips must belong to the models BuildMap is given.
+	struct RetargetReferences
+	{
+		const AnimationClip* Target = nullptr;
+		float TargetTime = 0;
+		const AnimationClip* Source = nullptr;
+		float SourceTime = 0;
 	};
 
 	// How the nodes of a clip library's skeleton (the source) drive an Animator's model (the target), with both rest
@@ -42,7 +54,7 @@ namespace Basalt {
 		// Target over source leg length (the root's rest height above the lowest mapped joint), which scales the root's
 		// displacement; 1 when either skeleton has no such height (BuildMap warns when the root is the humanoid hips).
 		float RootScale = 1.0f;
-		// Each skeleton's rest pose; both empty when either is not finite.
+		// Each skeleton's rest pose (its orientations from its reference pose, if any); both empty when either is not finite.
 		RestPose TargetRest, SourceRest;
 
 		size_t MappedCount() const;
@@ -62,9 +74,11 @@ namespace Basalt {
 
 		// Matches the skeletons over all their nodes: the explicit pairs first, then equal names after StripNamespace,
 		// then equal humanoid bones; each source and target node is used once. outWarnings gets explicit pairs that name
-		// a missing joint, are half filled or reuse a paired joint, paired joints given as matrices, rest poses that are
-		// not finite or have joints whose rest transform is not affine, and humanoid hips whose leg length cannot be measured.
-		RetargetMap BuildMap(const MeshSource& target, const MeshSource& source, const std::vector<AnimationRetargetJoint>& joints, std::vector<std::string>& outWarnings);
+		// a missing joint, are half filled or reuse a paired joint, paired joints given as matrices, rest (or reference)
+		// poses that are not finite or have joints whose transform is not affine, and humanoid hips whose leg length cannot
+		// be measured. `references` replace the rest orientations the joints turn from (sampled as playback samples, so a
+		// time past the clip's end takes its last pose).
+		RetargetMap BuildMap(const MeshSource& target, const MeshSource& source, const std::vector<AnimationRetargetJoint>& joints, std::vector<std::string>& outWarnings, const RetargetReferences& references = {});
 
 		// Whether baking `clip` fits MaxClipBakedFloats; the reason otherwise. Cheap (no allocation) for clips well inside
 		// it.

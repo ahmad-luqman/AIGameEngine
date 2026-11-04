@@ -10,6 +10,7 @@
 #include "Basalt/Automation/AutomationEvents.h"
 #include "Basalt/Automation/AutomationSession.h"
 #include "Basalt/Animation/AnimationGraph.h"
+#include "Basalt/Animation/AnimationJointMap.h"
 #include "Basalt/Animation/AnimationMask.h"
 #include "Basalt/Animation/PropertyAnimation.h"
 #include "Basalt/Automation/CommandRegistry.h"
@@ -1248,7 +1249,7 @@ namespace Basalt {
 				};
 			});
 
-			Add(registry, "animator.retarget", "How an Animator's named ClipLibraries map onto its model, resolved as playback resolves them but without baking (a listed clip can still be left out when it fails to bake or passes the 256 MiB per-Animator budget; the log reports it): per library its index in ClipLibraries, why it adds no clips (error), the joint pairs (target, source, matched by joint map, name or humanoid bone), the model's humanoid bones left unmatched, the root pair with its leg-length scale, the clips it adds, the clips earlier clips hide, and warnings. Read-only; works in edit mode.", Schema::Object({ { "entity", Schema::Entity("ID or name of an entity with an Animator") } }, { "entity" }), [](AutomationSession& session, const json& params) {
+			Add(registry, "animator.retarget", "How an Animator's named ClipLibraries map onto its model, resolved as playback resolves them but without baking (a listed clip can still be left out when it fails to bake or passes the 256 MiB per-Animator budget; the log reports it): per library its index in ClipLibraries, why it adds no clips (error: also a joint map that does not load or a reference clip that is not there), its joint map file (jointMap) and reference poses (reference, modelReference: {clip, time}, or null for the rest pose), the joint pairs (target, source, matched by joint map (Joints or the jointMap file), name or humanoid bone), the model's humanoid bones left unmatched, the root pair with its leg-length scale, the clips it adds, the clips earlier clips hide, and warnings. Read-only; works in edit mode.", Schema::Object({ { "entity", Schema::Entity("ID or name of an entity with an Animator") } }, { "entity" }), [](AutomationSession& session, const json& params) {
 				Entity entity = RequireEntity(session, params);
 				const auto* animator = entity.TryGetComponent<AnimatorComponent>();
 				if (!animator)
@@ -1274,6 +1275,9 @@ namespace Basalt {
 						{ "index", library.Index },
 						{ "mesh", library.Entry.Mesh },
 						{ "error", library.Error.empty() ? json() : json(library.Error) },
+						{ "jointMap", library.Entry.JointMap.empty() ? json() : json(library.Entry.JointMap) },
+						{ "reference", library.Entry.ReferenceClip.empty() ? json() : json{ { "clip", library.Entry.ReferenceClip }, { "time", library.Entry.ReferenceTime } } },
+						{ "modelReference", library.Entry.ModelReferenceClip.empty() ? json() : json{ { "clip", library.Entry.ModelReferenceClip }, { "time", library.Entry.ModelReferenceTime } } },
 						{ "joints", std::move(joints) },
 						{ "unmatchedHumanoidBones", std::move(unmatched) },
 						{ "root", rooted ? json{ { "target", model->Nodes[library.Map.TargetRoot].Name }, { "source", library.Source->Nodes[library.Map.SourceRoot].Name }, { "scale", library.Map.RootScale } } : json() },
@@ -1841,7 +1845,7 @@ namespace Basalt {
 				return result;
 			});
 
-			Add(registry, "asset.write", "Writes a text asset (script, prefab, scene, animation graph or mask, material...) to a project-relative path and reloads it. A .banimgraph, .banimmask or .bmaterial is validated before replacing the file; a material's texture problems (missing, wrong letter case, unresolved, not a texture, outside Assets/, an embedded image the model lacks) are reported in 'warnings', as project.validate reports them. A script written while the game runs (Play, not Simulate) is hot reloaded (see 'scripts'). A .bprefab merges into the edit scene's instances ('prefabInstances'; instances that cannot merge are 'warnings').", Schema::Object({ { "path", Schema::String("string", true) }, { "content", Schema::String("string") } }, { "path", "content" }), [](AutomationSession& session, const json& params) {
+			Add(registry, "asset.write", "Writes a text asset (script, prefab, scene, animation graph, mask or joint map, material...) to a project-relative path and reloads it. A .banimgraph, .banimmask, .bjointmap or .bmaterial is validated before replacing the file; a material's texture problems (missing, wrong letter case, unresolved, not a texture, outside Assets/, an embedded image the model lacks) are reported in 'warnings', as project.validate reports them. A script written while the game runs (Play, not Simulate) is hot reloaded (see 'scripts'). A .bprefab merges into the edit scene's instances ('prefabInstances'; instances that cannot merge are 'warnings').", Schema::Object({ { "path", Schema::String("string", true) }, { "content", Schema::String("string") } }, { "path", "content" }), [](AutomationSession& session, const json& params) {
 				RequireProject();
 				const std::string path = ProjectRelative(RequireString(params, "path"));
 				const json& content = Require(params, "content");
@@ -1853,6 +1857,8 @@ namespace Basalt {
 					throw CommandError("invalid animation graph: " + parseError);
 				if (AnimationMask::IsMaskFile(path) && !AnimationMask::FromText(text, parseError))
 					throw CommandError("invalid animation mask: " + parseError);
+				if (AnimationJointMap::IsJointMapFile(path) && !AnimationJointMap::FromText(text, parseError))
+					throw CommandError("invalid animation joint map: " + parseError);
 				std::vector<std::string> warnings;
 				if (MaterialAsset::IsMaterialFile(path))
 				{

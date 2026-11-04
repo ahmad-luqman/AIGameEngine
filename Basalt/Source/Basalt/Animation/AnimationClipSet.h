@@ -12,6 +12,8 @@
 
 namespace Basalt {
 
+	struct AnimationJointMap;
+
 	// The clips an Animator plays, by index: its model's own clips, then each clip library's clips retargeted onto the
 	// model (Retargeting::BakeClip) whose names the model and earlier libraries' baked clips do not use yet. Immutable
 	// once built; Animators with the same model and clip libraries share one. Load and Plan give editors and tools the
@@ -28,8 +30,11 @@ namespace Basalt {
 			size_t Index = 0; // Position in ClipLibraries (unnamed entries are skipped).
 			AnimationClipLibrary Entry;
 			Ref<MeshSource> Source; // Null when it failed to load.
-			// Why the library cannot add any clip (it does not load, has no clips, matches no joint or has no finite
-			// rest pose); empty when it may.
+			// Entry.JointMap loaded; null when it names none or failed to load (JointMapError says why).
+			Ref<const AnimationJointMap> JointMap;
+			std::string JointMapError;
+			// Why the library cannot add any clip (it or its joint map does not load, a reference clip is missing, it has no
+			// clips, matches no joint or has no finite rest or reference pose); empty when it may.
 			std::string Error;
 			RetargetMap Map;
 			// Joint map problems (Retargeting::BuildMap) and clips left out: past the bake budget, moving no paired
@@ -41,10 +46,16 @@ namespace Basalt {
 			// A clip that Clips names.
 			const AnimationClip& SourceClip(const std::string& name) const;
 		};
-		// Loads a library by key, or returns null with the reason in its second argument.
-		using Resolver = std::function<Ref<MeshSource>(const std::string&, std::string&)>;
+		// Load a library model, or its joint map, by key; null with the reason in the second argument.
+		struct Resolver
+		{
+			std::function<Ref<MeshSource>(const std::string&, std::string&)> Mesh;
+			std::function<Ref<const AnimationJointMap>(const std::string&, std::string&)> JointMap;
+		};
+		// Loads through AssetManager (main thread).
+		static Resolver AssetResolver();
 
-		// Loads each named ClipLibraries entry through AssetManager, or `resolve` (main thread).
+		// Loads each named ClipLibraries entry and its joint map through AssetManager, or `resolve` (main thread).
 		static std::vector<Library> Load(const AnimatorComponent& animator);
 		static std::vector<Library> Load(const AnimatorComponent& animator, const Resolver& resolve);
 		// Matches each loaded library to the model and lists the clips it would add, without baking (and so without
@@ -66,12 +77,12 @@ namespace Basalt {
 		}
 		const Ref<MeshSource>& GetModel() const { return m_Model; }
 		const std::vector<Library>& GetLibraries() const { return m_Libraries; }
-		// Whether this set was built for `model` and the Animator's named ClipLibraries entries, loaded as `resolve` loads
-		// them now (a reloaded library is a new source).
+		// Whether this set was built for `model` and the Animator's named ClipLibraries entries, loaded (with their joint maps)
+		// as `resolve` loads them now (a reloaded library or joint map is a new one).
 		bool Matches(const Ref<MeshSource>& model, const AnimatorComponent& animator, const Resolver& resolve) const;
 
 	private:
-		// Resets a library's results and fills its Map and Error.
+		// Resets a library's results and fills its Map and Error (from its loaded joint map and reference clips).
 		static void Match(const MeshSource& model, Library& library);
 
 		Ref<MeshSource> m_Model;

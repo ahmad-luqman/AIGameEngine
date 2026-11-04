@@ -6,6 +6,8 @@
 
 #include <Basalt/Animation/AnimatedModel.h>
 #include <Basalt/Animation/AnimationClipSet.h>
+#include <Basalt/Animation/AnimationJointMap.h>
+#include <Basalt/Animation/AnimationSystem.h>
 #include <Basalt/Animation/Retargeting.h>
 #include <Basalt/Asset/Thumbnails.h>
 #include <Basalt/Core/JsonUtils.h>
@@ -939,6 +941,226 @@ TEST_SUITE("Retargeting")
 		REQUIRE(EvaluateAnimation(*rigs.Target, &(*set)[set->Find("Wave")], 0.5f, first));
 		REQUIRE(EvaluateAnimation(*rigs.Target, &(*set)[set->Find("CopyWave")], 0.5f, second));
 		CHECK_FALSE(AnimationTest::NearPose({ first[clavicle] }, { second[clavicle] }));
+	}
+
+	TEST_CASE("Reference poses stand in for the rest orientations of skeletons authored in another rest style")
+	{
+		const Rigs rigs;
+		const AnimationClip& wave = Clip(*rigs.Source, "Wave");
+		const uint32_t upperArm = Node(*rigs.Target, "upperarm_l"), lowerArm = Node(*rigs.Target, "lowerarm_l");
+		// The same arm poses on the original target, baked from the original library.
+		const AnimationClip expected = Bake(*rigs.Target, *rigs.Source, wave);
+		const auto armRotations = [&](const MeshSource& model, const AnimationClip& clip, float time) {
+			std::vector<glm::mat4> globals;
+			REQUIRE(EvaluateAnimation(model, &clip, time, globals));
+			return std::pair{ GlobalRotation(globals, upperArm), GlobalRotation(globals, lowerArm) };
+		};
+		const auto samePoses = [&](const MeshSource& model, const AnimationClip& clip) {
+			for (const float time : { 0.0f, 0.3f, 0.7f })
+			{
+				const auto [upper, lower] = armRotations(model, clip, time);
+				const auto [expectedUpper, expectedLower] = armRotations(*rigs.Target, expected, time);
+				if (!NearRotation(upper, expectedUpper) || !NearRotation(lower, expectedLower))
+					return false;
+			}
+			return true;
+		};
+		const glm::quat lowered = glm::angleAxis(glm::radians(40.0f), glm::vec3(0, 0, 1));
+
+		// A library authored in another rest style: its left arm rests lowered, while its clips pose the arm as before.
+		auto library = CreateRef<MeshSource>(*rigs.Source);
+		const uint32_t sourceArm = Node(*library, "mixamorig:LeftArm");
+		AnimationClip tPose{ .Name = "TPose", .Duration = 1 };
+		const glm::quat sourceRest = library->Nodes[sourceArm].Rotation;
+		tPose.Tracks.push_back({ .Node = sourceArm, .Path = AnimationPath::Rotation, .Interpolation = AnimationInterpolation::Linear, .Times = { 0 }, .Values = { glm::vec4(sourceRest.x, sourceRest.y, sourceRest.z, sourceRest.w) } });
+		library->Nodes[sourceArm].Rotation = sourceRest * lowered;
+		library->Animations.push_back(tPose);
+		std::vector<std::string> warnings;
+		AnimationClip baked;
+		std::string error;
+		const RetargetMap plain = Retargeting::BuildMap(*rigs.Target, *library, {}, warnings);
+		REQUIRE(Retargeting::BakeClip(*rigs.Target, *library, plain, wave, baked, warnings, error));
+		CHECK_FALSE(samePoses(*rigs.Target, baked));
+		// Its T-pose frame as the reference turns the arm from the target's rest style again.
+		const RetargetMap referenced = Retargeting::BuildMap(*rigs.Target, *library, {}, warnings, { .Source = &library->Animations.back(), .SourceTime = 0.5f });
+		REQUIRE_MESSAGE(Retargeting::BakeClip(*rigs.Target, *library, referenced, wave, baked, warnings, error), error);
+		CHECK(samePoses(*rigs.Target, baked));
+		// Positions keep the rest pose: limb lengths and the root's scale do not change.
+		CHECK(referenced.RootScale == doctest::Approx(plain.RootScale));
+		CHECK(warnings.empty());
+
+		// The model side: a model whose arm rests lowered, with a clip that stands like the library's rest pose.
+		auto model = CreateRef<MeshSource>(*rigs.Target);
+		AnimationClip modelTPose{ .Name = "TPose", .Duration = 1 };
+		const glm::quat targetRest = model->Nodes[upperArm].Rotation;
+		modelTPose.Tracks.push_back({ .Node = upperArm, .Path = AnimationPath::Rotation, .Interpolation = AnimationInterpolation::Step, .Times = { 0 }, .Values = { glm::vec4(targetRest.x, targetRest.y, targetRest.z, targetRest.w) } });
+		model->Nodes[upperArm].Rotation = targetRest * lowered;
+		model->Animations.push_back(modelTPose);
+		const RetargetMap modelPlain = Retargeting::BuildMap(*model, *rigs.Source, {}, warnings);
+		REQUIRE(Retargeting::BakeClip(*model, *rigs.Source, modelPlain, wave, baked, warnings, error));
+		CHECK_FALSE(samePoses(*model, baked));
+		const RetargetMap modelReferenced = Retargeting::BuildMap(*model, *rigs.Source, {}, warnings, { .Target = &model->Animations.back() });
+		REQUIRE(Retargeting::BakeClip(*model, *rigs.Source, modelReferenced, wave, baked, warnings, error));
+		CHECK(samePoses(*model, baked));
+
+		// Through the libraries: a reference that is not there adds no clips, and a time past the clip's end is warned about.
+		const auto plan = [&](AnimationClipLibrary entry) {
+			std::vector<AnimationClipSet::Library> libraries{ { .Entry = std::move(entry), .Source = library } };
+			AnimationClipSet::Plan(*model, libraries);
+			return libraries.front();
+		};
+		const auto used = plan({ .Mesh = "Library.gltf", .ReferenceClip = "TPose", .ModelReferenceClip = "TPose" });
+		CHECK(used.Error.empty());
+		CHECK(used.Warnings.empty());
+		CHECK(std::ranges::find(used.Clips, "Wave") != used.Clips.end());
+		CHECK(plan({ .Mesh = "Library.gltf", .ReferenceClip = "APose" }).Error == fmt::format("ReferenceClip 'APose' is not a clip of '{}'", library->Key));
+		CHECK(plan({ .Mesh = "Library.gltf", .ModelReferenceClip = "APose" }).Error == fmt::format("ModelReferenceClip 'APose' is not a clip of '{}'", model->Key));
+		const auto late = plan({ .Mesh = "Library.gltf", .ReferenceClip = "TPose", .ReferenceTime = 2 });
+		CHECK(late.Error.empty());
+		CHECK(HasText(late.Warnings, "ReferenceTime 2 is past the end of clip 'TPose' (1 s), so its last pose is the reference"));
+		// A reference pose that is not finite is reported as one.
+		AnimationClip broken = tPose;
+		broken.Tracks[0].Values[0] = glm::vec4(std::numeric_limits<float>::quiet_NaN());
+		broken.Name = "Broken";
+		library->Animations.push_back(broken);
+		const auto nonFinite = plan({ .Mesh = "Library.gltf", .ReferenceClip = "Broken" });
+		CHECK(nonFinite.Error == "a rest or reference pose is not finite");
+		CHECK(HasText(nonFinite.Warnings, "the rest or reference pose of"));
+	}
+
+	TEST_CASE("Joint map files parse strictly and their pairs follow a library's own Joints")
+	{
+		std::string error;
+		const auto map = AnimationJointMap::FromText(R"({ "Joints": [ { "Source": "mixamorig:LeftArm", "Target": "clavicle_l" }, { "Source": "mixamorig:Head", "Target": "head" } ] })", error);
+		REQUIRE_MESSAGE(map, error);
+		REQUIRE(map->Joints.size() == 2);
+		CHECK(map->Joints[1].Target == "head");
+		const auto again = AnimationJointMap::FromJson(map->ToJson(), error);
+		REQUIRE(again);
+		CHECK(again->Joints == map->Joints);
+		CHECK(AnimationJointMap::IsJointMapFile("Assets/Rigs/Mixamo.BJOINTMAP"));
+		CHECK_FALSE(AnimationJointMap::IsJointMapFile("Assets/Rigs/Mixamo.banimmask"));
+		nlohmann::json tooMany = { { "Joints", nlohmann::json::array() } };
+		for (uint32_t i = 0; i <= AnimationClipLibrary::MaxJoints; i++)
+			tooMany["Joints"].push_back({ { "Source", fmt::format("s{}", i) }, { "Target", fmt::format("t{}", i) } });
+		const std::vector<std::pair<std::string, std::string>> invalid = {
+			{ "[]", "a joint map must be an object" },
+			{ R"({ "Joints": [], "Extra": 1 })", "Extra" },
+			{ "{}", "Joints must be an array with at most 256 entries" },
+			{ R"({ "Joints": {} })", "Joints must be an array" },
+			{ tooMany.dump(), "at most 256 entries" },
+			{ R"({ "Joints": [ 1 ] })", "Joints[0] must be an object" },
+			{ R"({ "Joints": [ { "Source": "a", "Target": "b", "Weight": 1 } ] })", "Weight" },
+			{ R"({ "Joints": [ { "Target": "b" } ] })", "Joints[0].Source must be a nonempty string" },
+			{ R"({ "Joints": [ { "Source": "a", "Target": "" } ] })", "Joints[0].Target must be a nonempty string" },
+			{ R"({ "Joints": [ { "Source": "a", "Target": 3 } ] })", "Joints[0].Target must be a nonempty string" },
+			{ R"({ "Joints": [ { "Source": "a", "Target": "b" }, { "Source": "a", "Target": "c" } ] })", "Joints[1].Source 'a' is listed twice" },
+			{ R"({ "Joints": [ { "Source": "a", "Target": "b" }, { "Source": "c", "Target": "b" } ] })", "Joints[1].Target 'b' is listed twice" },
+			{ "not json", "" },
+		};
+		for (const auto& [text, message] : invalid)
+		{
+			CHECK_FALSE(AnimationJointMap::FromText(text, error));
+			CHECK_MESSAGE(error.find(message) != std::string::npos, (text + ": " + error));
+		}
+		// An inline entry wins over map pairs that name either of its joints.
+		const AnimationClipLibrary entry{ .Joints = { { "mixamorig:LeftArm", "upperarm_l" }, { "mixamorig:Neck", "" } } };
+		const auto pairs = CombineJointPairs(entry, &*map);
+		REQUIRE(pairs.size() == 3);
+		CHECK(pairs[0] == AnimationRetargetJoint{ "mixamorig:LeftArm", "upperarm_l" });
+		CHECK(pairs[2] == AnimationRetargetJoint{ "mixamorig:Head", "head" });
+		CHECK(CombineJointPairs(entry, nullptr) == entry.Joints);
+		const AnimationClipLibrary targetOverride{ .Joints = { { "mixamorig:Neck", "head" } } };
+		CHECK(CombineJointPairs(targetOverride, &*map).size() == 2);
+	}
+
+	TEST_CASE("Joint map assets are shared, saved by identity, validated and reload the clip set")
+	{
+		TempProject project("RetargetJointMaps");
+		ClearAssetCache cacheGuard;
+		CommandRegistry registry;
+		AutomationSession session;
+		using BasaltTest::Run;
+		using BasaltTest::RunError;
+		for (const char* name : { "MixamoRig.gltf", "UnrealRig.gltf" })
+		{
+			const auto text = FileSystem::ReadTextFile(FixturePath(name));
+			REQUIRE(text);
+			REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath(std::string("Assets/Models/") + name), *text));
+		}
+		// asset.write checks the file.
+		CHECK(RunError(registry, session, "asset.write", { { "path", "Assets/Rigs/Mixamo.bjointmap" }, { "content", R"({ "Joints": [ { "Source": "a" } ] })" } }).find("invalid animation joint map: Joints[0].Target must be a nonempty string") != std::string::npos);
+		CHECK_FALSE(FileSystem::Exists(Project::ResolvePath("Assets/Rigs/Mixamo.bjointmap")));
+		Run(registry, session, "asset.write", { { "path", "Assets/Rigs/Mixamo.bjointmap" }, { "content", R"({ "Joints": [ { "Source": "mixamorig:LeftArm", "Target": "clavicle_l" } ] })" } });
+		Run(registry, session, "scene.new", { { "name", "Maps" }, { "empty", true } });
+		for (const char* name : { "Hero", "Villain" })
+			Run(registry, session, "entity.create", { { "name", name } });
+		const nlohmann::json animator = { { "Mesh", "Assets/Models/UnrealRig.gltf" }, { "ClipLibraries", { { { "Mesh", "Assets/Models/MixamoRig.gltf" }, { "JointMap", "Assets/Rigs/Mixamo.bjointmap" } } } }, { "Clip", "Wave" } };
+		for (const char* name : { "Hero", "Villain" })
+			Run(registry, session, "component.set", { { "entity", name }, { "component", "Animator" }, { "data", animator } });
+		CHECK(RunError(registry, session, "component.set", { { "entity", "Hero" }, { "component", "Animator" }, { "data", { { "ClipLibraries", { { { "Mesh", "Assets/Models/MixamoRig.gltf" }, { "JointMap", "Assets/Rigs/Mixamo.banimmask" } } } } } } }).find("ClipLibraries[0].JointMap 'Assets/Rigs/Mixamo.banimmask' must be a .bjointmap file") != std::string::npos);
+		CHECK(RunError(registry, session, "component.set", { { "entity", "Hero" }, { "component", "Animator" }, { "data", { { "ClipLibraries", { { { "Mesh", "Assets/Models/MixamoRig.gltf" }, { "ReferenceTime", -1 } } } } } } }).find("ClipLibraries[0].ReferenceTime -1 must be between 0 and 86400") != std::string::npos);
+
+		// The map pairs joints for both Animators, ahead of names.
+		const auto info = Run(registry, session, "animator.retarget", { { "entity", "Villain" } })["libraries"][0];
+		CHECK(info["error"].is_null());
+		CHECK(info["jointMap"] == "Assets/Rigs/Mixamo.bjointmap");
+		CHECK(info["reference"].is_null());
+		CHECK(std::ranges::count(info["joints"], nlohmann::json{ { "target", "clavicle_l" }, { "source", "mixamorig:LeftArm" }, { "match", "joint map" } }) == 1);
+		Run(registry, session, "component.set", { { "entity", "Villain" }, { "component", "Animator" }, { "data", { { "ClipLibraries", { { { "Mesh", "Assets/Models/MixamoRig.gltf" }, { "JointMap", "Assets/Rigs/Mixamo.bjointmap" }, { "ReferenceClip", "Idle" }, { "ReferenceTime", 0.25 } } } } } } });
+		const auto referenced = Run(registry, session, "animator.retarget", { { "entity", "Villain" } })["libraries"][0];
+		CHECK(referenced["reference"] == nlohmann::json{ { "clip", "Idle" }, { "time", 0.25 } });
+		CHECK(referenced["modelReference"].is_null());
+		Run(registry, session, "component.set", { { "entity", "Villain" }, { "component", "Animator" }, { "data", animator } });
+
+		// Playback shares one set for both, and builds it again when the map changes.
+		Run(registry, session, "play.start", nlohmann::json::object());
+		Scene& play = *session.GetScene();
+		AnimationSystem& system = *play.GetAnimationSystem();
+		Run(registry, session, "play.step", { { "frames", 1 } });
+		CHECK(system.GetClipSetCount() == 1);
+		const auto clavicleRotation = [&] {
+			const Entity hero = play.FindEntityByName("Hero");
+			return GlobalRotation(*system.GetPose(hero), Node(*AssetManager::GetMesh("Assets/Models/UnrealRig.gltf"), "clavicle_l"));
+		};
+		const glm::quat mapped = clavicleRotation();
+		Run(registry, session, "asset.write", { { "path", "Assets/Rigs/Mixamo.bjointmap" }, { "content", R"({ "Joints": [] })" } });
+		Run(registry, session, "asset.refresh", nlohmann::json::object());
+		Run(registry, session, "play.step", { { "frames", 1 } });
+		CHECK(system.GetClipSetCount() == 2);
+		CHECK_FALSE(NearRotation(clavicleRotation(), mapped));
+		// A map that cannot load adds no clips (rather than pairing by name alone), and the inspector says why.
+		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/Rigs/Mixamo.bjointmap"), "{}"));
+		Run(registry, session, "asset.refresh", nlohmann::json::object());
+		const auto since = Log::GetHistory().GetTotalCount();
+		Run(registry, session, "play.step", { { "frames", 1 } });
+		CHECK(CountLogMessages(since, "clip library 'Assets/Models/MixamoRig.gltf' adds no clips: cannot load joint map 'Assets/Rigs/Mixamo.bjointmap'") == 1);
+		CHECK(HasText(GetAnimationWarnings(play.FindEntityByName("Hero")), "adds no clips: cannot load joint map 'Assets/Rigs/Mixamo.bjointmap'"));
+		Run(registry, session, "play.stop", nlohmann::json::object());
+
+		// project.validate reports the broken file.
+		ValidationReport report = ValidateProject(*Project::GetActive());
+		CHECK(std::ranges::any_of(report.GetIssues(), [](const ValidationIssue& issue) { return issue.File == "Assets/Rigs/Mixamo.bjointmap" && issue.Message.find("invalid animation joint map: Joints must be an array") != std::string::npos; }));
+		Run(registry, session, "asset.write", { { "path", "Assets/Rigs/Mixamo.bjointmap" }, { "content", R"({ "Joints": [ { "Source": "mixamorig:LeftArm", "Target": "clavicle_l" } ] })" } });
+
+		// Saved by identity, and following moves.
+		Run(registry, session, "scene.save", { { "path", "Assets/Scenes/Maps.bscene" } });
+		const auto saved = FileSystem::ReadTextFile(Project::ResolvePath("Assets/Scenes/Maps.bscene"));
+		REQUIRE(saved);
+		const auto savedMap = ParseJson(*saved)["Entities"][0]["Components"]["Animator"]["ClipLibraries"][0]["JointMap"];
+		CHECK(savedMap.is_object());
+		CHECK(savedMap["Path"] == "Assets/Rigs/Mixamo.bjointmap");
+		Run(registry, session, "asset.move", { { "from", "Assets/Rigs/Mixamo.bjointmap" }, { "to", "Assets/Shared/Humanoid.bjointmap" } });
+		CHECK(session.GetScene()->FindEntityByName("Hero").GetComponent<AnimatorComponent>().ClipLibraries[0].JointMap == "Assets/Shared/Humanoid.bjointmap");
+		std::string error;
+		auto loaded = SceneSerializer::LoadScene(Project::ResolvePath("Assets/Scenes/Maps.bscene"), error);
+		REQUIRE_MESSAGE(loaded, error);
+		CHECK(loaded->FindEntityByName("Villain").GetComponent<AnimatorComponent>().ClipLibraries[0].JointMap == "Assets/Shared/Humanoid.bjointmap");
+		// A map that is gone is a missing file, like any other asset field.
+		Run(registry, session, "component.set", { { "entity", "Hero" }, { "component", "Animator" }, { "data", { { "ClipLibraries", { { { "Mesh", "Assets/Models/MixamoRig.gltf" }, { "JointMap", "Assets/Shared/Gone.bjointmap" } } } } } } });
+		Run(registry, session, "scene.save", { { "path", "Assets/Scenes/Maps.bscene" } });
+		report = ValidateProject(*Project::GetActive());
+		CHECK(std::ranges::any_of(report.GetIssues(), [](const ValidationIssue& issue) { return issue.File == "Assets/Scenes/Maps.bscene" && issue.Message.find("the missing file 'Assets/Shared/Gone.bjointmap'") != std::string::npos; }));
 	}
 
 	TEST_CASE("Clip libraries that fail to load are logged as errors")
