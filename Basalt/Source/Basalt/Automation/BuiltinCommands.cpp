@@ -1681,12 +1681,14 @@ namespace Basalt {
 			return root;
 		}
 
-		// The edit-mode instance root an instance command changes.
+		// The edit-mode instance root an instance command changes. A nested instance is part of the instance holding it.
 		Entity RequirePrefabInstance(AutomationSession& session, const json& params)
 		{
 			Entity root = RequirePrefabRoot(session, params);
 			if (session.IsPlaying())
 				throw CommandError("stop Play or Simulate before editing prefab instances");
+			if (const Entity enclosing = Prefab::EnclosingInstance(root))
+				throw CommandError(fmt::format("'{}' is nested in the instance '{}': its overrides belong to that instance, so use its root", root.GetName(), enclosing.GetName()));
 			return root;
 		}
 
@@ -1707,7 +1709,10 @@ namespace Basalt {
 		json PrefabOverridesResult(Entity root)
 		{
 			const auto& link = root.GetComponent<PrefabComponent>();
-			return { { "prefab", link.Prefab }, { "tracked", Prefab::IsTracked(link) }, { "overrides", Prefab::ComputeOverrides(root) }, { "members", link.Members } };
+			json result = { { "prefab", link.Prefab }, { "tracked", Prefab::IsTracked(link) }, { "overrides", Prefab::ComputeOverrides(root) }, { "members", link.Members } };
+			if (const Entity enclosing = Prefab::EnclosingInstance(root))
+				result["enclosing"] = static_cast<uint64_t>(enclosing.GetUUID());
+			return result;
 		}
 
 		// Writing a prefab merges it into the scene's instances. Those that could not merge are warnings, not errors,
@@ -2049,13 +2054,13 @@ namespace Basalt {
 				return EntitySummary(root);
 			});
 
-			Add(registry, "prefab.open", "Opens a prefab for editing in its own scene. The current scene, with its unsaved edits, selection and undo history (in the editor), waits until prefab.close. While the prefab is open, every edit-boundary command except prefab.save and prefab.close is rejected, and so is project.export (today: scene.new/open/save, project.create/open, asset.move/rename/delete/resolve, play.start, replay.run, prefab.open/apply)", Schema::Object({ { "path", Schema::String(".bprefab path under Assets/", true) } }, { "path" }), [](AutomationSession& session, const json& params) {
+			Add(registry, "prefab.open", "Opens a prefab for editing in its own scene, where its nested instances (and a variant's root) are ordinary instances with their overrides. The current scene, with its unsaved edits, selection and undo history (in the editor), waits until prefab.close. While the prefab is open, every edit-boundary command except prefab.save and prefab.close is rejected, and so is project.export (today: scene.new/open/save, project.create/open, asset.move/rename/delete/resolve, play.start, replay.run, prefab.open/apply)", Schema::Object({ { "path", Schema::String(".bprefab path under Assets/", true) } }, { "path" }), [](AutomationSession& session, const json& params) {
 				const auto path = RequirePrefabPath(params);
 				std::string error;
 				if (!session.OpenPrefab(path, error))
 					throw CommandError(error);
 				return json{ { "path", path }, { "entities", session.GetEditScene()->GetEntityCount() } }; }, CommandPolicy::EditBoundary);
-			Add(registry, "prefab.save", "Saves the open prefab and merges it into the instances of the waiting scene, keeping their overrides ('instances' counts those that merged). Instances that cannot merge are listed in 'warnings' (a rejected one keeps its previous state; a partly merged one merges fully on prefab.refresh). Rejected when the file changed on disk since it was opened or last saved (unless force), when the scene does not have exactly one root, or when it contains prefab instances (unpack them).", Schema::Object({ { "force", Schema::Boolean("overwrite the file even if it changed on disk (default false)") } }), [](AutomationSession& session, const json& params) {
+			Add(registry, "prefab.save", "Saves the open prefab and merges it into the instances of the waiting scene, keeping their overrides ('instances' counts those that merged). Instances that cannot merge are listed in 'warnings' (a rejected one keeps its previous state; a partly merged one merges fully on prefab.refresh). Instances in the open prefab are saved as nested instances, holding only their overrides, and a root that is an instance makes it a variant of that prefab. Rejected when the file changed on disk since it was opened or last saved (unless force), when the scene does not have exactly one root, or when an instance in it holds this prefab.", Schema::Object({ { "force", Schema::Boolean("overwrite the file even if it changed on disk (default false)") } }), [](AutomationSession& session, const json& params) {
 				std::string error;
 				AssetReloadReport report;
 				std::vector<std::string> warnings;
@@ -2068,7 +2073,7 @@ namespace Basalt {
 					throw CommandError(error);
 				return json{ { "path", session.GetScenePath() } }; }, CommandPolicy::EditBoundary);
 			const auto entityOnly = Schema::Object({ { "entity", Schema::Entity("prefab instance root") } }, { "entity" });
-			Add(registry, "prefab.apply", "Writes an instance's overrides into its prefab file, then merges the file into the instances of the open scene ('instances'). The root's position and rotation, entities the instance added and references to entities outside the prefab stay local ('warnings' names such references). An untracked instance is adopted first, so all its differences are applied. Edit mode only.", entityOnly, [](AutomationSession& session, const json& params) {
+			Add(registry, "prefab.apply", "Writes an instance's overrides into its prefab file, then merges the file into the instances of the open scene ('instances'). The root's position and rotation, entities the instance added and references to entities outside the prefab stay local ('warnings' names such references). An untracked instance is adopted first, so all its differences are applied. A nested instance's overrides go into the prefab holding it, and the root of a nested instance is rejected: use the instance holding it. Edit mode only.", entityOnly, [](AutomationSession& session, const json& params) {
 				Entity root = RequirePrefabInstance(session, params);
 				const auto path = root.GetComponent<PrefabComponent>().Prefab;
 				RequireAssetsPath(*RequireProject(), path, "prefab");
@@ -2089,38 +2094,49 @@ namespace Basalt {
 					return field.empty() ? Prefab::Refresh(root, source, Prefab::RefreshMode::RevertAll, error) : Prefab::RevertOverride(root, source, field, error);
 				});
 				return PrefabOverridesResult(root); });
-			Add(registry, "prefab.unpack", "Removes an instance's prefab link and keeps its entities as ordinary scene entities. Edit mode only.", entityOnly, [](AutomationSession& session, const json& params) {
-				Entity root = RequirePrefabInstance(session, params);
+			Add(registry, "prefab.unpack", "Removes an instance's prefab link and keeps its entities as ordinary scene entities. Nested instances stay instances of their prefabs, tracked from now on, each with its own overrides ('warnings' names any whose prefab cannot be read). On the root of a nested instance inside an instance, it is an override of that instance. Edit mode only.", entityOnly, [](AutomationSession& session, const json& params) {
+				Entity root = RequirePrefabRoot(session, params);
+				if (session.IsPlaying())
+					throw CommandError("stop Play or Simulate before editing prefab instances");
+				const bool nested = static_cast<bool>(Prefab::EnclosingInstance(root));
 				root.RemoveComponent<PrefabComponent>();
+				std::vector<std::string> warnings;
+				if (!nested)
+					Prefab::AdoptNestedInstances(root, warnings);
 				MarkEdited(session);
-				return EntitySummary(root); });
-			Add(registry, "prefab.overrides", "Lists an instance's overrides: JSON-pointer paths into its source records ('/<source ID>' for a whole entity: null when the instance deleted it, its record when the instance kept an entity the prefab no longer has; '/<source ID>/Name', '/<source ID>/Parent', '/<source ID>/Components/<component>[/<field>...]') with the instance's value, null where it removed something. Entity references are source IDs for the instance's entities, scene UUIDs otherwise, and {\"External\": <UUID>} where a scene UUID equals a source ID. Fields are whole values (vectors and lists are not merged element by element); the root's position and rotation are placement, not overrides. 'members' maps source entity IDs to instance entity IDs (including reserved IDs of entities the instance deleted); 'tracked' is false for an instance saved before tracking (it has no overrides until adopted).", entityOnly, [](AutomationSession& session, const json& params) { return PrefabOverridesResult(RequirePrefabRoot(session, params)); });
+				json result = EntitySummary(root);
+				if (!warnings.empty())
+					result["warnings"] = std::move(warnings);
+				return result; });
+			Add(registry, "prefab.overrides", "Lists an instance's overrides: JSON-pointer paths into its source records ('/<source ID>' for a whole entity: null when the instance deleted it, its record when the instance kept an entity the prefab no longer has; '/<source ID>/Name', '/<source ID>/Parent', '/<source ID>/Components/<component>[/<field>...]') with the instance's value, null where it removed something. Entity references are source IDs for the instance's entities, scene UUIDs otherwise, and {\"External\": <UUID>} where a scene UUID equals a source ID. Fields are whole values (vectors and lists are not merged element by element); the root's position and rotation are placement, not overrides. 'members' maps source entity IDs to instance entity IDs (including reserved IDs of entities the instance deleted); 'tracked' is false for an instance saved before tracking (it has no overrides until adopted). A nested instance's entities are part of the instance holding it, whose overrides list them; on the root of a nested instance, 'enclosing' names that instance.", entityOnly, [](AutomationSession& session, const json& params) { return PrefabOverridesResult(RequirePrefabRoot(session, params)); });
 
-			Add(registry, "prefab.create", "Saves an entity tree as a prefab file and makes the tree an instance of it ('linked'; not during Play, while a prefab is open, when the tree contains prefab instances, which are saved unpacked, or when it belongs to another instance or prefab, kept with a warning). Then merges the file into the open scene's other instances ('instances'). Overwriting a prefab keeps its entity IDs (through the tree's instance link, or by matching names), so existing instances keep merging.", Schema::Object({ { "entity", Schema::Entity("ID or name") }, { "path", Schema::String(".bprefab path under Assets/, e.g. 'Assets/Prefabs/Enemy.bprefab'", true) } }, { "entity", "path" }), [](AutomationSession& session, const json& params) {
+			Add(registry, "prefab.create", "Saves an entity tree as a prefab file and makes the tree an instance of it ('linked'; not during Play, while a prefab is open, or when it belongs to another instance or prefab, kept with a warning). Prefab instances inside the tree stay instances: the file holds a nested record with their overrides, so their prefabs' edits keep reaching it. With variant, an instance root becomes a variant of its prefab: the file holds only the instance's differences, and the instance now tracks the variant. Then merges the file into the open scene's other instances ('instances'). Overwriting a prefab keeps its entity IDs (through the tree's instance link, or by matching names), so existing instances keep merging. Rejected when a nested instance holds this file.", Schema::Object({ { "entity", Schema::Entity("ID or name") }, { "path", Schema::String(".bprefab path under Assets/, e.g. 'Assets/Prefabs/Enemy.bprefab'", true) }, { "variant", Schema::Boolean("save an instance root as a variant of its prefab (default false)") } }, { "entity", "path" }), [](AutomationSession& session, const json& params) {
 				Entity entity = RequireEntity(session, params);
 				const std::string path = RequirePrefabPath(params);
+				bool variant = OptionalBool(params, "variant", false);
 				std::vector<Entity> tree;
 				CollectTree(entity, tree);
 				std::vector<std::string> warnings;
-				const bool nested = std::any_of(tree.begin() + 1, tree.end(), [](Entity e) { return e.HasComponent<PrefabComponent>(); });
-				if (nested)
-					warnings.emplace_back("nested prefab instances were saved unpacked and the tree stays unlinked: a prefab's entities cannot be instances themselves");
 				// Linking would take the tree away from an instance it belongs to, or replace its link to another prefab.
 				const Entity enclosing = Prefab::EnclosingInstance(entity);
 				if (enclosing)
 					warnings.push_back(fmt::format("'{}' stays part of the prefab instance '{}' (not linked to {})", entity.GetName(), enclosing.GetName(), path));
 				const auto* existingLink = entity.TryGetComponent<PrefabComponent>();
+				if (variant && (!existingLink || enclosing))
+					throw CommandError(fmt::format("'{}' is not an instance root, so it has no prefab to make a variant of", entity.GetName()));
 				const bool otherPrefab = existingLink && Prefab::NormalizePath(existingLink->Prefab) != path;
-				if (otherPrefab)
+				if (variant && !otherPrefab)
+					throw CommandError(fmt::format("{} cannot be a variant of itself", path));
+				if (otherPrefab && !variant)
 					warnings.push_back(fmt::format("'{}' stays an instance of {} (not linked to {})", entity.GetName(), existingLink->Prefab, path));
 				json entities = SceneSerializer::SerializeEntityTree(entity);
-				Prefab::AssignSourceIds(entity, path, entities, warnings);
+				Prefab::AssignSourceIds(entity, path, entities, variant, warnings);
 				std::string error;
-				if (!SceneSerializer::SavePrefabEntities(entities, Project::ResolvePath(path), error))
+				if (!SceneSerializer::SavePrefabEntities(entities, Project::ResolvePath(path), error, variant))
 					throw CommandError(error);
 				// The saved tree becomes an instance of its prefab, so saving it again keeps every entity's ID even after
 				// renames and moves. Linked before the write merges, so the tree itself has nothing to merge.
-				const bool link = !nested && !enclosing && !otherPrefab && !session.IsPlaying() && !session.IsEditingPrefab();
+				const bool link = !enclosing && (!otherPrefab || variant) && !session.IsPlaying() && !session.IsEditingPrefab();
 				if (link)
 				{
 					Prefab::Link(tree, entities, path);
@@ -2129,6 +2145,35 @@ namespace Basalt {
 				json result = PrefabWriteResult(path, session.OnFileWritten(path), std::move(warnings));
 				result["linked"] = link;
 				return result;
+			});
+			Add(registry, "prefab.variant", "Creates a prefab that inherits another: its root is an instance of 'base' without any override, so everything follows the base until the variant changes it. Edit it like any prefab (prefab.open, prefab.apply): the file holds only its differences. Rejected when 'path' exists.", Schema::Object({ { "base", Schema::String(".bprefab path of the prefab to inherit", true) }, { "path", Schema::String(".bprefab path of the new variant, under Assets/", true) } }, { "base", "path" }), [](AutomationSession& session, const json& params) {
+				const std::string path = RequirePrefabPath(params);
+				const std::string base = RequirePrefabPath({ { "path", RequireString(params, "base") } });
+				const auto absolute = Project::ResolvePath(path);
+				std::error_code ignored;
+				if (std::filesystem::exists(absolute, ignored))
+					throw CommandError(path + " already exists");
+				std::string error;
+				if (!Prefab::CreateVariant(base, absolute, error))
+					throw CommandError(error);
+				return PrefabWriteResult(path, session.OnFileWritten(path));
+			});
+			Add(registry, "prefab.info", "Describes a prefab file without opening it: 'entities' (after expanding nested instances), 'base' (the prefab a variant inherits, else null), 'nested' (each nested instance as { entity, prefab }, the variant's root included), 'dependencies' (every prefab it reads, directly or not; a change to any of them reaches its instances) and 'warnings' (overrides of entities their prefab no longer has).", Schema::Object({ { "path", Schema::String(".bprefab path under Assets/", true) } }, { "path" }), [](AutomationSession&, const json& params) {
+				const std::string path = RequirePrefabPath(params);
+				json entities;
+				std::string error;
+				Prefab::ReadReport report;
+				const auto absolute = Project::ResolvePath(path);
+				if (!Prefab::ReadFile(absolute, entities, error, &report))
+					throw CommandError(error);
+				json nested = json::array();
+				for (const auto& instance : report.Nested)
+					nested.push_back({ { "entity", instance.Entity }, { "prefab", instance.Prefab } });
+				report.Files.erase(Prefab::FileKey(absolute));
+				json dependencies = json::array();
+				for (const std::string& file : report.Files)
+					dependencies.push_back(Project::MakeRelative(FileSystem::PathFromUtf8(file)));
+				return json{ { "path", path }, { "entities", entities.size() }, { "base", report.Base.empty() ? json(nullptr) : json(report.Base) }, { "nested", std::move(nested) }, { "dependencies", std::move(dependencies) }, { "warnings", report.Warnings } };
 			});
 
 			Add(registry, "prefab.instantiate", "Instantiates a prefab into the scene. The prefab file needs unique nonzero entity IDs and one root listed first. The root's Prefab component tracks the instance (with a baseline in edit mode), so prefab saves merge into it.", Schema::Object({ { "path", Schema::String(".bprefab path, e.g. 'Assets/Prefabs/Enemy.bprefab'", true) }, { "parent", Schema::Nullable(Schema::Entity("ID or name, optional")) }, { "position", Schema::Vector("[x, y, z], optional", 3) } }, { "path" }), [](AutomationSession& session, const json& params) {

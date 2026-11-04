@@ -1,0 +1,7 @@
+{
+	"Format": "BasaltPrefab",
+	"Version": 4,
+	"Entities": [
+		{ "ID": 7, "Parent": 0, "Components": { "Prefab": { "Prefab": "Assets/Prefabs/Lamp.bprefab", "Overrides": { "7": { "Name": "BrightLamp", "Components": { "PointLight": { "Intensity": 9 } } } } } } }
+	]
+}

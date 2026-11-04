@@ -381,6 +381,56 @@ namespace Basalt {
 		return image;
 	}
 
+	namespace {
+
+		// The files one entity record of a prefab refers to: declared asset fields (UUID references included, in lists too),
+		// then any other path-like string.
+		void AddRecordDependencies(const std::filesystem::path& projectDirectory, const AssetRegistry* assets, const nlohmann::json& record, std::set<std::string>& outDependencies)
+		{
+			const auto components = record.is_object() ? record.find("Components") : record.end();
+			if (components == record.end() || !components->is_object())
+				return;
+			for (const auto& [component, fields] : components->items())
+				if (fields.is_object())
+				{
+					const auto* info = ComponentRegistry::Find(component);
+					if (info)
+						for (const auto& assetField : info->AssetFields)
+							ForEachAssetValue(fields, assetField, [&](const nlohmann::json& value, const std::string&) { AddReferenceDependencies(projectDirectory, assets, value, outDependencies); });
+					for (const auto& [field, value] : fields.items())
+						if (value.is_string() && !(info && std::ranges::find(info->AssetFields, field) != info->AssetFields.end()))
+							AddReferenceDependencies(projectDirectory, assets, value, outDependencies);
+				}
+		}
+
+		// A prefab's references, through the prefabs it nests and their overrides: its preview changes with all of them.
+		// visited keeps a prefab that holds itself (which only fails later, when previewed) from recursing here.
+		void AddPrefabDependencies(const std::filesystem::path& projectDirectory, const AssetRegistry* assets, const std::string& prefab, std::set<std::string>& outDependencies, std::set<std::string>& visited)
+		{
+			if (!visited.insert(prefab).second)
+				return;
+			const auto text = FileSystem::ReadTextFile(projectDirectory / FileSystem::PathFromUtf8(prefab));
+			const nlohmann::json data = text ? ParseJson(*text) : nlohmann::json();
+			const auto entities = data.is_object() ? data.find("Entities") : data.end();
+			if (entities == data.end() || !entities->is_array())
+				return;
+			for (const auto& entity : *entities)
+			{
+				AddRecordDependencies(projectDirectory, assets, entity, outDependencies);
+				const auto components = entity.is_object() ? entity.find("Components") : entity.end();
+				const auto link = components != entity.end() && components->is_object() ? components->find("Prefab") : nlohmann::json::const_iterator();
+				if (components == entity.end() || !components->is_object() || link == components->end() || !link->is_object())
+					continue;
+				if (const auto overrides = link->find("Overrides"); overrides != link->end() && overrides->is_object())
+					for (const auto& record : *overrides)
+						AddRecordDependencies(projectDirectory, assets, record, outDependencies);
+				if (const auto nested = link->find("Prefab"); nested != link->end())
+					AddPrefabDependencies(projectDirectory, assets, DecodeReference(*nested, assets), outDependencies, visited);
+			}
+		}
+
+	}
+
 	ThumbnailCache::ThumbnailCache(std::filesystem::path projectDirectory)
 		: m_ProjectDirectory(std::move(projectDirectory))
 		, m_Directory(DirectoryFor(m_ProjectDirectory))
@@ -422,31 +472,9 @@ namespace Basalt {
 				break;
 			case ThumbnailKind::Prefab:
 			{
-				const auto text = FileSystem::ReadTextFile(m_ProjectDirectory / FileSystem::PathFromUtf8(relativePath));
-				const nlohmann::json data = text ? ParseJson(*text) : nlohmann::json();
-				const auto entities = data.is_object() ? data.find("Entities") : data.end();
-				if (entities == data.end() || !entities->is_array())
-					break;
 				AssetRegistry local(m_ProjectDirectory);
-				const AssetRegistry* assets = RegistryFor(m_ProjectDirectory, local);
-				for (const auto& entity : *entities)
-				{
-					const auto components = entity.is_object() ? entity.find("Components") : entity.end();
-					if (components == entity.end() || !components->is_object())
-						continue;
-					for (const auto& [component, fields] : components->items())
-						if (fields.is_object())
-						{
-							// Declared asset fields (UUID references included, in lists too), then any other path-like string.
-							const auto* info = ComponentRegistry::Find(component);
-							if (info)
-								for (const auto& assetField : info->AssetFields)
-									ForEachAssetValue(fields, assetField, [&](const nlohmann::json& value, const std::string&) { AddReferenceDependencies(m_ProjectDirectory, assets, value, dependencies); });
-							for (const auto& [field, value] : fields.items())
-								if (value.is_string() && !(info && std::ranges::find(info->AssetFields, field) != info->AssetFields.end()))
-									AddReferenceDependencies(m_ProjectDirectory, assets, value, dependencies);
-						}
-				}
+				std::set<std::string> visited;
+				AddPrefabDependencies(m_ProjectDirectory, RegistryFor(m_ProjectDirectory, local), relativePath, dependencies, visited);
 				break;
 			}
 			case ThumbnailKind::Material:

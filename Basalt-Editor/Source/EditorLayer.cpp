@@ -2389,6 +2389,7 @@ namespace Basalt {
 				filters = { { "Prefabs", "bprefab" } };
 				break;
 			case PromptKind::SavePrefabAs:
+			case PromptKind::SaveVariantAs:
 				kind = FileDialogs::Kind::Save;
 				filters = { { "Prefabs", "bprefab" } };
 				break;
@@ -2450,17 +2451,34 @@ namespace Basalt {
 		ImGui::TextDisabled("Prefab");
 		ImGui::SameLine();
 		ImGui::TextUnformatted(path.c_str());
+		// A nested instance has no overrides of its own: the instance holding it lists and applies them.
+		const Entity enclosing = Prefab::EnclosingInstance(entity);
+		if (enclosing)
+			ImGui::TextDisabled("Nested in the instance '%s', which holds its overrides.", enclosing.GetName().c_str());
 		ImGui::BeginDisabled(m_Session.IsPlaying());
 		ImGui::BeginDisabled(m_Session.IsEditingPrefab());
 		if (ImGui::Button("Open Prefab"))
 			m_Context.Execute("prefab.open", { { "path", path } });
 		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
 			ImGui::SetTooltip("Edit the prefab in its own scene; saving merges it into this scene's instances and keeps their overrides");
+		if (enclosing)
+		{
+			ImGui::EndDisabled();
+			ImGui::EndDisabled();
+			return;
+		}
 		ImGui::SameLine();
 		if (ImGui::Button("Apply All"))
 			ExecuteAndWarn("prefab.apply", { { "entity", id } });
 		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
 			ImGui::SetTooltip("Write this instance's overrides into the prefab (its position, rotation and added entities stay local)");
+		if (ImGui::Button("Save as Variant..."))
+		{
+			const std::filesystem::path source = FileSystem::PathFromUtf8(path);
+			OpenPrompt(PromptKind::SaveVariantAs, FileSystem::PathToGenericUtf8(source.parent_path() / FileSystem::PathFromUtf8(FileSystem::PathToUtf8(source.stem()) + " Variant.bprefab")));
+		}
+		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+			ImGui::SetTooltip("Save this instance's overrides as a new prefab that inherits the rest from this one, and make this an instance of it");
 		ImGui::EndDisabled();
 		// Two rows, so the actions fit the default inspector width.
 		if (ImGui::Button("Revert All"))
@@ -2883,7 +2901,7 @@ namespace Basalt {
 
 	void EditorLayer::DrawModals()
 	{
-		static const char* s_Titles[] = { "", "Open Scene", "Save Scene As", "Open Prefab", "Create Prefab", "Import Model", "Open Project", "New Project", "Export Game" };
+		static const char* s_Titles[] = { "", "Open Scene", "Save Scene As", "Open Prefab", "Create Prefab", "Save as Variant", "Import Model", "Open Project", "New Project", "Export Game" };
 		static_assert(std::size(s_Titles) == static_cast<size_t>(PromptKind::Export) + 1, "one title per PromptKind, in order");
 		if (m_Prompt == PromptKind::None)
 			return;
@@ -2905,6 +2923,7 @@ namespace Basalt {
 					break;
 				case PromptKind::OpenPrefab:
 				case PromptKind::SavePrefabAs:
+				case PromptKind::SaveVariantAs:
 					ImGui::TextUnformatted("Project-relative prefab path (.bprefab under Assets/):");
 					break;
 				case PromptKind::ImportModel:
@@ -2974,6 +2993,9 @@ namespace Basalt {
 						break;
 					case PromptKind::SavePrefabAs:
 						ok = ExecuteAndWarn("prefab.create", { { "entity", static_cast<uint64_t>(m_Session.GetSelection()) }, { "path", m_PromptPath } }).has_value();
+						break;
+					case PromptKind::SaveVariantAs:
+						ok = ExecuteAndWarn("prefab.create", { { "entity", static_cast<uint64_t>(m_Session.GetSelection()) }, { "path", m_PromptPath }, { "variant", true } }).has_value();
 						break;
 					case PromptKind::ImportModel:
 						ok = m_Context.Execute("asset.import_model", { { "path", m_PromptPath } }).has_value();

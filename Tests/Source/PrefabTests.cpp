@@ -454,14 +454,9 @@ TEST_SUITE("PrefabEditing")
 		f.Run("prefab.close");
 	}
 
-	TEST_CASE("Saving rejects external edits unless forced, nested instances and extra roots; failed opens change nothing")
+	TEST_CASE("Saving rejects external edits unless forced and extra roots; failed opens change nothing")
 	{
 		PrefabFixture f;
-		f.Run("prefab.open", { { "path", f.Path } });
-		f.Run("prefab.instantiate", { { "path", f.Path }, { "parent", "Source" } });
-		CHECK(Contains(f.RunError("prefab.save"), "unpack the nested prefab instance"));
-		f.Run("prefab.close", { { "discard", true } });
-
 		f.Run("prefab.open", { { "path", f.Path } });
 		f.Run("entity.create", { { "name", "SecondRoot" } });
 		CHECK(Contains(f.RunError("prefab.save"), "exactly one root"));
@@ -806,7 +801,7 @@ TEST_SUITE("PrefabEditing")
 		CHECK(edit.GetComponent<PointLightComponent>().Radius == 33);
 	}
 
-	TEST_CASE("Prefab files need unique nonzero IDs, one root first and a supported version; nested links are dropped")
+	TEST_CASE("Prefab files need unique nonzero IDs, one root first and a supported version")
 	{
 		PrefabFixture f;
 		const std::string badPath = "Assets/Prefabs/Bad.bprefab";
@@ -815,7 +810,7 @@ TEST_SUITE("PrefabEditing")
 		};
 		const auto before = f.Session.GetScene()->GetEntityCount();
 		const json root = { { "ID", 10 }, { "Name", "Root" }, { "Parent", 0 }, { "Components", json::object() } };
-		const json child = { { "ID", 11 }, { "Name", "Child" }, { "Parent", 10 }, { "Components", { { "Prefab", { { "Prefab", "Assets/Prefabs/Other.bprefab" } } } } } };
+		const json child = { { "ID", 11 }, { "Name", "Child" }, { "Parent", 10 }, { "Components", json::object() } };
 		writeBadPrefab(json::array({ root, json{ { "ID", 0 }, { "Name", "Zero" }, { "Parent", 10 } } }));
 		CHECK(Contains(f.RunError("prefab.instantiate", { { "path", badPath } }), "unique nonzero 'ID'"));
 		writeBadPrefab(json::array({ root, json{ { "ID", 10 }, { "Name", "Twin" }, { "Parent", 10 } } }));
@@ -835,28 +830,11 @@ TEST_SUITE("PrefabEditing")
 		f.RunError("prefab.instantiate", { { "path", badPath } });
 		CHECK(f.Session.GetScene()->GetEntityCount() == before);
 		CHECK_FALSE(f.Session.GetScene()->FindEntityByName("Root"));
-
-		writeBadPrefab(json::array({ root, child }));
-		Entity instance = f.EntityFrom(f.Run("prefab.instantiate", { { "path", badPath } }));
-		CHECK_FALSE(instance.GetChildren().front().HasComponent<PrefabComponent>());
 	}
 
-	TEST_CASE("prefab.create saves nested instances unpacked, with a warning; nested local instances are left alone")
+	TEST_CASE("An instance placed as a local child of another instance is left alone by its merges")
 	{
 		PrefabFixture f;
-		Entity holder = f.Session.GetScene()->CreateEntity("Holder");
-		Entity nested = f.Instantiate();
-		f.Session.GetScene()->SetParent(nested, holder, false);
-		const json result = f.Run("prefab.create", { { "entity", IdOf(holder) }, { "path", "Assets/Prefabs/Holder.bprefab" } });
-		REQUIRE(result["warnings"].size() == 1);
-		CHECK(Contains(result["warnings"][0].get<std::string>(), "unpacked"));
-		CHECK(result["linked"] == false);
-		CHECK_FALSE(holder.HasComponent<PrefabComponent>());
-		const auto text = FileSystem::ReadTextFile(Basalt::Project::ResolvePath("Assets/Prefabs/Holder.bprefab"));
-		REQUIRE(text);
-		CHECK_FALSE(Contains(*text, "\"Prefab\""));
-
-		// A nested instance placed as a local child of another instance is left alone by its merges.
 		Entity outer = f.Instantiate();
 		Entity inner = f.Instantiate();
 		f.Session.GetScene()->SetParent(inner, PrefabFixture::ChildNamed(outer, "Child"), false);

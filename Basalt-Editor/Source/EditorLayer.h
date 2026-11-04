@@ -277,6 +277,7 @@ namespace Basalt {
 			SaveSceneAs,
 			OpenPrefab,
 			SavePrefabAs,
+			SaveVariantAs,
 			ImportModel,
 			OpenProject,
 			NewProject,

@@ -8,6 +8,7 @@
 #include "Basalt/Core/JsonUtils.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Project/Project.h"
+#include "Basalt/Scene/Prefab.h"
 
 #include <spdlog/fmt/fmt.h>
 
@@ -350,14 +351,13 @@ namespace Basalt {
 				auto image = m_Renderer->RenderPrefab(relativePath, outError);
 				if (!image)
 					return std::nullopt;
-				const auto text = FileSystem::ReadTextFile(Project::ResolvePath(relativePath));
-				const nlohmann::json data = text ? ParseJson(*text) : nlohmann::json();
-				const auto entities = data.is_object() ? data.find("Entities") : data.end();
+				nlohmann::json entities;
+				std::string readError;
 				std::vector<std::string> details;
-				if (entities != data.end() && entities->is_array())
-					details.push_back(fmt::format("{} entit{}", entities->size(), entities->size() == 1 ? "y" : "ies"));
+				if (Prefab::ReadFile(Project::ResolvePath(relativePath), entities, readError))
+					details.push_back(fmt::format("{} entit{}", entities.size(), entities.size() == 1 ? "y" : "ies"));
 				else
-					BS_CORE_WARN("Thumbnails: '{}' rendered but could not be read again for its details (changed meanwhile?)", relativePath);
+					BS_CORE_WARN("Thumbnails: '{}' rendered but could not be read again for its details: {}", relativePath, readError);
 				return ThumbnailCache::Entry{ std::move(*image), std::move(details) };
 			}
 			case ThumbnailKind::Material:

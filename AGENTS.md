@@ -143,6 +143,21 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   prefab write (`scene.open` skips them). `prefab.open` swaps in an isolated scene; the waiting scene keeps its path,
   dirty state, selection and (editor) undo history, and edit boundaries other than `prefab.save/close`, plus
   `project.export`, are rejected until `prefab.close`.
+- **Nested prefabs and variants.** In a `.bprefab`, a record whose `Prefab` component names another file stands for that
+  file's tree, and its `Overrides` (a JSON merge patch keyed by entity IDs in the holding file, whose asset fields are
+  encoded like a baseline's) hold only what differs; a variant is a prefab whose root is such a record, so
+  both share one reader, writer and merge. `Prefab::ReadFile` expands them recursively (cycles, `MaxNestingDepth` and
+  `MaxExpandedEntities` are errors) into flat records whose nested IDs are derived from the nested root's ID, so files
+  are never rewritten when what they nest changes, and overrides and references stay valid. A prefab write merges into
+  every instance whose source read that file (`ReadReport::Files`). In a scene the outermost instance tracks all flat
+  records, and nested roots keep a marker (`Prefab` alone, also in baseline records, which carries moves and validation
+  through `AssetFields`): `EnclosingInstance` finds their owner, they never merge alone, and instance commands on them
+  are rejected, except `prefab.unpack`, there an override. Unpacking an outer instance adopts its nested instances. Only
+  `prefab.open` tracks the outermost nested instances, so overrides and live merges work there;
+  `Prefab::ToFileEntities` turns flat records back into nested ones on every write. A nested root's position and rotation
+  are the holding prefab's (always in its overrides); a variant's follow the base until changed. An override of an
+  entity the nested prefab dropped does nothing (`prefab.info`, `project.validate`), and that entity's added children
+  move to the root. Format version 4; a `Prefab` component in an older file is ignored.
 - **Shipping.** `ProjectConfig` holds `Version` (3 or 4 16-bit numbers, `ParseProjectVersion`), `Company` (Name and
   Company are capped at `MaxTextLength`) and `Icon` (a PNG asset reference, encoded and moved like `StartScene`; an
   unresolved one stays an `asset-uuid:` key). `project.export {"package": true}` packages for the host: a `.app`
