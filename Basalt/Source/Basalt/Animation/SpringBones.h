@@ -33,7 +33,8 @@ namespace Basalt {
 		float Radius = 0;
 	};
 
-	// Where a swept point first touches something: how far along its move (0..1), and the surface's normal there.
+	// Where a swept point first touches something: how far along its move (0..1), and the surface's normal there (away from
+	// the surface, toward the point).
 	struct SpringSweepHit
 	{
 		float Fraction = 0;
@@ -57,7 +58,8 @@ namespace Basalt {
 		// otherwise pass through (see SpringChain::Continuous).
 		bool Continuous = false;
 		// The first thing `World` holds that the sphere moving from the first position to the second meets, or nullopt.
-		// A sphere that starts inside something and moves out of it meets nothing. Only asked when Continuous.
+		// A sphere that starts inside something and moves out of it meets nothing. Only asked when Continuous, and needed
+		// then whenever World is set.
 		std::function<std::optional<SpringSweepHit>(const glm::vec3&, const glm::vec3&)> WorldSweep;
 		// Pull (1/s², 0..SpringChain::MaxStiffness) toward the animated shape, velocity decay (1/s, nonnegative), and the
 		// points' radius against the colliders.
@@ -80,7 +82,7 @@ namespace Basalt {
 	// length. A point that can stay outside every collider at its length usually ends up there; overlapping colliders
 	// can leave it slightly inside.
 	inline constexpr uint32_t SpringConstraintIterations = 4;
-	// How many surfaces a swept point slides along in one substep before it stays where it is.
+	// How many surfaces a swept point can meet in one substep; it stops at the last.
 	inline constexpr uint32_t SpringSweepIterations = 3;
 	// A swept point held farther than this many bone lengths from the point before it lets go: what holds it is behind
 	// a chain that moved on, and a point left there would pull its bone through the obstacle anyway.
@@ -88,7 +90,8 @@ namespace Basalt {
 	// Advances `points` (one per joint) by request.Seconds. Each point keeps its animated distance from the point
 	// before it (from the first joint for the first point), is pulled toward where the animated chain shape puts it
 	// relative to the simulated points before it, swings at most MaxAngle away from there, is pushed out of the
-	// colliders and the world, which win over the angle limit, and with Continuous stops at what it would have passed.
+	// colliders and the world, which win over the angle limit, and with Continuous stops at what it would have passed
+	// (a swept point can end nearer than its bone length, or up to SpringSweepStretch bone lengths away).
 	void SimulateSpringChain(const SpringSimulationRequest& request, std::span<SpringPoint> points);
 
 	// Fills outJoints with the chain's joints followed by its tip (Joint, then each joint's first child, ChainLength

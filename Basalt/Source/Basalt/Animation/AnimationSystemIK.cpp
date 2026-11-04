@@ -73,10 +73,10 @@ namespace Basalt {
 		return state;
 	}
 
-	std::optional<Entity> AnimationSystem::FindCharacter(Entity entity, const PhysicsWorld& physics)
+	std::optional<Entity> AnimationSystem::FindCharacter(Entity entity, const PhysicsWorld* physics)
 	{
 		for (Entity holder = entity; holder; holder = holder.GetParent())
-			if (holder.HasComponent<CharacterControllerComponent>() && physics.HasCharacter(holder))
+			if (holder.HasComponent<CharacterControllerComponent>() && (!physics || physics->HasCharacter(holder)))
 				return holder;
 		return std::nullopt;
 	}
@@ -177,7 +177,7 @@ namespace Basalt {
 		// Feet follow the ground only while the character stands on it, so a jump keeps its animated legs. The
 		// character's bodies (on the entity or the controller's entity above it, and below either) are not ground;
 		// other ancestors (a moving platform the character is parented to) are.
-		const std::optional<Entity> character = physics ? FindCharacter(entity, *physics) : std::nullopt;
+		const std::optional<Entity> character = physics ? FindCharacter(entity, physics) : std::nullopt;
 		const bool airborne = character && !physics->IsCharacterGrounded(*character);
 		const Entity body = character.value_or(entity);
 		const float blend = smoothing > 0 ? 1.0f - std::exp(-seconds / smoothing) : 1.0f;

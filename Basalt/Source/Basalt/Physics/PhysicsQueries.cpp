@@ -349,9 +349,8 @@ namespace Basalt {
 
 	PhysicsShapeSnapshot PhysicsWorld::CollectShapes(const glm::vec3& min, const glm::vec3& max, float radius, const PhysicsQueryFilter& filter, const std::function<bool(UUID)>& accept) const
 	{
-		PhysicsShapeSnapshot snapshot;
-		if (!IsFiniteVec(min) || !IsFiniteVec(max) || glm::any(glm::greaterThan(min, max)) || !std::isfinite(radius) || radius < 0.0f)
-			return snapshot;
+		if (!IsValidShapeRegion(min, max, radius))
+			return {};
 		const JPH::PhysicsSystem& system = *m_Impl->System;
 		JPH::AllHitCollisionCollector<JPH::CollideShapeBodyCollector> collector;
 		const QueryObjectLayerFilter layerFilter(filter.LayerMask);
@@ -361,21 +360,19 @@ namespace Basalt {
 		std::vector<PhysicsShapeSnapshot::Candidate> candidates;
 		for (const JPH::BodyID& id : collector.mHits)
 		{
-			PhysicsShapeSnapshot::Candidate candidate;
+			UUID entity = 0;
+			JPH::TransformedShape shape;
 			{
 				const JPH::BodyLockRead lock(system.GetBodyLockInterface(), id);
 				if (!lock.Succeeded() || !bodyFilter.ShouldCollideLocked(lock.GetBody()))
 					continue;
-				candidate.Entity = lock.GetBody().GetUserData();
-				candidate.Shape = lock.GetBody().GetTransformedShape();
+				entity = lock.GetBody().GetUserData();
+				shape = lock.GetBody().GetTransformedShape();
 			}
 			// After the lock is released: `accept` may query the world.
-			if (accept && !accept(candidate.Entity))
+			if (accept && !accept(entity))
 				continue;
-			const JPH::AABox bounds = candidate.Shape.GetWorldSpaceBounds();
-			const glm::vec3 closest = glm::clamp(center, FromJolt(JPH::Vec3(bounds.mMin)), FromJolt(JPH::Vec3(bounds.mMax)));
-			candidate.Distance = glm::length(closest - center);
-			candidates.push_back(std::move(candidate));
+			candidates.push_back(PhysicsShapeSnapshot::Candidate::At(entity, shape, shape.GetWorldSpaceBounds(), center));
 		}
 		return PhysicsShapeSnapshot::FromCandidates(std::move(candidates), radius);
 	}

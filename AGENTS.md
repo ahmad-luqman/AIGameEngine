@@ -81,22 +81,23 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   `PhysicsWorld::RaycastAll` and skip the entity, its descendants and its
   character controller's entity and descendants. IK targets and weights live in the system keyed by entity (they
   survive playback resets); layer state belongs to the playback. Solvers (`Animation/InverseKinematics.h`) are
-  stateless free functions that handle mirrored (negative-determinant) parents. `SpringBoneComponent` chains swing right
-  after IK, from `Pose` plus the IK overlay (never their own last solution), as world-space points
+  stateless free functions that handle mirrored (negative-determinant) parents. `SpringBoneComponent` chains swing after
+  IK and the ragdoll pass, from `Pose` plus the IK and ragdoll overlays (never their own last solution), as world-space points
   (`Animation/SpringBones.h`, substeps of at most 1/120 s) kept in the system by entity; their joints go into a second overlay
   that `Finish` applies after the IK one. Each substep limits a point's swing (`MaxAngle`), then pushes it out of the
-  chain's colliders (all of the component's, or those its `Colliders` list names) and, with `CollidePhysics`
-  (Play/Simulate only), out of the bodies a per-chain, per-frame `PhysicsShapeSnapshot` (`PhysicsWorld::CollectShapes`:
+  chain's colliders (all of the component's, or those its `Colliders` list names) and, with `CollidePhysics`, out of the
+  bodies a per-chain, per-frame `PhysicsShapeSnapshot` (`PhysicsWorld::CollectShapes`:
   nearest 32, the character's own bodies skipped through `FindCharacter`, as for IK foot rays, seen through the chain's
-  `Layer` and the collision matrix) gathered; `Continuous` chains then sweep each point's move (`PhysicsShapeSnapshot::Sweep`,
-  sphere tracing against colliders). The edit preview swings springs too, against the scene's static bodies:
+  `Layer` and the collision matrix) gathered; `Continuous` chains then sweep each point's move (`PhysicsShapeSnapshot::Sweep`, a Jolt
+  shape cast, against bodies; sphere tracing, `SweepShape`, against colliders). The edit preview swings springs too, with
+  `CollidePhysics` against the scene's static bodies:
   `StaticPhysicsShapes` builds them from the components (`BuildColliderShape`) with no world, which would write `BodyRecord`s
   into the edit registry, and yields the same snapshots (`PhysicsShapeSnapshot::FromCandidates`).
 - **Ragdolls.** `RagdollComponent` holds authored settings; `PhysicsWorld` owns the Jolt ragdoll, its selected skin
   joints and frozen recovery pose. Capsules and swing-twist frames derive from the rest skeleton, and activation starts
-  on the current pose. Active ragdolls suspend the entity's body/controller and inherit the body's linear/angular motion (a controller's linear motion); live rebuilds preserve
+  on the current pose. Active ragdolls (other than `KinematicRoot` rigs, below) suspend the entity's body/controller and inherit the body's linear/angular motion (a controller's linear motion); live rebuilds preserve
   physical placement and joint motion. Animation keeps
-  ticking, but root motion, IK and springs yield to the physical overlay, applied last before attachments. Powered rigs
+  ticking, but a rig that owns its root (`RagdollOwnsRoot`) makes root motion, IK and springs yield to the physical overlay. Powered rigs
   (strength x `MotorTorque` > 0; the strength is a per-entity `FadingWeight` in `PhysicsWorld`, configured from
   `MotorStrength`, faded by `SetRagdollMotorStrength`, surviving rebuilds) set swing-twist position
   motors toward the layered animation once per physics frame (`DriveRagdollMotors`, targets from the portable
@@ -104,22 +105,27 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   limit); a rig never powered never touches its motors, and motor and balance settings never rebuild
   (`RagdollNeedsRebuild`). A `KinematicRoot` rig keeps the entity's body or character, root motion and IK: `RagdollOwnsRoot`, not
   `HasRagdollPose`, is what makes animation yield. Its root part is a kinematic body moved each fixed step
-  (`StepRagdolls`, after characters move), the entity's move counts as walking unless `IsRagdollTeleport`, the overlay leaves
-  the root to the animation and places limbs relative to the root body (so a frame without a fixed step does not tear
-  them), and overlays run IK, ragdoll, springs (a chain on rig joints yields; one below hangs from the physical joint). A
-  limb against the entity's own body is filtered in the collide callback by collision group (never a `{uuid, uuid}` ignored
-  pair: limbs of one rig share a UUID and must collide), a controller on an ancestor through `RagdollRecord::Owner` in
-  `IgnoredPairs`, and each character's update filter skips its rig. `StopRagdollBodies` then ends only the limbs' contacts.
-  Balance (`BalanceRagdoll`, each fixed step, since Jolt clears forces) is rigid-body forces, not a joint: tilt
-  correction about the center of mass, a capped upward push toward the animated `StandHeight`, and a brake for the
-  grip the lift took off the feet, gated on `HasRagdollSupport` and `BalanceMaxTilt`. It uses no angles, so it needs no
-  libm: only Jolt's math and `DecomposeRagdollTransform`, as its forces reach the determinism hashes. Recovery
+  (`FollowRagdollRoot`, after characters move, dividing the frame's animated move among its steps) and a jump faster than
+  `RagdollRootMaxSpeed`, whatever made it, carries the whole rig (`IsRagdollTeleport`). The overlay leaves the root to the
+  animation and places limbs relative to the root body, so a frame without a fixed step does not tear them. The passes
+  solve IK, ragdoll, springs, with `Finish` still applying IK, springs, ragdoll: a chain on the rig's joints below its root
+  yields, and one on nodes below them hangs from the physical joint. A limb against the entity's own body is filtered by
+  collision group in `BodyPairFilter` (a `SimShapeFilter`: Jolt's continuous collision job honors it, never a collide
+  callback; not a `{uuid, uuid}` ignored pair, as limbs of one rig share a UUID and must collide), a controller on an
+  ancestor through `LiveState::Character` in `IgnoredPairs`, and each character's own `NonCharacterBodyFilter` skips its
+  rig. `EndContacts` takes the bodies an entity lost, so a rig and the body it keeps end only their own contacts.
+  Balance (`BalanceRagdoll`, each fixed step, since Jolt clears forces) is rigid-body forces, not a joint: tilt correction
+  about the center of mass, a capped upward push toward the animated `StandHeight`, and a brake, relative to the supporting
+  body, for the grip the lift took off the feet, gated on `FindRagdollSupport` (contact normals are kept for it: a wall is no
+  support) and `BalanceMaxTilt`. It uses no angles, so it needs no libm: only Jolt's math and `DecomposeRagdollTransform`, as
+  its forces reach the determinism hashes. Recovery
   removes the bodies, optionally starts a get-up clip, and blends local transforms from the frozen pose; gameplay
   supplies the height when recovering onto a different ground level, and a `KinematicRoot` entity stays where it is. Positive uniform transforms are required.
   `scene.hash` includes physical joints and recovery weight; saves/copies contain configuration only. Ragdoll TRS
   decomposition avoids platform libm rounding, and recovery rotations and clip sampling and pose blends use Jolt's
-  portable interpolation (`Math::Slerp`), so the layered poses ragdoll motors read agree across platforms (IK and root
-  motion still use libm, and feed no physics).
+  portable interpolation (`Math::Slerp`), so the layered poses ragdoll motors read agree across platforms (root motion's yaw
+  uses `Math::Atan2`/`YawRotation`, as it reaches physics through characters and kinematic roots; IK still uses libm, and
+  feeds no physics).
 - **Morph targets and retargeting.** Morph deltas are imported per submesh (`MeshSource::MorphDeltas`, following vertex
   reordering) and drawn in the vertex shader from a per-model delta texture (set 2, vertex stage) with each draw's
   nonzero weights packed into draw records alongside the palettes. Weights live in the pose

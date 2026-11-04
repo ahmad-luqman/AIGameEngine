@@ -23,8 +23,11 @@
 #include <glm/gtc/epsilon.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
+#include <algorithm>
+#include <array>
 #include <limits>
 #include <optional>
+#include <span>
 #include <tuple>
 
 using namespace Basalt;
@@ -1037,13 +1040,19 @@ TEST_SUITE("Animation")
 		CHECK(dragged.x == doctest::Approx(4 - 0.436f).epsilon(0.03));
 		CHECK(strand.Length(0) == doctest::Approx(1).epsilon(0.02));
 
-		// The chain moves through a thin rod while its point is behind it: the point is stopped at first, but once the
-		// rod would part it from its bone it comes along.
-		const SpringCollisionShape rod{ .A = { -1, -0.5f, -1 }, .B = { 1, -0.5f, -1 }, .Radius = 0.001f };
-		const SpringCollisionShape wall{ .A = { 0, -0.5f, 0.05f }, .B = { 0, 0.5f, 0.05f }, .Radius = 0.001f };
-		const std::array<SpringCollisionShape, 2> shapes{ rod, wall };
+		// A chain whose head walks through a wall, its point behind: stopped at first, held past half a bone it comes along.
+		// The wall is a plane at z = 0.5 that stops anything crossing it.
+		const auto wall = [](const glm::vec3& from, const glm::vec3& to) -> std::optional<SpringSweepHit> {
+			if ((from.z - 0.5f) * (to.z - 0.5f) >= 0)
+				return std::nullopt;
+			return SpringSweepHit{ .Fraction = (0.5f - from.z) / (to.z - from.z), .Normal = { 0, 0, from.z < 0.5f ? -1.0f : 1.0f } };
+		};
 		Strand trailing({ 0, 0, 0 }, { 0, 0, -1 }, 1, 0.2f);
-		trailing.Move({ 0, 0, 2 }, 60, 1.0f / 60.0f, { .Colliders = shapes, .Continuous = true, .Stiffness = 100 });
+		SpringSimulationRequest request{ .Continuous = true, .WorldSweep = wall, .Stiffness = 100 };
+		// Its head a little past the wall, the point is held on the near side.
+		trailing.Move({ 0, 0, 2 }, 17, 1.0f / 60.0f, request);
+		CHECK(trailing.Points[0].Position.z < 0.5f);
+		trailing.Move({ 0, 0, 2 }, 43, 1.0f / 60.0f, request);
 		CHECK(trailing.Points[0].Position.z > 1.5f);
 		CHECK(trailing.Length(0) == doctest::Approx(0.2f).epsilon(0.05));
 	}
@@ -1072,6 +1081,16 @@ TEST_SUITE("Animation")
 		REQUIRE(deeper);
 		CHECK(deeper->Fraction == 0);
 		CHECK(Near(deeper->Normal, glm::vec3(0, 0, -1)));
+		// Deep inside a thick body the normal is still the shortest way out, not against the move.
+		auto block = scene.CreateEntity("Block");
+		block.GetTransform().Translation = { 20, 0, 0 };
+		block.AddComponent<RigidBodyComponent>();
+		block.AddComponent<BoxColliderComponent>().HalfExtents = { 2, 2, 2 };
+		scene.OnUpdate(Step);
+		const PhysicsShapeSnapshot inBlock = scene.GetPhysicsWorld()->CollectShapes({ 18, -2, -2 }, { 22, 2, 2 }, 0.1f);
+		const auto inner = inBlock.Sweep({ 20, 0, -1.8f }, { 21, 0, 0 });
+		REQUIRE(inner);
+		CHECK(Near(inner->Normal, glm::vec3(0, 0, -1)));
 		// Nothing moves, or nothing is known.
 		CHECK_FALSE(snapshot.Sweep({ 0, 0, -1 }, { 0, 0, -1 }));
 		CHECK_FALSE(snapshot.Sweep({ 0, 0, -1 }, { 0, 0, std::numeric_limits<float>::infinity() }));
@@ -1261,6 +1280,9 @@ TEST_SUITE("Animation")
 		wall.GetComponent<BoxColliderComponent>().HalfExtents = glm::vec3(2);
 		shapes.Refresh();
 		CHECK(pushed({ 0, 1.5f, 3 }));
+		wall.GetTransform().Scale = glm::vec3(2);
+		shapes.Refresh();
+		CHECK(pushed({ 0, 3.5f, 3 }));
 		scene.DestroyEntity(wall);
 		shapes.Refresh();
 		CHECK_FALSE(pushed({ 0, 1.5f, 3 }));
@@ -1269,9 +1291,154 @@ TEST_SUITE("Animation")
 		dynamic.GetComponent<RigidBodyComponent>().Type = RigidBodyType::Static;
 		shapes.Refresh();
 		CHECK(pushed({ 5, 0.5f, 0 }));
+
+		// A transform that cannot place a body leaves it out, said once, and it returns with its collider when it can.
+		const auto since = Log::GetHistory().GetTotalCount();
+		dynamic.GetTransform().Scale = glm::vec3(0);
+		for (int i = 0; i < 3; i++)
+			shapes.Refresh();
+		CHECK_FALSE(pushed({ 5, 0.5f, 0 }));
+		CHECK(CountLogMessages(since, "degenerate transform; the preview leaves its body out") == 1);
+		dynamic.GetTransform().Scale = glm::vec3(1);
+		shapes.Refresh();
+		CHECK(pushed({ 5, 0.5f, 0 }));
+		// A layer the project does not define is Default, as in Play.
+		dynamic.GetComponent<RigidBodyComponent>().Layer = "Nope";
+		shapes.Refresh();
+		CHECK(CountLogMessages(since, "unknown physics layer 'Nope', using Default") == 1);
+		CHECK(shapes.CollectShapes({ 4, -1, -1 }, { 6, 1, 1 }, 0.1f, { .LayerMask = 1 }).PushOut({ 5, 0.5f, 0 }).has_value());
 	}
 
-	TEST_CASE("The edit preview's chains rest on static bodies, skip the character's own and sweep")
+	TEST_CASE("Static shapes answer as the world does for the same scene")
+	{
+		ClearAssetCache clear;
+		Scene scene;
+		const auto add = [&](const glm::vec3& at, const glm::quat& rotation, const glm::vec3& scale) {
+			auto entity = scene.CreateEntity("Body");
+			entity.GetTransform().Translation = at;
+			entity.GetTransform().Rotation = rotation;
+			entity.GetTransform().Scale = scale;
+			entity.AddComponent<RigidBodyComponent>();
+			return entity;
+		};
+		// Offset colliders put the center of mass away from the origin; a compound of two kinds, a rotated parent, a scale.
+		const glm::quat turned = glm::angleAxis(0.6f, glm::normalize(glm::vec3(1, 2, 3)));
+		auto offset = add({ 0, 0, 0 }, turned, glm::vec3(1));
+		offset.AddComponent<BoxColliderComponent>().Offset = { 1, 0, 0 };
+		auto compound = add({ 3, 0, 0 }, glm::quat(1, 0, 0, 0), glm::vec3(1));
+		compound.AddComponent<SphereColliderComponent>().Offset = { 0, 1, 0 };
+		compound.AddComponent<BoxColliderComponent>().HalfExtents = { 0.4f, 0.4f, 0.4f };
+		auto child = add({ 0, 2, 0 }, glm::quat(1, 0, 0, 0), glm::vec3(1));
+		child.AddComponent<CapsuleColliderComponent>();
+		scene.SetParent(child, compound, false);
+		auto scaled = add({ -3, 0, 0 }, turned, glm::vec3(1.5f));
+		scaled.AddComponent<MeshColliderComponent>().Mesh = "builtin://Cube";
+		StaticPhysicsShapes shapes(scene);
+		scene.OnSimulationStart();
+		PhysicsWorld& physics = *scene.GetPhysicsWorld();
+		const glm::vec3 min(-6, -4, -4), max(7, 5, 4);
+		const PhysicsShapeSnapshot world = physics.CollectShapes(min, max, 0.1f);
+		const PhysicsShapeSnapshot edit = shapes.CollectShapes(min, max, 0.1f);
+		for (int x = 0; x <= 26; x++)
+			for (int y = 0; y <= 18; y++)
+				for (int z = 0; z <= 16; z++)
+				{
+					const glm::vec3 point = min + 0.5f * glm::vec3(x, y, z);
+					CAPTURE(point);
+					const auto expected = world.PushOut(point);
+					const auto actual = edit.PushOut(point);
+					REQUIRE(expected.has_value() == actual.has_value());
+					if (expected)
+						CHECK(Near(*expected, *actual, 1e-4f));
+					const auto expectedHit = world.Sweep(point, point + glm::vec3(1.3f, 0.7f, -0.4f));
+					const auto actualHit = edit.Sweep(point, point + glm::vec3(1.3f, 0.7f, -0.4f));
+					REQUIRE(expectedHit.has_value() == actualHit.has_value());
+					if (expectedHit)
+						CHECK(expectedHit->Fraction == doctest::Approx(actualHit->Fraction).epsilon(1e-4));
+				}
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("Static shapes follow a collider's mesh and stop at a triangle mesh's front faces")
+	{
+		ClearAssetCache clear;
+		Scene scene;
+		auto floor = scene.CreateEntity("Floor");
+		floor.AddComponent<RigidBodyComponent>();
+		floor.AddComponent<MeshComponent>().Mesh = "builtin://Plane";
+		floor.AddComponent<MeshColliderComponent>();
+		auto cube = scene.CreateEntity("Cube");
+		cube.GetTransform().Translation = { 5, 0, 0 };
+		cube.AddComponent<RigidBodyComponent>();
+		cube.AddComponent<MeshComponent>().Mesh = "builtin://Cube";
+		cube.AddComponent<MeshColliderComponent>().Convex = true;
+		StaticPhysicsShapes shapes(scene);
+		const auto collect = [&](const glm::vec3& at) { return shapes.CollectShapes(at - glm::vec3(2), at + glm::vec3(2), 0.1f); };
+		// A plane's triangles face up: a sphere comes down on it, and up through it.
+		CHECK(collect({ 0, 1, 0 }).Sweep({ 0, 1, 0 }, { 0, -1, 0 }).has_value());
+		CHECK_FALSE(collect({ 0, -1, 0 }).Sweep({ 0, -1, 0 }, { 0, 1, 0 }).has_value());
+		// The borrowed mesh is the entity's MeshComponent: a change reaches the shape.
+		CHECK(collect({ 5, 0.45f, 0 }).PushOut({ 5, 0.45f, 0 }).has_value());
+		cube.GetComponent<MeshComponent>().Mesh = "builtin://Sphere";
+		shapes.Refresh();
+		CHECK(collect({ 5, 0.45f, 0.4f }).PushOut({ 5, 0.45f, 0.4f }).has_value() == false);
+	}
+
+	TEST_CASE("Spring chain warnings say what a chain's settings cannot do")
+	{
+		ClearAssetCache clear;
+		Scene scene;
+		PhysicsLayers layers;
+		std::string error;
+		REQUIRE(layers.Add("Nothing", error));
+		for (uint32_t other = 0; other < layers.GetCount(); other++)
+			layers.SetCollides(*layers.Find("Nothing"), other, false);
+		scene.SetPhysicsLayers(layers);
+		auto chain = RightArm();
+		chain.Continuous = true;
+		auto biped = AddBiped(scene, { chain });
+		const auto warned = [&](const std::string& text) { return std::ranges::count(GetAnimationWarnings(biped), text); };
+		const std::string nothing = "SpringBone chain 'RightArm': Continuous has no effect: there is nothing to sweep against";
+		CHECK(warned(nothing) == 1);
+		auto& config = biped.GetComponent<SpringBoneComponent>().Chains[0];
+		config.CollidePhysics = true;
+		CHECK(warned(nothing) == 0);
+		config.Layer = "Nothing";
+		CHECK(warned("SpringBone chain 'RightArm': the physics layer 'Nothing' collides with no layer") == 1);
+	}
+
+	TEST_CASE("A swept chain in the edit preview stops at thin static bodies")
+	{
+		const auto run = [](bool continuous) {
+			ClearAssetCache clear;
+			Scene scene;
+			auto chain = RightArm();
+			chain.CollidePhysics = true;
+			chain.Continuous = continuous;
+			auto biped = AddBiped(scene, { chain });
+			biped.GetComponent<AnimatorComponent>().Preview = true;
+			biped.GetComponent<SpringBoneComponent>().Wind = { 0, 0, 300 };
+			scene.GetPhysicsSettings().Gravity = glm::vec3(0, -1, 0);
+			scene.UpdateAnimationPreview(Step);
+			glm::mat4 joint;
+			std::string error;
+			REQUIRE(scene.GetPoseAnimationSystem()->GetBoneTransform(biped, "RightUpperArm", joint, error));
+			const float wallZ = joint[3].z + 0.3f;
+			auto wall = scene.CreateEntity("Wall");
+			wall.GetTransform().Translation = { 0, 1, wallZ };
+			wall.AddComponent<RigidBodyComponent>();
+			wall.AddComponent<BoxColliderComponent>().HalfExtents = { 3, 3, 0.001f };
+			for (int i = 0; i < 90; i++)
+				scene.UpdateAnimationPreview(Step);
+			REQUIRE(scene.GetPoseAnimationSystem()->GetBoneTransform(biped, "RightHand", joint, error));
+			scene.ResetAnimationPreview();
+			return joint[3].z - wallZ;
+		};
+		CHECK(run(false) > 0);
+		CHECK(run(true) < 0);
+	}
+
+	TEST_CASE("The edit preview's chains rest on static bodies and skip the character's own")
 	{
 		ClearAssetCache clear;
 		Scene scene;
@@ -1310,8 +1477,7 @@ TEST_SUITE("Animation")
 		auto foreign = addShelf("Foreign", {});
 		const json placed = SceneSerializer::SerializeScene(scene);
 		CHECK(before != placed);
-		// Thrown through the shelf from below by nothing: starting under it, the hand stays clear of it, and starting above
-		// it the arm lands on it.
+		// Reversed gravity lifts the arm above the shelf, and normal gravity lands it there.
 		biped.GetComponent<SpringBoneComponent>().Chains[0].GravityFactor = -1;
 		for (int i = 0; i < 300; i++)
 			scene.UpdateAnimationPreview(Step);

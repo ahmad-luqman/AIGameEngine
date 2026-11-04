@@ -118,6 +118,21 @@ namespace Basalt {
 
 	namespace {
 
+		// The chain element's schema with its Layer offered as the project's layers, no layer (every one) first, and any
+		// unknown name of `chains` kept selectable so it stays visible until it is fixed.
+		std::shared_ptr<const ComponentObjectSchema> WithChainLayers(const ComponentObjectSchema& schema, const nlohmann::json& chains)
+		{
+			const Ref<Project>& project = Project::GetActive();
+			std::vector<std::string> names = project ? project->GetConfig().Physics.GetNames() : PhysicsLayers().GetNames();
+			names.insert(names.begin(), std::string());
+			for (const nlohmann::json& chain : chains)
+				if (const auto layer = chain.find("Layer"); layer != chain.end() && layer->is_string() && std::ranges::find(names, layer->get<std::string>()) == names.end())
+					names.push_back(layer->get<std::string>());
+			auto copy = std::make_shared<ComponentObjectSchema>(schema);
+			copy->EnumOptions["Layer"] = std::move(names);
+			return copy;
+		}
+
 		// Whether the entity gets a physics body when play starts (a RigidBody alone is not enough).
 		bool HasPhysicsBody(Entity entity)
 		{
@@ -324,7 +339,10 @@ namespace Basalt {
 					}
 					if (const auto type = info.FieldTypes.find(field); type != info.FieldTypes.end() && type->second.Kind == ComponentFieldKind::List)
 					{
-						const JsonFieldResult result = DrawJsonList(field, data[field], type->second);
+						ComponentFieldType listType = type->second;
+						if (info.Name == "SpringBone" && field == "Chains")
+							listType.Element = WithChainLayers(*listType.Element, data[field]);
+						const JsonFieldResult result = DrawJsonList(field, data[field], listType);
 						m_Context.EditField("component.set", { { "entity", id }, { "component", info.Name }, { "data", { { field, data[field] } } } }, result.Changed, result.Committed);
 						continue;
 					}

@@ -95,14 +95,15 @@ namespace Basalt {
 			return;
 		CharacterCollision.Remove(it->second.Character.GetPtr());
 		const JPH::BodyID inner = it->second.Character->GetInnerBodyID();
+		const uint32_t removed = inner.GetIndexAndSequenceNumber();
 		if (!inner.IsInvalid())
 		{
-			BodyToEntity.erase(inner.GetIndexAndSequenceNumber());
+			BodyToEntity.erase(removed);
 			ContactListener.Materials[inner.GetIndex()] = {};
 		}
 		// The character destroys its inner body.
 		Characters.erase(it);
-		EndContacts(uuid, false);
+		EndContacts(uuid, std::span(&removed, 1), false);
 	}
 
 	void PhysicsWorld::Impl::OnCharacterChanged(entt::registry& registry, entt::entity entity)
@@ -220,7 +221,7 @@ namespace Basalt {
 		// A new character starts in the air; find its ground now so a rebuild (e.g. a crouch changing the
 		// collider) does not lose a step of IsGrounded or a jump.
 		const JPH::ObjectLayer objectLayer = MakeObjectLayer(true, layer);
-		character->RefreshContacts(JPH::DefaultBroadPhaseLayerFilter(ObjectVsBroadPhaseLayerFilter, objectLayer), JPH::DefaultObjectLayerFilter(ObjectLayerPairFilter, objectLayer), CharacterBodyFilter, JPH::ShapeFilter(),
+		character->RefreshContacts(JPH::DefaultBroadPhaseLayerFilter(ObjectVsBroadPhaseLayerFilter, objectLayer), JPH::DefaultObjectLayerFilter(ObjectLayerPairFilter, objectLayer), NonCharacterBodyFilter(*this, entity.GetUUID()), JPH::ShapeFilter(),
 								   *TempAllocator);
 	}
 
@@ -246,7 +247,7 @@ namespace Basalt {
 		const JPH::ObjectLayer layer = MakeObjectLayer(true, record.Layer);
 		// Switches whatever the new shape overlaps (FLT_MAX); the next update pushes a grown character out. The
 		// character keeps its contacts and ground.
-		character.SetShape(outer.Shape, FLT_MAX, JPH::DefaultBroadPhaseLayerFilter(ObjectVsBroadPhaseLayerFilter, layer), JPH::DefaultObjectLayerFilter(ObjectLayerPairFilter, layer), CharacterBodyFilter, JPH::ShapeFilter(),
+		character.SetShape(outer.Shape, FLT_MAX, JPH::DefaultBroadPhaseLayerFilter(ObjectVsBroadPhaseLayerFilter, layer), JPH::DefaultObjectLayerFilter(ObjectLayerPairFilter, layer), NonCharacterBodyFilter(*this, entity.GetUUID()), JPH::ShapeFilter(),
 						   *TempAllocator);
 		character.SetInnerBodyShape(inner.Shape);
 		record.Bounds = outer.Shape->GetLocalBounds();
@@ -315,7 +316,7 @@ namespace Basalt {
 			const JPH::ObjectLayer layer = MakeObjectLayer(true, record.Layer);
 			const JPH::DefaultBroadPhaseLayerFilter broadPhaseFilter(ObjectVsBroadPhaseLayerFilter, layer);
 			const JPH::DefaultObjectLayerFilter objectLayerFilter(ObjectLayerPairFilter, layer);
-			// Other characters are met through CharacterCollision, not their inner bodies.
+			// Other characters are met through CharacterCollision, not their inner bodies, and this one's rig not at all.
 			const NonCharacterBodyFilter bodyFilter(*this, entity.GetUUID());
 			const JPH::ShapeFilter shapeFilter;
 

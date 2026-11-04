@@ -1313,7 +1313,7 @@ the selected clip is held at time 0 until played. Edit mode shows the authored r
 of `PlayOnStart`): its clip or state machine (a state machine at its parameters' defaults, so its blend-space states
 sample at those values; a `Clip` naming a blend space plays it at (0, 0)), layers (clips and graphs), inverse kinematics
 (script-free targets: `FollowTarget` chains follow `Target`; foot locks work, ground placement does not, as edit mode has
-no physics) and spring bones (they swing as the entity is moved in the editor and stay outside the component's colliders
+no physics world) and spring bones (they swing as the entity is moved in the editor and stay outside the component's colliders
 and, with `CollidePhysics`, the scene's static bodies; bodies that move wait for Play). The preview never changes the scene: root motion plays in place (the entity stays where
 it was authored), events are not delivered, and ragdolls and bone attachments wait for Play. Component edits
 apply at the next frame; turning `Preview` off returns the rest pose, and Play starts every Animator afresh.
@@ -1624,7 +1624,7 @@ that locks in the air still comes down). Once locked it stays locked, whatever i
 joint `LockHeight` (default 0.05 m) above its height when it locked, the character leaves the ground, or (at once, without
 easing) the target gets `LockDistance` (default 0.3 m) away across the up axis (a teleport, or a stride the lock cannot
 follow). Locking and releasing ease with `Smoothing`. A script target, turning `FootLock` off, a zero chain weight, and frames the entity's IK
-does not run (an active ragdoll, an Animator that cannot play, a zero scale, an unresolvable chain) release the lock at
+does not run (a ragdoll of the whole body, active or recovering, an Animator that cannot play, a zero scale, an unresolvable chain) release the lock at
 once, without easing. `IsIKFootLocked` reports the lock (footstep sounds).
 
 **Foot placement.** For each `Ground` chain a ray is cast down the entity's up axis under the animated joint, from
@@ -1752,8 +1752,8 @@ names colliders collides only with those (so hair can rest on the head while a c
 matches no collider is warned about, as are unnamed entries in a list and, when a chain lists colliders, unnamed
 colliders (no list can pick them). `Wind` is a world-space acceleration (m/s²) added to every point.
 
-With `CollidePhysics`, a chain's points also stay outside physics bodies while the scene plays or simulates (a cape against
-walls, hair on the ground): every body whose bounds come within the chain's reach of its first joint, at most the nearest
+With `CollidePhysics`, a chain's points also stay outside physics bodies (a cape against walls, hair on the ground; while
+the scene plays or simulates, and against static bodies in the editor's preview): every body whose bounds come within the chain's reach of its first joint, at most the nearest
 32 (a warning is logged once per chain when more are near), except triggers, the entity's own bodies and its descendants', and the
 character controller it belongs to (on it or an ancestor) and that controller's descendants. Each point is pushed out
 of the body it penetrates most deeply along the shortest way out, then back to its bone length, as for colliders; mesh
@@ -1762,15 +1762,16 @@ where physics left them. Each substep, the angle limit applies first, then the c
 `Layer` (like a body's, a name the project does not define counts as Default, warned about) filters them through the
 project's collision matrix, so hair can ignore props the body itself walks into. In the editor's preview, which has no
 physics world, the chain collides with the same components' shapes for the scene's static bodies only: dynamic and kinematic
-bodies move once the game runs. Their shapes are rebuilt when their colliders or scale change, and a move costs nothing.
+bodies move once the game runs. Their shapes are rebuilt when their colliders, scale or mesh change; a moved body rebuilds
+nothing.
 
 A fast point can cross what is thinner than one substep's move: at 120 substeps a second a point moving 12 m/s crosses
 10 cm between checks. `Continuous` sweeps each point's move after the steps above, against the colliders and the bodies:
 it stops at the first thing it meets and slides along it with the rest of the move, so what starts on one side stays on it.
 A point starting inside something leaves freely. A point an obstacle holds more than half a bone length past its bone
 lets go (it comes through): that happens when the chain's head went past the obstacle, and a point left behind would only
-stretch the bone across it. The sweep costs a query per point and substep, so it stays off unless a chain is fast and
-its obstacles thin.
+stretch the bone across it. The sweep costs up to three queries per point and substep, so it stays off unless a chain is
+fast and its obstacles thin.
 
 Points simulate in world space in equal substeps of at most 1/120 s, so a moving or turning character swings its
 chains, and every bone keeps its animated length (scaled with the entity). A frame longer than 1/15 s (a hitch)
@@ -1937,7 +1938,7 @@ character:RecoverRagdoll("GetUp", 0.5)
 ```
 
 - `ActivateRagdoll([impulse]) -> boolean` constructs immediately, inherits the entity's rigid-body/controller
-  linear velocity and rigid-body angular velocity (including each part's tangential motion), and applies a total world-space impulse in N*s, divided equally among the parts. Repeated activation
+  linear velocity and rigid-body angular velocity (including each part's tangential motion), and applies a total world-space impulse in N*s, divided equally among the parts that can move. Repeated activation
   adds the impulse to the existing parts. Missing/unloadable rigs, invalid settings and non-finite impulses return
   false with a diagnostic; the original controller/body is retained on construction failure. A missing Ragdoll component
   and a wrongly typed Lua impulse raise an error (a missing Animator returns false). Finite impulses that would overflow physics are also rejected.
@@ -1947,8 +1948,8 @@ character:RecoverRagdoll("GetUp", 0.5)
   returns the current strength. Both raise errors without a Ragdoll component.
 - `RecoverRagdoll(clip, seconds) -> boolean` removes the bodies and blends the frozen physical pose back to animation
   over 0..60 seconds. Empty `clip` keeps the current playback. A missing clip, invalid duration or inactive ragdoll
-  returns false; a rejected request leaves the ragdoll active. The entity moves horizontally with its fallen root;
-  gameplay sets its height when the ground level changes. Zero seconds returns to animation immediately.
+  returns false; a rejected request leaves the ragdoll active. The entity moves horizontally with its fallen root (a
+  `KinematicRoot` entity stays where it is); gameplay sets its height when the ground level changes. Zero seconds returns to animation immediately.
   A missing Ragdoll component raises an error. Activation and recovery require Play/Simulate.
 
 `RootJoint` selects a skin joint and its skin descendants; empty uses every skin joint. The selection must have a
@@ -1975,17 +1976,17 @@ model reload (including unknown layers); asset-availability, animated-pose, gene
 failures can retry. Unsupported live world transforms or physical poses that cannot be expressed by the animated
 hierarchy disable the rig with a diagnostic, as does invalid physical output.
 
-Active physics replaces the entity's controller/body until recovery (unless `KinematicRoot`, below); the authored
-components remain. Animation clocks and events continue, while root motion, IK and springs yield to the physical pose
-during simulation and recovery.
+Unless `KinematicRoot` (below), active physics replaces the entity's controller/body until recovery, and root motion, IK
+and springs yield to the physical pose during simulation and recovery. The authored components remain, and animation
+clocks and events continue.
 Attachments and skinning follow that pose, including animation re-evaluation in callbacks. Play and Simulate both
 support ragdolls. Runtime handles and frozen poses stay outside saves and scene copies; `scene.hash` includes the
 physical joints and recovery weight.
 
-**Powered ragdolls.** While a ragdoll with a motor strength above 0 is active, every joint's motor turns it toward the
+**Powered ragdolls.** While a ragdoll with a motor strength above 0 is active, every joint's motor (each scaled by its bone's `MotorStrength`) turns it toward the
 Animator's current layered pose (before IK, springs and the physical pose), as a stunned body that still falls: a hit
 reaction or stumble activates it with an impulse, lets the motors pull the limbs back toward the animation, then
-recovers. The root body is not driven. Each joint is a spring of `MotorFrequency` (Hz, 0.1..30, default 8) and
+recovers. The root body has no motor. Each joint is a spring of `MotorFrequency` (Hz, 0.1..30, default 8) and
 `MotorDamping` (ratio 0..10, default 1) whose torque is capped at `MotorTorque * strength` (N·m, `MotorTorque`
 0..1,000,000, default 500): low strength makes weak, floppy limbs, and 0 turns the motors off. `MotorStrength` (0..1,
 default 0) is the starting strength; a changed value applies at once and ends a `SetRagdollMotorStrength` fade. The
@@ -2004,8 +2005,9 @@ end
 ```
 
 `MotorStrength` on a `Bones` entry (0..1, default 1) scales that joint's torque, live and without a rebuild: a limp arm
-at 0 while the rest of the body holds its pose. It multiplies the rig's strength, and a joint at 0 has its motor off.
-Adding or removing a `Bones` entry changes the list, which is structural and rebuilds.
+at 0 while the rest of the body holds its pose. It multiplies the rig's strength, and a joint at 0 has its motor off. The
+rig's root has no joint above it, so an entry there does nothing (warned about). Adding or removing a `Bones` entry
+changes the list, which is structural and rebuilds.
 
 **Partial ragdolls.** With `KinematicRoot`, the `RootJoint` body follows the animation instead of falling, and only what
 hangs from it is physical: an upper body reacting to hits while the legs keep walking.
@@ -2017,15 +2019,20 @@ Timer.After(0.8, function() character:RecoverRagdoll("", 0.3) end)
 ```
 
 The rig joins the entity instead of replacing it: its rigid body or character controller stays, with root motion and
-gameplay movement, and `HasCharacter`/`Move` go on working. The root is moved once per physics step to where the entity
-and the animation put it, the rest follows through the joints, lagging behind as it should. A move faster than 100 m/s or
-a turn of more than 90° in one frame is a teleport, which carries the whole rig along. The drawn limbs hang from the
-animated root, which stays the animation's. Limbs never collide with the entity's own body or inner character (nor with a
-character controller on an ancestor) and that character ignores them, but they do collide with each other and the world,
-and a total impulse goes to the parts that can move. IK and spring chains run as usual outside the rig; where they
-touch its joints, the rig wins and a spring chain restarts when it lets go, and chains on nodes below it hang from the
-physical joints. `RecoverRagdoll` leaves the entity where it is. With no other animation, a passive partial rig (no
-motor strength) hangs limp from an animated root. Contacts of the entity's own body are unaffected by the rig coming or going.
+gameplay movement, and `Move` and `IsGrounded` go on working. The root is moved once per physics step to where the entity
+and the animation put it (a frame with several steps divides the animated move among them), and the rest follows through
+the joints, lagging behind as it should. A jump faster than 30 m/s or a turn of more than 90° in one step, from the entity or
+from the animation, carries the whole rig along as it hung, because following it would fling the limbs. The drawn limbs
+hang from the animated root, which stays the animation's. Limbs never collide with the entity's own body or inner character
+(nor with a character controller on an ancestor), and that character ignores them, but they do collide with each other and
+the world, and a total impulse goes to the parts that can move. A rigid body on an ancestor is an ordinary obstacle, as it
+is for spring chains and IK rays.
+
+IK and spring chains run as usual outside the rig. On the rig's joints below its root the rig wins and a spring chain
+restarts when it lets go (the inspector warns); chains on nodes below the rig (not skin joints, or they would be part of it)
+hang from the physical joints. `RecoverRagdoll` leaves the entity where it is. With no motor strength, the limbs hang limp
+from the animated root. The rig needs a skin joint below `RootJoint`: a root with nothing to simulate is rejected. Contacts
+of the entity's own body are unaffected by the rig coming or going, and the other way around.
 
 **Active balance.** `BalanceStrength` (0..1, default 0: off) keeps a powered rig on its feet. While the motors run and a
 part below the rig's center of mass rests on something:
@@ -2034,22 +2041,25 @@ part below the rig's center of mass rests on something:
   has to carry the correction. This is a spring of `BalanceFrequency` (Hz, 0.1..30, default 3) and `BalanceDamping`
   (ratio 0..10, default 1) on the tilt of the root body: the animation's own lean is kept, and spinning about the
   vertical is left to the feet.
-- A rig that sinks below the animated pose's height (its center of mass above its lowest part) is pushed back up, at most at
-  twice gravity's acceleration, because motors alone cannot carry a body. It pushes only up, never down.
+- A rig that sinks below the animated pose's height (the parts' mass-weighted height above the lowest part) is pushed back
+  up by the same spring, at most at twice gravity's acceleration, because motors alone cannot carry a body. It pushes only
+  up, never down.
 - What that lift takes off the feet it also takes from their grip, so the friction that weight would have given
-  is applied as a brake on the rig's horizontal motion. A push moves the rig and it stops; it does not skate away.
+  is applied as a brake on the rig's horizontal motion relative to what it stands on. A push moves the rig and it stops; it
+  does not skate away, and a moving floor carries it.
 
-Past `BalanceMaxTilt` degrees (0..180, default 60) of tilt the rig has lost its balance and falls, until something rights
-it. The strength is scaled by the motor strength, so fading the motors out with `SetRagdollMotorStrength` drops the rig:
+"Rests on something" means a surface that faces up, within 60° of vertical: a wall brushing a falling leg holds nothing up.
+Past `BalanceMaxTilt` degrees (0..180, default 60) of tilt from the animation's uprightness the rig has lost its balance
+and falls, until something rights it; at 0 it would need to be exactly upright, which it never quite is. The strength is scaled by the motor strength, so fading the motors out with `SetRagdollMotorStrength` drops the rig:
 stumble with a low strength and let it recover, or fade to 0 for a knockdown. `IsRagdollBalanced() -> boolean` reports whether
-balance held the rig up in the last physics step: false when it is off, with nothing underneath (in the air, on triggers,
-hanging by an arm) and past the tilt. A `KinematicRoot` rig cannot fall, so it never balances. Balance settings apply live
-and never rebuild, and rigs with `BalanceStrength` 0 simulate exactly as before. The balance has no stepping: a rig pushed
-far stands where its feet slid to, and the brake assumes the ground stands still.
+balance held the rig up in the last physics step: false when it is off, without gravity (logged), with nothing underneath
+(in the air, on triggers, against a wall, hanging by an arm) and past the tilt. A `KinematicRoot` rig cannot fall, so it never
+balances. Balance settings apply live and never rebuild, and a `BalanceStrength` of 0 applies no forces. The balance has no
+stepping: a rig pushed far stands where its feet slid to.
 
 `ActivateRagdoll` writes `Ragdoll.Enabled = true`; recovery writes it back to false. A stale component table with
 `Enabled = false` therefore starts recovery when passed to `SetComponent`. The original rigid body or character
-returns at the aligned entity transform on the next physics update. `AddImpulse` and the rigid-body velocity calls
+returns at the aligned entity transform on the next physics update (a `KinematicRoot` entity never lost them). `AddImpulse` and the rigid-body velocity calls
 continue to address ordinary bodies; use repeated `ActivateRagdoll(impulse)` to impulse a live ragdoll. Contact-end
 callbacks can cancel an activation by recovering, removing the rig or destroying the actor; that activation returns
 false without overriding the callback's final state. Stopping Play/Simulate tears down contacts without gameplay

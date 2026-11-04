@@ -44,10 +44,10 @@ namespace Basalt {
 
 	// Per-entity playback and poses for a playing/simulating scene. Asset data stays shared and immutable.
 	// Each Update advances every Animator, samples due poses (optionally distance-throttled), and collects the events
-	// playback crossed (TakeEvents). The scene runs LateUpdate (inverse kinematics, spring bones, ragdoll physics, then attachments) after
+	// playback crossed (TakeEvents). The scene runs LateUpdate (inverse kinematics, ragdoll physics, spring bones, then attachments) after
 	// physics and OnLateUpdate; standalone callers get it at the end of Update by default.
 	// A preview system (Scene::UpdateAnimationPreview) animates only Animators with Preview in an edit scene: clips, state
-	// machines, layers, inverse kinematics and spring bones (without physics bodies), never writing the scene (no
+	// machines, layers, inverse kinematics and spring bones (against static bodies only), never writing the scene (no
 	// root-motion displacement, events, ragdolls or attachments).
 	class AnimationSystem
 	{
@@ -59,8 +59,8 @@ namespace Basalt {
 		~AnimationSystem();
 		// runLateUpdate: also run LateUpdate at the end; the scene passes false and calls LateUpdate after physics.
 		void Update(Timestep timestep, bool runLateUpdate = true);
-		// Solves IK and spring bones, applies physical ragdoll poses, then refreshes attachments after physics and
-		// OnLateUpdate. Invalid steps (reported by Update) skip IK/springs; physical overlays and attachments still refresh.
+		// Solves IK, applies physical ragdoll poses, solves spring bones (so a chain below a partial rig hangs from the
+		// physical joint), then refreshes attachments after physics and OnLateUpdate. Invalid steps (reported by Update) skip IK/springs; physical overlays and attachments still refresh.
 		void LateUpdate(Timestep timestep);
 		// Sets a declared Float/Bool parameter on the base graph and on every StateMachine layer graph that declares the
 		// name. True when any of them takes it; false when none does (an unknown name, a wrong type, a non-finite value, no
@@ -167,14 +167,13 @@ namespace Basalt {
 		// crossed them, the current clip's before the outgoing one's (for a two-clip blend, the second clip's first).
 		std::vector<AnimationEventRecord> TakeEvents();
 
+	private:
 		// A move faster than this (units/s) between two updates is a teleport (respawn, Scene.Load, a script placing the
 		// entity), not movement, so it does not spike MatchVelocity or swing spring bones. MatchVelocity checks the
 		// entity's horizontal move, spring bones each chain's first joint in 3D; both compare the move against
 		// TeleportSpeed times the longer of the frame and one fixed step, because physics moves bodies once per step: at
-		// high frame rates most frames see no move. A KinematicRoot ragdoll takes its entity's move the same way.
+		// high frame rates most frames see no move.
 		static constexpr double TeleportSpeed = 100.0;
-
-	private:
 		// Why graph evaluation/parameter writes are enabled or disabled, independent of pose and pause state.
 		enum class GraphControl
 		{
@@ -358,7 +357,7 @@ namespace Basalt {
 			// keeps the solution until the next solve.
 			std::vector<OverlayEntry> IKOverlay;
 			// The last spring bone solution's local transforms of the nodes it turned, applied after IKOverlay the same
-			// way. Spring bones solve from Pose with IKOverlay, never from this.
+			// way. Spring bones solve from Pose with IKOverlay and RagdollOverlay, never from this.
 			std::vector<OverlayEntry> SpringOverlay;
 			// Physical pose, applied last so callbacks that resample animation keep the ragdoll.
 			std::vector<OverlayEntry> RagdollOverlay;
@@ -608,7 +607,9 @@ namespace Basalt {
 		IKState& SyncIK(Entity entity, const InverseKinematicsComponent& component);
 		// The entity holding the character controller `entity` belongs to: itself or its nearest ancestor with a live
 		// character; nullopt when none.
-		static std::optional<Entity> FindCharacter(Entity entity, const PhysicsWorld& physics);
+		// The character controller the entity belongs to: on it or the nearest ancestor with one. Without a physics world
+		// (a preview), by component; otherwise it must have been built.
+		static std::optional<Entity> FindCharacter(Entity entity, const PhysicsWorld* physics);
 		void SolveSprings(float seconds);
 		// The edit scene's static bodies for a preview, brought up to date once per spring pass.
 		StaticPhysicsShapes& GetStaticShapes();
@@ -620,11 +621,12 @@ namespace Basalt {
 		void OnSpringDestroy(entt::registry& registry, entt::entity handle);
 		// A pass's overlay: &Playback::IKOverlay, &Playback::SpringOverlay or &Playback::RagdollOverlay.
 		using Overlay = std::vector<OverlayEntry> Playback::*;
+		static void ApplyOverlay(AnimationLocalPose& pose, const std::vector<OverlayEntry>& overlay);
 		// Drops a pass's overlay and composes the pose again from what the other passes left.
 		static void DropOverlay(Playback& playback, Overlay overlay);
 		// Keeps the local transforms of `nodes` (sorted and deduplicated here) as a pass's overlay and its composed globals
-		// as the pose: Pose with the overlays of this pass and the passes before it (IK, springs, then ragdoll). A later pass then
-		// stores or drops its own.
+		// as the pose: what this pass solved from, its own overlay included (IK alone, then springs on IK and the ragdoll). A
+		// later pass then stores or drops its own.
 		static void StoreOverlay(Playback& playback, Overlay overlay, std::vector<uint32_t>& nodes, const AnimationLocalPose& pose, const std::vector<glm::mat4>& globals);
 		// Logs `problem` for `owner` (a component name) when it changed since `reported`, naming `chain` when given.
 		static void ReportProblem(std::string& reported, std::string problem, Entity entity, const char* owner, const std::string* chain = nullptr);

@@ -326,7 +326,7 @@ namespace Basalt {
 		std::vector<AnimationClipLibrary> ClipLibraries;
 		// Edit mode only: plays the Animator in the scene view (its clip or state machine, layers, inverse kinematics and
 		// spring bones), regardless of PlayOnStart, without moving the entity. Events, root-motion displacement, spring
-		// bone collisions with physics bodies, ragdolls and attachments wait for Play.
+		// bone collisions with bodies that move, ragdolls and attachments wait for Play.
 		bool Preview = false;
 	};
 
@@ -488,7 +488,7 @@ namespace Basalt {
 		// body.
 		std::string Layer;
 		// Each substep also checks the way a point moved, not only where it ended, so a fast point stops at a collider or
-		// body too thin to catch it there. Costs one sweep per point and substep; a point that an obstacle would part
+		// body too thin to catch it there. Costs up to three sweeps per point and substep; a point that an obstacle would part
 		// from its bone by more than half the bone's length lets go, so a chain whose head went past cannot hang behind.
 		bool Continuous = false;
 	};
@@ -546,7 +546,7 @@ namespace Basalt {
 		float TwistMin = -30.0f;
 		float TwistMax = 30.0f;
 		// 0..1: scales the rig's motor torque for the joint above this bone, so one limb can go limp while the others hold
-		// their pose. Applies live, without rebuilding the rig.
+		// their pose (the rig's root has no joint above it). Applies live, without rebuilding the rig.
 		float MotorStrength = 1.0f;
 		bool operator==(const RagdollBone&) const = default;
 	};
@@ -557,17 +557,18 @@ namespace Basalt {
 	{
 		static constexpr uint32_t MaxBones = 128;
 		static constexpr float MaxRecoveryTime = 60.0f;
+		static constexpr float MinMotorFrequency = 0.1f;
 		static constexpr float MaxMotorFrequency = 30.0f;
 		static constexpr float MaxMotorDamping = 10.0f;
 		static constexpr float MaxMotorTorque = 1000000.0f;
-		static constexpr float MaxTilt = 180.0f;
+		static constexpr float MaxTiltLimit = 180.0f;
 		bool Enabled = false;
 		// Empty selects all skin joints; otherwise selects this skin joint and its descendants.
 		std::string RootJoint;
 		// RootJoint's body follows the animation instead of falling, so only what hangs from it is physical: an upper body
 		// reacting to hits while the legs keep walking. The entity keeps its rigid body or character controller, root
 		// motion and inverse kinematics, and recovery leaves it where it is. The limbs never collide with those bodies (or
-		// those of a character controller on an ancestor).
+		// a character controller on an ancestor). Needs a skin joint below the root.
 		bool KinematicRoot = false;
 		float Mass = 70.0f;
 		// Generated radius as a fraction of the rest bone length (0.01..0.5).
@@ -580,22 +581,24 @@ namespace Basalt {
 		// hit reactions) with up to MotorTorque * MotorStrength. The starting strength: a changed value applies at once,
 		// and SetRagdollMotorStrength fades it. Motor settings never rebuild the ragdoll.
 		float MotorStrength = 0.0f;
-		// Hz (0.1..MaxMotorFrequency): how stiffly the motors spring toward the pose.
+		// Hz (MinMotorFrequency..MaxMotorFrequency): how stiffly the motors spring toward the pose.
 		float MotorFrequency = 8.0f;
 		// 0..MaxMotorDamping: the motors' damping ratio (1 settles without overshoot).
 		float MotorDamping = 1.0f;
 		// N·m (0..MaxMotorTorque): the largest torque each joint's motor applies at strength 1.
 		float MotorTorque = 500.0f;
-		// 0..1; 0 leaves balance off. While the motors run and part of the rig below its center of mass rests on something,
-		// the whole rig is turned back toward the animated root's uprightness, about its center of mass, so no joint
-		// has to carry it. Scaled by the motor strength, so a fade to 0 lets the rig fall. Has no effect with KinematicRoot.
-		// Balance settings never rebuild the ragdoll.
+		// 0..1; 0 leaves balance off. While the motors run and a part below the rig's center of mass stands on something, the
+		// whole rig is turned back toward the animated root's uprightness about its center of mass, so no joint has to
+		// carry it, and pushed back up to the animated pose's height with a brake for the grip that takes off the feet. Scaled
+		// by the motor strength, so a fade to 0 lets the rig fall. Has no effect with KinematicRoot. Balance settings never
+		// rebuild the ragdoll.
 		float BalanceStrength = 0.0f;
-		// Hz (0.1..MaxMotorFrequency): how stiffly the rig is turned upright.
+		// Hz (MinMotorFrequency..MaxMotorFrequency): how stiffly the rig is turned upright and lifted.
 		float BalanceFrequency = 3.0f;
-		// 0..MaxMotorDamping: the damping ratio of that turn (1 settles without overshoot).
+		// 0..MaxMotorDamping: the damping ratio of that turn and lift (1 settles without overshoot).
 		float BalanceDamping = 1.0f;
-		// Degrees (0..MaxTilt): past this tilt the rig has lost its balance and falls, until something rights it.
+		// Degrees (0..MaxTiltLimit) away from the animation's uprightness: past this the rig has lost its balance and falls,
+		// until something rights it. At 0 it needs to be exactly upright, which it never quite is.
 		float BalanceMaxTilt = 60.0f;
 		bool operator==(const RagdollComponent&) const = default;
 	};

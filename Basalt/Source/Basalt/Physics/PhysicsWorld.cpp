@@ -44,13 +44,14 @@ namespace Basalt {
 		const bool trigger = record->IsTrigger;
 		RemoveJointsOfBody(uuid);
 		JPH::BodyInterface& bodies = System->GetBodyInterface();
-		BodyToEntity.erase(record->ID.GetIndexAndSequenceNumber());
+		const uint32_t removed = record->ID.GetIndexAndSequenceNumber();
+		BodyToEntity.erase(removed);
 		// Jolt reuses the index; the next body must not inherit these material modes.
 		ContactListener.Materials[record->ID.GetIndex()] = {};
 		bodies.RemoveBody(record->ID);
 		bodies.DestroyBody(record->ID);
 		ScenePtr->GetRegistry().remove<BodyRecord>(entity);
-		EndContacts(uuid, trigger);
+		EndContacts(uuid, std::span(&removed, 1), trigger);
 	}
 
 	bool PhysicsWorld::Impl::WritePose(Entity entity, const glm::vec3& position, const glm::quat& rotation)
@@ -141,18 +142,7 @@ namespace Basalt {
 		m_Impl->ContactListener.MinVelocityForRestitution = m_Impl->System->GetPhysicsSettings().mMinVelocityForRestitution;
 		m_Impl->System->SetContactListener(&m_Impl->ContactListener);
 		// Bodies joined by a joint do not collide with each other unless the joint asks for it.
-		m_Impl->System->SetSimCollideBodyVsBody([impl = m_Impl.get()](const JPH::Body& body1, const JPH::Body& body2, JPH::Mat44Arg transform1, JPH::Mat44Arg transform2,
-																	  JPH::CollideShapeSettings& settings, JPH::CollideShapeCollector& collector, const JPH::ShapeFilter& filter) {
-			const uint64_t a = body1.GetUserData();
-			const uint64_t b = body2.GetUserData();
-			// One entity's bodies in different groups: a rig's limb and the body it left in place. Limbs of one rig share a
-			// group and do collide, so this cannot be an ignored pair.
-			if (a == b && body1.GetCollisionGroup().GetGroupID() != body2.GetCollisionGroup().GetGroupID())
-				return;
-			if (!impl->IgnoredPairs.empty() && impl->IgnoredPairs.contains({ std::min(a, b), std::max(a, b) }))
-				return;
-			JPH::PhysicsSystem::sDefaultSimCollideBodyVsBody(body1, body2, transform1, transform2, settings, collector, filter);
-		});
+		m_Impl->System->SetSimShapeFilter(&m_Impl->BodyPairs);
 		SetGravity(scene->GetPhysicsSettings().Gravity);
 
 		entt::registry& registry = scene->GetRegistry();
@@ -609,7 +599,7 @@ namespace Basalt {
 
 			// Characters move before the bodies step, as Jolt expects.
 			impl.UpdateCharacters(fixedStep);
-			impl.StepRagdolls(fixedStep);
+			impl.StepRagdolls(fixedStep, std::max(plannedSteps - steps, 1u));
 
 			impl.System->Update(fixedStep, 1, impl.TempAllocator.get(), impl.JobSystem);
 			impl.ValidateRagdollOutput();

@@ -29,6 +29,10 @@ namespace Basalt::Math {
 	// Shortest-arc spherical interpolation (weight 0: from, 1: to), normalized, computed with Jolt's portable trigonometry so
 	// it rounds the same on every platform (libm's acos and sin do not): sampled poses can drive deterministic physics.
 	glm::quat Slerp(const glm::quat& from, const glm::quat& to, float weight);
+	// atan2 and a turn about +Y that round the same on every platform (Jolt's own trigonometry, not libm): root motion reaches
+	// physics through characters and kinematic ragdoll roots.
+	float Atan2(float y, float x);
+	glm::quat YawRotation(float yaw);
 
 	inline bool NearlyEqual(float a, float b, float epsilon = 1e-5f)
 	{

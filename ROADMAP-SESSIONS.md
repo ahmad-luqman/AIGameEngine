@@ -44,7 +44,8 @@ Size estimates: **S** = a day or less, **M** = a few days, **L** = a week or mor
   [#67](https://github.com/ahmad-luqman/AIGameEngine/pull/67), [#68](https://github.com/ahmad-luqman/AIGameEngine/pull/68),
   [#69](https://github.com/ahmad-luqman/AIGameEngine/pull/69), [#70](https://github.com/ahmad-luqman/AIGameEngine/pull/70),
   [#71](https://github.com/ahmad-luqman/AIGameEngine/pull/71)).
-  `ROADMAP.md` lists only their follow-ups (sessions 23–24).
+  `ROADMAP.md` lists only their follow-ups (sessions 23–24, and the spring bone and powered ragdoll follow-ups, which have
+  no session yet).
 - **Next:** session 23 (Animation authoring II), the highest-priority work left.
 - **Open checks after #69:** its Windows crash paths (deadline thread, watchdog timeouts, Open Report) are only
   compile-tested, so they belong with the real-GPU smoke tests on Windows hardware.
