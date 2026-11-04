@@ -13,7 +13,9 @@
 #include <cctype>
 #include <chrono>
 #include <optional>
+#include <string_view>
 #include <system_error>
+#include <unordered_set>
 
 namespace Basalt {
 
@@ -78,10 +80,104 @@ namespace Basalt {
 			return false;
 		}
 
-		// Packs the project's Assets into archive: every file except the .meta sidecars, whose UUIDs go into the index.
+		// A file bound for the archive.
+		struct ArchiveFile
+		{
+			std::string Key;
+			std::filesystem::path Source;
+			uint64_t AssetID = 0;
+		};
+
+		// Whether a file is media, which cannot name another asset: everything else (scenes, scripts, models, unknown types)
+		// is searched for mentions.
+		bool IsMediaFile(const std::filesystem::path& file)
+		{
+			static constexpr std::string_view MediaExtensions[] = { ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".hdr", ".ktx2", ".wav", ".ogg", ".mp3", ".flac", ".ttf", ".otf" };
+			const std::string extension = FileSystem::GetLowercaseExtension(file);
+			return std::find(std::begin(MediaExtensions), std::end(MediaExtensions), extension) != std::end(MediaExtensions);
+		}
+
+		// How a glTF URI spells a file name: spaces and the like as %XX.
+		std::string PercentEncode(std::string_view name)
+		{
+			static constexpr char Digits[] = "0123456789ABCDEF";
+			std::string encoded;
+			for (const char c : name)
+			{
+				const auto byte = static_cast<unsigned char>(c);
+				if (std::isalnum(byte) != 0 || std::string_view("-._~").find(c) != std::string_view::npos)
+					encoded += c;
+				else
+					encoded.append({ '%', Digits[byte >> 4], Digits[byte & 15] });
+			}
+			return encoded;
+		}
+
+		// The images that compressed replacements make unnecessary: an image with a .ktx2 of the same name beside it (what
+		// asset.compress_texture is told to write; KTX2 files do not record their source), whose path, file name and UUID
+		// no other file mentions. A search of the bytes rather than a walk of the declared asset fields, because a script's
+		// string, a script property or a glTF URI can name a file too; a false match only keeps the file.
+		std::vector<std::string> FindReplacedOriginals(const Project& project, const std::vector<ArchiveFile>& files, std::vector<std::string>& outWarnings)
+		{
+			std::unordered_set<std::string> keys;
+			for (const ArchiveFile& file : files)
+				keys.insert(file.Key);
+			struct Candidate
+			{
+				std::string Key;
+				std::vector<std::string> Mentions;
+			};
+			std::vector<Candidate> candidates;
+			for (const ArchiveFile& file : files)
+			{
+				const std::filesystem::path path = FileSystem::PathFromUtf8(file.Key);
+				const std::string extension = FileSystem::GetLowercaseExtension(path);
+				if (extension != ".png" && extension != ".jpg" && extension != ".jpeg" && extension != ".tga" && extension != ".bmp")
+					continue;
+				if (!keys.contains(file.Key.substr(0, file.Key.size() - extension.size()) + ".ktx2"))
+					continue;
+				const std::string name = FileSystem::PathToUtf8(path.filename());
+				Candidate candidate{ file.Key, { name, PercentEncode(name) } };
+				if (file.AssetID != 0)
+					candidate.Mentions.push_back(std::to_string(file.AssetID));
+				candidates.push_back(std::move(candidate));
+			}
+			if (candidates.empty())
+				return {};
+
+			std::vector<std::filesystem::path> searched = { project.GetProjectFilePath() };
+			for (const ArchiveFile& file : files)
+				if (!IsMediaFile(file.Source))
+					searched.push_back(file.Source);
+			for (const std::filesystem::path& file : searched)
+			{
+				std::string readError;
+				const auto bytes = FileSystem::ReadBinaryFile(file, &readError);
+				if (!bytes)
+				{
+					outWarnings.push_back("every original texture stays in the archive: cannot search '" + FileSystem::PathToUtf8(file) + "' for references to them (" + readError + ")");
+					return {};
+				}
+				const std::string_view text(reinterpret_cast<const char*>(bytes->data()), bytes->size());
+				std::erase_if(candidates, [&](const Candidate& candidate) {
+					return std::any_of(candidate.Mentions.begin(), candidate.Mentions.end(), [&](const std::string& mention) { return text.find(mention) != std::string_view::npos; });
+				});
+				if (candidates.empty())
+					return {};
+			}
+			std::vector<std::string> replaced;
+			replaced.reserve(candidates.size());
+			for (const Candidate& candidate : candidates)
+				replaced.push_back(candidate.Key);
+			std::sort(replaced.begin(), replaced.end());
+			return replaced;
+		}
+
+		// Packs the project's Assets into archive: every file except the .meta sidecars, whose UUIDs go into the index, and
+		// (unless keepOriginals) the originals of compressed textures nothing else mentions, listed in outOmitted.
 		// Assets whose sidecar is broken go in without a UUID, so references to them will not resolve: outWarnings says so
 		// (project.validate reports them as errors, so only an export with validation off gets here).
-		std::optional<PackArchiveWriter::Statistics> WriteAssetArchive(const Project& project, const std::filesystem::path& archive, std::vector<std::string>& outWarnings, std::string& outError)
+		std::optional<PackArchiveWriter::Statistics> WriteAssetArchive(const Project& project, const std::filesystem::path& archive, bool keepOriginals, std::vector<std::string>& outOmitted, std::vector<std::string>& outWarnings, std::string& outError)
 		{
 			// A fresh scan: the project's own registry may predate files written since it loaded.
 			AssetRegistry registry(project.GetDirectory());
@@ -93,7 +189,7 @@ namespace Basalt {
 				warning.append(asset).append(".meta: ").append(problem).append("), so references to it will not resolve");
 				outWarnings.push_back(std::move(warning));
 			}
-			PackArchiveWriter writer;
+			std::vector<ArchiveFile> files;
 			const std::filesystem::path assets = project.GetDirectory() / Project::AssetDirectoryName;
 			std::error_code error;
 			for (auto it = std::filesystem::recursive_directory_iterator(assets, error); !error && it != std::filesystem::recursive_directory_iterator(); it.increment(error))
@@ -135,20 +231,28 @@ namespace Basalt {
 					return std::nullopt;
 				}
 				const std::optional<UUID> id = registry.FindID(key);
-				if (!writer.AddFile(key, it->path(), id ? static_cast<uint64_t>(*id) : 0, outError))
-					return std::nullopt;
+				files.push_back({ key, it->path(), id ? static_cast<uint64_t>(*id) : 0 });
 			}
 			if (error)
 			{
 				outError = "cannot list '" + FileSystem::PathToUtf8(assets) + "': " + error.message();
 				return std::nullopt;
 			}
+			if (!keepOriginals)
+				outOmitted = FindReplacedOriginals(project, files, outWarnings);
+			if (!outOmitted.empty())
+				BS_CORE_INFO("Exporter: left out {} original image(s) that a .ktx2 replaces", outOmitted.size());
+			PackArchiveWriter writer;
+			for (ArchiveFile& file : files)
+				if (!std::binary_search(outOmitted.begin(), outOmitted.end(), file.Key) && !writer.AddFile(std::move(file.Key), std::move(file.Source), file.AssetID, outError))
+					return std::nullopt;
 			return writer.Write(archive, outError);
 		}
 
 		// Copies the project file and its input actions into directory with its Assets (a folder, or with archive an
-		// Assets.bpak whose statistics go to outArchive), replacing a previous export's.
-		bool CopyProjectFiles(const Project& project, const std::filesystem::path& directory, bool archive, std::optional<PackArchiveWriter::Statistics>& outArchive, std::vector<std::string>& outWarnings, std::string& outError)
+		// Assets.bpak whose statistics go to outArchive and whose left out originals to outOmitted), replacing a previous
+		// export's.
+		bool CopyProjectFiles(const Project& project, const std::filesystem::path& directory, const ExportOptions& options, std::optional<PackArchiveWriter::Statistics>& outArchive, std::vector<std::string>& outOmitted, std::vector<std::string>& outWarnings, std::string& outError)
 		{
 			std::error_code error;
 			// Assets the project no longer has must not survive from the previous export, in either form: the runtime would
@@ -168,9 +272,9 @@ namespace Basalt {
 				outError = "cannot create '" + FileSystem::PathToUtf8(directory) + "': " + error.message();
 				return false;
 			}
-			if (archive)
+			if (options.Archive)
 			{
-				outArchive = WriteAssetArchive(project, directory / Project::ArchiveFileName, outWarnings, outError);
+				outArchive = WriteAssetArchive(project, directory / Project::ArchiveFileName, options.KeepOriginals, outOmitted, outWarnings, outError);
 				if (!outArchive)
 				{
 					outError = "cannot write " + std::string(Project::ArchiveFileName) + ": " + outError;
@@ -572,7 +676,7 @@ namespace Basalt {
 			return result;
 		};
 		std::optional<PackArchiveWriter::Statistics> archive;
-		if (!CopyProjectFiles(project, projectDirectory, options.Archive, archive, result.Warnings, result.Error))
+		if (!CopyProjectFiles(project, projectDirectory, options, archive, result.ArchiveOmitted, result.Warnings, result.Error))
 			return fail();
 
 		std::filesystem::path executable = executableDirectory / ExecutableFileName(executableName);

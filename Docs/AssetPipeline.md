@@ -146,7 +146,8 @@ recompress. The cache only saves re-encoding: an unreadable or invalid entry is 
 still produces the output, and a symlinked cache folder is skipped. Each of these is listed in the result's
 `warnings`, as is an output that adopts an orphaned `.meta` (keeping its UUID). The result also reports
 `cacheHit`, `overwrote` and the assets `reloaded` from the output. Output write failures report the OS
-reason. Outputs live under `Assets/` and export normally; caches are excluded. Source and output paths and
+reason. Outputs live under `Assets/` and export normally; caches are excluded. An archived export leaves out an image
+with a `.ktx2` of the same name beside it when no file mentions it (see Docs/Shipping.md). Source and output paths and
 their ancestors must not be symlinks.
 
 The headless loader accepts 2D KTX2 with native BC7, Basis ETC1S, or LDR UASTC (including Zstandard).

@@ -124,7 +124,7 @@ if(Python3_Interpreter_FOUND)
 	endif()
 	# Crashes child processes on purpose and checks their crash reports (Core/CrashReporter).
 	add_test(NAME CrashReport COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/Automation/CrashReport.py" $<TARGET_FILE:BasaltTests>)
-	set_tests_properties(CrashReport PROPERTIES LABELS integration TIMEOUT 300 SKIP_RETURN_CODE 77)
+	set_tests_properties(CrashReport PROPERTIES LABELS integration TIMEOUT 600 SKIP_RETURN_CODE 77)
 	add_test(NAME PhysicsJobFailure
 		COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/Automation/PhysicsJobFailure.py" $<TARGET_FILE:BasaltTests>)
 	set_tests_properties(PhysicsJobFailure PROPERTIES LABELS unit TIMEOUT 90)

@@ -4,6 +4,7 @@
 #include <Basalt/Core/Base.h>
 #include <Basalt/Core/CrashReporter.h>
 #include <Basalt/Core/FileSystem.h>
+#include <Basalt/Core/JobSystem.h>
 #include <Basalt/Core/Log.h>
 #include <Basalt/Core/Platform.h>
 
@@ -147,6 +148,22 @@ namespace {
 			std::thread worker([] { CrashNow("segv"); });
 			worker.join();
 		}
+		else if (kind == "thread-stackoverflow")
+		{
+			// A thread of its own needs a ThreadStack: the installing thread's alternate stack does not reach it.
+			std::thread worker([] {
+				const Basalt::CrashReporter::ThreadStack stack;
+				CrashNow("stackoverflow");
+			});
+			worker.join();
+		}
+		else if (kind == "job-stackoverflow")
+		{
+			// Polled rather than waited for: a waiting thread helps run jobs, and this one must run on a worker.
+			const Basalt::JobHandle job = Basalt::JobSystem::Get().Submit([] { CrashNow("stackoverflow"); });
+			while (!job.IsComplete())
+				std::this_thread::yield();
+		}
 		else if (kind == "two-thread-segv")
 		{
 			// Two workers crashing at once: one reports, the other waits rather than ending the process mid-report.
@@ -169,17 +186,20 @@ namespace {
 		std::exit(2);
 	}
 
-	// `BasaltTests --basalt-child <actions...>` acts as a child process for the RunProcess tests, so they need no
-	// shell or other platform tool. With BASALT_TEST_CHILD_ACTIONS set (space-separated actions), it does the same
-	// whatever its arguments, standing in for an exported game (smoke tests). Actions run in order:
-	// print <text> (stdout), error <text> (stderr), env <name>, cwd, sleep <ms>, spam <bytes>, utf8 <count>
-	// (prints "é" count times), invalid (prints bytes that are not UTF-8), fd <descriptor> (POSIX: whether it is
-	// open), crash (a real access violation on Windows, SIGABRT elsewhere), trap (BS_DEBUGBREAK), args (prints
-	// every remaining argument on its own line), exit <code>, crash-report <kind> (installs the crash reporter as
-	// "CrashChild", then calls Install again from two threads at once, logs "crash-test sentinel 42", then crashes: kind is
-	// segv, abort, terminate, throw-int, purecall, invalid-parameter (Windows), trap, stackoverflow, thread-segv or
-	// two-thread-segv; exits 77 when crash reports are unavailable, as under AddressSanitizer; Tests/Automation/CrashReport.py
-	// checks the report).
+	// `BasaltTests --basalt-child <actions...>` acts as a child process for the RunProcess tests, so they need no shell
+	// or other platform tool. With BASALT_TEST_CHILD_ACTIONS set (space-separated actions), it does the same whatever
+	// its arguments, standing in for an exported game (smoke tests). Actions run in order: print <text> (stdout), error
+	// <text> (stderr), env <name>, cwd, sleep <ms>, spam <bytes>, utf8 <count> (prints "é" count times), invalid (prints
+	// bytes that are not UTF-8), fd <descriptor> (POSIX: whether it is open), crash (a real access violation on Windows,
+	// SIGABRT elsewhere), trap (BS_DEBUGBREAK), args (prints every remaining argument on its own line), exit <code>,
+	// crash-report <kind> (installs the crash reporter as "CrashChild", then calls Install again from two threads at
+	// once, logs "crash-test sentinel 42", then crashes: kind is segv, abort, terminate, throw-int, purecall,
+	// invalid-parameter (Windows), trap, stackoverflow, thread-segv, thread-stackoverflow, job-stackoverflow or
+	// two-thread-segv; exits 77 when crash reports are unavailable, as under AddressSanitizer;
+	// Tests/Automation/CrashReport.py checks the report), crash-dialog <zenity|kdialog|xmessage> <program> <opener>
+	// <crash|error|disabled> (macOS, Linux: installs with those tools and dialogs on, then crashes with a report or
+	// shows an error; disabled shows an error with dialogs off, then one with them on), crash-script <title> <message>
+	// <report path> (prints the macOS dialog's AppleScript).
 	int RunChild(const std::vector<std::string>& actions)
 	{
 		for (size_t i = 0; i < actions.size(); i++)
@@ -258,6 +278,43 @@ namespace {
 			{
 				std::fflush(stdout);
 				BS_DEBUGBREAK();
+			}
+			else if (action == "crash-script")
+			{
+				static Basalt::CrashText s_Script;
+				if (i + 3 >= actions.size())
+					return 2;
+				Basalt::CrashReporter::FormatAppleScript(s_Script, actions[i + 1], actions[i + 2], actions[i + 3]);
+				std::printf("%s", s_Script.CStr());
+				i += 3;
+			}
+			else if (action == "crash-dialog")
+			{
+				if (i + 4 >= actions.size())
+					return 2;
+				const std::string_view kind = actions[i + 1];
+				Basalt::CrashReporterOptions options;
+				options.ApplicationName = "CrashChild";
+				options.DialogTools = Basalt::CrashDialogTools{ Basalt::FileSystem::PathFromUtf8(actions[i + 2]), kind == "kdialog" ? Basalt::CrashDialogKind::KDialog : (kind == "xmessage" ? Basalt::CrashDialogKind::XMessage : Basalt::CrashDialogKind::Zenity), Basalt::FileSystem::PathFromUtf8(actions[i + 3]) };
+				Basalt::Log::Init();
+				if (!Basalt::CrashReporter::Install(options))
+					return 77;
+				// Automated runs leave dialogs off: nothing may show, or a run would wait on a box nobody closes.
+				if (actions[i + 4] == "disabled")
+					Basalt::CrashReporter::ShowErrorDialog("no dialog");
+				Basalt::CrashReporter::SetDialogEnabled(true);
+				if (actions[i + 4] == "disabled")
+				{
+					// Tells the test the call above has had its chance: it cannot wait for something that must not happen.
+					Basalt::CrashReporter::ShowErrorDialog("dialogs on");
+					return 0;
+				}
+				if (actions[i + 4] == "error")
+				{
+					Basalt::CrashReporter::ShowErrorDialog("The \"archive\" is broken: $(touch injected)\nsecond line");
+					return 0;
+				}
+				CrashNow("segv");
 			}
 			else if (action == "crash-report")
 			{

@@ -55,8 +55,9 @@ namespace Basalt {
 		std::atomic<bool> s_JobBoundReported = false;
 		std::atomic<bool> s_MixFailureReported = false;
 
-		// The resource managers open clips through this VFS: a file in a mounted archive (FileSystem::Mount, an exported
-		// game's Assets.bpak) is read whole and served from memory, anything else goes to miniaudio's default VFS.
+		// The resource managers open clips through this VFS. A file a mounted archive (FileSystem::Mount, an exported game's
+		// Assets.bpak) stores uncompressed is read from the archive as it decodes; one it compresses is read whole and served
+		// from memory (a zstd frame cannot be read in part). Anything else goes to miniaudio's default VFS.
 		struct ArchiveVfs
 		{
 			// First: miniaudio reads the callbacks through the ma_vfs pointer.
@@ -69,10 +70,15 @@ namespace Basalt {
 
 		struct VfsFile
 		{
+			// A compressed archive entry, read whole.
 			std::vector<uint8_t> Data;
-			size_t Cursor = 0;
+			// Set for a stored archive entry, read as it plays. Holds the archive open.
+			FileSystem::MountedFile Stored;
+			uint64_t Cursor = 0;
 			// Set for a file on disk, which the default VFS serves instead.
 			ma_vfs_file Disk = nullptr;
+
+			uint64_t GetSize() const { return Stored ? Stored.GetEntry().Size : Data.size(); }
 		};
 
 		ma_vfs* GetDisk(ma_vfs* vfs)
@@ -100,7 +106,9 @@ namespace Basalt {
 			{
 				auto file = std::make_unique<VfsFile>();
 				const FileSystem::MountedFile mounted = (openMode & MA_OPEN_MODE_WRITE) == 0 ? FileSystem::FindMounted(VfsPath(pathText)) : FileSystem::MountedFile{};
-				if (mounted)
+				if (mounted && mounted.GetEntry().Compression == PackArchive::Method::Store)
+					file->Stored = mounted;
+				else if (mounted)
 				{
 					// No reason can travel through miniaudio's result code: the log gets it (ReadMounted without outError).
 					auto data = FileSystem::ReadMounted(mounted);
@@ -165,8 +173,26 @@ namespace Basalt {
 			auto* file = static_cast<VfsFile*>(handle);
 			if (file->Disk)
 				return ma_vfs_read(GetDisk(vfs), file->Disk, destination, size, outRead);
-			const size_t count = std::min(size, file->Data.size() - file->Cursor);
-			if (count > 0)
+			const auto count = static_cast<size_t>(std::min<uint64_t>(size, file->GetSize() - file->Cursor));
+			if (file->Stored)
+			{
+				// No exception may reach miniaudio (C), and the error text allocates.
+				try
+				{
+					std::string error;
+					const auto copied = file->Stored.GetArchive()->ReadStored(file->Stored.GetEntry(), file->Cursor, destination, count, error);
+					if (!copied)
+					{
+						BS_CORE_ERROR("AudioEngine: {}", error);
+						return MA_IO_ERROR;
+					}
+				}
+				catch (...)
+				{
+					return MA_IO_ERROR;
+				}
+			}
+			else if (count > 0)
 				std::memcpy(destination, file->Data.data() + file->Cursor, count);
 			file->Cursor += count;
 			if (outRead)
@@ -186,7 +212,7 @@ namespace Basalt {
 			auto* file = static_cast<VfsFile*>(handle);
 			if (file->Disk)
 				return ma_vfs_seek(GetDisk(vfs), file->Disk, offset, origin);
-			const auto size = static_cast<ma_int64>(file->Data.size());
+			const auto size = static_cast<ma_int64>(file->GetSize());
 			ma_int64 base = size;
 			if (origin == ma_seek_origin_start)
 				base = 0;
@@ -195,7 +221,7 @@ namespace Basalt {
 			// Both within [0, size]: no overflow.
 			if (offset < -base || offset > size - base)
 				return MA_BAD_SEEK;
-			file->Cursor = static_cast<size_t>(base + offset);
+			file->Cursor = static_cast<uint64_t>(base + offset);
 			return MA_SUCCESS;
 		}
 
@@ -213,7 +239,7 @@ namespace Basalt {
 			auto* file = static_cast<VfsFile*>(handle);
 			if (file->Disk)
 				return ma_vfs_info(GetDisk(vfs), file->Disk, outInfo);
-			outInfo->sizeInBytes = file->Data.size();
+			outInfo->sizeInBytes = file->GetSize();
 			return MA_SUCCESS;
 		}
 

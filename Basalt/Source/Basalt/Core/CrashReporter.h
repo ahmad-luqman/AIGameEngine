@@ -91,30 +91,68 @@ namespace Basalt {
 	};
 	using CrashText = BasicCrashText<size_t{ 32 } * 1024>;
 
+	// The dialog programs of macOS and Linux.
+	enum class CrashDialogKind
+	{
+		Osascript,
+		Zenity,
+		KDialog,
+		XMessage
+	};
+
+	// A dialog program and what opens a report from it.
+	struct CrashDialogTools
+	{
+		std::filesystem::path Program;
+		CrashDialogKind Kind = CrashDialogKind::Zenity;
+		std::filesystem::path Opener;
+	};
+
 	struct CrashReporterOptions
 	{
 		// Names the report folder (<user data>/<name>/Crashes) and appears in reports. Control characters and characters
 		// that would leave that folder or that Windows refuses (/ \ : < > " | ? *) are dropped, trailing dots and spaces
 		// too, and the name is cut at 127 bytes on a UTF-8 character boundary; "Basalt" when nothing is left.
 		std::string ApplicationName;
+		// Stand-ins for the system's dialog program and opener, on macOS and Linux (tests); ignored on Windows.
+		std::optional<CrashDialogTools> DialogTools;
 	};
 
-	// Writes a crash report when the process dies of a fatal signal (SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGABRT, SIGTRAP on
-	// macOS and Linux) or an unhandled exception (Windows, plus abort, invalid C runtime parameters and pure virtual
+	// Writes a crash report when the process dies of a fatal signal (SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGABRT, SIGTRAP
+	// on macOS and Linux) or an unhandled exception (Windows, plus abort, invalid C runtime parameters and pure virtual
 	// calls): the reason, a stack trace, the application and its context (the project), an uncaught C++ exception's
-	// message, and the last log lines; Windows adds a minidump. Reports go to <user data>/<application>/Crashes (per user,
-	// so a signed app bundle or a read-only install is normally left alone); only when there is no user data directory, or
-	// the report cannot be created there, are they tried in CrashReports next to the executable. Everything the handler
-	// uses is prepared beforehand: it formats into fixed buffers and, on macOS and Linux, allocates nothing and never forks
-	// (the dialog starts through posix_spawn, and backtrace's unwinder is loaded at Install), on an alternate stack for the
-	// thread that installed it. Then the process ends: by the same signal or exception code, or with the C runtime's abort
-	// code 3 after abort, an invalid C runtime parameter or a pure virtual call on Windows (where it would otherwise fail
-	// fast with 0xC0000409).
+	// message, and the last log lines; Linux adds addr2line's names for the executable's frames, and Windows a minidump
+	// written by a watchdog thread, which keeps working when the crashed thread has no stack left. Reports go to <user
+	// data>/<application>/Crashes (per user, so a signed app bundle or a read-only install is normally left alone); only
+	// when there is no user data directory, or the report cannot be created there, are they tried in CrashReports next
+	// to the executable. Everything the handler uses is prepared beforehand: it formats into fixed buffers and, on macOS
+	// and Linux, allocates nothing and never forks (the dialog and addr2line start through posix_spawn, and backtrace's
+	// unwinder is loaded at Install), on an alternate stack for the thread that installed it and for threads holding a
+	// ThreadStack. Then the process ends: by the same signal or exception code, or with the C runtime's abort code 3
+	// after abort, an invalid C runtime parameter or a pure virtual call on Windows (where it would otherwise fail fast
+	// with 0xC0000409).
 	class CrashReporter
 	{
 	public:
 		static constexpr size_t MaxLogLines = 64;
 		static constexpr size_t MaxLogLineLength = 240;
+
+		// Makes a stack overflow on the calling thread reportable: an alternate signal stack on macOS and Linux, a stack
+		// guarantee on Windows, each only per thread. Hold one for the life of an engine thread started after Install. Does
+		// nothing before Install or when crash reports are unavailable, and threads the engine does not start (miniaudio's,
+		// a driver's) have none: their overflows end the process without a report.
+		class ThreadStack
+		{
+		public:
+			ThreadStack();
+			~ThreadStack();
+			ThreadStack(const ThreadStack&) = delete;
+			ThreadStack& operator=(const ThreadStack&) = delete;
+
+		private:
+			// The alternate stack; null when this object set up nothing.
+			void* m_Stack = nullptr;
+		};
 
 		// Installs the handlers (once per process; later and concurrent calls return the first call's result). False when
 		// crash reports are unavailable: under AddressSanitizer, which reports these crashes itself and needs the signals
@@ -125,13 +163,18 @@ namespace Basalt {
 		// A line naming what was running, in every report from now on ("Project: Platformer 1.2.0"). Cut at 255 bytes, on
 		// a UTF-8 character boundary.
 		static void SetContext(std::string_view context);
-		// Shows a message box with the report's path after writing it: the windowed runtime enables it; tools, headless
-		// and automated runs never show one (nobody would close it).
+		// Shows a message box with the report's path after writing it, offering to open the report: the windowed runtime
+		// enables it; tools, headless and automated runs never show one (nobody would close it).
 		static void SetDialogEnabled(bool enabled);
+		// Tells the player why the game cannot go on, for a failure that is no crash (a broken archive): a message box when
+		// dialogs are enabled, nothing otherwise. Windows returns when it is closed; elsewhere it stays after the process ends.
+		static void ShowErrorDialog(std::string_view message);
 		// The folder reports go to; empty before Install, under AddressSanitizer and after a failed Install.
 		static std::filesystem::path GetReportDirectory();
 
 		// The parts of a report, shared by the handler and the tests.
+		// The AppleScript of the macOS dialog: an alert with the message, and with a reportPath a button that opens that file.
+		static void FormatAppleScript(CrashText& out, std::string_view title, std::string_view message, std::string_view reportPath);
 		// The folder name Install makes of CrashReporterOptions::ApplicationName (the rules are there).
 		static std::string SanitizeApplicationName(std::string_view name);
 		// "SIGSEGV (invalid memory access)" and the like; nullptr for a signal the reporter does not handle.

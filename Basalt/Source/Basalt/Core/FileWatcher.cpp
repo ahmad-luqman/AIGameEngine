@@ -1,6 +1,7 @@
 #include "Basalt/Core/FileWatcher.h"
 
 #include "Basalt/Core/Assert.h"
+#include "Basalt/Core/CrashReporter.h"
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/Log.h"
 
@@ -377,6 +378,7 @@ namespace Basalt {
 
 	void FileWatcher::RunWorker(const std::filesystem::path& root, const std::string& subdirectory, std::chrono::milliseconds interval)
 	{
+		const CrashReporter::ThreadStack crashStack;
 		// Only the scan runs here: no logging, no project access (Apply reports errors on the owner's thread).
 		std::unique_lock lock(m_Mutex);
 		while (!m_Wake.wait_for(lock, interval, [this]() { return m_Stop; }))

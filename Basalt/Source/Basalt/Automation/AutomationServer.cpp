@@ -3,6 +3,7 @@
 #include "Basalt/Automation/AutomationLimits.h"
 #include "Basalt/Core/Assert.h"
 #include "Basalt/Core/Base.h"
+#include "Basalt/Core/CrashReporter.h"
 #include "Basalt/Core/Log.h"
 
 #if defined(BS_PLATFORM_WINDOWS)
@@ -161,7 +162,10 @@ namespace Basalt {
 		m_Factory = std::move(factory);
 		m_Stopping = false;
 		m_Running = true;
-		m_Thread = std::thread([this]() { Run(); });
+		m_Thread = std::thread([this]() {
+			const CrashReporter::ThreadStack crashStack;
+			Run();
+		});
 		BS_CORE_INFO("Automation server listening on 127.0.0.1:{}", m_Port);
 		return true;
 	}

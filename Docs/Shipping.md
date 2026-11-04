@@ -110,7 +110,15 @@ basalt archive.inspect '{"path": "Dist/MyGame/Assets.bpak", "verify": true}'
   (`project.validate`, which runs first unless `validate: false`, reports it as an error). A linked folder or a broken
   link inside `Assets/`, or a path an archive cannot hold (a `:` or `\` in a name, or over 1024 bytes), stops the
   export. An archive holds at most 2^20 files of at most 4 GiB each.
-- **Compression.** Each file is compressed with zstd (level 9) and kept compressed only when that makes it smaller.
+- **Compressed texture originals.** A PNG, JPEG, TGA or BMP stays out when a `.ktx2` of the same name sits beside it
+  (`Wall.ktx2` next to `Wall.png`) and no other file mentions it: neither the project file nor any asset except media
+  contains its file name (also as a glTF URI spells it) or its UUID. The search reads bytes, so a script's
+  string, a script property or a glTF URI keeps a file, and a false match only keeps it too. `project.export` lists what
+  it left out in `archive.omitted`. A script that builds such a name at run time would no longer find the file: pass
+  `"keepOriginals": true` to keep every original. Folder exports copy every file.
+- **Compression.** Each file is compressed with zstd (level 9) on the job system, up to 256 MiB of files at a time, and
+  kept compressed only when that makes it smaller. Files are written in path order, so the same files give the same bytes
+  on any machine.
   PNG/JPEG images and Ogg/MP3 audio usually end up stored as they are; `.ktx2` textures without supercompression (BC7
   from `asset.compress_texture`, plain UASTC) usually shrink further, while ETC1S and Zstandard-supercompressed UASTC do
   not.
@@ -121,9 +129,11 @@ basalt archive.inspect '{"path": "Dist/MyGame/Assets.bpak", "verify": true}'
   Linux (`project.validate` reports references whose case differs from the file). An archive that fails its checks when
   it opens (header, layout, index hash) stops the game at start with exit code 1 and the reason; a damaged file fails
   only its own load, never falling back to a disk copy. Scene, prefab, script, material, texture, animation graph, font
-  and model loads and `require` put the reason in their error; audio clips log it. An audio
-  clip's file is read from the archive into memory whole when the clip opens, streamed clips included (streaming still
-  decodes page by page from that copy).
+  and model loads and `require` put the reason in their error; audio clips log it. An audio clip stored uncompressed
+  (Ogg and MP3 usually are) is read from the archive as it decodes, so a long streamed clip stays out of memory; such a
+  clip skips the hash check, since a part of a file cannot be checked (reads stay inside its entry, and damage plays as
+  noise or fails to decode; `archive.inspect` with `verify: true` finds it). One that zstd shrinks (usually WAV) is read
+  into memory whole when the clip opens, and streaming decodes page by page from that copy.
 - **Format** (`Core/PackArchive`, little-endian): a 40-byte header (`BPAK`, format version u32 = 1, flags u32 = 0, entry
   count u32, index offset u64, index size u64, index hash u64), the files' bytes, then the index, which must end the
   file exactly. Each index entry is the path's length (u32) and UTF-8 bytes (normalized, `/`-separated, sorted
@@ -164,9 +174,13 @@ parameters and pure virtual calls there. A report holds:
   the project's name and version (runtime reports), the platform, the process ID and the time;
 - the reason (`SIGSEGV (invalid memory access) at 0x…`, `EXCEPTION_ACCESS_VIOLATION …`), and the message of an
   uncaught C++ exception that ended the process;
-- a stack trace (`backtrace_symbols_fd` on macOS and Linux, where Linux frames are module and offset, for
-  `addr2line`; dbghelp on Windows, which also writes a minidump next to the report);
-- the last 64 log lines.
+- a stack trace (`backtrace_symbols_fd` on macOS and Linux, where Linux frames are module and offset; dbghelp on
+  Windows, where a watchdog thread also writes a minidump next to the report);
+- the last 64 log lines;
+- on Linux with `/usr/bin/addr2line`, the executable's frames with their function names (and files and lines when the
+  binary has debug information), last, so that a slow `addr2line` costs only this section: it is stopped after 15
+  seconds. A player's machine rarely has it; a report from one still gives each frame's offset, for `addr2line -e` on the
+  same build.
 
 Reports go to `<user data>/<application>/Crashes/crash-<unix time>-<process>.txt` (the per-user data directory that
 save data uses, `BASALT_USER_DATA_DIR` included), so a signed `.app` or a read-only install is normally left alone. Only
@@ -181,16 +195,23 @@ exit code 3 shows up as `exited` with exit code 3 ("the game aborted"). If anoth
 being written, it waits for the report; a report that is not finished within 30 seconds (a lock the crash left held)
 ends the process anyway, by SIGALRM on macOS and Linux.
 
-The windowed runtime also shows a message box with the report's path: a task-modal Windows message box (the process
-ends when it is closed); osascript on macOS, or zenity, kdialog or xmessage from `/usr/bin` on Linux when a display is
-set, started as a separate process (the crashed process ends at once). The CLI, the editor, and headless, offscreen and
+The windowed runtime also shows a message box with the report's path, offering to open the report: a task-modal Windows
+message box (the process ends when it is closed); osascript on macOS, or zenity, kdialog or xmessage from `/usr/bin` on
+Linux when a display is set, started as a separate process (the crashed process ends at once; on Linux the offer needs
+`/usr/bin/xdg-open`). Reports are not sent anywhere: the engine has no network client and no destination for them. A
+failed start that is no crash (an archive that does not open, a project or start scene that does not load, no window or
+graphics device) shows its reason the same way before the exit code 1. The CLI, the editor, and headless, offscreen and
 `--frames` runs never show one. AddressSanitizer builds leave crashes to AddressSanitizer.
 
-On macOS and Linux the handler formats into fixed buffers, allocates nothing and never forks: the dialog starts
-through `posix_spawn` (which runs no atfork handlers), prepared when the reporter installs, and backtrace's unwinder is
-loaded at install. It runs on an alternate stack, so stack overflows on the thread that installed the reporter (the main
-thread) are reported too. On Windows it uses static buffers, writes the text before the minidump, and keeps a 128 KiB
-stack guarantee for that thread (taken from its 1 MiB stack); dbghelp may load symbol files while it names frames.
+On macOS and Linux the handler formats into fixed buffers, allocates nothing and never forks: the dialog and `addr2line`
+start through `posix_spawn` (which runs no atfork handlers), prepared when the reporter installs, and backtrace's unwinder
+is loaded at install. It runs on an alternate stack, so stack overflows are reported on the main thread and on every
+thread holding a `CrashReporter::ThreadStack`: the job workers, the file watcher and the automation server. On Windows it
+uses static buffers and writes the text first, and those threads keep a 128 KiB stack guarantee (taken from their 1 MiB
+stacks); dbghelp may load symbol files while it names frames. A watchdog thread waiting from install on writes the
+minidump, with its own stack, and opens the report; if it has not finished after 20 seconds (a lock the crash left held)
+the report says so and no partial dump stays. Threads the engine does not start (miniaudio's, a graphics driver's) have
+neither, so their stack overflows end the process without a report.
 
 ## Releasing Basalt
 
