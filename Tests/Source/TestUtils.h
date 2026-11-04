@@ -155,12 +155,12 @@ namespace BasaltTest {
 		}
 	}
 
-	// Creates an empty, active project in a fresh temporary directory; removed and deactivated on scope exit.
 	inline uint64_t IdOf(Basalt::Entity entity)
 	{
 		return static_cast<uint64_t>(entity.GetUUID());
 	}
 
+	// Creates an empty, active project in a fresh temporary directory; removed and deactivated on scope exit.
 	class TempProject
 	{
 	public:

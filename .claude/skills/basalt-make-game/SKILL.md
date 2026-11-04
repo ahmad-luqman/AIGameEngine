@@ -27,7 +27,7 @@ broken version leaves the old one running). Typical patterns:
   reads input, and spawns/moves/destroys entities (`Scene.CreateEntity` + `AddComponent`,
   or `Scene.Instantiate("Assets/Prefabs/Block.bprefab", pos)`).
 - Change placed copies of a prefab by editing the prefab: `prefab.open`, ordinary entity/component commands,
-  `prefab.save` (its `warnings` list instances that could not merge), `prefab.close`. Saving merges into the instances
+  `prefab.save` (its `warnings` list instances that could not merge and what saving forgets), `prefab.close`. Saving merges into the instances
   of the scene you opened the prefab from; other scenes merge when opened (`scene.open`), so open and save each scene
   that places the prefab
   before exporting (`project.validate` warns about outdated ones). Instances keep their own edits as overrides:
@@ -35,8 +35,8 @@ broken version leaves the old one running). Typical patterns:
   into the prefab. `prefab.create` links the saved tree as an instance, so deleting it afterwards is optional. Close a
   prefab before the session ends: the CLI refuses to drop unsaved edits behind an open prefab.
 - Reuse prefabs instead of copying them: an instance inside a tree stays nested when you `prefab.create` that tree (or
-  `prefab.instantiate` it into an open prefab), and `prefab.variant {"base": ..., "path": ...}` makes a prefab that
-  inherits everything until `prefab.open` changes it. Editing the inner prefab or base then reaches them all (in other
+  `prefab.instantiate` it into an open prefab), and `prefab.variant {"base": ...}` (`path` optional) makes a prefab that
+  inherits everything it does not change, except its root's position and rotation, which saving never records. Editing the inner prefab or base then reaches them all (in other
   scenes when those are opened). Their overrides belong to the outermost instance: run `prefab.overrides/apply/revert` on
   its root, not on a nested root.
 - Prefer input actions over raw keys: declare them with `project.set {"inputActions": {"Actions": [{"Name":

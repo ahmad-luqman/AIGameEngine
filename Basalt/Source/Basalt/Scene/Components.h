@@ -1331,10 +1331,12 @@ namespace Basalt {
 	// last merged, so later prefab edits merge without losing the instance's own edits (Scene/Prefab). Overrides are
 	// derived from these (Prefab::ComputeOverrides, prefab.overrides), never stored. What it is follows from its fields and
 	// its place, so copies and unpacking need no bookkeeping:
-	// - Members and Baseline: a tracked instance.
+	// - Members and Baseline: a tracked instance. Listed by an instance around it that holds this prefab there, it is a
+	//   nested root that was on its own for a while, which belongs to that instance again until its next merge clears this.
 	// - Members alone: created during Play; it records membership only.
 	// - Neither, listed by an instance around it: a nested root, which that instance tracks with its entities.
 	// - Neither, anywhere else: untracked (saved before tracking existed, a copy of a nested root), adopted on merge.
+	// - Empty Prefab: no link; prefab writes ignore it.
 	struct PrefabComponent
 	{
 		std::string Prefab;

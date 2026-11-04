@@ -271,9 +271,9 @@ namespace Basalt {
 		};
 		std::optional<PrefabEditing> m_PrefabEditing;
 
-		// Merges a changed prefab file, or without one every prefab, into the instances that read it in the edit scene and the
-		// scene waiting for prefab editing. outdatedOnly keeps to tracked instances that are behind their prefab.
-		void MergePrefabInstances(const std::optional<std::string>& changedPrefab, bool outdatedOnly, AssetReloadReport& report);
+		// Merges a changed prefab file into the instances that read it in the edit scene and the scene waiting for prefab
+		// editing. Without one, merges every tracked instance that is behind its prefab.
+		void MergePrefabInstances(const std::optional<std::string>& changedPrefab, AssetReloadReport& report);
 
 		class SceneEvents;
 		void PublishPlayState(PlayStateChange change);

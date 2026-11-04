@@ -139,7 +139,7 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   outdated tracked instances, and `project.validate` warns about scenes still holding outdated ones. Instances created
   during Play keep no baseline. `prefab.create` gives files fresh source IDs (kept on rewrites through the instance link,
   then name matching) and links the saved tree as an instance, unless it belongs to another instance or prefab (a
-  variant relinks to itself). Untracked instances are adopted (children matched by name) by `prefab.refresh/revert/apply`
+  variant's root links to the new variant). Untracked instances are adopted (children matched by name) by `prefab.refresh/revert/apply`
   or the merge after a write of their own prefab (`scene.open` skips them). `prefab.open` swaps in an isolated scene; the waiting scene keeps its path,
   dirty state, selection and (editor) undo history, and edit boundaries other than `prefab.save/close`, plus
   `project.export`, are rejected until `prefab.close`.
@@ -147,24 +147,27 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   file's tree, and its `Overrides` (a JSON merge patch keyed by entity IDs in the holding file, whose asset fields are
   encoded like a baseline's) hold only what differs; a variant is a prefab whose root is such a record, so both share
   one reader, writer and merge. `Prefab::ReadFile` expands them recursively (cycles, `MaxNestingDepth` and
-  `MaxExpandedEntities` are errors) into flat records whose nested IDs are derived from the nested root's ID, so files are
-  never rewritten when what they nest changes, and overrides and references stay valid. A prefab write merges into its
-  own instances and into the tracked instances whose source read that file (`ReadReport::Files`, keyed by `FileKey`, which
-  ignores case where disks do). In a scene the outermost instance tracks all flat records, and nested roots keep a marker
-  (`Prefab` alone, also in baseline records, which carries moves and validation through `AssetFields`):
+  `MaxExpandedEntities` are errors) into flat records whose nested IDs derive from the nested root's ID through a
+  composable `NestedId`: unpacking at any level keeps every ID below it, files are never rewritten when what they nest
+  changes, and overrides and references stay valid. A prefab write merges into its own instances and into the tracked
+  instances whose source read that file (`ReadReport::Files`, keyed by `FileKey`, which ignores ASCII case on Windows and
+  macOS; identity checks use `SameFile`). In a scene the outermost instance tracks all flat records, and nested roots keep
+  a marker (`Prefab` alone, also in baseline records, which carries moves and validation through `AssetFields`):
   `EnclosingInstance` finds their owner, they never merge alone (`PrepareMerge` rejects them), `prefab.apply/refresh/revert`
   on them are rejected, `prefab.overrides` reports `enclosing`, and `prefab.unpack` there is an override. A listed nested
-  root that tracked itself meanwhile (a copy, or moved out and back) is reclaimed on merge. Unpacking an outer instance
-  tracks its nested instances exactly through the former link, since they stop being nested; while still nested, only
-  `prefab.open` tracks them. `Prefab::ToFileEntities` turns flat records back into nested ones on every write, diffing
-  against what the nested prefabs say now, so writers first merge what they missed (`MergeOutdatedNested`), and
-  `SavePrefabEntities` refuses a result it could not read back. A nested root's position and rotation are the holding
-  prefab's (always in its overrides); a variant's root has none of its own and follows its base, like any placement never
-  an override. An override of an entity the nested prefab dropped does nothing and an addition under it moves to the root,
-  which reads report in `ReadReport::Warnings`, shown by every command that reads or writes the file. Format version 4; a
-  `Prefab` component in a prefab file declaring an older version, or none, is ignored, and `asset.move` strips it when it
-  upgrades the file. Limits: a nested tree keeps its prefab's sibling order, and a nested root that holds instances
-  unpacks only in its open prefab, because their IDs derive from it.
+  root that tracked itself meanwhile (a copy, or moved out and back) counts as the instance's on the read side, and its
+  next merge makes it a marker. Unpacking an outer instance (`Prefab::Unpack`) catches up with its prefab, then tracks its
+  nested instances exactly through the former link; while still nested, only `prefab.open` tracks them.
+  `Prefab::ToFileEntities` turns flat records back into nested ones on every write, diffing against what the nested
+  prefabs say now, so writers first catch up (`MergeOutdatedNested`: every source is read before anything merges), and
+  `SavePrefabEntities` refuses a result it could not read back. Operations over many instances read through a
+  `SourceCache`. A nested root's position and rotation are the holding prefab's (always in its overrides); a variant's root
+  is saved with none of its own and follows its base. An override of an entity the nested prefab dropped does nothing, and
+  an addition under it moves to the root on read, or to its nearest kept ancestor in a live merge; `ReadReport::Warnings`
+  says so, and the commands that read or write a prefab return it (`prefab.info`, `project.validate`, `asset.write`, and the
+  `warnings` of the other `prefab.*` commands). Format version 4; a `Prefab` component in a prefab file declaring an older
+  version, or none, is ignored, and `asset.move` removes it when it upgrades the file. Limits: a nested tree keeps its
+  prefab's sibling order, and a kept nested root that returns keeps deletions of what it lost meanwhile.
 - **Shipping.** `ProjectConfig` holds `Version` (3 or 4 16-bit numbers, `ParseProjectVersion`), `Company` (Name and
   Company are capped at `MaxTextLength`) and `Icon` (a PNG asset reference, encoded and moved like `StartScene`; an
   unresolved one stays an `asset-uuid:` key). `project.export {"package": true}` packages for the host: a `.app`

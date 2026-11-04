@@ -1181,7 +1181,7 @@ namespace Basalt {
 		if (AssetManager::IsMeshFile(path))
 			result = m_Context.Execute("asset.import_model", { { "path", path } });
 		else if (extension == ".bprefab")
-			result = m_Context.Execute("prefab.instantiate", { { "path", path } });
+			result = ExecuteAndWarn("prefab.instantiate", { { "path", path } });
 		else if (extension == ".lua" && m_Session.GetSelection().IsValid())
 			result = m_Context.Execute("component.set", { { "entity", static_cast<uint64_t>(m_Session.GetSelection()) }, { "component", "Script" }, { "data", { { "Script", path } } } });
 		else if (extension == ".hdr")
@@ -2504,7 +2504,7 @@ namespace Basalt {
 		if (!entity.IsValid() || !entity.HasComponent<PrefabComponent>())
 			return;
 		const auto& link = entity.GetComponent<PrefabComponent>();
-		if (link.Members.empty())
+		if (!Prefab::ListsMembers(link))
 		{
 			ImGui::TextDisabled("Overrides are not tracked yet (saved before tracking existed, or copied out of an instance); Refresh starts tracking.");
 			return;

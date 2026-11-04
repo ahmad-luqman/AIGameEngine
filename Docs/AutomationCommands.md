@@ -796,7 +796,7 @@ Resolves an asset UUID (decimal string) to its current project-relative path. Re
 
 ### `asset.write`
 
-Writes a text asset (script, prefab, scene, animation graph, mask or joint map, material...) to a project-relative path and reloads it. A .banimgraph, .banimmask, .bjointmap or .bmaterial is validated before replacing the file; a material's texture problems (missing, wrong letter case, unresolved, not a texture, outside Assets/, an embedded image the model lacks) are reported in 'warnings', as project.validate reports them. A script written while the game runs (Play, not Simulate) is hot reloaded (see 'scripts'). A .bprefab merges into the edit scene's instances ('prefabInstances'; instances that cannot merge are 'warnings').
+Writes a text asset (script, prefab, scene, animation graph, mask or joint map, material...) to a project-relative path and reloads it. A .banimgraph, .banimmask, .bjointmap or .bmaterial is validated before replacing the file; a material's texture problems (missing, wrong letter case, unresolved, not a texture, outside Assets/, an embedded image the model lacks) are reported in 'warnings', as project.validate reports them. A script written while the game runs (Play, not Simulate) is hot reloaded (see 'scripts'). A .bprefab merges into the instances that read it in the edit scene and a waiting scene ('prefabInstances'); what reading it finds, instances that cannot merge and what those merges find are 'warnings'.
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -2272,7 +2272,7 @@ Stops play mode and restores the edit scene.
 
 ### `prefab.apply`
 
-Writes an instance's overrides into its prefab file, then merges the file into the instances of the open scene ('instances'). The root's position and rotation, entities the instance added and references to entities outside the prefab stay local ('warnings' names such references). An untracked instance is adopted first, so all its differences are applied. A nested instance's overrides go into the prefab holding it, and the root of a nested instance is rejected: use the instance holding it. Also rejected when a nested root that holds nested instances was unpacked: do that in the prefab holding it (prefab.open). Edit mode only.
+Writes an instance's overrides into its prefab file, then merges the file into the instances of the open scene ('instances'). The root's position and rotation, entities the instance added and references to entities outside the prefab stay local ('warnings' names such references, and what the file's prefabs report). An untracked instance is adopted first, so all its differences are applied. A nested instance's overrides go into the prefab holding it, and the root of a nested instance is rejected: use the instance holding it. Edit mode only.
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -2338,7 +2338,7 @@ Returns to the scene that waited during prefab editing, with its path, unsaved s
 
 ### `prefab.create`
 
-Saves an entity tree as a prefab file and makes the tree an instance of it ('linked'; not during Play, while a prefab is open, or when it belongs to another instance or prefab, kept with a warning). Prefab instances inside the tree stay instances: the file holds a nested record with their overrides, so their prefabs' edits keep reaching it. With variant, an instance root becomes a variant of its prefab: the file holds only the instance's differences, and the instance now tracks the variant. Their prefabs' changes are merged first, and a variant's root keeps its base's position and rotation. Then merges the file into the open scene's other instances ('instances'). Overwriting a prefab keeps its entity IDs (through the tree's instance link, or by matching names), so existing instances keep merging. Rejected when a nested instance holds this file or cannot read or merge its prefab, when the result could not be read back (too deep, too large), when saving an instance over a file that cannot be read, or, with variant, when the entity is not a top-level instance root or path is its own prefab.
+Saves an entity tree as a prefab file and makes the tree an instance of it ('linked'; not during Play, while a prefab is open, or when it belongs to another instance or prefab, kept with a warning). Prefab instances inside the tree stay instances: the file holds a nested record with their overrides, so their prefabs' edits keep reaching it. With variant, an instance root becomes a variant of its prefab: the file holds only the instance's differences, without its root's position and rotation, and the instance stays where it is, tracking the variant. What an instance in or around the tree missed from its prefab is merged first (a running game cannot: 'warnings' says so, and its old values are saved as overrides). Then merges the file into the open scene's instances ('instances'). Overwriting a prefab keeps its entity IDs (through the tree's instance link, or by matching names), so existing instances keep merging. Rejected when a nested instance holds this file or cannot read or merge its prefab (nothing merges when one cannot be read), when the result could not be read back (too deep, too large), when saving an instance over a file that cannot be read, or, with variant, when the entity is not a top-level instance root or path is its own prefab.
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -2390,7 +2390,7 @@ Saves an entity tree as a prefab file and makes the tree an instance of it ('lin
 
 ### `prefab.info`
 
-Describes a prefab file without opening it: 'entities' (after expanding nested instances), 'base' (the prefab a variant inherits, else null), 'nested' (the nested instances this file holds directly, as { entity, prefab }, the variant's root included), 'dependencies' (every prefab it reads, directly or not; a change to any of them reaches its tracked instances) and 'warnings' (overrides of entities their prefab no longer has, entities moved to the root because their parent is gone, and fields a nested record ignores).
+Describes a prefab file without opening it: 'entities' (after expanding nested instances), 'base' (the prefab a variant inherits, else null), 'nested' (the nested instances this file holds directly, as { entity, prefab }, the variant's root included), 'dependencies' (every prefab it reads, directly or not; a change to any of them reaches its tracked instances) and 'warnings' (overrides of entities their prefab no longer has, entities moved to the root because their parent is gone, fields a nested record ignores, records replacing a nested prefab's, and Prefab components ignored in a file too old to nest).
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -2486,7 +2486,7 @@ Instantiates a prefab into the scene, with the prefabs it nests or is based on. 
 
 ### `prefab.open`
 
-Opens a prefab for editing in its own scene, where its outermost nested instances (and a variant's root) are ordinary instances with their overrides; 'warnings' says what reading it found (overrides of entities a nested prefab dropped, which saving forgets). The current scene, with its unsaved edits, selection and undo history (in the editor), waits until prefab.close. While the prefab is open, every edit-boundary command except prefab.save and prefab.close is rejected, and so is project.export (today: scene.new/open/save, project.create/open, asset.move/rename/delete/resolve, play.start, replay.run, prefab.open/apply)
+Opens a prefab for editing in its own scene, where its outermost nested instances (and a variant's root) are ordinary instances with their overrides; 'warnings' says what reading it found (see prefab.info) and which nested instances could not be tracked. The current scene, with its unsaved edits, selection and undo history (in the editor), waits until prefab.close. While the prefab is open, every edit-boundary command except prefab.save and prefab.close is rejected, and so is project.export (today: scene.new/open/save, project.create/open, asset.move/rename/delete/resolve, play.start, replay.run, prefab.open/apply)
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -2515,7 +2515,7 @@ Opens a prefab for editing in its own scene, where its outermost nested instance
 
 ### `prefab.overrides`
 
-Lists an instance's overrides: JSON-pointer paths into its source records ('/<source ID>' for a whole entity: null when the instance deleted it, its record when the instance kept an entity the prefab no longer has; '/<source ID>/Name', '/<source ID>/Parent', '/<source ID>/Components/<component>[/<field>...]') with the instance's value, null where it removed something. Entity references are source IDs for the instance's entities, scene UUIDs otherwise, and {"External": <UUID>} where a scene UUID equals a source ID. Fields are whole values (vectors and lists are not merged element by element); the root's position and rotation are placement, not overrides. 'members' maps source entity IDs to instance entity IDs (including reserved IDs of entities the instance deleted); 'tracked' is false for an instance saved before tracking or copied out of an instance (it has no overrides until adopted), and for a nested root. A nested instance's entities are part of the instance holding it, whose overrides list them; on the root of a nested instance, 'enclosing' names that instance.
+Lists an instance's overrides: JSON-pointer paths into its source records ('/<source ID>' for a whole entity: null when the instance deleted it, its record when the instance kept an entity the prefab no longer has; '/<source ID>/Name', '/<source ID>/Parent', '/<source ID>/Components/<component>[/<field>...]') with the instance's value, null where it removed something. Entity references are source IDs for the instance's entities, scene UUIDs otherwise, and {"External": <UUID>} where a scene UUID equals a source ID. Fields are whole values (vectors and lists are not merged element by element); the root's position and rotation are placement, not overrides. 'members' maps source entity IDs to instance entity IDs (including reserved IDs of entities the instance deleted); 'tracked' is false for an instance saved before tracking, copied out of an instance (it has no overrides until adopted) or created during Play, and for a nested root. A nested instance's entities are part of the instance holding it, whose overrides list them; on the root of a nested instance, 'enclosing' names that instance.
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -2555,7 +2555,7 @@ Lists an instance's overrides: JSON-pointer paths into its source records ('/<so
 
 ### `prefab.refresh`
 
-Merges the prefab file into an instance, keeping its overrides, entity IDs and the entities it added. Prefab writes and scene.open merge tracked instances automatically; this catches up an instance by hand. Instances without tracking (saved before it existed, or a nested root copied out of its instance) are adopted first (here, by revert and apply, and by the merge after a write of their own prefab; scene.open and project.open leave them untracked): their differences from the current file become overrides, so that file's changes are not taken. Edit mode only.
+Merges the prefab file into an instance, keeping its overrides, entity IDs and the entities it added. Prefab writes and scene.open merge tracked instances automatically; this catches up an instance by hand. Instances without tracking (saved before it existed, or a nested root copied out of its instance) are adopted first (here, by revert and apply, and by the merge after a write of their own prefab; scene.open and project.open leave them untracked): their differences from the current file become overrides, so that file's changes are not taken. 'warnings', when present, says what reading the prefab found and which of the instance's entities moved. Edit mode only.
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -2595,7 +2595,7 @@ Merges the prefab file into an instance, keeping its overrides, entity IDs and t
 
 ### `prefab.revert`
 
-Discards an instance's overrides: all of them, or the one override path 'field' from prefab.overrides. The root's position, rotation and parent and the entities the instance added stay. An untracked instance is adopted first, so reverting all discards its differences from the prefab. Edit mode only.
+Discards an instance's overrides: all of them, or the one override path 'field' from prefab.overrides. The root's position, rotation and parent and the entities the instance added stay. An untracked instance is adopted first, so reverting all discards its differences from the prefab. 'warnings', when present, says what reading the prefab found and which of the instance's entities moved. Edit mode only.
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -2640,7 +2640,7 @@ Discards an instance's overrides: all of them, or the one override path 'field' 
 
 ### `prefab.save`
 
-Saves the open prefab and merges it into the instances of the waiting scene, keeping their overrides ('instances' counts those that merged). Instances that cannot merge are listed in 'warnings' (a rejected one keeps its previous state; a partly merged one merges fully on prefab.refresh). Instances in the open prefab are saved as nested instances, holding only their overrides, after merging what their prefabs changed meanwhile, and a root that is an instance makes it a variant of that prefab. Rejected when the file changed on disk since it was opened or last saved (unless force), when the scene does not have exactly one root, when an instance in it holds this prefab or cannot read or merge its own, or when the result could not be read back (too deep, too large).
+Saves the open prefab and merges it into the instances of the waiting scene, keeping their overrides ('instances' counts those that merged). Instances that cannot merge are listed in 'warnings' (a rejected one keeps its previous state; a partly merged one merges fully on prefab.refresh), with what reading found (see prefab.info), entities its merges moved, and a variant root's move, which is not saved. Instances in the open prefab are saved as nested instances, holding only their overrides, after merging what their prefabs changed meanwhile, and a root that is an instance makes it a variant of that prefab. Rejected when the file changed on disk since it was opened or last saved (unless force), when the scene does not have exactly one root, when an instance in it holds this prefab or cannot read or merge its own (nothing merges when one cannot be read), or when the result could not be read back (too deep, too large).
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -2666,7 +2666,7 @@ Saves the open prefab and merges it into the instances of the waiting scene, kee
 
 ### `prefab.unpack`
 
-Removes an instance's prefab link and keeps its entities as ordinary scene entities. Nested instances stay instances of their prefabs, tracked from now on, each with its own overrides ('warnings' names any whose prefab cannot be read). On the root of a nested instance inside an instance, it is an override of that instance. Edit mode only.
+Removes an instance's prefab link and keeps its entities as ordinary scene entities. It first catches up with its prefab. Nested instances stay instances of their prefabs, tracked from now on, each with its own overrides and with the IDs they had ('warnings' names any whose prefab cannot be read). On the root of a nested instance inside an instance, it is an override of that instance. Edit mode only.
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -2706,7 +2706,7 @@ Removes an instance's prefab link and keeps its entities as ordinary scene entit
 
 ### `prefab.variant`
 
-Creates a prefab that inherits another: its root is an instance of 'base' without any override, so everything follows the base until the variant changes it. Edit it like any prefab (prefab.open, prefab.apply): the file holds only its differences, and its root's position and rotation always follow the base. 'path' defaults to '<base> Variant.bprefab' beside the base, numbered when taken, and the result names it. Rejected when 'path' exists.
+Creates a prefab that inherits another: its root is an instance of 'base' without any override, so everything follows the base until the variant changes it. Edit it like any prefab (prefab.open, prefab.apply): the file holds only its differences, and saves never write its root's position or rotation, so those follow the base. 'path' defaults to '<base> Variant.bprefab' beside the base, numbered when taken, and the result names it. Rejected when 'path' exists, or when the base cannot be read or the result could not be read back (too deep).
 
 | Parameter | Type / description |
 |-----------|--------------------|

@@ -92,6 +92,11 @@ namespace {
 			return EntityFrom(Run("prefab.instantiate", { { "path", path }, { "position", position } }));
 		}
 
+		Entity InstantiateUnder(const std::string& path, Entity parent)
+		{
+			return EntityFrom(Run("prefab.instantiate", { { "path", path }, { "parent", IdOf(parent) } }));
+		}
+
 		// Opens path, runs edit on its scene and saves it; returns what prefab.save reported.
 		json Edit(const std::string& path, const std::function<void(Scene&)>& edit)
 		{
@@ -256,14 +261,15 @@ TEST_SUITE("PrefabNesting")
 		CHECK(instance.GetTransform().Translation == glm::vec3(9, 0, 0));
 		CHECK(f.Overrides(instance).empty());
 
-		// Saving a variant whose base moved meanwhile pins nothing.
+		// Saving a variant whose base moved meanwhile pins nothing, and is not a move of the variant's.
 		f.Run("prefab.open", { { "path", f.Elite } });
 		f.WriteRecords(f.Soldier, [](json& record) {
 			if (record["Name"] == "Soldier")
 				record["Components"]["Transform"]["Translation"] = { 0, 7, 0 };
 		});
 		f.Session.MarkDirty();
-		f.Run("prefab.save");
+		CHECK(f.Run("prefab.save")["warnings"].empty());
+		CHECK(f.Session.GetEditScene()->FindEntityByName("Soldier").GetTransform().Translation == glm::vec3(0, 7, 0));
 		f.Run("prefab.close");
 		CHECK_FALSE(f.FileEntities(f.Elite)[0]["Components"]["Prefab"].contains("Overrides"));
 
@@ -310,8 +316,8 @@ TEST_SUITE("PrefabNesting")
 	{
 		NestingFixture f;
 		Entity holder = f.Session.GetScene()->CreateEntity("Pair");
-		Entity left = f.EntityFrom(f.Run("prefab.instantiate", { { "path", f.Soldier }, { "parent", IdOf(holder) } }));
-		Entity right = f.EntityFrom(f.Run("prefab.instantiate", { { "path", f.Soldier }, { "parent", IdOf(holder) } }));
+		Entity left = f.InstantiateUnder(f.Soldier, holder);
+		Entity right = f.InstantiateUnder(f.Soldier, holder);
 		left.GetComponent<TagComponent>().Tag = "Left";
 		right.GetComponent<TagComponent>().Tag = "Right";
 		Find(right, "Gun").GetComponent<PointLightComponent>().Radius = 2;
@@ -335,7 +341,7 @@ TEST_SUITE("PrefabNesting")
 		NestingFixture f;
 		auto scene = f.Session.GetScene();
 		Entity army = scene->CreateEntity("Army");
-		Entity squad = f.EntityFrom(f.Run("prefab.instantiate", { { "path", f.Squad }, { "parent", IdOf(army) } }));
+		Entity squad = f.InstantiateUnder(f.Squad, army);
 		Entity pointer = scene->CreateEntity("Pointer");
 		scene->SetParent(pointer, army, false);
 		pointer.AddComponent<BoneAttachmentComponent>().Target = Find(squad, "Gun").GetUUID();
@@ -397,7 +403,7 @@ TEST_SUITE("PrefabNesting")
 		Entity pointer = edit.CreateEntity("Pointer");
 		edit.SetParent(pointer, edit.FindEntityByName("Squad"), false);
 		pointer.AddComponent<BoneAttachmentComponent>().Target = added.GetUUID();
-		Entity second = f.EntityFrom(f.Run("prefab.instantiate", { { "path", f.Soldier }, { "parent", IdOf(pointer) } }));
+		Entity second = f.InstantiateUnder(f.Soldier, pointer);
 		Entity secondGun = Find(second, "Gun");
 		pointer.GetComponent<BoneAttachmentComponent>().Target = secondGun.GetUUID();
 		second.GetComponent<TagComponent>().Tag = "Second";
@@ -504,7 +510,7 @@ TEST_SUITE("PrefabNesting")
 		NestingFixture f;
 		auto scene = f.Session.GetScene();
 		Entity army = scene->CreateEntity("Army");
-		f.Run("prefab.instantiate", { { "path", f.Squad }, { "parent", IdOf(army) } });
+		f.InstantiateUnder(f.Squad, army);
 		const std::string path = "Assets/Prefabs/Army.bprefab";
 		f.Run("prefab.create", { { "entity", IdOf(army) }, { "path", path } });
 		Entity instance = f.Instantiate(path);
@@ -747,7 +753,7 @@ TEST_SUITE("PrefabNesting")
 
 		// Creating over a prefab a nested instance holds.
 		Entity holder = f.Session.GetScene()->CreateEntity("Holder");
-		f.Run("prefab.instantiate", { { "path", f.Squad }, { "parent", IdOf(holder) } });
+		f.InstantiateUnder(f.Squad, holder);
 		CHECK(Contains(f.RunError("prefab.create", { { "entity", IdOf(holder) }, { "path", f.Soldier } }), "holds that prefab itself"));
 		CHECK(f.FileText(f.Soldier) == file);
 
@@ -1019,7 +1025,7 @@ TEST_SUITE("PrefabNesting")
 
 		// The same for a tree in a scene, and for a tree over its own nesting prefab.
 		Entity holder = f.Session.GetScene()->CreateEntity("Holder");
-		Entity nested = f.EntityFrom(f.Run("prefab.instantiate", { { "path", f.Soldier }, { "parent", IdOf(holder) } }));
+		Entity nested = f.InstantiateUnder(f.Soldier, holder);
 		f.WriteRecords(f.Soldier, setRadius(43));
 		f.Run("prefab.create", { { "entity", IdOf(holder) }, { "path", "Assets/Prefabs/Holder.bprefab" } });
 		CHECK_FALSE(Contains(f.FileText("Assets/Prefabs/Holder.bprefab"), "Radius"));
@@ -1098,7 +1104,7 @@ TEST_SUITE("PrefabNesting")
 	{
 		NestingFixture f;
 		Entity holder = f.Session.GetScene()->CreateEntity("Holder");
-		Entity nested = f.EntityFrom(f.Run("prefab.instantiate", { { "path", f.Squad }, { "parent", IdOf(holder) } }));
+		Entity nested = f.InstantiateUnder(f.Squad, holder);
 		Entity other = f.EntityFrom(f.Run("prefab.instantiate", { { "path", f.Soldier }, { "parent", IdOf(Find(nested, "Gun")) } }));
 		other.GetComponent<TagComponent>().Tag = "Other";
 		const std::string path = "Assets/Prefabs/Holder.bprefab";
@@ -1117,34 +1123,52 @@ TEST_SUITE("PrefabNesting")
 		CHECK(Contains(f.Overrides(added).dump(), "/Name"));
 	}
 
-	TEST_CASE("A nested root that holds instances unpacks in its prefab, not in an instance about to be applied")
+	TEST_CASE("Unpacking a nested root keeps the IDs of everything below it, wherever that is done")
 	{
 		NestingFixture f;
 		Entity army = f.Session.GetScene()->CreateEntity("Army");
-		f.Run("prefab.instantiate", { { "path", f.Squad }, { "parent", IdOf(army) } });
+		f.InstantiateUnder(f.Squad, army);
 		const std::string path = "Assets/Prefabs/Army.bprefab";
 		f.Run("prefab.create", { { "entity", IdOf(army) }, { "path", path } });
-		Entity instance = f.Instantiate(path);
-		Entity squad = Find(instance, "Squad");
-		f.Run("prefab.unpack", { { "entity", IdOf(squad) } });
-		const std::string file = f.FileText(path);
-		CHECK(Contains(f.RunError("prefab.apply", { { "entity", IdOf(instance) } }), "holds nested instances"));
-		CHECK(Contains(f.RunError("prefab.create", { { "entity", IdOf(instance) }, { "path", path } }), "holds nested instances"));
-		CHECK(f.FileText(path) == file);
-		f.Run("prefab.revert", { { "entity", IdOf(instance) } });
-		CHECK(Prefab::EnclosingInstance(squad) == instance);
 
-		// In the open prefab the Soldier inside it becomes a nested instance of Army, and still follows its prefab.
-		f.Run("prefab.open", { { "path", path } });
-		f.Run("prefab.unpack", { { "entity", "Squad" } });
-		f.Run("prefab.save");
-		f.Run("prefab.close");
-		const json info = f.Info(path);
+		// In an instance, and applied: the Soldier inside becomes a nested instance of Army, and still follows its prefab.
+		Entity instance = f.Instantiate(path);
+		Entity gun = Find(instance, "Gun");
+		const uint64_t gunId = IdOf(gun);
+		gun.GetComponent<PointLightComponent>().Intensity = 66;
+		f.Run("prefab.unpack", { { "entity", IdOf(Find(instance, "Squad")) } });
+		f.Run("prefab.apply", { { "entity", IdOf(instance) } });
+		json info = f.Info(path);
 		REQUIRE(info["nested"].size() == 1);
 		CHECK(info["nested"][0]["prefab"] == f.Soldier);
-		f.Edit(f.Soldier, [](Scene& edit) { GunLight(edit).Radius = 94; });
-		CHECK(GunRadius(instance) == 94);
 		CHECK(f.Overrides(instance).empty());
+		CHECK(IdOf(Find(instance, "Gun")) == gunId);
+
+		// In the open prefab: an instance with an override of its own keeps one Gun, the same one, and the override.
+		Entity holder = f.Session.GetScene()->CreateEntity("Holder");
+		f.InstantiateUnder(f.Squad, holder);
+		const std::string holderPath = "Assets/Prefabs/Holder.bprefab";
+		f.Run("prefab.create", { { "entity", IdOf(holder) }, { "path", holderPath } });
+		Entity other = f.Instantiate(holderPath);
+		Entity otherGun = Find(other, "Gun");
+		const uint64_t otherId = IdOf(otherGun);
+		otherGun.GetComponent<PointLightComponent>().Intensity = 77;
+		f.Session.MarkDirty();
+		f.Run("prefab.open", { { "path", holderPath } });
+		f.Run("prefab.unpack", { { "entity", "Squad" } });
+		const json saved = f.Run("prefab.save");
+		f.Run("prefab.close");
+		// The instance and the authoring tree.
+		CHECK(saved["instances"] == 2);
+		CHECK(IdOf(Find(other, "Gun")) == otherId);
+		CHECK(Find(other, "Gun").GetComponent<PointLightComponent>().Intensity == 77);
+		CHECK(f.Overrides(other).size() == 1);
+		size_t guns = 0;
+		for (Entity child : Find(other, "Soldier").GetChildren())
+			guns += child.GetName() == "Gun" ? 1 : 0;
+		CHECK(guns == 1);
+		f.Edit(f.Soldier, [](Scene& edit) { GunLight(edit).Radius = 94; });
+		CHECK(GunRadius(other) == 94);
 	}
 
 	TEST_CASE("A chain too deep to read is refused before it is written")
@@ -1159,11 +1183,11 @@ TEST_SUITE("PrefabNesting")
 			previous = path;
 		}
 		Entity holder = f.Session.GetScene()->CreateEntity("Holder");
-		f.Run("prefab.instantiate", { { "path", previous }, { "parent", IdOf(holder) } });
+		f.InstantiateUnder(previous, holder);
 		const std::string path = "Assets/Prefabs/TooDeep.bprefab";
 		f.Run("prefab.create", { { "entity", IdOf(holder) }, { "path", path } });
 		Entity outer = f.Session.GetScene()->CreateEntity("Outer");
-		f.Run("prefab.instantiate", { { "path", path }, { "parent", IdOf(outer) } });
+		f.InstantiateUnder(path, outer);
 		CHECK(Contains(f.RunError("prefab.create", { { "entity", IdOf(outer) }, { "path", "Assets/Prefabs/Deeper.bprefab" } }), "deeper than"));
 		CHECK_FALSE(FileSystem::Exists(Basalt::Project::ResolvePath("Assets/Prefabs/Deeper.bprefab")));
 	}
@@ -1175,7 +1199,8 @@ TEST_SUITE("PrefabNesting")
 		const std::string path = "Assets/Prefabs/Old.bprefab";
 		const json root = { { "ID", 1 }, { "Name", "Old" }, { "Parent", 0 }, { "Components", { { "Script", { { "Script", "Assets/Script.lua" } } }, { "Prefab", { { "Prefab", f.Soldier } } } } } };
 		f.Directory.WriteFile(path, json{ { "Format", "BasaltPrefab" }, { "Version", 3 }, { "Entities", json::array({ root }) } }.dump());
-		f.Run("asset.move", { { "from", "Assets/Script.lua" }, { "to", "Assets/Moved.lua" } });
+		const json moved = f.Run("asset.move", { { "from", "Assets/Script.lua" }, { "to", "Assets/Moved.lua" } });
+		CHECK(Contains(moved["warnings"].dump(), "removed a Prefab component from 'Old'"));
 		CHECK(ParseJson(f.FileText(path))["Version"] == SceneSerializer::FormatVersion);
 		CHECK(f.Info(path)["entities"] == 1);
 		CHECK(f.Info(path)["base"].is_null());
@@ -1209,7 +1234,7 @@ TEST_SUITE("PrefabNesting")
 	{
 		NestingFixture f;
 		Entity army = f.Session.GetScene()->CreateEntity("Army");
-		f.Run("prefab.instantiate", { { "path", f.Squad }, { "parent", IdOf(army) } });
+		f.InstantiateUnder(f.Squad, army);
 		const std::string path = "Assets/Prefabs/Army.bprefab";
 		f.Run("prefab.create", { { "entity", IdOf(army) }, { "path", path } });
 		Entity instance = f.Instantiate(path);
@@ -1234,10 +1259,9 @@ TEST_SUITE("PrefabNesting")
 		CHECK(Prefab::IsTracked(soldier.GetComponent<PrefabComponent>()));
 		scene->SetParent(soldier, parent, false);
 		f.Session.MarkDirty();
-		f.Run("prefab.refresh", { { "entity", IdOf(instance) } });
-		CHECK_FALSE(Prefab::ListsMembers(soldier.GetComponent<PrefabComponent>()));
 		CHECK(Prefab::EnclosingInstance(soldier) == instance);
 		f.Run("prefab.apply", { { "entity", IdOf(instance) } });
+		CHECK_FALSE(Prefab::ListsMembers(soldier.GetComponent<PrefabComponent>()));
 		CHECK(Find(f.Instantiate(path), "Soldier"));
 	}
 
@@ -1308,7 +1332,7 @@ TEST_SUITE("PrefabNesting")
 		CHECK(f.Overrides(instance).empty());
 
 		Entity holder = f.Session.GetScene()->CreateEntity("Holder");
-		Entity nested = f.EntityFrom(f.Run("prefab.instantiate", { { "path", f.Elite }, { "parent", IdOf(holder) } }));
+		Entity nested = f.InstantiateUnder(f.Elite, holder);
 		const std::string path = "Assets/Prefabs/Holder.bprefab";
 		f.Run("prefab.create", { { "entity", IdOf(holder) }, { "path", path } });
 		CHECK(nested.GetComponent<PrefabComponent>().Prefab == f.Elite);
@@ -1328,7 +1352,7 @@ TEST_SUITE("PrefabNesting")
 		NestingFixture f;
 		f.Edit(f.Squad, [](Scene& edit) { GunLight(edit).Radius = 12; });
 		Entity army = f.Session.GetScene()->CreateEntity("Army");
-		Entity squad = f.EntityFrom(f.Run("prefab.instantiate", { { "path", f.Squad }, { "parent", IdOf(army) } }));
+		Entity squad = f.InstantiateUnder(f.Squad, army);
 		CHECK(GunRadius(squad) == 12);
 		Find(squad, "Gun").GetComponent<PointLightComponent>().Radius = 13;
 		const std::string path = "Assets/Prefabs/Army.bprefab";
@@ -1356,8 +1380,8 @@ TEST_SUITE("PrefabNesting")
 		});
 		auto scene = f.Session.GetScene();
 		Entity pair = scene->CreateEntity("Pair");
-		Entity left = f.EntityFrom(f.Run("prefab.instantiate", { { "path", f.Soldier }, { "parent", IdOf(pair) } }));
-		Entity right = f.EntityFrom(f.Run("prefab.instantiate", { { "path", f.Soldier }, { "parent", IdOf(pair) } }));
+		Entity left = f.InstantiateUnder(f.Soldier, pair);
+		Entity right = f.InstantiateUnder(f.Soldier, pair);
 		left.GetComponent<TagComponent>().Tag = "L";
 		right.GetComponent<TagComponent>().Tag = "R";
 		// One nested instance's entity aims at the other's, and the other's at the holder's own.
@@ -1475,7 +1499,7 @@ TEST_SUITE("PrefabNesting")
 	{
 		NestingFixture f;
 		Entity holder = f.Session.GetScene()->CreateEntity("Holder");
-		Entity nested = f.EntityFrom(f.Run("prefab.instantiate", { { "path", f.Soldier }, { "parent", IdOf(holder) } }));
+		Entity nested = f.InstantiateUnder(f.Soldier, holder);
 		nested.RemoveComponent<PointLightComponent>();
 		f.Session.GetScene()->DestroyEntity(Find(nested, "Gun"));
 		const std::string path = "Assets/Prefabs/Holder.bprefab";
@@ -1519,8 +1543,7 @@ TEST_SUITE("PrefabNesting")
 		Entity instance = f.Instantiate(f.Squad);
 		std::filesystem::remove(Basalt::Project::ResolvePath(f.Soldier));
 		const json unpacked = f.Run("prefab.unpack", { { "entity", IdOf(instance) } });
-		REQUIRE(unpacked["warnings"].size() == 1);
-		CHECK(Contains(unpacked["warnings"][0].get<std::string>(), "stays untracked"));
+		CHECK(Contains(unpacked["warnings"].dump(), "stays untracked"));
 
 		const std::string path = "Assets/Prefabs/New.bprefab";
 		Entity holder = f.Session.GetScene()->CreateEntity("Holder");
@@ -1565,6 +1588,339 @@ TEST_SUITE("PrefabNesting")
 			f.WriteNesting(path, link, 1);
 			CHECK(Contains(f.RunError("prefab.info", { { "path", path } }), "inside the project"));
 		}
+	}
+
+	TEST_CASE("Entities a stale nested instance gains or loses when saved stay linked to the right records")
+	{
+		NestingFixture f;
+		Entity holder = f.Session.GetScene()->CreateEntity("Holder");
+		Entity nested = f.InstantiateUnder(f.Soldier, holder);
+		json soldier = ParseJson(f.FileText(f.Soldier));
+		json added = soldier["Entities"][1];
+		added["ID"] = 777;
+		added["Name"] = "Added";
+		soldier["Entities"].push_back(added);
+		f.Directory.WriteFile(f.Soldier, soldier.dump());
+		const std::string path = "Assets/Prefabs/Holder.bprefab";
+		const json first = f.Run("prefab.create", { { "entity", IdOf(holder) }, { "path", path } });
+		CHECK(first["linked"] == true);
+		CHECK(Find(nested, "Added"));
+		CHECK(holder.GetComponent<PrefabComponent>().Members.size() == 4);
+		CHECK(f.Overrides(holder).empty());
+
+		soldier["Entities"].erase(1);
+		soldier["Entities"].erase(1);
+		f.Directory.WriteFile(f.Soldier, soldier.dump());
+		f.Run("prefab.create", { { "entity", IdOf(holder) }, { "path", path } });
+		CHECK_FALSE(Find(nested, "Gun"));
+		CHECK(holder.GetComponent<PrefabComponent>().Members.size() >= 2);
+		CHECK(f.Overrides(holder).empty());
+	}
+
+	TEST_CASE("Saving elsewhere catches up what an instance missed, also through the instance around a subtree")
+	{
+		NestingFixture f;
+		const auto setRadius = [](float radius) {
+			return [=](json& record) {
+				if (record["Name"] == "Gun")
+					record["Components"]["PointLight"]["Radius"] = radius;
+			};
+		};
+		Entity instance = f.Instantiate(f.Squad);
+		f.WriteRecords(f.Soldier, setRadius(42));
+		f.Run("prefab.create", { { "entity", IdOf(instance) }, { "path", "Assets/Prefabs/Copy.bprefab" } });
+		CHECK_FALSE(Contains(f.FileText("Assets/Prefabs/Copy.bprefab"), "Radius"));
+
+		f.WriteRecords(f.Soldier, setRadius(43));
+		f.Run("prefab.create", { { "entity", IdOf(Find(instance, "Soldier")) }, { "path", "Assets/Prefabs/Sub.bprefab" } });
+		// A plain copy of the subtree, so it holds its values: the current ones.
+		CHECK(GunRadius(f.Instantiate("Assets/Prefabs/Sub.bprefab")) == 43);
+		CHECK(GunRadius(instance) == 43);
+
+		// A running game cannot merge, and says what that means.
+		Entity holder = f.Session.GetScene()->CreateEntity("Holder");
+		f.InstantiateUnder(f.Soldier, holder);
+		f.Run("play.start");
+		f.WriteRecords(f.Soldier, setRadius(44));
+		const json played = f.Run("prefab.create", { { "entity", "Holder" }, { "path", "Assets/Prefabs/Played.bprefab" } });
+		f.Run("play.stop");
+		CHECK(Contains(played["warnings"].dump(), "while the game runs"));
+	}
+
+	TEST_CASE("A save that cannot read one nested prefab merges nothing; one that cannot merge says so")
+	{
+		NestingFixture f;
+		f.Run("prefab.create", { { "entity", IdOf(f.SoldierTree) }, { "path", "Assets/Prefabs/Other.bprefab" } });
+		Entity holder = f.Session.GetScene()->CreateEntity("Holder");
+		Entity first = f.InstantiateUnder(f.Soldier, holder);
+		f.InstantiateUnder("Assets/Prefabs/Other.bprefab", holder);
+		const std::string other = f.FileText("Assets/Prefabs/Other.bprefab");
+		f.WriteRecords(f.Soldier, [](json& record) {
+			if (record["Name"] == "Gun")
+				record["Components"]["PointLight"]["Radius"] = 42;
+		});
+		f.Directory.WriteFile("Assets/Prefabs/Other.bprefab", "not a prefab");
+		const std::string path = "Assets/Prefabs/Holder.bprefab";
+		CHECK(Contains(f.RunError("prefab.create", { { "entity", IdOf(holder) }, { "path", path } }), "not a valid prefab"));
+		CHECK(GunRadius(first) == 7);
+		CHECK_FALSE(FileSystem::Exists(Basalt::Project::ResolvePath(path)));
+		f.Directory.WriteFile("Assets/Prefabs/Other.bprefab", other);
+
+		// When one nested instance merges and the next cannot, what merged is an edit of the open prefab like any other.
+		f.Session.GetScene()->DestroyEntity(holder);
+		f.WriteRecords(f.Soldier, [](json&) {});
+		Entity pair = f.Session.GetScene()->CreateEntity("Pair");
+		f.InstantiateUnder(f.Soldier, pair);
+		f.InstantiateUnder("Assets/Prefabs/Other.bprefab", pair);
+		f.Run("prefab.create", { { "entity", IdOf(pair) }, { "path", path } });
+		const std::string file = f.FileText(path);
+		f.Run("prefab.open", { { "path", path } });
+		f.Session.ClearDirty();
+		f.WriteRecords(f.Soldier, [](json& record) {
+			if (record["Name"] == "Gun")
+				record["Components"]["PointLight"]["Radius"] = 43;
+		});
+		f.WriteRecords("Assets/Prefabs/Other.bprefab", [](json& record) {
+			if (record["Parent"] == 0)
+				record["ID"] = 555;
+			else
+				record["Parent"] = 555;
+		});
+		CHECK(Contains(f.RunError("prefab.save"), "could not take its prefab's changes"));
+		CHECK(f.FileText(path) == file);
+		CHECK(f.Session.IsDirty());
+		f.Run("prefab.close", { { "discard", true } });
+	}
+
+	TEST_CASE("A nested root kept by its holder survives coming back, and so does its holder")
+	{
+		NestingFixture f;
+		Entity army = f.Session.GetScene()->CreateEntity("Army");
+		f.InstantiateUnder(f.Squad, army);
+		const std::string path = "Assets/Prefabs/Army.bprefab";
+		f.Run("prefab.create", { { "entity", IdOf(army) }, { "path", path } });
+		const std::string squadFile = f.FileText(f.Squad);
+
+		f.Run("prefab.open", { { "path", path } });
+		f.Session.GetEditScene()->FindEntityByName("Soldier").GetComponent<PointLightComponent>().Radius = 21;
+		GunLight(*f.Session.GetEditScene()).Radius = 22;
+		f.Session.MarkDirty();
+		json dropped = ParseJson(squadFile);
+		dropped["Entities"].erase(1);
+		f.Run("asset.write", { { "path", f.Squad }, { "content", dropped.dump() } });
+		f.Run("prefab.save");
+		f.Run("prefab.close");
+
+		f.Directory.WriteFile(f.Squad, squadFile);
+		const json info = f.Info(path);
+		CHECK(Contains(info["warnings"].dump(), "replaces the one in"));
+		Entity instance = f.Instantiate(path);
+		Entity soldier = Find(instance, "Soldier");
+		REQUIRE(soldier);
+		CHECK(Radius(soldier) == 21);
+		size_t soldiers = 0;
+		for (Entity child : Find(instance, "Squad").GetChildren())
+			soldiers += child.GetName() == "Soldier" ? 1 : 0;
+		CHECK(soldiers == 1);
+		// What it holds comes once too, with the kept override.
+		CHECK(soldier.GetChildren().size() == 1);
+		CHECK(GunRadius(soldier) == 22);
+	}
+
+	TEST_CASE("Saving a nested root over its own variant writes overrides, not a copy")
+	{
+		NestingFixture f;
+		f.Variant(f.Soldier, f.Elite);
+		Entity holder = f.Session.GetScene()->CreateEntity("Holder");
+		Entity nested = f.InstantiateUnder(f.Elite, holder);
+		f.Run("prefab.create", { { "entity", IdOf(holder) }, { "path", "Assets/Prefabs/Holder.bprefab" } });
+		Find(nested, "Gun").GetComponent<PointLightComponent>().Intensity = 55;
+		Find(nested, "Gun").GetComponent<TagComponent>().Tag = "Rifle";
+		f.Session.MarkDirty();
+		f.Run("prefab.create", { { "entity", IdOf(nested) }, { "path", f.Elite } });
+		CHECK(f.FileEntities(f.Elite).size() == 1);
+		CHECK_FALSE(Contains(f.FileText(f.Elite), "null"));
+		CHECK(f.Info(f.Elite)["base"] == f.Soldier);
+		f.Edit(f.Soldier, [](Scene& edit) { GunLight(edit).Radius = 70; });
+		Entity fresh = f.Instantiate(f.Elite);
+		Entity rifle = Find(fresh, "Rifle");
+		REQUIRE(rifle);
+		CHECK(Radius(rifle) == 70);
+		CHECK(rifle.GetComponent<PointLightComponent>().Intensity == 55);
+	}
+
+	TEST_CASE("Unpacking an outdated instance catches up first: nothing new reads as deleted")
+	{
+		NestingFixture f;
+		Entity instance = f.Instantiate(f.Squad);
+		json soldier = ParseJson(f.FileText(f.Soldier));
+		json added = soldier["Entities"][1];
+		added["ID"] = 777;
+		added["Name"] = "Added";
+		soldier["Entities"].push_back(added);
+		f.Directory.WriteFile(f.Soldier, soldier.dump());
+		f.Run("prefab.unpack", { { "entity", IdOf(instance) } });
+		Entity nested = Find(instance, "Soldier");
+		CHECK(f.Overrides(nested).empty());
+		CHECK(Find(nested, "Added"));
+		f.Edit(f.Soldier, [](Scene& edit) { GunLight(edit).Radius = 71; });
+		CHECK(GunRadius(nested) == 71);
+	}
+
+	TEST_CASE("A nested root moved out and back belongs to its instance straight away")
+	{
+		NestingFixture f;
+		Entity instance = f.Instantiate(f.Squad);
+		Entity soldier = Find(instance, "Soldier");
+		Entity parent = soldier.GetParent();
+		auto scene = f.Session.GetScene();
+		scene->SetParent(soldier, Entity{}, false);
+		f.Edit(f.Soldier, [](Scene& edit) { GunLight(edit).Radius = 32; });
+		REQUIRE(Prefab::IsTracked(soldier.GetComponent<PrefabComponent>()));
+		scene->SetParent(soldier, parent, false);
+		const json overrides = f.Overrides(instance);
+		for (const auto& [field, value] : overrides.items())
+			CHECK_FALSE(value.is_null());
+		CHECK(Prefab::EnclosingInstance(soldier) == instance);
+		// The next edit merges through the instance, and leaves a marker behind.
+		const json result = f.Edit(f.Soldier, [](Scene& edit) { GunLight(edit).Intensity = 33; });
+		CHECK(result["warnings"].empty());
+		CHECK(Find(soldier, "Gun").GetComponent<PointLightComponent>().Intensity == 33);
+		CHECK_FALSE(Prefab::ListsMembers(soldier.GetComponent<PrefabComponent>()));
+	}
+
+	TEST_CASE("Path spelling never decides what a file is")
+	{
+		NestingFixture f;
+		const std::string shouted = "Assets/Prefabs/ELITE.bprefab";
+		f.Variant(f.Soldier, f.Elite);
+		if (!FileSystem::Exists(Basalt::Project::ResolvePath(shouted)))
+			return;
+		Entity instance = f.Instantiate(f.Elite);
+		Entity gun = Find(instance, "Gun");
+		const uint64_t gunId = IdOf(gun);
+		gun.GetComponent<TagComponent>().Tag = "Rifle";
+		gun.GetComponent<PointLightComponent>().Radius = 45;
+		f.Session.MarkDirty();
+		f.Run("prefab.create", { { "entity", IdOf(instance) }, { "path", shouted } });
+		CHECK(f.Info(f.Elite)["base"] == f.Soldier);
+		CHECK(IdOf(Find(instance, "Rifle")) == gunId);
+		size_t children = 0;
+		for (Entity child : instance.GetChildren())
+			children += child.GetName() == "Rifle" ? 1 : 0;
+		CHECK(children == 1);
+	}
+
+	TEST_CASE("Depth counts through a prefab read earlier, in any sibling order")
+	{
+		NestingFixture f;
+		// Over > Top > the chain is exactly the limit. Top also reaches the chain through Longer, which is one too many, and
+		// must say so even when the chain was read first, the short way.
+		std::string previous = f.Soldier;
+		for (size_t level = Prefab::MaxNestingDepth - 3; level > 0; --level)
+		{
+			const std::string path = "Assets/Prefabs/Chain" + std::to_string(level) + ".bprefab";
+			f.WriteNesting(path, previous, 1);
+			previous = path;
+		}
+		const std::string deep = previous;
+		const auto write = [&](const std::string& path, const std::vector<std::string>& nested) {
+			json entities = json::array({ json{ { "ID", 1 }, { "Name", "Root" }, { "Parent", 0 } } });
+			uint64_t id = 2;
+			for (const std::string& prefab : nested)
+				entities.push_back({ { "ID", id++ }, { "Parent", 1 }, { "Components", { { "Prefab", { { "Prefab", prefab } } } } } });
+			f.Directory.WriteFile(path, json{ { "Version", SceneSerializer::FormatVersion }, { "Entities", entities } }.dump());
+		};
+		write("Assets/Prefabs/Longer.bprefab", { deep });
+		std::string error;
+		json entities;
+		write("Assets/Prefabs/Top.bprefab", { deep });
+		write("Assets/Prefabs/Over.bprefab", { "Assets/Prefabs/Top.bprefab" });
+		CHECK(Prefab::ReadFile(Basalt::Project::ResolvePath("Assets/Prefabs/Over.bprefab"), entities, error));
+		for (const std::vector<std::string>& order : { std::vector<std::string>{ deep, "Assets/Prefabs/Longer.bprefab" }, std::vector<std::string>{ "Assets/Prefabs/Longer.bprefab", deep } })
+		{
+			write("Assets/Prefabs/Top.bprefab", order);
+			write("Assets/Prefabs/Over.bprefab", { "Assets/Prefabs/Top.bprefab" });
+			CHECK_FALSE(Prefab::ReadFile(Basalt::Project::ResolvePath("Assets/Prefabs/Over.bprefab"), entities, error));
+			CHECK(Contains(error, "deeper than"));
+		}
+	}
+
+	TEST_CASE("Warnings reach prefab.variant, prefab.refresh and asset.write once each")
+	{
+		NestingFixture f;
+		f.Variant(f.Soldier, f.Elite);
+		f.Edit(f.Elite, [](Scene& edit) { GunLight(edit).Radius = 17; });
+		Entity instance = f.Instantiate(f.Elite);
+		f.Edit(f.Soldier, [](Scene& edit) { edit.DestroyEntity(edit.FindEntityByName("Gun")); });
+		const json variant = f.Run("prefab.variant", { { "base", f.Elite } });
+		CHECK(Contains(variant["warnings"].dump(), "do nothing"));
+		CHECK(Contains(f.Run("prefab.refresh", { { "entity", IdOf(instance) } })["warnings"].dump(), "do nothing"));
+		CHECK(Contains(f.Run("prefab.revert", { { "entity", IdOf(instance) } })["warnings"].dump(), "do nothing"));
+
+		// Two nested copies of a prefab with a dead override report it once.
+		Entity holder = f.Session.GetScene()->CreateEntity("Holder");
+		f.InstantiateUnder(f.Elite, holder);
+		f.InstantiateUnder(f.Elite, holder);
+		const json created = f.Run("prefab.create", { { "entity", IdOf(holder) }, { "path", "Assets/Prefabs/Holder.bprefab" } });
+		size_t mentions = 0;
+		for (const json& warning : created["warnings"])
+			mentions += Contains(warning.get<std::string>(), "do nothing") ? 1 : 0;
+		CHECK(mentions == 1);
+
+		// No instance needs to exist for a written prefab to be read.
+		f.WriteNesting("Assets/Prefabs/A.bprefab", "Assets/Prefabs/B.bprefab", 1);
+		json cycle = ParseJson(f.FileText("Assets/Prefabs/A.bprefab"));
+		cycle["Entities"][1]["Components"]["Prefab"]["Prefab"] = "Assets/Prefabs/B.bprefab";
+		f.WriteNesting("Assets/Prefabs/B.bprefab", "Assets/Prefabs/A.bprefab", 1);
+		const json written = f.Run("asset.write", { { "path", "Assets/Prefabs/A.bprefab" }, { "content", cycle.dump() } });
+		CHECK(Contains(written["warnings"].dump(), "prefab cycle"));
+	}
+
+	TEST_CASE("A deleted nested prefab is reported through what holds it, and restoring it brings everything back")
+	{
+		NestingFixture f;
+		f.Variant(f.Soldier, f.Elite);
+		Entity squad = f.Instantiate(f.Squad);
+		Entity elite = f.Instantiate(f.Elite);
+		const std::string text = f.FileText(f.Soldier);
+		const std::string meta = f.FileText(f.Soldier + ".meta");
+		f.Run("asset.delete", { { "path", f.Soldier } });
+		const json refreshed = f.Run("project.validate");
+		CHECK(Contains(refreshed.dump(), "unresolved asset UUID"));
+		f.Directory.WriteFile(f.Soldier + ".meta", meta);
+		f.Directory.WriteFile(f.Soldier, text);
+		f.Session.ReloadAssets({ { f.Soldier, FileChangeType::Added } });
+		CHECK(f.Overrides(squad).empty());
+		f.Edit(f.Soldier, [](Scene& edit) { GunLight(edit).Radius = 72; });
+		CHECK(GunRadius(squad) == 72);
+		CHECK(GunRadius(elite) == 72);
+	}
+
+	TEST_CASE("An empty Prefab component is no link: it does not stop a save or make a variant")
+	{
+		NestingFixture f;
+		f.Run("prefab.open", { { "path", f.Soldier } });
+		f.Run("component.set", { { "entity", "Gun" }, { "component", "Prefab" }, { "data", json::object() } });
+		f.Run("component.set", { { "entity", "Soldier" }, { "component", "Prefab" }, { "data", json::object() } });
+		f.Run("prefab.save");
+		f.Run("prefab.close");
+		CHECK_FALSE(Contains(f.FileText(f.Soldier), "\"Prefab\""));
+		CHECK(f.Info(f.Soldier)["base"].is_null());
+	}
+
+	TEST_CASE("Hand-written small IDs do not collide across nested copies")
+	{
+		NestingFixture f;
+		const auto write = [&](const std::string& path, const json& entities) {
+			f.Directory.WriteFile(path, json{ { "Version", SceneSerializer::FormatVersion }, { "Entities", entities } }.dump());
+		};
+		const std::string inner = "Assets/Prefabs/Small.bprefab";
+		write(inner, json::array({ json{ { "ID", 1 }, { "Name", "Root" }, { "Parent", 0 } }, json{ { "ID", 2 }, { "Name", "B" }, { "Parent", 1 } }, json{ { "ID", 3 }, { "Name", "C" }, { "Parent", 1 } } }));
+		const json link = { { "Prefab", { { "Prefab", inner } } } };
+		const std::string outer = "Assets/Prefabs/Pair.bprefab";
+		write(outer, json::array({ json{ { "ID", 1 }, { "Name", "Pair" }, { "Parent", 0 } }, json{ { "ID", 2 }, { "Parent", 1 }, { "Components", link } }, json{ { "ID", 3 }, { "Parent", 1 }, { "Components", link } } }));
+		CHECK(f.Info(outer)["entities"] == 7);
 	}
 
 	TEST_CASE("A prefab's preview depends on what its nested prefabs use, and a nesting loop ends")
