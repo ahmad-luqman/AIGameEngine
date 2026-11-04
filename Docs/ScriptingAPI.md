@@ -1347,8 +1347,8 @@ hidden (the inspector and `scene.info` say which). Mixamo downloads name every t
 before export (in Blender, the action name) or only the first library's plays.
 
 Joints pair up by the library entry's `Joints` (`{ Mesh = "...", Joints = { { Source = "mixamorig:Spine2", Target =
-"spine_05" } } }`; each source and each target appears once, and an entry that names a missing joint, lacks a name or
-reuses a paired joint is warned about), then by equal names ignoring `namespace:` and
+"spine_05" } } }`; each source and each target appears once, and an entry that names a missing joint, lacks one of its two names
+or reuses a paired joint is warned about), then by equal names ignoring `namespace:` and
 `Armature|` prefixes (so `mixamorig:Hips` matches `Hips`), then as the same humanoid bone across Mixamo, Unreal,
 Unity, Blender (Rigify deform bones, numbered spine included), VRM and 3ds Max biped naming (hips, spine, chest, upper
 chest, neck, head, and per side shoulder, upper and lower arm, hand, upper and lower leg, foot, toes). Every node takes
@@ -1377,7 +1377,7 @@ not other libraries') whose pose at `ModelReferenceTime` stands like the library
 skeleton's rest orientations as the pose joints turn from; positions keep the rest pose, so limb lengths and the root's
 scale do not change. A single-frame clip of the matching pose is enough (`{ Mesh = "...", ReferenceClip = "TPose" }`).
 A reference clip that is not there makes the library add no clips; a time past the clip's end takes its last pose, with
-a warning, as does a nonzero time without its clip (the rest pose is used). Paired joints keep the target's rest translation, so limbs keep their length. The hips (or
+a warning; a nonzero time without its clip is also warned about (the rest pose is used). Paired joints keep the target's rest translation, so limbs keep their length. The hips (or
 the topmost paired node) also move by their source joint's displacement scaled by the ratio of the skeletons' leg lengths
 (hips height above the lowest paired joint), so root motion matches the character's stride; a warning says when the hips
 have nothing paired below them and move unscaled. Morph weight tracks keep their keys and move to target nodes of the
@@ -1726,7 +1726,7 @@ hero:SetComponent("SpringBone", springs)
 | `Stiffness` | Pull (1/s², 0..10000, default 40) of each point back toward where the animated shape puts it, measured from the swung points before it; 0 hangs freely |
 | `Damping` | Velocity decay (1/s, 0..1000, default 4): higher settles sooner. It acts on world-space velocity, like air drag, so moving chains trail behind |
 | `GravityFactor` | Scales the physics gravity (-100..100, default 1) |
-| `Radius` | Radius (0..100, default 0.02) of each point against the colliders and, with `CollidePhysics`, physics bodies (at least 1 mm there), in the entity's units: it scales with the entity |
+| `Radius` | Radius (0..100, default 0.02) of each point against the colliders and, with `CollidePhysics`, physics bodies (at least 1 mm in world space there), in the entity's units: it scales with the entity |
 | `Weight` | 0..1 blend from the animated pose (0) to the simulation (1); the simulation keeps running at 0 |
 | `MaxAngle` | Degrees (0..180, default 180 = free): how far each bone may swing away from where the animated shape, turned with the swung bones before it, points it, for stiff appendages (a tail that bends at most 20° per joint). 0 keeps the animated shape. Colliders and physics bodies win over the limit |
 | `Colliders` | The component's colliders this chain stays outside, by `Name` (`{ { Name = "Head" } }`); empty (default), or only entries without a `Name` (the inspector's unnamed additions): every collider. Several colliders may share a name, which then names all of them |
@@ -1737,13 +1737,14 @@ chains' `Colliders` lists), at `Offset` in the joint's space, with `Radius` (def
 `HalfHeight` to each side of `Offset`), both in the joint's space (they scale with it, by its average axis scale) or
 the entity's. They keep the points of every chain of the component outside them as far as a point can stay outside at
 its bone length (overlapping colliders may leave it slightly inside). They follow the pose before
-any chain swings, so a collider on a swinging joint stays where the animation puts it. A chain with a `Colliders` list
-collides only with the colliders it names (so hair can rest on the head while a cape brushes the legs); a name that
-matches no collider is warned about. `Wind` is a world-space acceleration (m/s²) added to every point.
+any chain swings, so a collider on a swinging joint stays where the animation puts it. A chain whose `Colliders` list
+names colliders collides only with those (so hair can rest on the head while a cape brushes the legs); a name that
+matches no collider is warned about, as are unnamed entries in a list and, when a chain lists colliders, unnamed
+colliders (no list can pick them). `Wind` is a world-space acceleration (m/s²) added to every point.
 
 With `CollidePhysics`, a chain's points also stay outside physics bodies while the scene plays or simulates (a cape against
 walls, hair on the ground): every body whose bounds come within the chain's reach of its first joint, at most the nearest
-32 (a problem is logged when more are near), except triggers, the entity's own bodies and its descendants', and the
+32 (a warning is logged once per chain when more are near), except triggers, the entity's own bodies and its descendants', and the
 character controller it belongs to (on it or an ancestor) and that controller's descendants. Each point is pushed out
 of the body it penetrates most deeply along the shortest way out, then back to its bone length, as for colliders; mesh
 triangles push from their front faces only, and dynamic bodies are not pushed back. The bodies are read once per frame,
@@ -1758,12 +1759,15 @@ non-finite pose, a zero-scale or non-invertible transform), when its points go n
 moves faster than 100 m/s (a teleport or respawn: about 1.7 m in one 60 Hz frame). `e:ResetSpringBones()` restarts every chain on the next update, for shorter teleports and cuts; it
 raises an error without a SpringBone component.
 
-Problems are logged once and the chain (or the component) skipped: chains whose joints are missing, have no child,
-are fewer than `ChainLength` in a line or have fixed glTF matrices; unknown collider joints; a non-finite physics gravity
-or `Wind`, or the two overflowing together (ignored); points that go non-finite (the chain restarts); and a SpringBone
-whose Animator cannot animate. Two problems are logged without skipping anything: chain `Colliders` names that match no
-collider (the chain collides with the ones that match, so with none when none does), and, once per chain, more physics
-bodies near a chain than it reads (it collides with the nearest 32). A chain the animation scales to nothing (hiding it) has nothing to swing,
+Problems are logged once. These skip the chain (or the component) until fixed: chain joints that are missing, have no
+child, are fewer than `ChainLength` in a line or have fixed glTF matrices; points or a swung pose that go non-finite (the
+chain restarts); a non-finite animated pose or a non-invertible entity transform; and a SpringBone whose Animator cannot
+animate. These ignore only the faulty part: an unknown collider joint, or a collider whose `Offset`, `Radius` or
+`HalfHeight` is not finite and nonnegative (that collider); a non-finite physics gravity or `Wind`, or the two
+overflowing together (treated as zero); out-of-range chain settings written from C++ (clamped). These are logged and
+change nothing: chain `Colliders` names that match no collider (the chain collides with the ones that match, so with
+none when none does), and, once per chain, more physics bodies near a chain than it reads (it collides with the nearest
+32). A chain the animation scales to nothing (hiding it) has nothing to swing,
 quietly. The inspector and `scene.info` show the authoring problems too and warn when two chains turn the same joint
 (the later one wins), when a chain joint has several children (the first is followed), when a `ChainLength` 0 chain
 goes on past 16 joints and when a chain's bones have zero length in the model's rest pose. The simulated points are gameplay state: they survive playback resets and end with the component.

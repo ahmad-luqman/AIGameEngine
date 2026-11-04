@@ -1034,8 +1034,18 @@ TEST_SUITE("Retargeting")
 		CHECK(nonFinite.Error == "a rest or reference pose is not finite");
 		CHECK(HasText(nonFinite.Warnings, fmt::format("the pose of reference clip 'Broken' at 0 s of '{}' is not finite, so no clip can be retargeted", library->Key)));
 		CHECK(HasText(nonFinite.Warnings, fmt::format("the pose of reference clip 'BrokenModel' at 0 s of '{}' is not finite", model->Key)));
-		// A time without its clip does nothing, which is most likely a half-done setup.
-		CHECK(HasText(plan({ .Mesh = "Library.gltf", .ModelReferenceTime = 0.5f }).Warnings, "ModelReferenceTime 0.5 has no ModelReferenceClip, so the rest pose is used"));
+		// A time without its clip does nothing, which is most likely a half-done setup: warned about, never blocking.
+		const auto modelTime = plan({ .Mesh = "Library.gltf", .ModelReferenceTime = 0.5f });
+		CHECK(HasText(modelTime.Warnings, "ModelReferenceTime 0.5 has no ModelReferenceClip, so the rest pose is used"));
+		CHECK(modelTime.Error.empty());
+		const auto sourceTime = plan({ .Mesh = "Library.gltf", .ReferenceTime = 0.5f });
+		CHECK(HasText(sourceTime.Warnings, "ReferenceTime 0.5 has no ReferenceClip, so the rest pose is used"));
+		CHECK(sourceTime.Error.empty());
+		CHECK(plan({ .Mesh = "Library.gltf" }).Warnings.empty());
+		// A library handed over without a model (not through Load) says so.
+		std::vector<AnimationClipSet::Library> unloaded{ { .Entry = { .Mesh = "Library.gltf" } } };
+		AnimationClipSet::Plan(*model, unloaded);
+		CHECK(unloaded[0].Error == "cannot load: no model");
 	}
 
 	TEST_CASE("Reference corrections of joints a clip leaves alone are baked, at the reference time")
@@ -1070,13 +1080,54 @@ TEST_SUITE("Retargeting")
 		const auto referenced = AnimationClipSet::Build(model, { AnimationClipSet::Library{ .Entry = { .Mesh = "Library.gltf", .ModelReferenceClip = "TPose", .ModelReferenceTime = 1 }, .Source = library } });
 		REQUIRE(referenced->GetLibraries()[0].Error.empty());
 		CHECK(NearRotation(armAt(referenced), tPoseArm));
+		// The correction is a RestCorrection track, which counts as no animated channel, so a layer playing the clip leaves
+		// the arm to the poses below.
+		const AnimationClip& corrected = (*referenced)[referenced->Find("HeadOnly")];
+		const auto armTrack = std::ranges::find(corrected.Tracks, upperArm, &AnimationTrack::Node);
+		REQUIRE(armTrack != corrected.Tracks.end());
+		CHECK(armTrack->RestCorrection);
+		CHECK(AnimatedChannels(*model, corrected)[upperArm] == 0);
+		CHECK(std::ranges::count_if(corrected.Tracks, [](const AnimationTrack& track) { return !track.RestCorrection; }) > 0);
 		// At 0 s it is the A-pose itself, so nothing is corrected and the arm keeps its lowered rest.
 		const auto early = AnimationClipSet::Build(model, { AnimationClipSet::Library{ .Entry = { .Mesh = "Library.gltf", .ModelReferenceClip = "TPose", .ModelReferenceTime = 0 }, .Source = library } });
-		CHECK_FALSE(NearRotation(armAt(early), tPoseArm));
-		// Without a reference no constant track is added: the baked clip moves only what the source moves.
+		std::vector<glm::mat4> aPoseRest;
+		REQUIRE(EvaluateAnimation(*model, nullptr, 0, aPoseRest));
+		CHECK(NearRotation(armAt(early), GlobalRotation(aPoseRest, upperArm)));
+		// Without a reference no constant track is added: the baked clip moves only what the source moves, the head.
 		const auto plain = AnimationClipSet::Build(rigs.Target, { AnimationClipSet::Library{ .Entry = { .Mesh = "Library.gltf" }, .Source = library } });
 		const AnimationClip& baked = (*plain)[plain->Find("HeadOnly")];
-		CHECK(std::ranges::none_of(baked.Tracks, [&](const AnimationTrack& track) { return track.Node == upperArm; }));
+		const RetargetMap& map = plain->GetLibraries()[0].Map;
+		REQUIRE_FALSE(baked.Tracks.empty());
+		CHECK(std::ranges::all_of(baked.Tracks, [&](const AnimationTrack& track) { return map.SourceOf[track.Node] == static_cast<int32_t>(head) && !track.RestCorrection; }));
+	}
+
+	TEST_CASE("Unreferenced bakes add no constant tracks on centimetre rigs or for rests stored as negated quaternions")
+	{
+		const Rigs rigs;
+		// A centimetre rig: the root holds a 0.01 scale and an awkward rotation, the hips stand about 120 units up, so the
+		// root translation round-trips through its parent with float error well above 1e-5.
+		auto model = CreateRef<MeshSource>(*rigs.Target);
+		const uint32_t pelvis = Node(*model, "pelvis");
+		int32_t top = static_cast<int32_t>(pelvis);
+		while (model->Nodes[top].Parent >= 0)
+			top = model->Nodes[top].Parent;
+		REQUIRE(top != static_cast<int32_t>(pelvis));
+		model->Nodes[top].Scale = glm::vec3(0.01f);
+		model->Nodes[top].Rotation = glm::normalize(glm::quat(0.9f, 0.2f, 0.3f, 0.1f));
+		model->Nodes[pelvis].Translation = model->Nodes[pelvis].Translation * 100.0f + glm::vec3(3.7f, 120.3f, -11.9f);
+		// A rest stored as -q (the same rotation) must not read as a correction either.
+		const uint32_t spine = Node(*model, "spine_01");
+		model->Nodes[spine].Rotation = -model->Nodes[spine].Rotation;
+		// A library clip that turns only the head.
+		auto library = CreateRef<MeshSource>(*rigs.Source);
+		const uint32_t head = Node(*library, "mixamorig:Head");
+		const glm::quat rest = library->Nodes[head].Rotation, nod = rest * glm::angleAxis(glm::radians(20.0f), glm::vec3(1, 0, 0));
+		library->Animations.push_back({ .Name = "HeadOnly", .Duration = 1, .Tracks = { { .Node = head, .Path = AnimationPath::Rotation, .Times = { 0, 1 }, .Values = { glm::vec4(rest.x, rest.y, rest.z, rest.w), glm::vec4(nod.x, nod.y, nod.z, nod.w) } } } });
+		const auto set = AnimationClipSet::Build(model, { AnimationClipSet::Library{ .Entry = { .Mesh = "Library.gltf" }, .Source = library } });
+		const AnimationClip& baked = (*set)[set->Find("HeadOnly")];
+		const RetargetMap& map = set->GetLibraries()[0].Map;
+		REQUIRE_FALSE(baked.Tracks.empty());
+		CHECK(std::ranges::all_of(baked.Tracks, [&](const AnimationTrack& track) { return map.SourceOf[track.Node] == static_cast<int32_t>(head); }));
 	}
 
 	TEST_CASE("Joint map files parse strictly and their pairs follow a library's own Joints")
@@ -1096,7 +1147,7 @@ TEST_SUITE("Retargeting")
 			tooMany["Joints"].push_back({ { "Source", fmt::format("s{}", i) }, { "Target", fmt::format("t{}", i) } });
 		const std::vector<std::pair<std::string, std::string>> invalid = {
 			{ "[]", "a joint map must be an object" },
-			{ R"({ "Joints": [], "Extra": 1 })", "Extra" },
+			{ R"({ "Joints": [], "Extra": 1 })", "joint map: unknown key 'Extra'" },
 			{ "{}", "Joints must be an array with at most 256 entries" },
 			{ R"({ "Joints": {} })", "Joints must be an array" },
 			{ tooMany.dump(), "at most 256 entries" },
@@ -1165,6 +1216,18 @@ TEST_SUITE("Retargeting")
 			Run(registry, session, "component.set", { { "entity", name }, { "component", "Animator" }, { "data", animator } });
 		CHECK(RunError(registry, session, "component.set", { { "entity", "Hero" }, { "component", "Animator" }, { "data", { { "ClipLibraries", { { { "Mesh", "Assets/Models/MixamoRig.gltf" }, { "JointMap", "Assets/Rigs/Mixamo.banimmask" } } } } } } }).find("ClipLibraries[0].JointMap 'Assets/Rigs/Mixamo.banimmask' must be a .bjointmap file") != std::string::npos);
 		CHECK(RunError(registry, session, "component.set", { { "entity", "Hero" }, { "component", "Animator" }, { "data", { { "ClipLibraries", { { { "Mesh", "Assets/Models/MixamoRig.gltf" }, { "ReferenceTime", -1 } } } } } } }).find("ClipLibraries[0].ReferenceTime -1 must be between 0 and 86400") != std::string::npos);
+
+		// A map file that is not there names itself wherever the reason is shown.
+		const AnimatorComponent missingMap{ .ClipLibraries = { { .Mesh = "Assets/Models/MixamoRig.gltf", .JointMap = "Assets/Rigs/Missing.bjointmap" } } };
+		const auto missing = AnimationClipSet::Load(missingMap);
+		REQUIRE(missing.size() == 1);
+		CHECK(missing[0].Error.find("cannot load joint map 'Assets/Rigs/Missing.bjointmap': cannot read animation joint map 'Assets/Rigs/Missing.bjointmap'") == 0);
+		// Settings on an entry without a Mesh (an inspector addition) do nothing yet, and the inspector says so.
+		Run(registry, session, "component.set", { { "entity", "Villain" }, { "component", "Animator" }, { "data", { { "ClipLibraries", { { { "Mesh", "" }, { "JointMap", "Assets/Rigs/Mixamo.bjointmap" } }, { { "Mesh", "" } } } } } } });
+		const auto unnamed = GetAnimationWarnings(session.GetScene()->FindEntityByName("Villain"));
+		CHECK(std::ranges::count(unnamed, std::string("Animator ClipLibraries[0] has no Mesh, so it adds no clips and its other settings do nothing")) == 1);
+		CHECK_FALSE(HasText(unnamed, "ClipLibraries[1]"));
+		Run(registry, session, "component.set", { { "entity", "Villain" }, { "component", "Animator" }, { "data", animator } });
 
 		// The map pairs joints for both Animators, ahead of names.
 		const auto info = Run(registry, session, "animator.retarget", { { "entity", "Villain" } })["libraries"][0];

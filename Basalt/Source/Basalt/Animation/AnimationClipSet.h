@@ -38,7 +38,7 @@ namespace Basalt {
 			// clips, matches no joint or has no finite rest or reference pose); empty when it may.
 			std::string Error;
 			RetargetMap Map;
-			// Joint map problems (Retargeting::BuildMap) and clips left out: past the bake budget, moving no paired
+			// Joint map problems (Retargeting::BuildMap), reference-time warnings, and clips left out: past the bake budget, moving no paired
 			// joint, and in Build also failing to bake, past MaxSetBakedFloats, or weights tracks that match nothing.
 			std::vector<std::string> Warnings;
 			std::vector<std::string> Clips;    // Added to the set, in the library's order.
@@ -83,7 +83,8 @@ namespace Basalt {
 		bool Matches(const Ref<MeshSource>& model, const AnimatorComponent& animator, const Resolver& resolve) const;
 
 	private:
-		// Resets a library's results and fills its Map and Error (from its loaded joint map and reference clips).
+		// Resets a library's results and fills its Map and Error (starting from LoadError, then its joint pairs and reference
+		// clips).
 		static void Match(const MeshSource& model, Library& library);
 
 		Ref<MeshSource> m_Model;

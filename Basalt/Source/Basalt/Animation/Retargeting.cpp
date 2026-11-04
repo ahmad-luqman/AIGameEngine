@@ -333,7 +333,7 @@ namespace Basalt {
 		RetargetMap BuildMap(const MeshSource& target, const MeshSource& source, const std::vector<AnimationRetargetJoint>& joints, std::vector<std::string>& outWarnings, const RetargetReferences& references)
 		{
 			// Sampling another model's clip would index past this model's nodes.
-			const auto owns = [](const MeshSource& model, const AnimationClip* clip) { return !clip || (clip >= model.Animations.data() && clip < model.Animations.data() + model.Animations.size()); };
+			[[maybe_unused]] const auto owns = [](const MeshSource& model, const AnimationClip* clip) { return !clip || (clip >= model.Animations.data() && clip < model.Animations.data() + model.Animations.size()); };
 			BS_CORE_ASSERT(owns(target, references.Target) && owns(source, references.Source), "reference clips belong to the models they stand for");
 			RetargetMap map;
 			map.SourceOf.assign(target.Nodes.size(), -1);
@@ -528,35 +528,40 @@ namespace Basalt {
 				}
 			}
 
-			// Keep the channels that move or that the source animates, so layers still leave the others alone.
+			// Keep the channels that move or that the source animates, so layers still leave the others alone; constant
+			// rotations away from the node's own (reference corrections) are kept as RestCorrection tracks, which layers
+			// ignore too.
 			const std::vector<float> keyTimes(times.begin(), times.end());
 			const auto varies = [](const std::vector<glm::vec4>& values) {
 				return std::ranges::any_of(values, [&](const glm::vec4& value) { return glm::any(glm::greaterThan(glm::abs(value - values.front()), glm::vec4(1e-6f))); });
 			};
-			// A constant value away from the node's own (a reference pose's correction of a joint the clip leaves alone) is kept
-			// too: dropped, playback would fall back to the node's uncorrected rest. The tolerance stays above float error,
-			// so unreferenced bakes, whose constant values are the node's own, add no tracks.
-			const auto differs = [](const std::vector<glm::vec4>& values, const glm::vec4& own, bool rotation) {
+			// A constant rotation away from the node's own (a reference pose's correction of a joint the clip leaves alone) is
+			// kept too, as a RestCorrection track: dropped, playback would fall back to the node's uncorrected rest. Only
+			// rotations: reference poses replace rest orientations, never positions, and an unanimated scale ratio is exactly
+			// 1, so constant translations and scales away from the node's own are only float error (a centimetre rig's root
+			// round-trips through its parent to within a few 1e-5). Unit quaternions keep that error far below the tolerance,
+			// so unreferenced bakes add no tracks, except on joints whose rest orientation counts as identity (not affine;
+			// BuildMap warns about those).
+			const auto corrects = [](const std::vector<glm::vec4>& values, const glm::quat& own) {
+				const glm::vec4 rest(own.x, own.y, own.z, own.w);
 				const auto away = [&](const glm::vec4& reference) { return glm::any(glm::greaterThan(glm::abs(values.front() - reference), glm::vec4(1e-5f))); };
 				// q and -q are the same rotation.
-				return away(own) && (!rotation || away(-own));
+				return away(rest) && away(-rest);
 			};
 			for (size_t node = 0; node < target.Nodes.size(); node++)
 			{
 				const int32_t sourceNode = map.SourceOf[node];
-				if (sourceNode < 0 || target.Nodes[node].HasMatrix)
+				const MeshNode& targetNode = target.Nodes[node];
+				if (sourceNode < 0 || targetNode.HasMatrix)
 					continue;
 				const uint8_t animated = channels[sourceNode];
-				const MeshNode& targetNode = target.Nodes[node];
-				const glm::vec4 ownTranslation(targetNode.Translation, 0.0f), ownRotation(targetNode.Rotation.x, targetNode.Rotation.y, targetNode.Rotation.z, targetNode.Rotation.w), ownScale(targetNode.Scale, 0.0f);
 				const auto add = [&](std::vector<glm::vec4>& values, AnimationPath path, bool keep) {
 					if (values.empty())
 						return;
-					const glm::vec4& own = path == AnimationPath::Translation ? ownTranslation : path == AnimationPath::Rotation ? ownRotation
-																																 : ownScale;
-					if (!(keep || varies(values) || differs(values, own, path == AnimationPath::Rotation)))
+					const bool moves = keep || varies(values);
+					if (!moves && !(path == AnimationPath::Rotation && corrects(values, targetNode.Rotation)))
 						return;
-					outClip.Tracks.push_back({ .Node = static_cast<uint32_t>(node), .Path = path, .Interpolation = stepped ? AnimationInterpolation::Step : AnimationInterpolation::Linear, .Times = keyTimes, .Values = std::move(values) });
+					outClip.Tracks.push_back({ .Node = static_cast<uint32_t>(node), .Path = path, .Interpolation = stepped ? AnimationInterpolation::Step : AnimationInterpolation::Linear, .Times = keyTimes, .Values = std::move(values), .RestCorrection = !moves });
 				};
 				add(translations[node], AnimationPath::Translation, (animated & AnimatedChannel::Translation) != 0);
 				add(rotations[node], AnimationPath::Rotation, (animated & AnimatedChannel::Rotation) != 0);

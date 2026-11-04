@@ -721,14 +721,18 @@ TEST_SUITE("Animation")
 		// colliders), and a list of only those means every collider, so Belly still holds the arm.
 		component.Chains[0].Colliders = { { .Name = "" } };
 		RunAnimation(scene, 60);
-		CHECK_FALSE(hangsStraight());
-		CHECK(GetAnimationWarnings(biped).empty());
+		CHECK(Near(BoneWorld(scene, biped, "RightHand"), held, 1e-4f));
+		CHECK(GetAnimationWarnings(biped) == std::vector<std::string>{ "SpringBone chain 'RightArm': Colliders[0] has no Name, so it names no collider (a list without names keeps every collider)" });
 		// Next to a name, an unnamed entry still picks no unnamed collider: naming only the far Head, the arm hangs
 		// straight, its hand inside the unnamed sphere moved to where the hand hangs.
 		component.Colliders[1].Offset = glm::vec3(model * glm::vec4(hanging, 1));
 		component.Chains[0].Colliders = { { .Name = "" }, { .Name = "Head" } };
 		RunAnimation(scene, 300);
 		CHECK(hangsStraight());
+		// Once a chain lists colliders, an unnamed collider is one no list can pick: the inspector says so.
+		const auto listed = GetAnimationWarnings(biped);
+		CHECK(std::ranges::count(listed, std::string("SpringBone Colliders[1] has no Name, so chains that list colliders cannot pick it")) == 1);
+		CHECK(std::ranges::count(listed, std::string("SpringBone chain 'RightArm': Colliders[0] has no Name, so it names no collider (a list without names keeps every collider)")) == 1);
 		component.Colliders = named;
 		component.Chains[0].Colliders = { { .Name = "Belly" } };
 		// Without a list the chain collides with every collider.
@@ -741,6 +745,12 @@ TEST_SUITE("Animation")
 		RunAnimation(scene, 300);
 		CHECK_FALSE(hangsStraight());
 
+		// An unnamed entry among named colliders is no missing name: neither the inspector nor the log reports one.
+		const auto beforeUnnamed = Log::GetHistory().GetTotalCount();
+		component.Chains[0].Colliders = { { .Name = "" }, { .Name = "Belly" } };
+		CHECK(GetAnimationWarnings(biped) == std::vector<std::string>{ "SpringBone chain 'RightArm': Colliders[0] has no Name, so it names no collider (a list without names keeps every collider)" });
+		RunAnimation(scene, 10);
+		CHECK(CountLogMessages(beforeUnnamed, "no collider is named") == 0);
 		// A name that matches no collider is an authoring warning and a runtime problem, logged once.
 		component.Chains[0].Colliders = { { .Name = "Belly" }, { .Name = "Gone" } };
 		CHECK(GetAnimationWarnings(biped) == std::vector<std::string>{ "SpringBone chain 'RightArm': Colliders: no collider is named 'Gone'" });
@@ -833,6 +843,7 @@ TEST_SUITE("Animation")
 		// The same boxes owned by another entity do.
 		const Result foreign = run(true, Boxes::Foreign);
 		CHECK_FALSE(Near(foreign.Elbow - foreign.Shoulder, on.Elbow - on.Shoulder, 2e-3f));
+		CHECK_FALSE(Near(foreign.Hand - foreign.Shoulder, on.Hand - on.Shoulder, 2e-3f));
 	}
 
 	TEST_CASE("Spring chains read the nearest physics bodies and warn once when more are near")
@@ -846,21 +857,41 @@ TEST_SUITE("Animation")
 		scene.OnUpdate(Step);
 		const glm::vec3 shoulder = BoneWorld(scene, biped, "RightUpperArm");
 		// More small bodies than a chain reads, within its reach but beside the arm's plane, so none touches it.
+		std::vector<Entity> pebbles;
 		for (uint32_t i = 0; i < PhysicsShapeSnapshot::MaxShapes + 8; i++)
 		{
-			auto pebble = scene.CreateEntity("Pebble");
+			auto pebble = pebbles.emplace_back(scene.CreateEntity("Pebble"));
 			const uint32_t column = i % 10, row = i / 10;
 			pebble.GetTransform().Translation = shoulder + glm::vec3(-0.05f * static_cast<float>(column), -0.05f * static_cast<float>(row), 0.3f);
 			pebble.AddComponent<RigidBodyComponent>();
 			pebble.AddComponent<BoxColliderComponent>().HalfExtents = { 0.01f, 0.01f, 0.01f };
 		}
 		const auto since = Log::GetHistory().GetTotalCount();
-		for (int i = 0; i < 300; i++)
-			scene.OnUpdate(Step);
+		const auto run = [&](int frames) {
+			for (int i = 0; i < frames; i++)
+				scene.OnUpdate(Step);
+		};
+		run(100);
+		// The count drops below the limit and rises past it again: still one warning.
+		for (size_t i = 0; i < 20; i++)
+			pebbles[i].GetTransform().Translation.z += 50;
+		run(50);
+		for (size_t i = 0; i < 20; i++)
+			pebbles[i].GetTransform().Translation.z -= 50;
+		run(150);
 		CHECK(CountLogMessages(since, "SpringBone 'Biped': chain 'RightArm': more than 32 physics bodies are within its reach; it collides with the nearest 32") == 1);
 		// Out of the way, the arm still hangs straight.
 		CHECK(Near(BoneWorld(scene, biped, "RightHand"), BoneWorld(scene, biped, "RightUpperArm") + glm::vec3(0, -0.6f, 0), 5e-3f));
 		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("Spheres leave a body against its penetration axis, else away from its centre, else up")
+	{
+		CHECK(Near(PushOutDirection({ 0, 0, -2 }, { 1, 1, 1 }, { 0, 0, 0 }), glm::vec3(0, 0, 1)));
+		// No axis (Jolt never reports one, but a penetration must still move the sphere).
+		CHECK(Near(PushOutDirection(glm::vec3(0), { 3, 0, 4 }, { 0, 0, 0 }), glm::vec3(0.6f, 0, 0.8f)));
+		CHECK(Near(PushOutDirection(glm::vec3(std::numeric_limits<float>::quiet_NaN()), { 3, 0, 4 }, { 0, 0, 0 }), glm::vec3(0.6f, 0, 0.8f)));
+		CHECK(Near(PushOutDirection(glm::vec3(0), { 1, 2, 3 }, { 1, 2, 3 }), glm::vec3(0, 1, 0)));
 	}
 
 	TEST_CASE("Physics shape snapshots gather the nearest bodies and push spheres out of them")
@@ -891,6 +922,14 @@ TEST_SUITE("Animation")
 		// Triggers join when the filter asks; `accept` and the filter leave bodies out.
 		CHECK(physics.CollectShapes({ -0.5f, 2.5f, -0.5f }, { 0.5f, 3, 0.5f }, 0.1f, { .IncludeTriggers = true }).PushOut({ 0, 2.5f, 0 }));
 		CHECK(physics.CollectShapes({ -0.5f, -0.5f, -0.5f }, { 0.5f, 3, 0.5f }, 0.1f, {}, [&](UUID id) { return id != floor.GetUUID(); }).Empty());
+		// `accept` runs with no body locked, so it may query the world itself.
+		const auto queried = physics.CollectShapes({ -0.5f, -0.5f, -0.5f }, { 0.5f, 3, 0.5f }, 0.1f, {}, [&](UUID id) { return !physics.OverlapSphere({ 0, -1, 0 }, 0.5f).empty() && id == floor.GetUUID(); });
+		CHECK(queried.PushOut({ 0.2f, 0.05f, 0 }));
+		// The radius queried with, at least MinRadius.
+		CHECK(snapshot.GetRadius() == 0.1f);
+		CHECK(physics.CollectShapes({ -0.5f, -0.5f, -0.5f }, { 0.5f, 3, 0.5f }, 0).GetRadius() == PhysicsShapeSnapshot::MinRadius);
+		CHECK(physics.CollectShapes({ 50, 50, 50 }, { 51, 51, 51 }, 0.2f).GetRadius() == 0.2f);
+		CHECK(PhysicsShapeSnapshot().GetRadius() == 0);
 		CHECK(physics.CollectShapes({ -0.5f, -0.5f, -0.5f }, { 0.5f, 3, 0.5f }, 0.1f, { .IgnoreEntity = floor.GetUUID() }).Empty());
 		CHECK(physics.CollectShapes({ -0.5f, -0.5f, -0.5f }, { 0.5f, 3, 0.5f }, 0.1f, { .LayerMask = 0 }).Empty());
 		// Bad input gathers nothing.
@@ -976,7 +1015,7 @@ TEST_SUITE("Animation")
 			{ { { "Chains", { { { "Weight", 2 } } } } }, "Chains[0].Weight 2 must be between 0 and 1" },
 			{ { { "Chains", { { { "MaxAngle", -1 } } } } }, "Chains[0].MaxAngle -1 must be between 0 and 180" },
 			{ { { "Chains", { { { "MaxAngle", 181 } } } } }, "Chains[0].MaxAngle 181 must be between 0 and 180" },
-			{ { { "Chains", { { { "Colliders", json::array({ { { "Name", 3 } } }) } } } } }, "Name" },
+			{ { { "Chains", { { { "Colliders", json::array({ { { "Name", 3 } } }) } } } } }, "field 'Chains[0].Colliders[0].Name' must be a string" },
 			{ { { "Colliders", { { { "Radius", -1 } } } } }, "Colliders[0].Radius -1 must be between 0 and 100" },
 			{ { { "Colliders", { { { "HalfHeight", 101 } } } } }, "Colliders[0].HalfHeight 101 must be between 0 and 100" },
 			{ { { "Colliders", { { { "Shape", "Box" } } } } }, "Shape" },

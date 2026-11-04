@@ -17,8 +17,9 @@ namespace Basalt {
 	struct PropertyAnimationComponent;
 	struct PropertyAnimationField;
 	// Empty on valid declarations; otherwise the component-level or indexed track/key problem. Does not require target
-	// components. Keys are checked against their field's kind (whole integers, 0/1 booleans, valid enum values); the
-	// field's own ranges are the component's to check when a sample patches it. outFields, when given, gets every track's
+	// components. Keys are checked against their field's kind (finite Values, whole integers, 0/1 booleans, valid enum
+	// values, an empty Text on fields other than strings and enums); the field's own ranges are the component's to check
+	// when a sample patches it. outFields, when given, gets every track's
 	// resolved field, in order (complete only when the result is empty).
 	std::string ValidatePropertyAnimation(const PropertyAnimationComponent& animation, std::vector<PropertyAnimationField>* outFields = nullptr);
 
@@ -46,8 +47,6 @@ namespace Basalt {
 
 		// Integer, boolean, string and enum fields: their tracks always step.
 		bool IsDiscrete() const;
-		// The component's top-level field a sample patches (the outermost list for a nested field).
-		const std::string& TopField() const { return Steps.empty() ? Leaf : Steps.front().List; }
 		// The field's value in the component's JSON, or null with outError when an element on the way is missing.
 		nlohmann::json* Find(nlohmann::json& component, std::string& outError) const;
 	};
@@ -71,9 +70,9 @@ namespace Basalt {
 		// component rejects its patch, components patched before it (in name order) stay changed. Tracks reaching the same
 		// field (also through different spellings) apply in order, so the last nonempty one wins.
 		static bool Sample(Entity entity, const PropertyAnimationComponent& animation, float time, std::string& outError);
-		// Captures a field, adding PropertyAnimation if needed. Inserts/replaces in the last nonempty track reaching the same
-		// field (whichever way its path spells it), or the last empty one when all are empty; a new track of a discrete field
-		// is Stepped.
+		// Captures a field, adding PropertyAnimation if needed. Inserts/replaces in the last nonempty track spelled the same
+		// way, else in the last nonempty one reaching the same field another way, else in the last such empty one; a new
+		// track of a discrete field is Stepped. Fails while a keyed track of the component no longer reaches its field.
 		static bool Key(Entity entity, const std::string& component, const std::string& field, float time, std::string& outError);
 	};
 

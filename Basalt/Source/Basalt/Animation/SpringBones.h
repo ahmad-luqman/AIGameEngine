@@ -12,6 +12,8 @@
 namespace Basalt {
 
 	struct SpringChain;
+	struct SpringChainCollider;
+	struct SpringCollider;
 
 	// Stateless pieces of spring bones (SpringBoneComponent): resolving a chain on a model and advancing its simulated
 	// points. AnimationSystem keeps the points between frames and turns the joints toward them (SolveAimChainIK).
@@ -41,8 +43,8 @@ namespace Basalt {
 		std::span<const glm::vec3> PreviousAnimated;
 		std::span<const SpringCollisionShape> Colliders;
 		// Other things points stay outside (physics bodies): the point, as a sphere of the callback's own radius (callers
-		// match Radius, as a PhysicsShapeSnapshot of that radius does), moved out of what it penetrates, or nullopt when it
-		// is clear. Empty: none.
+		// match Radius; a PhysicsShapeSnapshot of that radius queries with at least PhysicsShapeSnapshot::MinRadius), moved
+		// out of what it penetrates, or nullopt when it is clear. Empty: none.
 		std::function<std::optional<glm::vec3>(const glm::vec3&)> World;
 		// Pull (1/s², 0..SpringChain::MaxStiffness) toward the animated shape, velocity decay (1/s, nonnegative), and the
 		// points' radius against the colliders.
@@ -81,6 +83,8 @@ namespace Basalt {
 	bool NamesSpringColliders(const SpringChain& chain);
 	// Whether the chain's Colliders list names a collider called `name` (an empty name is never named).
 	bool SpringChainNames(const SpringChain& chain, const std::string& name);
+	// Whether a chain's Colliders entry names a collider `colliders` lacks (an unnamed entry names none, so never).
+	bool NamesMissingSpringCollider(const SpringChainCollider& named, std::span<const SpringCollider> colliders);
 	// The first node whose parent is `node`, or -1.
 	int32_t FirstChild(const MeshSource& source, uint32_t node);
 	// How many nodes have `node` as their parent.

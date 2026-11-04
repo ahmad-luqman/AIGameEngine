@@ -649,6 +649,7 @@ TEST_SUITE("Animation authoring")
 			{ track("Tag", "Tag", { { "Text", std::string(PropertyAnimationKey::MaxTextLength + 1, 'x') } }), "Text holds at most 1024 bytes" },
 			// Text on another field would be ignored, so it is refused.
 			{ track("Mesh", "CastShadows", { { "Text", "true" } }), "Text must be empty: CastShadows is a boolean field (keys use Value)" },
+			{ track("Mesh", "MeshIndex", { { "Text", "2" } }), "Text must be empty: MeshIndex is an integer field (keys use Value)" },
 		};
 		for (const auto& [bad, message] : invalid)
 		{
@@ -679,7 +680,6 @@ TEST_SUITE("Animation authoring")
 		// Paths resolve through the element schemas.
 		const auto weight = PropertyAnimation::ResolveField("Animator", "Layers[Upper].Weight", &error);
 		REQUIRE_MESSAGE(weight, error);
-		CHECK(weight->TopField() == "Layers");
 		CHECK(weight->Steps.size() == 1);
 		CHECK(std::get<std::string>(weight->Steps[0].Selector) == "Upper");
 		const auto speed = PropertyAnimation::ResolveField("Animator", "Layers[1].Speed");
@@ -770,15 +770,27 @@ TEST_SUITE("Animation authoring")
 		REQUIRE(PropertyAnimation::Key(entity, "Animator", "Layers[0].Weight", .25f, error));
 		CHECK(animation.Tracks.size() == 3);
 		CHECK(animation.Tracks[0].Keys.size() == 3);
+		// The same field of another element is another track.
+		REQUIRE(PropertyAnimation::Key(entity, "Animator", "Layers[1].Weight", .25f, error));
+		CHECK(animation.Tracks.size() == 4);
+		CHECK(animation.Tracks[0].Keys.size() == 3);
+		entity.GetComponent<PropertyAnimationComponent>().Tracks.pop_back();
 
 		// A missing element fails the sample with the track's path, and the key capture too; the inspector warns first.
 		animator.Layers[0].Name = "Torso";
 		const auto warnings = GetAnimationWarnings(entity);
 		CHECK(has(warnings, "PropertyAnimation Tracks[0] (Animator.Layers[Upper].Weight): Layers has no element whose Name is 'Upper'"));
 		CHECK(std::ranges::count_if(warnings, [](const std::string& warning) { return warning.starts_with("PropertyAnimation"); }) == 1);
-		CHECK_FALSE(PropertyAnimation::Sample(entity, animation, 0, error));
+		// Nothing changes before the failure is found.
+		const float breathSpeed = animator.Layers[1].Speed;
+		CHECK_FALSE(PropertyAnimation::Sample(entity, animation, 1, error));
 		CHECK_MESSAGE(error == "Animator.Layers[Upper].Weight: Layers has no element whose Name is 'Upper'", error);
+		CHECK(animator.Layers[1].Speed == breathSpeed);
 		CHECK_FALSE(PropertyAnimation::Key(entity, "Animator", "Layers[Upper].Weight", 0, error));
+		// Keying the renamed layer would add a second track behind one that fails every sample, so it is refused.
+		CHECK_FALSE(PropertyAnimation::Key(entity, "Animator", "Layers[Torso].Weight", 0, error));
+		CHECK_MESSAGE(error == "cannot key Animator.Layers[Torso].Weight: its track Animator.Layers[Upper].Weight no longer reaches its field (Layers has no element whose Name is 'Upper'); fix or remove it first", error);
+		CHECK(animation.Tracks.size() == 3);
 		animator.Layers.pop_back();
 		CHECK_FALSE(PropertyAnimation::Key(entity, "Animator", "Layers[1].Speed", 0, error));
 		CHECK_MESSAGE(error.find("Layers has no element 1 (it has 1)") != std::string::npos, error);
@@ -788,6 +800,31 @@ TEST_SUITE("Animation authoring")
 		animator.Layers.push_back({ .Name = "Breath" });
 		CHECK_FALSE(PropertyAnimation::Sample(entity, animation, 0, error));
 		CHECK_MESSAGE(error == "SpringBone.Chains[Hair].Colliders[1].Name: the entity has no SpringBone", error);
+		CHECK(has(GetAnimationWarnings(entity), "PropertyAnimation Tracks[2] (SpringBone.Chains[Hair].Colliders[1].Name): the entity has no SpringBone"));
+	}
+	TEST_CASE("Tracks reaching one field through different spellings play the later one, and empty tracks keep their place")
+	{
+		Scene scene;
+		auto entity = scene.CreateEntity("Hero");
+		entity.AddComponent<AnimatorComponent>().Layers = { { .Name = "Upper", .Weight = 0 } };
+		auto& timeline = entity.AddComponent<PropertyAnimationComponent>();
+		const auto weightTrack = [](const char* field, float value) { return PropertyAnimationTrack{ .Component = "Animator", .Field = field, .Keys = { { .Time = 0, .Value = glm::vec4(value) } } }; };
+		// An empty track first, so a resolved field per track keeps tracks and fields in step.
+		timeline.Tracks = { { .Component = "Camera", .Field = "FOV" }, weightTrack("Layers[Upper].Weight", 0.25f), weightTrack("Layers[0].Weight", 0.75f) };
+		std::string error;
+		REQUIRE_MESSAGE(PropertyAnimation::Sample(entity, timeline, 0, error), error);
+		CHECK(entity.GetComponent<AnimatorComponent>().Layers[0].Weight == 0.75f);
+		// The inspector says the earlier one is hidden; the empty track (and its missing Camera) says nothing.
+		const auto warnings = GetAnimationWarnings(entity);
+		CHECK(std::ranges::count(warnings, std::string("PropertyAnimation Tracks[1] (Animator.Layers[Upper].Weight) reaches the same field as Tracks[2] (Animator.Layers[0].Weight), so only the later one plays")) == 1);
+		CHECK(std::ranges::none_of(warnings, [](const std::string& warning) { return warning.find("Camera") != std::string::npos; }));
+		// Capture keys the track spelled the same way before another one reaching the field.
+		REQUIRE(PropertyAnimation::Key(entity, "Animator", "Layers[Upper].Weight", 0.5f, error));
+		CHECK(timeline.Tracks[1].Keys.size() == 2);
+		CHECK(timeline.Tracks[2].Keys.size() == 1);
+		// A timeline C++ code wrote past the registry's checks is reported too.
+		timeline.Duration = -1;
+		CHECK(std::ranges::count(GetAnimationWarnings(entity), std::string("PropertyAnimation: Duration must be in (0, 86400]")) == 1);
 	}
 	TEST_CASE("Animation authoring commands use dirty tracking and validated asset writes")
 	{

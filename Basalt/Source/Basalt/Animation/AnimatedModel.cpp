@@ -87,6 +87,13 @@ namespace Basalt {
 	namespace {
 		void AddAnimatorWarnings(const AnimatorComponent& animator, std::vector<std::string>& warnings)
 		{
+			// Entries without a Mesh are the inspector's additions and are skipped, so settings on them do nothing yet.
+			for (size_t i = 0; i < animator.ClipLibraries.size(); i++)
+			{
+				const AnimationClipLibrary& library = animator.ClipLibraries[i];
+				if (library.Mesh.empty() && library != AnimationClipLibrary{})
+					warnings.push_back(fmt::format("Animator ClipLibraries[{}] has no Mesh, so it adds no clips and its other settings do nothing", i));
+			}
 			if (animator.Mesh.empty())
 			{
 				warnings.emplace_back("Animator Mesh is empty");
@@ -320,9 +327,14 @@ namespace Basalt {
 			for (const SpringChain& chain : springs.Chains)
 			{
 				// Chains name colliders by Name, which needs no model.
-				for (const SpringChainCollider& named : chain.Colliders)
-					if (!named.Name.empty() && std::ranges::find(springs.Colliders, named.Name, &SpringCollider::Name) == springs.Colliders.end())
+				for (size_t i = 0; i < chain.Colliders.size(); i++)
+				{
+					const SpringChainCollider& named = chain.Colliders[i];
+					if (NamesMissingSpringCollider(named, springs.Colliders))
 						warnings.push_back(fmt::format("SpringBone chain '{}': Colliders: no collider is named '{}'", chain.Name, named.Name));
+					else if (named.Name.empty())
+						warnings.push_back(fmt::format("SpringBone chain '{}': Colliders[{}] has no Name, so it names no collider (a list without names keeps every collider)", chain.Name, i));
+				}
 				if (chain.Joint.empty())
 				{
 					warnings.push_back(fmt::format("SpringBone chain '{}': Joint is empty", chain.Name));
@@ -356,6 +368,11 @@ namespace Basalt {
 				if (chain.ChainLength == 0 && FirstChild(*source, joints.back()) >= 0)
 					warnings.push_back(fmt::format("SpringBone chain '{}': the joints go on past the first {}; the rest follow the animation", chain.Name, SpringChain::MaxChainLength));
 			}
+			// An unnamed collider is one a chain that lists colliders can never pick.
+			if (std::ranges::any_of(springs.Chains, NamesSpringColliders))
+				for (size_t i = 0; i < springs.Colliders.size(); i++)
+					if (springs.Colliders[i].Name.empty())
+						warnings.push_back(fmt::format("SpringBone Colliders[{}] has no Name, so chains that list colliders cannot pick it", i));
 			if (!source)
 				return;
 			for (size_t i = 0; i < springs.Colliders.size(); i++)
@@ -366,20 +383,32 @@ namespace Basalt {
 			}
 		}
 
-		// Tracks whose target is not there now (a component removed, a list element renamed or removed): sampling them
-		// would fail and suspend the timeline.
+		// Keyed tracks whose target is not there now (a component removed, a list element renamed or removed), which would
+		// fail and suspend the timeline, and keyed tracks a later one hides by reaching the same field.
 		void AddPropertyAnimationWarnings(Entity entity, const PropertyAnimationComponent& timeline, std::vector<std::string>& warnings)
 		{
+			// The registry validates what it writes; C++ code may not.
+			if (std::string problem = ValidatePropertyAnimation(timeline); !problem.empty())
+			{
+				warnings.push_back("PropertyAnimation: " + problem);
+				return;
+			}
 			std::map<std::string, nlohmann::json> components;
+			// The track reaching each field last, by the field's place in its component's JSON.
+			std::map<const nlohmann::json*, size_t> reachedBy;
 			for (size_t i = 0; i < timeline.Tracks.size(); i++)
 			{
 				const PropertyAnimationTrack& track = timeline.Tracks[i];
-				const auto field = PropertyAnimation::ResolveField(track.Component, track.Field);
-				const auto* info = ComponentRegistry::Find(track.Component);
-				// Invalid declarations are the component validator's to reject.
-				if (!field || !info)
+				// Empty tracks do nothing, so they cannot fail.
+				if (track.Keys.empty())
 					continue;
+				// Validated above, so this only keeps the optional access visibly safe.
+				const auto field = PropertyAnimation::ResolveField(track.Component, track.Field);
+				if (!field)
+					continue;
+				const auto* info = ComponentRegistry::Find(track.Component);
 				std::string problem;
+				const nlohmann::json* reached = nullptr;
 				if (!info->Has(entity))
 					problem = "the entity has no " + track.Component;
 				else
@@ -387,10 +416,16 @@ namespace Basalt {
 					auto [data, inserted] = components.try_emplace(track.Component);
 					if (inserted)
 						data->second = info->Serialize(entity);
-					field->Find(data->second, problem);
+					reached = field->Find(data->second, problem);
 				}
 				if (!problem.empty())
 					warnings.push_back(fmt::format("PropertyAnimation Tracks[{}] ({}.{}): {}", i, track.Component, track.Field, problem));
+				else if (const auto [earlier, added] = reachedBy.try_emplace(reached, i); !added)
+				{
+					const PropertyAnimationTrack& hidden = timeline.Tracks[earlier->second];
+					warnings.push_back(fmt::format("PropertyAnimation Tracks[{}] ({}.{}) reaches the same field as Tracks[{}] ({}.{}), so only the later one plays", earlier->second, hidden.Component, hidden.Field, i, track.Component, track.Field));
+					earlier->second = i;
+				}
 			}
 		}
 

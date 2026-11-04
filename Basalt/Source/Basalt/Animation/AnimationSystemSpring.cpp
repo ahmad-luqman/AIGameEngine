@@ -250,7 +250,7 @@ namespace Basalt {
 					if (SpringChainNames(config, component.Colliders[colliderSources[i]].Name))
 						filtered.push_back(colliders[i]);
 				for (const SpringChainCollider& named : config.Colliders)
-					if (!named.Name.empty() && std::ranges::find(component.Colliders, named.Name, &SpringCollider::Name) == component.Colliders.end())
+					if (NamesMissingSpringCollider(named, component.Colliders))
 						chainProblems.push_back(fmt::format("Colliders: no collider is named '{}'", named.Name));
 				chainColliders = filtered;
 			}
@@ -277,13 +277,13 @@ namespace Basalt {
 					nearby = bodies->CollectShapes(low, high, request.Radius, {}, obstacle);
 					// Warned once per chain, outside its problem list: the count rises and falls as the character moves.
 					if (nearby.Truncated() && !chain.TruncationWarned)
-						BS_CORE_WARN("{} '{}': chain '{}': more than {} physics bodies are within its reach; it collides with the nearest {}", Owner, entity.GetName(), config.Name, PhysicsShapeSnapshot::MaxShapes, PhysicsShapeSnapshot::MaxShapes);
-					chain.TruncationWarned = chain.TruncationWarned || nearby.Truncated();
-					if (!nearby.Empty())
 					{
-						BS_CORE_ASSERT(nearby.GetRadius() == std::max(request.Radius, PhysicsShapeSnapshot::MinRadius), "the bodies push out the chain's points");
-						request.World = [&nearby](const glm::vec3& point) { return nearby.PushOut(point); };
+						BS_CORE_WARN("{} '{}': chain '{}': more than {} physics bodies are within its reach; it collides with the nearest {}", Owner, entity.GetName(), config.Name, PhysicsShapeSnapshot::MaxShapes, PhysicsShapeSnapshot::MaxShapes);
+						chain.TruncationWarned = true;
 					}
+					// CollectShapes was given the points' radius, so the bodies push spheres of it out.
+					if (!nearby.Empty())
+						request.World = [&nearby](const glm::vec3& point) { return nearby.PushOut(point); };
 				}
 				SimulateSpringChain(request, chain.Sim->Points);
 				chain.Sim->Animated = animated;
