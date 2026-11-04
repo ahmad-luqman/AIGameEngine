@@ -567,7 +567,7 @@ Imports a static model as an entity hierarchy, or a skinned/animated model as on
 
 ### `asset.list`
 
-Lists project asset files, optionally filtered by extensions (e.g. ['.lua']).
+Lists project asset files, optionally filtered by extensions (e.g. ['.lua']). Entries with names that are not valid Unicode have no key: they are left out and listed in 'warnings' (a folder with everything in it).
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -597,7 +597,7 @@ Lists project asset files, optionally filtered by extensions (e.g. ['.lua']).
 
 ### `asset.move`
 
-Moves one asset file and its .meta sidecar within Assets/. 'to' is the complete destination path. Creates metadata if needed, migrates scene, prefab and material-file references to this asset to UUIDs and updates the open edit scene and the project's start scene and icon. A scene or prefab that cannot be read stops the move (it might reference the asset); a material file that is not valid JSON is skipped with a warning. Does not rewrite paths inside scripts or glTF files. Stop Play or Simulate first.
+Moves one asset file and its .meta sidecar within Assets/. 'to' is the complete destination path. Creates metadata if needed, migrates scene, prefab and material-file references to this asset to UUIDs and updates the open edit scene and the project's start scene and icon. A scene or prefab that cannot be read stops the move (it might reference the asset); a material file that is not valid JSON, and a document whose name is not valid Unicode, are skipped with a warning. Does not rewrite paths inside scripts or glTF files. Stop Play or Simulate first.
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -700,7 +700,7 @@ Reads a text asset.
 
 ### `asset.refresh`
 
-Reloads the asset files changed on disk since changes were last reported (by an earlier refresh, by the editor's automatic reload, or since the project was opened in this process): models, textures, animation graphs and material files load again on their next use (graphs restart from their initial state and parameter defaults), and while the game runs (Play, not Simulate) changed scripts are hot reloaded (instances keep their fields; OnReload is called). With 'paths', reloads those files instead, changed or not (a path that does not exist and was not known is an error, and nothing is reloaded then). Files the session wrote itself (asset.write, scene.save, ...) are not reported again. Changed .bprefab files merge into the edit scene's instances ('prefabInstances'; instances that cannot merge are 'warnings'). Without 'paths', fails when Assets/ cannot be read.
+Reloads the asset files changed on disk since changes were last reported (by an earlier refresh, by the editor's automatic reload, or since the project was opened in this process): models, textures, animation graphs and material files load again on their next use (graphs restart from their initial state and parameter defaults), and while the game runs (Play, not Simulate) changed scripts are hot reloaded (instances keep their fields; OnReload is called). With 'paths', reloads those files instead, changed or not (a path that does not exist and was not known is an error, and nothing is reloaded then). Files the session wrote itself (asset.write, scene.save, ...) are not reported again. Changed .bprefab files merge into the edit scene's instances ('prefabInstances'; instances that cannot merge are 'warnings'). Without 'paths', fails when Assets/ cannot be read; entries with names that are not valid Unicode are skipped and listed in 'warnings'.
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -731,7 +731,7 @@ Reloads the asset files changed on disk since changes were last reported (by an 
 
 ### `asset.rename`
 
-Moves one asset file and its .meta sidecar within Assets/. 'to' is the complete destination path. Creates metadata if needed, migrates scene, prefab and material-file references to this asset to UUIDs and updates the open edit scene and the project's start scene and icon. A scene or prefab that cannot be read stops the move (it might reference the asset); a material file that is not valid JSON is skipped with a warning. Does not rewrite paths inside scripts or glTF files. Stop Play or Simulate first.
+Moves one asset file and its .meta sidecar within Assets/. 'to' is the complete destination path. Creates metadata if needed, migrates scene, prefab and material-file references to this asset to UUIDs and updates the open edit scene and the project's start scene and icon. A scene or prefab that cannot be read stops the move (it might reference the asset); a material file that is not valid JSON, and a document whose name is not valid Unicode, are skipped with a warning. Does not rewrite paths inside scripts or glTF files. Stop Play or Simulate first.
 
 | Parameter | Type / description |
 |-----------|--------------------|

@@ -3,6 +3,7 @@
 #include "Basalt/Core/Base.h"
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/Platform.h"
+#include "Basalt/Core/TextEncoding.h"
 
 #if defined(BS_PLATFORM_WINDOWS)
 	#include <windows.h>
@@ -90,31 +91,8 @@ namespace Basalt {
 				i++;
 			while (i < text.size())
 			{
-				const auto lead = static_cast<unsigned char>(text[i]);
-				size_t length = 0;
-				if (lead < 0x80)
-					length = 1;
-				else if (lead >= 0xC2 && lead <= 0xDF)
-					length = 2;
-				else if (lead >= 0xE0 && lead <= 0xEF)
-					length = 3;
-				else if (lead >= 0xF0 && lead <= 0xF4)
-					length = 4;
-				bool valid = length > 0 && i + length <= text.size();
-				for (size_t k = 1; valid && k < length; k++)
-					valid = (static_cast<unsigned char>(text[i + k]) & 0xC0) == 0x80;
-				// Overlong forms, surrogates and code points above U+10FFFF.
-				if (valid && length == 3)
-				{
-					const auto second = static_cast<unsigned char>(text[i + 1]);
-					valid = !(lead == 0xE0 && second < 0xA0) && !(lead == 0xED && second >= 0xA0);
-				}
-				if (valid && length == 4)
-				{
-					const auto second = static_cast<unsigned char>(text[i + 1]);
-					valid = !(lead == 0xF0 && second < 0x90) && !(lead == 0xF4 && second >= 0x90);
-				}
-				if (valid)
+				const size_t length = TextEncoding::Utf8SequenceLength(text, i);
+				if (length != 0)
 				{
 					result.append(text, i, length);
 					i += length;
@@ -506,7 +484,7 @@ namespace Basalt {
 		const std::filesystem::path temporary = std::filesystem::temp_directory_path(error);
 		if (error)
 		{
-			result.Error = "cannot find the temporary directory: " + error.message();
+			result.Error = "cannot find the temporary directory: " + FileSystem::DescribeError(error);
 			return result;
 		}
 		std::string pattern = (temporary / "basalt-process-XXXXXX").string();

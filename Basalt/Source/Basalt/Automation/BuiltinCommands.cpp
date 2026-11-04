@@ -381,9 +381,19 @@ namespace Basalt {
 			if (FileSystem::FindSymlink(project.GetDirectory(), relative, entry, error))
 			{
 				if (error)
-					throw CommandError("cannot inspect " + FileSystem::PathToUtf8(entry) + ": " + error.message());
+					throw CommandError("cannot inspect " + FileSystem::PathToUtf8(entry) + ": " + FileSystem::DescribeError(error));
 				throw CommandError(fmt::format("symlinks are not allowed in {} paths: {}", subject, FileSystem::PathToUtf8(entry)));
 			}
+		}
+
+		// What asset.list and asset.refresh say about entries a scan could not give a key.
+		std::vector<std::string> SkippedEntryWarnings(const std::vector<std::string>& entries)
+		{
+			std::vector<std::string> warnings;
+			warnings.reserve(entries.size());
+			for (const std::string& entry : entries)
+				warnings.push_back(fmt::format("'{}': {}", entry, FileSystem::NonUtf8NameProblem));
+			return warnings;
 		}
 
 		// Adds the problems a material's texture references will have when it renders, as project.validate reports them
@@ -1036,7 +1046,7 @@ namespace Basalt {
 				std::error_code error;
 				const bool isFile = std::filesystem::is_regular_file(executable, error);
 				if (error && error != std::errc::no_such_file_or_directory)
-					throw CommandError("cannot check '" + FileSystem::PathToUtf8(executable) + "': " + error.message());
+					throw CommandError("cannot check '" + FileSystem::PathToUtf8(executable) + "': " + FileSystem::DescribeError(error));
 				if (!isFile)
 					throw CommandError("no executable at '" + FileSystem::PathToUtf8(executable) + "'");
 				const auto frames = static_cast<uint32_t>(OptionalInteger(params, "frames", DefaultSmokeTestFrames, 1, MaxSmokeTestFrames));
@@ -1552,10 +1562,14 @@ namespace Basalt {
 			};
 			std::vector<Migration> migrations;
 			// Scenes, prefabs and material files (textures, models' embedded images) hold references.
-			const auto documents = AssetManager::ListAssets({ ".bscene", ".bprefab", std::string(MaterialAsset::Extension) }, &error);
+			std::vector<std::string> unnamed;
+			const auto documents = AssetManager::ListAssets({ ".bscene", ".bprefab", std::string(MaterialAsset::Extension) }, &error, &unnamed);
 			std::vector<std::string> skipped;
 			if (!error.empty())
 				throw CommandError(error);
+			// No key can open these, nor can anything load them, so they must not block the move; what they say stays as it is.
+			for (const std::string& entry : unnamed)
+				skipped.push_back(fmt::format("'{}' was not checked for references to this asset: {}", entry, FileSystem::NonUtf8NameProblem));
 			for (const auto& path : documents)
 			{
 				const auto text = FileSystem::ReadTextFile(Project::ResolvePath(path));
@@ -1807,7 +1821,7 @@ namespace Basalt {
 				}
 			};
 			for (const auto* command : { "asset.move", "asset.rename" })
-				Add(registry, command, "Moves one asset file and its .meta sidecar within Assets/. 'to' is the complete destination path. Creates metadata if needed, migrates scene, prefab and material-file references to this asset to UUIDs and updates the open edit scene and the project's start scene and icon. A scene or prefab that cannot be read stops the move (it might reference the asset); a material file that is not valid JSON is skipped with a warning. Does not rewrite paths inside scripts or glTF files. Stop Play or Simulate first.", Schema::Object({ { "from", Schema::String("source path", true) }, { "to", Schema::String("destination path", true) } }, { "from", "to" }), move, CommandPolicy::EditBoundary);
+				Add(registry, command, "Moves one asset file and its .meta sidecar within Assets/. 'to' is the complete destination path. Creates metadata if needed, migrates scene, prefab and material-file references to this asset to UUIDs and updates the open edit scene and the project's start scene and icon. A scene or prefab that cannot be read stops the move (it might reference the asset); a material file that is not valid JSON, and a document whose name is not valid Unicode, are skipped with a warning. Does not rewrite paths inside scripts or glTF files. Stop Play or Simulate first.", Schema::Object({ { "from", Schema::String("source path", true) }, { "to", Schema::String("destination path", true) } }, { "from", "to" }), move, CommandPolicy::EditBoundary);
 
 			Add(registry, "asset.delete", "Deletes one asset file and its .meta identity. Existing UUID references become unresolved; deleting the project's start scene or icon is reported in warnings. Stop Play or Simulate first.", Schema::Object({ { "path", Schema::String("asset path", true) } }, { "path" }), [](AutomationSession& session, const json& params) {
 				auto project = RequireProject();
@@ -1834,13 +1848,17 @@ namespace Basalt {
 					result["warnings"] = std::move(warnings);
 				return result; }, CommandPolicy::EditBoundary);
 
-			Add(registry, "asset.list", "Lists project asset files, optionally filtered by extensions (e.g. ['.lua']).", Schema::Object({ { "extensions", Schema::Array("array of strings", Schema::String()) } }), [](AutomationSession&, const json& params) {
+			Add(registry, "asset.list", "Lists project asset files, optionally filtered by extensions (e.g. ['.lua']). Entries with names that are not valid Unicode have no key: they are left out and listed in 'warnings' (a folder with everything in it).", Schema::Object({ { "extensions", Schema::Array("array of strings", Schema::String()) } }), [](AutomationSession&, const json& params) {
 				RequireProject();
 				// The schema has checked the types.
 				std::vector<std::string> extensions;
 				if (auto it = params.find("extensions"); it != params.end())
 					extensions = it->get<std::vector<std::string>>();
-				return json{ { "assets", AssetManager::ListAssets(extensions) } };
+				std::vector<std::string> skipped;
+				json result = { { "assets", AssetManager::ListAssets(extensions, nullptr, &skipped) } };
+				if (!skipped.empty())
+					result["warnings"] = SkippedEntryWarnings(skipped);
+				return result;
 			});
 
 			Add(registry, "asset.compress_texture", "Compresses an 8-bit PNG/JPEG/TGA/BMP source to a separate KTX2/BC7 asset with mipmaps. Keeps the source, caches by source contents and sRGB setting in Cache/Textures. Reference the output asset to use compression; HDR sources are rejected.", Schema::Object({ { "path", Schema::String("source image under Assets/", true) }, { "output", Schema::String("separate output .ktx2 under Assets/", true) }, { "srgb", Schema::Boolean("sRGB mip filtering, encoder weights and format tag (default true); false for normal/data maps") } }, { "path", "output" }), [](AutomationSession& session, const json& params) {
@@ -1865,7 +1883,7 @@ namespace Basalt {
 				if (FileSystem::FindSymlink(project->GetDirectory(), cacheRelative, cacheEntry, cacheError))
 				{
 					const auto entry = FileSystem::PathToUtf8(cacheEntry);
-					warnings.push_back("compressed without the cache: " + (cacheError ? "cannot inspect " + entry + ": " + cacheError.message() : entry + " is a symlink"));
+					warnings.push_back("compressed without the cache: " + (cacheError ? "cannot inspect " + entry + ": " + FileSystem::DescribeError(cacheError) : entry + " is a symlink"));
 					BS_CORE_WARN("asset.compress_texture: {}", warnings.back().get<std::string>());
 					cacheDirectory.clear();
 				}
@@ -1941,7 +1959,7 @@ namespace Basalt {
 				return result;
 			});
 
-			Add(registry, "asset.refresh", "Reloads the asset files changed on disk since changes were last reported (by an earlier refresh, by the editor's automatic reload, or since the project was opened in this process): models, textures, animation graphs and material files load again on their next use (graphs restart from their initial state and parameter defaults), and while the game runs (Play, not Simulate) changed scripts are hot reloaded (instances keep their fields; OnReload is called). With 'paths', reloads those files instead, changed or not (a path that does not exist and was not known is an error, and nothing is reloaded then). Files the session wrote itself (asset.write, scene.save, ...) are not reported again. Changed .bprefab files merge into the edit scene's instances ('prefabInstances'; instances that cannot merge are 'warnings'). Without 'paths', fails when Assets/ cannot be read.", Schema::Object({ { "paths", Schema::Array("array of project-relative file paths, optional", Schema::String("string", true)) } }), [](AutomationSession& session, const json& params) {
+			Add(registry, "asset.refresh", "Reloads the asset files changed on disk since changes were last reported (by an earlier refresh, by the editor's automatic reload, or since the project was opened in this process): models, textures, animation graphs and material files load again on their next use (graphs restart from their initial state and parameter defaults), and while the game runs (Play, not Simulate) changed scripts are hot reloaded (instances keep their fields; OnReload is called). With 'paths', reloads those files instead, changed or not (a path that does not exist and was not known is an error, and nothing is reloaded then). Files the session wrote itself (asset.write, scene.save, ...) are not reported again. Changed .bprefab files merge into the edit scene's instances ('prefabInstances'; instances that cannot merge are 'warnings'). Without 'paths', fails when Assets/ cannot be read; entries with names that are not valid Unicode are skipped and listed in 'warnings'.", Schema::Object({ { "paths", Schema::Array("array of project-relative file paths, optional", Schema::String("string", true)) } }), [](AutomationSession& session, const json& params) {
 				RequireProject();
 				std::vector<FileChange> changes;
 				json warnings = json::array();
@@ -1955,7 +1973,7 @@ namespace Basalt {
 						std::error_code error;
 						const std::filesystem::file_status status = std::filesystem::status(Project::ResolvePath(path), error);
 						if (error && error != std::errc::no_such_file_or_directory && error != std::errc::not_a_directory)
-							throw CommandError("cannot read '" + path + "': " + error.message());
+							throw CommandError("cannot read '" + path + "': " + FileSystem::DescribeError(error));
 						if (std::filesystem::is_directory(status))
 							throw CommandError("'" + path + "' is a folder; name the files to reload");
 						const bool exists = std::filesystem::is_regular_file(status);
@@ -1976,6 +1994,8 @@ namespace Basalt {
 						throw CommandError(error);
 					if (!warning.empty())
 						warnings.push_back(warning);
+					for (const std::string& skipped : SkippedEntryWarnings(session.GetSkippedFiles()))
+						warnings.push_back(skipped);
 				}
 				const AssetReloadReport report = session.ReloadAssets(changes);
 				json changed = json::array();
@@ -2360,7 +2380,7 @@ namespace Basalt {
 					if (std::filesystem::is_regular_file(diffPath, removeError))
 						std::filesystem::remove(diffPath, removeError);
 					if (removeError)
-						BS_CORE_WARN("image.compare: cannot remove the old diff image '{}': {}", FileSystem::PathToUtf8(diffPath), removeError.message());
+						BS_CORE_WARN("image.compare: cannot remove the old diff image '{}': {}", FileSystem::PathToUtf8(diffPath), FileSystem::DescribeError(removeError));
 				}
 			}
 

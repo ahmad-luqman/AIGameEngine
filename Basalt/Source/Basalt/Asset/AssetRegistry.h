@@ -26,6 +26,8 @@ namespace Basalt {
 		bool Refresh(std::string& outError);
 		const std::map<std::string, std::string>& GetProblems() const { return m_Problems; }
 		const std::vector<std::string>& GetOrphans() const { return m_Orphans; }
+		// Entries under Assets/ left out of the index for names no key can hold (FileSystem::SkipNonUtf8Entry), sorted.
+		const std::vector<std::string>& GetSkipped() const { return m_Skipped; }
 		std::optional<UUID> Ensure(const std::string& path, std::string& outError);
 		std::string Find(UUID id) const;
 		// The UUID of an asset path in the last scan (never creates metadata); nullopt for an asset without one.
@@ -55,7 +57,7 @@ namespace Basalt {
 		std::string DescribeUnresolved(UUID id, const std::string& hint) const;
 		std::optional<UUID> EnsureIndexed(const std::string& path, std::string& outError);
 		// Replaces the index with a completed scan.
-		void SetIndex(std::map<uint64_t, std::string> paths, std::map<std::string, std::string> problems, std::vector<std::string> orphans);
+		void SetIndex(std::map<uint64_t, std::string> paths, std::map<std::string, std::string> problems, std::vector<std::string> orphans, std::vector<std::string> skipped);
 		bool CheckPath(const std::string& path, std::filesystem::path& absolute, std::string& outError, bool allowHash = false) const;
 		std::filesystem::path m_Root;
 		std::map<uint64_t, std::string> m_Paths;
@@ -63,6 +65,7 @@ namespace Basalt {
 		std::vector<std::string> m_WrittenPaths;
 		std::map<std::string, std::string> m_Problems;
 		std::vector<std::string> m_Orphans;
+		std::vector<std::string> m_Skipped;
 		bool m_Indexed = false;
 	};
 

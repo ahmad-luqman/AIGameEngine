@@ -160,6 +160,8 @@ namespace Basalt {
 		// opened, or since the folder could first be read). outError is set (and nothing reported) when the folder cannot
 		// be read; outWarning when the baseline was only taken now (earlier changes were not seen).
 		std::vector<FileChange> RefreshFileChanges(std::string& outError, std::string& outWarning);
+		// Entries of Assets/ that the newest scan could not give a key (FileWatcher::GetSkipped).
+		const std::vector<std::string>& GetSkippedFiles() const { return m_FileWatcher.GetSkipped(); }
 		// A file the host wrote or removed itself: not reported as a change later.
 		std::optional<FileChangeType> AcknowledgeFile(const std::string& relativePath);
 		// The file is one the watcher knows (it existed at the last report).

@@ -108,10 +108,6 @@ Native file dialogs, prefab editing with per-instance overrides, nested prefabs 
 - **Signed and universal tools on macOS — S.** The release signs and notarizes only the sample bundles: sign the
   editor, runtime and CLI (and their bundled Vulkan libraries) and notarize the tools archive too, and build universal
   (arm64 + x86-64) binaries for Intel Macs.
-- **Unicode follow-ups — S.** About 75 older `std::error_code::message()` calls put ANSI text into UTF-8 messages on
-  Windows: switch them to `FileSystem::DescribeError`. Directory scans (asset registry, file watcher, exporter, content
-  browser) turn NTFS names with unpaired surrogates into keys with U+FFFD that no longer name the file: skip and report
-  such entries.
 
 ---
 

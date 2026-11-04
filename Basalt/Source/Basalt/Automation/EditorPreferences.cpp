@@ -130,7 +130,7 @@ namespace Basalt {
 		if (error)
 		{
 			outStatus = LoadStatus::Unreadable;
-			outError = "cannot read '" + FileSystem::PathToUtf8(file) + "': " + error.message();
+			outError = "cannot read '" + FileSystem::PathToUtf8(file) + "': " + FileSystem::DescribeError(error);
 			return preferences;
 		}
 		const auto text = FileSystem::ReadTextFile(file);
@@ -163,7 +163,7 @@ namespace Basalt {
 		std::filesystem::rename(file, backup, error);
 		if (error)
 		{
-			outError = "cannot rename '" + FileSystem::PathToUtf8(file) + "': " + error.message();
+			outError = "cannot rename '" + FileSystem::PathToUtf8(file) + "': " + FileSystem::DescribeError(error);
 			return std::nullopt;
 		}
 		return backup;

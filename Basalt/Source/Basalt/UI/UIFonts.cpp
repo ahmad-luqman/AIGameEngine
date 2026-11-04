@@ -96,7 +96,7 @@ namespace Basalt {
 			const std::optional<uint64_t> size = FileSystem::GetRegularFileSize(file, error);
 			if (error)
 			{
-				outError = fmt::format("'{}' could not be read: {}", name, error.message());
+				outError = fmt::format("'{}' could not be read: {}", name, FileSystem::DescribeError(error));
 				return std::nullopt;
 			}
 			if (!size)

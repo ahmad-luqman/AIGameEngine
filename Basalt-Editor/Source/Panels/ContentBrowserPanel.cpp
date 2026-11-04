@@ -121,9 +121,19 @@ return %s
 		ImGui::Separator();
 
 		std::vector<std::filesystem::directory_entry> entries;
+		std::vector<std::string> skipped;
 		for (auto it = std::filesystem::directory_iterator(m_CurrentDirectory, error); !error && it != std::filesystem::directory_iterator(); it.increment(error))
-			if (FileSystem::GetLowercaseExtension(it->path()) != ".meta")
+			if (!FileSystem::SkipNonUtf8Entry(*it, root, skipped) && FileSystem::GetLowercaseExtension(it->path()) != ".meta")
 				entries.push_back(*it);
+		if (!skipped.empty())
+		{
+			std::sort(skipped.begin(), skipped.end());
+			std::string details = FileSystem::NonUtf8NameProblem;
+			for (const std::string& entry : skipped)
+				details.append("\n").append(entry);
+			ImGui::TextColored(EditorColors::Warning(), "%zu hidden: names that are not valid Unicode", skipped.size());
+			ImGui::SetItemTooltip("%s", details.c_str());
+		}
 		std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) {
 			if (a.is_directory() != b.is_directory())
 				return a.is_directory();
@@ -234,7 +244,7 @@ return %s
 				else if (!error)
 					m_Context.Execute("asset.delete", { { "path", Project::MakeRelative(m_PendingDelete) } });
 				if (error)
-					m_Context.SetStatus("Delete failed: " + error.message(), true);
+					m_Context.SetStatus("Delete failed: " + FileSystem::DescribeError(error), true);
 				m_PendingDelete.clear();
 				ImGui::CloseCurrentPopup();
 			}

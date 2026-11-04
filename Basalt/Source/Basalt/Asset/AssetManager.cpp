@@ -723,7 +723,7 @@ namespace Basalt {
 		return MeshImporter::InstantiateHierarchy(scene, *mesh, name, parent);
 	}
 
-	std::vector<std::string> AssetManager::ListAssets(const std::vector<std::string>& extensions, std::string* outError)
+	std::vector<std::string> AssetManager::ListAssets(const std::vector<std::string>& extensions, std::string* outError, std::vector<std::string>* outSkipped)
 	{
 		if (outError)
 			outError->clear();
@@ -733,12 +733,21 @@ namespace Basalt {
 		if (!std::filesystem::is_directory(root, error))
 		{
 			if (outError)
-				*outError = "cannot scan Assets/: " + (error ? error.message() : "not a directory");
+				*outError = "cannot scan Assets/: " + (error ? FileSystem::DescribeError(error) : "not a directory");
 			return result;
 		}
 
+		std::vector<std::string> skipped;
 		for (auto it = std::filesystem::recursive_directory_iterator(root, error); !error && it != std::filesystem::recursive_directory_iterator(); it.increment(error))
 		{
+			if (FileSystem::SkipNonUtf8Entry(it, root.parent_path(), skipped))
+			{
+				// A skipped folder may hold files of any type; a file of another type was not asked for.
+				std::error_code folderError;
+				if (!extensions.empty() && !it->is_directory(folderError) && std::find(extensions.begin(), extensions.end(), Extension(skipped.back())) == extensions.end())
+					skipped.pop_back();
+				continue;
+			}
 			const bool regular = it->is_regular_file(error);
 			if (error)
 				break;
@@ -749,8 +758,13 @@ namespace Basalt {
 				result.push_back(path);
 		}
 		if (error && outError)
-			*outError = "cannot scan all asset files: " + error.message();
+			*outError = "cannot scan all asset files: " + FileSystem::DescribeError(error);
 		std::sort(result.begin(), result.end());
+		if (outSkipped)
+		{
+			std::sort(skipped.begin(), skipped.end());
+			*outSkipped = std::move(skipped);
+		}
 		return result;
 	}
 

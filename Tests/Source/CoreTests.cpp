@@ -1238,6 +1238,35 @@ TEST_SUITE("Core")
 
 	// Lua strings and percent-decoded URIs need not be UTF-8: converting them must not throw (MSVC's std::filesystem
 	// does), and on Windows they then name no file.
+	TEST_CASE("System error text comes through DescribeError")
+	{
+		// No test can tell the two apart off Windows, or on a runner in an English locale, where the ANSI text is ASCII.
+		const std::filesystem::path source = BASALT_SOURCE_DIR;
+		const std::string rawMessage = std::string(".message") + "()";
+		const std::string rawSystemMessage = std::string("system_category().message") + "(";
+		std::string offenders;
+		size_t scanned = 0;
+		for (const char* tree : { "Basalt/Source", "Basalt-Editor/Source", "Basalt-Runtime/Source", "Basalt-CLI/Source", "Tests/Source" })
+			for (const auto& entry : std::filesystem::recursive_directory_iterator(source / tree))
+			{
+				const std::string extension = FileSystem::GetLowercaseExtension(entry.path());
+				if (extension != ".cpp" && extension != ".h")
+					continue;
+				const std::optional<std::string> text = FileSystem::ReadTextFile(entry.path());
+				REQUIRE(text);
+				scanned++;
+				// DescribeError's own fallback, for error categories that are not the system's.
+				const size_t allowed = entry.path().filename() == "FileSystem.cpp" ? 1 : 0;
+				size_t count = 0;
+				for (size_t at = text->find(rawMessage); at != std::string::npos; at = text->find(rawMessage, at + 1))
+					count++;
+				if (count != allowed || text->find(rawSystemMessage) != std::string::npos)
+					offenders += " " + FileSystem::PathToUtf8(entry.path().lexically_relative(source));
+			}
+		CHECK(scanned > 100);
+		CHECK_MESSAGE(offenders.empty(), "system error text bypasses FileSystem::DescribeError in:", offenders);
+	}
+
 	TEST_CASE("Paths convert to and from UTF-8 without throwing, whatever the text")
 	{
 		CHECK(FileSystem::PathToUtf8(FileSystem::PathFromUtf8("Assets/資産.png")) == "Assets/資産.png");

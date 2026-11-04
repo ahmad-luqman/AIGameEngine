@@ -114,7 +114,7 @@ namespace Basalt {
 		std::filesystem::path entry;
 		if (FileSystem::FindSymlink(m_Root, relative, entry, error))
 		{
-			outError = error ? "cannot inspect asset path '" + path + "': " + error.message() : "asset path must not contain symlinks: " + path;
+			outError = error ? "cannot inspect asset path '" + path + "': " + FileSystem::DescribeError(error) : "asset path must not contain symlinks: " + path;
 			return false;
 		}
 		absolute = std::filesystem::weakly_canonical(m_Root / relative, error);
@@ -142,23 +142,25 @@ namespace Basalt {
 			for (const PackArchive::Entry& entry : archive->GetEntries())
 				if (entry.AssetID != 0 && entry.Path.starts_with("Assets/"))
 					paths.emplace(entry.AssetID, entry.Path);
-			SetIndex(std::move(paths), {}, {});
+			SetIndex(std::move(paths), {}, {}, {});
 			return true;
 		}
 		std::map<uint64_t, std::string> paths, owners;
 		std::map<std::string, std::string> problems;
-		std::vector<std::string> orphans;
+		std::vector<std::string> orphans, skipped;
 		std::error_code error;
 		const auto assets = m_Root / "Assets";
 		if (!std::filesystem::exists(assets, error) && !error)
 		{
-			SetIndex({}, {}, {});
+			SetIndex({}, {}, {}, {});
 			return true;
 		}
 		auto scanPath = assets;
 		for (auto it = std::filesystem::recursive_directory_iterator(assets, error); !error && it != std::filesystem::recursive_directory_iterator(); it.increment(error))
 		{
 			scanPath = it->path();
+			if (FileSystem::SkipNonUtf8Entry(it, m_Root, skipped))
+				continue;
 			if (it->is_symlink(error))
 			{
 				if (FileSystem::GetLowercaseExtension(it->path()) == ".meta")
@@ -211,14 +213,15 @@ namespace Basalt {
 		}
 		if (error)
 		{
-			outError = "cannot scan asset metadata at '" + FileSystem::PathToUtf8(scanPath) + "': " + error.message();
+			outError = "cannot scan asset metadata at '" + FileSystem::PathToUtf8(scanPath) + "': " + FileSystem::DescribeError(error);
 			return false;
 		}
-		SetIndex(std::move(paths), std::move(problems), std::move(orphans));
+		std::sort(skipped.begin(), skipped.end());
+		SetIndex(std::move(paths), std::move(problems), std::move(orphans), std::move(skipped));
 		return true;
 	}
 
-	void AssetRegistry::SetIndex(std::map<uint64_t, std::string> paths, std::map<std::string, std::string> problems, std::vector<std::string> orphans)
+	void AssetRegistry::SetIndex(std::map<uint64_t, std::string> paths, std::map<std::string, std::string> problems, std::vector<std::string> orphans, std::vector<std::string> skipped)
 	{
 		m_Paths = std::move(paths);
 		m_IDs.clear();
@@ -226,6 +229,7 @@ namespace Basalt {
 			m_IDs.emplace(path, id);
 		m_Problems = std::move(problems);
 		m_Orphans = std::move(orphans);
+		m_Skipped = std::move(skipped);
 		m_Indexed = true;
 	}
 
@@ -270,7 +274,7 @@ namespace Basalt {
 		lock += ".importing";
 		if (!std::filesystem::create_directory(lock, error))
 		{
-			outError = "cannot acquire metadata import lock '" + FileSystem::PathToUtf8(lock) + "': " + (error ? error.message() : "another import is active (remove the lock only if that importer stopped)");
+			outError = "cannot acquire metadata import lock '" + FileSystem::PathToUtf8(lock) + "': " + (error ? FileSystem::DescribeError(error) : "another import is active (remove the lock only if that importer stopped)");
 			return std::nullopt;
 		}
 		// Owns only this import's lock; the atomic file writer owns its temporary file.
@@ -282,7 +286,7 @@ namespace Basalt {
 				std::error_code removeError;
 				std::filesystem::remove(Path, removeError);
 				if (removeError)
-					BS_CORE_WARN("AssetRegistry: cannot release import lock '{}': {}", FileSystem::PathToUtf8(Path), removeError.message());
+					BS_CORE_WARN("AssetRegistry: cannot release import lock '{}': {}", FileSystem::PathToUtf8(Path), FileSystem::DescribeError(removeError));
 			}
 		} guard{ lock };
 		const auto status = std::filesystem::symlink_status(meta, error);
@@ -293,7 +297,7 @@ namespace Basalt {
 		}
 		if (error && error != std::errc::no_such_file_or_directory)
 		{
-			outError = "cannot inspect metadata: " + error.message();
+			outError = "cannot inspect metadata: " + FileSystem::DescribeError(error);
 			return std::nullopt;
 		}
 		UUID id;
@@ -428,7 +432,7 @@ namespace Basalt {
 		{
 			if (!error || error == std::errc::no_such_file_or_directory)
 				return true;
-			outError = "cannot inspect asset '" + path + "': " + error.message();
+			outError = "cannot inspect asset '" + path + "': " + FileSystem::DescribeError(error);
 			return false;
 		}
 		if (!m_Indexed && !Refresh(outError))
@@ -457,18 +461,18 @@ namespace Basalt {
 		const bool hasMeta = status.type() != std::filesystem::file_type::not_found;
 		if (error && error != std::errc::no_such_file_or_directory)
 		{
-			outError = "cannot inspect metadata: " + error.message();
+			outError = "cannot inspect metadata: " + FileSystem::DescribeError(error);
 			return false;
 		}
 		const auto before = hasMeta ? FileSystem::ReadTextFile(meta) : std::optional<std::string>{};
 		if (hasMeta && (!before || !std::filesystem::remove(meta, error)))
 		{
-			outError = "cannot remove metadata for '" + path + "': " + (error ? error.message() : "cannot read metadata");
+			outError = "cannot remove metadata for '" + path + "': " + (error ? FileSystem::DescribeError(error) : "cannot read metadata");
 			return false;
 		}
 		if (!std::filesystem::remove(source, error))
 		{
-			outError = "cannot remove asset '" + path + "': " + error.message();
+			outError = "cannot remove asset '" + path + "': " + FileSystem::DescribeError(error);
 			std::string restoreError;
 			if (before && !FileSystem::WriteTextFile(meta, *before, restoreError))
 				outError += "; cannot restore metadata: " + restoreError;
@@ -525,7 +529,7 @@ namespace Basalt {
 			std::filesystem::rename(source, destination, error);
 		if (error)
 		{
-			outError = "cannot move asset: " + error.message();
+			outError = "cannot move asset: " + FileSystem::DescribeError(error);
 			return false;
 		}
 		auto sourceMeta = source, targetMeta = destination;
@@ -534,10 +538,10 @@ namespace Basalt {
 		std::filesystem::rename(sourceMeta, targetMeta, error);
 		if (error)
 		{
-			outError = "cannot move asset metadata: " + error.message();
+			outError = "cannot move asset metadata: " + FileSystem::DescribeError(error);
 			std::filesystem::rename(destination, source, error);
 			if (error)
-				outError += "; cannot restore source: " + error.message();
+				outError += "; cannot restore source: " + FileSystem::DescribeError(error);
 			return false;
 		}
 		// Both renames committed. Publish this known change without a fallible scan after the commit point.

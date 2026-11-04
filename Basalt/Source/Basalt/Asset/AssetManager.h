@@ -97,8 +97,10 @@ namespace Basalt {
 
 		// Project-relative paths of every file under the asset directory with one of the extensions
 		// (lower-case, including the dot). Metadata is excluded. On an incomplete scan, returns the files found
-		// so far and sets *outError when provided; successful scans clear it.
-		static std::vector<std::string> ListAssets(const std::vector<std::string>& extensions = {}, std::string* outError = nullptr);
+		// so far and sets *outError when provided; successful scans clear it. *outSkipped, when provided, gets the entries
+		// of those types left out because no key can hold their names (FileSystem::SkipNonUtf8Entry), sorted, with every
+		// such folder, since it may hold any type.
+		static std::vector<std::string> ListAssets(const std::vector<std::string>& extensions = {}, std::string* outError = nullptr, std::vector<std::string>* outSkipped = nullptr);
 		static bool IsMeshFile(const std::string& path);
 		static bool IsTextureFile(const std::string& path);
 	};

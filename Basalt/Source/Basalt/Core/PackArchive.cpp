@@ -94,7 +94,7 @@ namespace Basalt {
 			const uint64_t size = regular && !error ? std::filesystem::file_size(source, error) : 0;
 			if (error || !regular)
 			{
-				outError = error ? error.message() : "not a file";
+				outError = error ? FileSystem::DescribeError(error) : "not a file";
 				return std::nullopt;
 			}
 			if (size > PackArchive::MaxEntrySize)
@@ -191,7 +191,7 @@ namespace Basalt {
 		const uint64_t size = regular && !error ? std::filesystem::file_size(file, error) : 0;
 		if (!regular || error)
 		{
-			outError = "cannot read the archive '" + name + "'" + (error ? ": " + error.message() : std::string(": not a file"));
+			outError = "cannot read the archive '" + name + "'" + (error ? ": " + FileSystem::DescribeError(error) : std::string(": not a file"));
 			return nullptr;
 		}
 		auto archive = CreateRef<PackArchive>(Token{});
@@ -586,7 +586,7 @@ namespace Basalt {
 			std::filesystem::create_directories(file.parent_path(), error);
 			if (error)
 			{
-				outError = "cannot create the folder '" + FileSystem::PathToUtf8(file.parent_path()) + "': " + error.message();
+				outError = "cannot create the folder '" + FileSystem::PathToUtf8(file.parent_path()) + "': " + FileSystem::DescribeError(error);
 				return std::nullopt;
 			}
 		}

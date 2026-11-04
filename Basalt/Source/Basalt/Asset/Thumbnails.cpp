@@ -448,7 +448,7 @@ namespace Basalt {
 		const std::optional<std::string> stamp = FileStamp(m_ProjectDirectory / FileSystem::PathFromUtf8(relativePath), error);
 		if (!stamp)
 		{
-			outError = error == std::errc::no_such_file_or_directory ? "the file is missing" : "cannot read the file: " + error.message();
+			outError = error == std::errc::no_such_file_or_directory ? "the file is missing" : "cannot read the file: " + FileSystem::DescribeError(error);
 			return std::nullopt;
 		}
 		std::string key = relativePath + "\n" + *stamp + "\n" + std::to_string(static_cast<int>(ClassifyThumbnail(relativePath))) + "\n" + std::to_string(Version);
@@ -457,7 +457,7 @@ namespace Basalt {
 		{
 			std::error_code dependencyError;
 			const auto dependencyStamp = FileStamp(m_ProjectDirectory / FileSystem::PathFromUtf8(dependency), dependencyError);
-			key += "\n" + dependency + " " + (dependencyStamp ? *dependencyStamp : (dependencyError == std::errc::no_such_file_or_directory ? std::string("missing") : "unreadable: " + dependencyError.message()));
+			key += "\n" + dependency + " " + (dependencyStamp ? *dependencyStamp : (dependencyError == std::errc::no_such_file_or_directory ? std::string("missing") : "unreadable: " + FileSystem::DescribeError(dependencyError)));
 		}
 		return key;
 	}
@@ -530,7 +530,7 @@ namespace Basalt {
 		std::filesystem::create_directories(m_Directory, error);
 		if (error)
 		{
-			outError = "cannot create '" + FileSystem::PathToUtf8(m_Directory) + "': " + error.message();
+			outError = "cannot create '" + FileSystem::PathToUtf8(m_Directory) + "': " + FileSystem::DescribeError(error);
 			return false;
 		}
 		const std::filesystem::path path = GetImagePath(relativePath);
@@ -539,7 +539,7 @@ namespace Basalt {
 		std::filesystem::remove(keyPath, error);
 		if (error)
 		{
-			outError = "cannot replace '" + FileSystem::PathToUtf8(keyPath) + "': " + error.message();
+			outError = "cannot replace '" + FileSystem::PathToUtf8(keyPath) + "': " + FileSystem::DescribeError(error);
 			return false;
 		}
 		if (!WritePng(path, entry.Image.Pixels, entry.Image.Width, entry.Image.Height, outError))
@@ -564,14 +564,14 @@ namespace Basalt {
 		for (auto it = std::filesystem::directory_iterator(m_Directory, error); !error && it != std::filesystem::directory_iterator(); it.increment(error))
 			files.push_back(it->path());
 		if (error && error != std::errc::no_such_file_or_directory)
-			BS_CORE_WARN("Thumbnails: cannot list '{}': {}", FileSystem::PathToUtf8(m_Directory), error.message());
+			BS_CORE_WARN("Thumbnails: cannot list '{}': {}", FileSystem::PathToUtf8(m_Directory), FileSystem::DescribeError(error));
 		size_t removed = 0;
 		const auto remove = [&](const std::filesystem::path& file) {
 			std::error_code removeError;
 			if (std::filesystem::remove(file, removeError))
 				removed++;
 			else if (removeError)
-				BS_CORE_WARN("Thumbnails: cannot remove '{}': {}", FileSystem::PathToUtf8(file), removeError.message());
+				BS_CORE_WARN("Thumbnails: cannot remove '{}': {}", FileSystem::PathToUtf8(file), FileSystem::DescribeError(removeError));
 		};
 		for (const std::filesystem::path& file : files)
 		{
