@@ -108,8 +108,9 @@ namespace Basalt::TextEncoding {
 		const auto unit = static_cast<uint32_t>(text[index]);
 		if (unit < 0xD800 || unit > 0xDFFF)
 			return 1;
-		if (unit > 0xDBFF || index + 1 == text.size())
+		if (unit > 0xDBFF)
 			return 0;
+		// At the end this reads the string's terminator, which pairs with nothing.
 		const auto next = static_cast<uint32_t>(text[index + 1]);
 		return next >= 0xDC00 && next <= 0xDFFF ? 2 : 0;
 	}
