@@ -17,7 +17,6 @@
 
 #include <algorithm>
 #include <map>
-#include <set>
 
 namespace Basalt {
 
@@ -184,7 +183,7 @@ namespace Basalt {
 		return m_PrefabEditing ? m_PrefabEditing->Path : s_None;
 	}
 
-	bool AutomationSession::OpenPrefab(const std::string& prefabPath, std::string& outError)
+	bool AutomationSession::OpenPrefab(const std::string& prefabPath, std::string& outError, std::vector<std::string>& outWarnings)
 	{
 		const std::string path = Prefab::NormalizePath(prefabPath);
 		if (IsPlaying())
@@ -206,15 +205,16 @@ namespace Basalt {
 			return false;
 		}
 		nlohmann::json entities;
-		if (!Prefab::ReadSource(absolute, entities, outError))
+		Prefab::ReadReport report;
+		if (!Prefab::ReadSource(absolute, entities, outError, &report))
 			return false;
 		auto scene = CreateRef<Scene>(FileSystem::PathToUtf8(FileSystem::PathFromUtf8(path).stem()));
 		if (!SceneSerializer::DeserializeScene(*scene, SceneSerializer::SceneDocument(std::move(entities)), outError))
 			return false;
 		// In here nested instances are instances like a scene's: they list overrides and take their prefabs' edits.
-		std::vector<std::string> warnings;
-		Prefab::TrackNestedInstances(*scene, warnings);
-		for (const std::string& warning : warnings)
+		outWarnings = std::move(report.Warnings);
+		Prefab::TrackNestedInstances(*scene, outWarnings);
+		for (const std::string& warning : outWarnings)
 			BS_CORE_WARN("Prefab: {}", warning);
 		m_PrefabEditing = PrefabEditing{ path, text, m_EditScene, m_ScenePath, m_Selection, m_Dirty };
 		SetEditScene(scene, "");
@@ -248,7 +248,11 @@ namespace Basalt {
 			return false;
 		}
 		// A root that is an instance makes this a variant of that prefab.
-		if (!Prefab::SaveTree(roots.front(), absolute, roots.front().HasComponent<PrefabComponent>(), outWarnings, outError))
+		const PrefabFileRoot rootKind = roots.front().HasComponent<PrefabComponent>() ? PrefabFileRoot::Variant : PrefabFileRoot::Plain;
+		// What a nested instance has not merged yet would otherwise save as overrides of what its prefab says now.
+		if (bool merged = false; !Prefab::MergeOutdatedNested(roots.front(), editing.Path, rootKind, merged, outError))
+			return false;
+		if (!Prefab::SaveTree(roots.front(), absolute, rootKind, outWarnings, outError))
 			return false;
 		ClearDirty();
 		// The file is written; failing to read it back only loses the conflict check's reference, so the next save needs
@@ -290,23 +294,30 @@ namespace Basalt {
 		return true;
 	}
 
-	void AutomationSession::MergePrefabInstances(const std::string& prefabPath, bool outdatedOnly, AssetReloadReport& report)
+	void AutomationSession::MergePrefabInstances(const std::optional<std::string>& changedPrefab, bool outdatedOnly, AssetReloadReport& report)
 	{
-		const std::string changedFile = prefabPath.empty() ? std::string() : Prefab::FileKey(Project::ResolvePath(Prefab::NormalizePath(prefabPath)));
+		const std::optional<std::string> changedFile = changedPrefab ? std::optional(Prefab::FileKeyOf(*changedPrefab)) : std::nullopt;
 		struct Source
 		{
-			nlohmann::json Entities;
+			// Nothing when it cannot be read: Error says why.
+			std::optional<nlohmann::json> Entities;
 			std::string Error;
-			bool Readable = false;
-			Prefab::ReadReport Report;
+			Prefab::ReadReport Read;
+			std::string File;
+			bool WarningsReported = false;
 		};
 		// Each prefab reads once, for all its instances in both scenes.
 		std::map<std::string, Source> sources;
-		const auto readSource = [&](const std::string& path) -> const Source& {
-			auto [source, inserted] = sources.try_emplace(path);
-			if (inserted)
-				source->second.Readable = Prefab::ReadSource(Project::ResolvePath(path), source->second.Entities, source->second.Error, &source->second.Report);
-			return source->second;
+		const auto readSource = [&](const std::string& path) -> Source& {
+			auto [entry, inserted] = sources.try_emplace(path);
+			Source& source = entry->second;
+			if (nlohmann::json entities; inserted)
+			{
+				source.File = Prefab::FileKeyOf(path);
+				if (Prefab::ReadSource(Project::ResolvePath(path), entities, source.Error, &source.Read))
+					source.Entities = std::move(entities);
+			}
+			return source;
 		};
 		// The edit scenes only: a play copy is discarded when play stops, and its edit scene merges meanwhile.
 		const Ref<Scene> waiting = m_PrefabEditing ? m_PrefabEditing->WaitingScene : nullptr;
@@ -323,12 +334,13 @@ namespace Basalt {
 				if (path.empty() || Prefab::EnclosingInstance(entity))
 					continue;
 				const Source& source = readSource(path);
-				// A changed file reaches every instance whose source read it: of that prefab, and of those nesting or based on it.
-				const bool ownFile = Prefab::FileKey(Project::ResolvePath(path)) == changedFile;
-				if (!changedFile.empty() && !ownFile && (!source.Report.Files.contains(changedFile) || !Prefab::IsTracked(link)))
+				// A changed file reaches its own prefab's instances and the tracked instances of prefabs nesting or based on
+				// it. Adopting an untracked one here would freeze this very edit as its overrides.
+				const bool readsFile = changedFile && source.Read.Files.contains(*changedFile);
+				if (changedFile && source.File != *changedFile && (!readsFile || !Prefab::IsTracked(link)))
 					continue;
 				// Opening a scene leaves untracked instances alone: adopting them would change scenes nobody edited.
-				if (outdatedOnly && (!Prefab::IsTracked(link) || (source.Readable && !Prefab::IsOutdated(link, source.Entities))))
+				if (outdatedOnly && (!Prefab::IsTracked(link) || (source.Entities && !Prefab::IsOutdated(link, *source.Entities))))
 					continue;
 				roots.emplace_back(entity.GetUUID(), path);
 			}
@@ -338,9 +350,19 @@ namespace Basalt {
 				Entity root = scene->GetEntityByUUID(id);
 				if (!root || !root.HasComponent<PrefabComponent>())
 					continue;
-				const Source& source = readSource(path);
+				Source& source = readSource(path);
+				if (!source.WarningsReported)
+				{
+					source.WarningsReported = true;
+					for (const std::string& warning : source.Read.Warnings)
+						if (std::find(report.PrefabWarnings.begin(), report.PrefabWarnings.end(), warning) == report.PrefabWarnings.end())
+						{
+							report.PrefabWarnings.push_back(warning);
+							BS_CORE_WARN("Prefab: {}", warning);
+						}
+				}
 				std::string error = source.Error;
-				const auto result = source.Readable ? Prefab::Refresh(root, source.Entities, Prefab::RefreshMode::Merge, error) : Prefab::RefreshResult::Rejected;
+				const auto result = source.Entities ? Prefab::Refresh(root, *source.Entities, Prefab::RefreshMode::Merge, error, &report.PrefabWarnings) : Prefab::RefreshResult::Rejected;
 				if (result == Prefab::RefreshResult::Merged)
 					++report.PrefabInstances;
 				if (Prefab::ChangedScene(result))
@@ -367,7 +389,7 @@ namespace Basalt {
 	AssetReloadReport AutomationSession::MergeOutdatedPrefabInstances()
 	{
 		AssetReloadReport report;
-		MergePrefabInstances({}, true, report);
+		MergePrefabInstances(std::nullopt, true, report);
 		return report;
 	}
 

@@ -42,7 +42,6 @@ namespace Basalt {
 		// In a prefab file only: what a nested instance's record changes in its prefab's tree.
 		constexpr const char* OverridesKey = "Overrides";
 		constexpr const char* LinkComponent = "Prefab";
-		constexpr int NestingVersion = 4;
 
 		uint64_t IdOf(Entity entity)
 		{
@@ -131,6 +130,15 @@ namespace Basalt {
 			});
 		}
 
+		void RenumberTree(json& entities, const IdMap& ids)
+		{
+			for (json& record : entities)
+			{
+				record["ID"] = ids.at(RecordId(record));
+				RenumberReferences(record, ids);
+			}
+		}
+
 		// The ID a nested prefab's entity has in the file holding it. Derived, not stored, so overrides and references
 		// to it stay valid however often that prefab changes, and two nested copies of one prefab never share an ID.
 		uint64_t NestedId(uint64_t nestedRoot, uint64_t inner)
@@ -145,23 +153,29 @@ namespace Basalt {
 			return id ? id : 1;
 		}
 
-		// A prefab's records as the tree of the nested root in another file: renumbered, the root in the nested record's
-		// place, marked as an instance of prefab.
-		void NestRecords(json& records, uint64_t nestedRoot, uint64_t parent, const std::string& prefab)
+		// A prefab's IDs -> their IDs as the tree of nestedRoot in the file holding it. The root takes the nested root's.
+		IdMap NestedIds(const json& records, uint64_t nestedRoot)
 		{
 			const uint64_t innerRoot = RecordId(records[0]);
 			IdMap ids;
 			for (const json& record : records)
 				ids[RecordId(record)] = RecordId(record) == innerRoot ? nestedRoot : NestedId(nestedRoot, RecordId(record));
-			for (json& record : records)
-			{
-				record["ID"] = ids.at(RecordId(record));
-				RenumberReferences(record, ids);
-			}
+			return ids;
+		}
+
+		// What a nested root's Prefab component holds: the path alone.
+		json LinkMarker(const std::string& prefab)
+		{
+			return json{ { LinkComponent, prefab } };
+		}
+
+		// A prefab's records as the tree of the nested root in another file: renumbered, the root in the nested record's
+		// place, marked as an instance of prefab.
+		void NestRecords(json& records, uint64_t nestedRoot, uint64_t parent, const std::string& prefab)
+		{
+			RenumberTree(records, NestedIds(records, nestedRoot));
 			records[0]["Parent"] = parent;
-			if (!records[0].contains("Components"))
-				records[0]["Components"] = json::object();
-			records[0]["Components"][LinkComponent] = json{ { LinkComponent, prefab } };
+			records[0]["Components"][LinkComponent] = LinkMarker(prefab);
 		}
 
 		// Instance space to source space: members become their source IDs; any other reference keeps its UUID, marked
@@ -214,7 +228,7 @@ namespace Basalt {
 					components[info.Name] = info.Serialize(entity);
 			// A nested instance's root says what it is an instance of, and the outer instance tracks the rest.
 			if (const auto* link = entity.TryGetComponent<PrefabComponent>(); link && entity != root && !link->Prefab.empty())
-				components[LinkComponent] = json{ { LinkComponent, link->Prefab } };
+				components[LinkComponent] = LinkMarker(link->Prefab);
 			const Entity parent = entity.GetParent();
 			json record = { { "ID", IdOf(entity) }, { "Name", entity.GetName() }, { "Parent", entity == root || !parent ? 0 : IdOf(parent) }, { "Components", std::move(components) } };
 			ToSourceSpace(record, toSource, sourceKeys);
@@ -240,7 +254,7 @@ namespace Basalt {
 			{
 				if (current == root)
 					return true;
-				if (const auto* link = current.TryGetComponent<PrefabComponent>(); link && (!link->Members.empty() || !members.contains(IdOf(current))))
+				if (const auto* link = current.TryGetComponent<PrefabComponent>(); link && (Prefab::ListsMembers(*link) || !members.contains(IdOf(current))))
 					return false;
 			}
 			return false;
@@ -268,8 +282,8 @@ namespace Basalt {
 			for (json entity : entities)
 			{
 				// The root's link is a variant's base: instances replace it with their own, and only nested roots keep theirs.
-				if (records.Order.empty())
-					entity["Components"].erase(LinkComponent);
+				if (const auto components = entity.find("Components"); records.Order.empty() && components != entity.end())
+					components->erase(LinkComponent);
 				const std::string key = KeyOf(RecordId(entity));
 				records.Order.push_back(key);
 				records.ByKey[key] = std::move(entity);
@@ -409,7 +423,7 @@ namespace Basalt {
 
 		// What turns base into current, as a JSON merge patch: keys current lacks are null, objects recurse, and any other
 		// value is written whole. Equivalent values are left out, so a file holds only real differences.
-		json DiffObjects(const json& base, const json& current, bool rotation = false)
+		json DiffObjects(const json& base, const json& current)
 		{
 			json patch = json::object();
 			for (const auto& [key, value] : base.items())
@@ -418,7 +432,7 @@ namespace Basalt {
 				if (now == current.end())
 					patch[key] = nullptr;
 				else if (!Equivalent(value, *now, key == "Rotation"))
-					patch[key] = value.is_object() && now->is_object() ? DiffObjects(value, *now, key == "Rotation") : *now;
+					patch[key] = value.is_object() && now->is_object() ? DiffObjects(value, *now) : *now;
 			}
 			for (const auto& [key, value] : current.items())
 				if (!base.contains(key))
@@ -426,6 +440,7 @@ namespace Basalt {
 			return patch;
 		}
 
+		// Not json::merge_patch: that strips nulls inside a value it adds, and a patch writes values whole.
 		void ApplyPatch(json& target, const json& patch)
 		{
 			for (const auto& [key, value] : patch.items())
@@ -496,7 +511,8 @@ namespace Basalt {
 			return id;
 		}
 
-		// The path a record's Prefab component names; empty when it has none. A file's holds an asset reference.
+		// The path a record's Prefab component names; empty when it has none, or an encoded reference (a file's, before
+		// expansion).
 		std::string LinkPath(const json& record)
 		{
 			const auto components = record.find("Components");
@@ -559,6 +575,23 @@ namespace Basalt {
 			link.Baseline = ToRecords(sourceEntities).ByKey;
 		}
 
+		// A listed nested root that tracked itself while it was on its own (a copy, adopted before the instance around it,
+		// or moved out and back) is this instance's again: left tracking itself, its entities would read as deleted.
+		void ReclaimNestedRoots(Entity root, const PrefabComponent& link)
+		{
+			Scene& scene = *root.GetScene();
+			for (const auto& [key, value] : link.Members.items())
+			{
+				const Entity entity = IsId(value) ? EntityOf(scene, value.get<uint64_t>()) : Entity{};
+				auto* nested = entity && entity != root ? entity.TryGetComponent<PrefabComponent>() : nullptr;
+				const auto record = link.Baseline.find(key);
+				if (!nested || !Prefab::ListsMembers(*nested) || record == link.Baseline.end() || !scene.IsDescendantOf(entity, root) || LinkPath(*record) != Prefab::NormalizePath(nested->Prefab))
+					continue;
+				nested->Members = json::object();
+				nested->Baseline = json::object();
+			}
+		}
+
 		// The number of ancestors member will have, walking the merged hierarchy up from parent; nothing on a cycle
 		// through member or past the scene's depth limit.
 		std::optional<uint32_t> AncestorDepth(Scene& scene, uint64_t member, uint64_t parent, const IdMap& parents)
@@ -593,12 +626,18 @@ namespace Basalt {
 
 		std::optional<MergeInputs> PrepareMerge(Entity root, const json& sourceEntities, std::string& outError)
 		{
+			if (const Entity enclosing = Prefab::EnclosingInstance(root))
+			{
+				outError = fmt::format("it is nested in the instance '{}', which merges it", enclosing.GetName());
+				return std::nullopt;
+			}
 			MergeInputs in{ root.GetComponent<PrefabComponent>() };
 			if (!Prefab::IsTracked(in.Link))
 			{
 				Adopt(root, sourceEntities, in.Link);
 				in.Adopted = true;
 			}
+			ReclaimNestedRoots(root, in.Link);
 			in.RootKey = KeyOf(RecordId(sourceEntities[0]));
 			if (const std::string tracked = RootKey(in.Link, root); tracked != in.RootKey)
 			{
@@ -669,10 +708,7 @@ namespace Basalt {
 		// instance stop being tracked.
 		InstanceIds AssignInstanceIds(Scene& scene, Entity root, const json& merged, const Records& next, PrefabComponent& link)
 		{
-			IdSet taken;
-			for (const auto& value : link.Members)
-				if (IsId(value))
-					taken.insert(value.get<uint64_t>());
+			IdSet taken = MemberIds(link);
 			IdMap toInstance;
 			for (const auto& [key, record] : merged.items())
 			{
@@ -714,7 +750,7 @@ namespace Basalt {
 			IdMap Parents;
 			// Entities the instance added under a kept member, by member, in their order.
 			std::unordered_map<uint64_t, std::vector<Entity>> Locals;
-			// Entities the instance added under a member the merge removes; they move to the root.
+			// Entities the instance added under a member the merge removes; they move to its nearest kept ancestor.
 			std::vector<Entity> Orphans;
 			// Members the merge removes: destroyed.
 			std::vector<Entity> Destroyed;
@@ -772,7 +808,11 @@ namespace Basalt {
 					else
 					{
 						plan.Orphans.push_back(child);
-						plan.Parents[IdOf(child)] = rootId;
+						uint64_t ancestor = rootId;
+						for (Entity above = member.GetParent(); above && above != root && ancestor == rootId; above = above.GetParent())
+							if (plan.Members.contains(IdOf(above)))
+								ancestor = IdOf(above);
+						plan.Parents[IdOf(child)] = ancestor;
 						heights[IdOf(child)] = scene.GetSubtreeHeight(child);
 					}
 				}
@@ -847,12 +887,12 @@ namespace Basalt {
 					for (Entity local : locals->second)
 						parent(local, EntityOf(scene, RecordId(record)));
 			for (Entity orphan : plan.Orphans)
-				parent(orphan, root);
+				parent(orphan, EntityOf(scene, plan.Parents.at(IdOf(orphan))));
 			outError = fmt::format("{}", fmt::join(errors, "; "));
 			return errors.empty();
 		}
 
-		Prefab::RefreshResult MergeInto(Entity root, const json& sourceEntities, MergeKind kind, const std::string& field, std::string& outError)
+		Prefab::RefreshResult MergeInto(Entity root, const json& sourceEntities, MergeKind kind, const std::string& field, std::string& outError, std::vector<std::string>* outWarnings)
 		{
 			Scene& scene = *root.GetScene();
 			if (scene.IsRunning())
@@ -878,6 +918,9 @@ namespace Basalt {
 			if (!PlanMerge(scene, root, merged, in, ids, plan, outError))
 				return Prefab::RefreshResult::Rejected;
 			const bool complete = ApplyPlan(scene, root, plan, outError);
+			if (outWarnings)
+				for (Entity orphan : plan.Orphans)
+					outWarnings->push_back(fmt::format("'{}' moved to '{}': the entity it was under left the prefab", orphan.GetName(), orphan.GetParent() ? orphan.GetParent().GetName() : root.GetName()));
 			// A partial merge keeps the old baseline (with the members it created), so merging again finishes it: what
 			// applied now equals the source, and what did not still equals the baseline and takes the source's value.
 			link.Baseline = complete ? in.Next.ByKey : in.Link.Baseline;
@@ -894,8 +937,13 @@ namespace Basalt {
 		struct Expansion
 		{
 			Prefab::ReadReport& Report;
-			// The files being expanded, outermost first: FileKey and name.
-			std::vector<std::pair<std::string, std::string>> Chain;
+			struct File
+			{
+				std::string Key;
+				std::string Name;
+			};
+			// The files being expanded, outermost first.
+			std::vector<File> Chain;
 			// Each file expands once per read, however often it is nested.
 			std::unordered_map<std::string, json> Files;
 			size_t Entities = 0;
@@ -943,7 +991,7 @@ namespace Basalt {
 			return true;
 		}
 
-		bool ParseRecords(std::string_view text, const std::string& name, json& outEntities, std::string& outError)
+		bool ParseRecords(std::string_view text, const std::string& name, Expansion& expansion, json& outEntities, std::string& outError)
 		{
 			json data = ParseJson(text);
 			if (data.is_discarded() || !data.is_object() || !data.contains("Entities") || !data["Entities"].is_array() || data["Entities"].empty())
@@ -956,7 +1004,8 @@ namespace Basalt {
 				outError = "prefab '" + name + "' has 'Format' " + format->dump() + ", expected \"BasaltPrefab\"";
 				return false;
 			}
-			if (const auto version = data.find("Version"); version != data.end() && (!version->is_number_integer() || version->get<int64_t>() > SceneSerializer::FormatVersion))
+			const auto version = data.find("Version");
+			if (version != data.end() && (!version->is_number_integer() || version->get<int64_t>() > SceneSerializer::FormatVersion))
 			{
 				outError = "prefab '" + name + "' has format version " + version->dump() + ", newer than the supported version " + std::to_string(SceneSerializer::FormatVersion);
 				return false;
@@ -964,35 +1013,39 @@ namespace Basalt {
 			if (!CheckRecords(data["Entities"], name, outError))
 				return false;
 			// Before version 4 a prefab could not nest: a Prefab component in such a file is no link, only left over.
-			if (const auto version = data.find("Version"); version != data.end() && version->get<int64_t>() < NestingVersion)
+			if (version == data.end() || version->get<int64_t>() < Prefab::NestingVersion)
 				for (json& entity : data["Entities"])
-					if (const auto components = entity.find("Components"); components != entity.end())
-						components->erase(LinkComponent);
+					if (const auto components = entity.find("Components"); components != entity.end() && components->erase(LinkComponent) > 0)
+						expansion.Report.Warnings.push_back(fmt::format("prefab '{}': the Prefab component of entity {} is ignored: nesting needs 'Version' {} or later", name, RecordId(entity), Prefab::NestingVersion));
 			outEntities = std::move(data["Entities"]);
 			return true;
 		}
 
-		// The prefab a record's link names, as a path; empty when it names none. Links come from files that may be hand
-		// edited: they name prefabs inside the project, and an unresolved UUID says so.
-		bool NamedPrefab(const json& value, const std::string& context, std::string& outPath, std::string& outError)
+		// The prefab a record's link names. Links come from files that may be hand edited: they name prefabs inside the
+		// project, and an unresolved UUID says so. outPath holds the unresolved key then.
+		bool NamedPrefab(const json& link, const std::string& context, std::string& outPath, std::string& outError)
 		{
+			const auto reference = link.is_object() ? link.find(LinkComponent) : link.end();
+			if (reference == link.end() || reference->is_null())
+			{
+				outError = context + ": a nested instance's Prefab component must be an object naming its prefab in 'Prefab'";
+				return false;
+			}
 			const auto& project = Project::GetActive();
-			if (value.is_string())
-				outPath = Prefab::NormalizePath(value.get<std::string>());
-			else if (std::string error; !project || !project->GetAssets().Decode(value, outPath, error, true))
+			if (reference->is_string())
+				outPath = Prefab::NormalizePath(reference->get<std::string>());
+			else if (std::string error; !project || !project->GetAssets().Decode(*reference, outPath, error, true))
 			{
 				outError = context + ": " + (project ? error : "UUID asset references require an active project");
 				return false;
 			}
-			if (outPath.empty())
-				return true;
 			if (AssetRegistry::IsUnresolvedKey(outPath))
 			{
 				outError = context + ": " + (project ? project->GetAssets().DescribeUnresolved(outPath) : "unresolved asset UUID");
 				return false;
 			}
 			const std::filesystem::path path = FileSystem::PathFromUtf8(outPath);
-			if (path.is_absolute() || path.has_root_path() || *path.begin() == ".." || FileSystem::GetLowercaseExtension(path) != ".bprefab")
+			if (outPath.empty() || path.has_root_path() || *path.begin() == ".." || FileSystem::GetLowercaseExtension(path) != ".bprefab")
 			{
 				outError = context + " must name a .bprefab file inside the project, got '" + outPath + "'";
 				return false;
@@ -1000,8 +1053,60 @@ namespace Basalt {
 			return true;
 		}
 
-		// A nested record's tree, with its overrides, appended to flat.
-		bool ExpandNested(const json& record, const std::string& prefab, const std::string& name, Expansion& expansion, json& flat, std::string& outError)
+		// A nested record holds its ID, parent and link; anything else would look like it had an effect.
+		void ReportIgnoredFields(const json& record, const json& link, const std::string& name, std::vector<std::string>& outWarnings)
+		{
+			std::vector<std::string> ignored;
+			for (const auto& [key, value] : record.items())
+				if (key != "ID" && key != "Parent" && key != "Components")
+					ignored.push_back(key);
+			for (const auto& [key, value] : record["Components"].items())
+				if (key != LinkComponent)
+					ignored.push_back(key);
+			for (const auto& [key, value] : link.items())
+				if (key != LinkComponent && key != OverridesKey)
+					ignored.push_back(LinkComponent + std::string(".") + key);
+			if (!ignored.empty())
+				outWarnings.push_back(fmt::format("prefab '{}': nested entity {} ignores {}: its 'Overrides' hold changes", name, RecordId(record), fmt::join(ignored, ", ")));
+		}
+
+		// Applies a nested record's overrides to its tree (already in the file's IDs) and collects the entities they delete.
+		bool ApplyOverrides(const json& overrides, const std::string& prefab, const std::string& name, json& records, Expansion& expansion, IdSet& outDeleted, std::string& outError)
+		{
+			std::unordered_map<std::string, size_t> indices;
+			for (size_t i = 0; i < records.size(); ++i)
+				indices[KeyOf(RecordId(records[i]))] = i;
+			for (const auto& [key, patch] : overrides.items())
+			{
+				const auto index = indices.find(key);
+				// The nested prefab dropped this entity, and that wins: overrides alone could not rebuild it.
+				if (index == indices.end())
+				{
+					if (!patch.is_null())
+						expansion.Report.Warnings.push_back(fmt::format("prefab '{}': the overrides of entity {} do nothing, '{}' no longer has it (saving the prefab drops them)", name, key, prefab));
+					continue;
+				}
+				if (patch.is_null() && index->second != 0)
+				{
+					outDeleted.insert(ParseKey(key));
+					continue;
+				}
+				if (!patch.is_object())
+				{
+					outError = fmt::format("prefab '{}': the override of entity {} must be an object, or null for an entity other than the root", name, key);
+					return false;
+				}
+				json& target = records[index->second];
+				const json id = target["ID"];
+				ApplyPatch(target, patch);
+				target["ID"] = id;
+			}
+			return true;
+		}
+
+		// Appends a nested record's tree, with its overrides, to flat. An entity of the tree that the file also holds as a
+		// plain record (an edit kept it when the nested prefab dropped it, and it came back) is that record.
+		bool ExpandNested(const json& record, const std::string& prefab, const std::string& name, const IdSet& plain, Expansion& expansion, json& flat, std::string& outError)
 		{
 			const json* source = ReadExpanded(Project::ResolvePath(prefab), prefab, expansion, outError);
 			if (!source)
@@ -1016,6 +1121,7 @@ namespace Basalt {
 			json records = *source;
 			NestRecords(records, RecordId(record), parent, prefab);
 			const json& link = record["Components"][LinkComponent];
+			ReportIgnoredFields(record, link, name, expansion.Report.Warnings);
 			IdSet deleted;
 			if (const auto overrides = link.find(OverridesKey); overrides != link.end())
 			{
@@ -1024,81 +1130,61 @@ namespace Basalt {
 					outError = fmt::format("prefab '{}' entity {}: 'Overrides' must be an object", name, RecordId(record));
 					return false;
 				}
-				std::unordered_map<std::string, size_t> indices;
-				for (size_t i = 0; i < records.size(); ++i)
-					indices[KeyOf(RecordId(records[i]))] = i;
-				for (const auto& [key, patch] : overrides->items())
-				{
-					const auto index = indices.find(key);
-					// The nested prefab dropped this entity, and that wins: overrides alone could not rebuild it.
-					if (index == indices.end())
-					{
-						if (!patch.is_null())
-							expansion.Report.Warnings.push_back(fmt::format("prefab '{}': the overrides of entity {} do nothing, '{}' no longer has it (saving the prefab drops them)", name, key, prefab));
-						continue;
-					}
-					if (patch.is_null() && index->second != 0)
-					{
-						deleted.insert(ParseKey(key));
-						continue;
-					}
-					if (!patch.is_object())
-					{
-						outError = fmt::format("prefab '{}': the override of entity {} must be an object, or null for an entity other than the root", name, key);
-						return false;
-					}
-					json& target = records[index->second];
-					const json id = target["ID"];
-					ApplyPatch(target, patch);
-					target["ID"] = id;
-				}
+				if (!ApplyOverrides(*overrides, prefab, name, records, expansion, deleted, outError))
+					return false;
 			}
 			records[0]["Parent"] = parent;
 			for (json& inner : records)
-				if (!deleted.contains(RecordId(inner)))
+			{
+				if (plain.contains(RecordId(inner)))
+					expansion.Report.Warnings.push_back(fmt::format("prefab '{}': its own record of '{}' replaces the one in '{}' (saving the prefab merges them)", name, NameOf(inner), prefab));
+				else if (!deleted.contains(RecordId(inner)))
 					flat.push_back(std::move(inner));
+			}
 			return true;
 		}
 
-		// Replaces nested records with the trees they stand for.
 		bool ExpandRecords(json& entities, const std::string& name, Expansion& expansion, std::string& outError)
 		{
+			const auto linkOf = [](json& record) {
+				const auto components = record.find("Components");
+				return components != record.end() && components->contains(LinkComponent) ? &(*components)[LinkComponent] : nullptr;
+			};
+			IdSet plain;
+			for (json& record : entities)
+				if (!linkOf(record))
+					plain.insert(RecordId(record));
 			json flat = json::array();
-			bool nested = false;
 			for (size_t i = 0; i < entities.size(); ++i)
 			{
 				json& record = entities[i];
-				std::string prefab;
-				const auto components = record.find("Components");
-				if (components != record.end())
-				{
-					const auto link = components->find(LinkComponent);
-					if (link != components->end() && link->is_object() && link->contains(LinkComponent) && !NamedPrefab((*link)[LinkComponent], fmt::format("prefab '{}' entity #{}", name, i), prefab, outError))
-					{
-						// A deleted prefab's UUID no longer resolves, but its instances must still hear that it changed.
-						if (const auto unresolved = AssetRegistry::ParseUnresolvedKey(prefab))
-							expansion.Report.Files.insert(Prefab::FileKey(Project::ResolvePath(Prefab::NormalizePath(unresolved->second))));
-						return false;
-					}
-					if (prefab.empty())
-						components->erase(LinkComponent);
-				}
-				if (prefab.empty())
+				const json* link = linkOf(record);
+				if (!link)
 				{
 					flat.push_back(std::move(record));
 					continue;
 				}
-				nested = true;
+				std::string prefab;
+				if (!NamedPrefab(*link, fmt::format("prefab '{}' entity #{}", name, i), prefab, outError))
+				{
+					// A deleted prefab's UUID no longer resolves, but its instances must still hear that it changed.
+					if (const auto unresolved = AssetRegistry::ParseUnresolvedKey(prefab))
+					{
+						const std::string hint = Prefab::NormalizePath(unresolved->second);
+						expansion.Report.Files[Prefab::FileKeyOf(hint)] = hint;
+					}
+					return false;
+				}
 				if (expansion.Chain.size() == 1)
 				{
 					expansion.Report.Nested.push_back({ RecordId(record), prefab });
 					if (i == 0)
 						expansion.Report.Base = prefab;
 				}
-				if (!ExpandNested(record, prefab, name, expansion, flat, outError))
+				if (!ExpandNested(record, prefab, name, plain, expansion, flat, outError))
 					return false;
 			}
-			if (nested)
+			if (plain.size() != entities.size())
 			{
 				// An entity added under one the nested prefab dropped stays, at the root.
 				IdSet ids;
@@ -1107,7 +1193,7 @@ namespace Basalt {
 				for (json& record : flat)
 					if (const auto parent = record.find("Parent"); parent != record.end() && IsId(*parent) && *parent != 0 && !ids.contains(parent->get<uint64_t>()))
 					{
-						expansion.Report.Warnings.push_back(fmt::format("prefab '{}': the parent of entity {} is gone, so it moved to the root", name, RecordId(record)));
+						expansion.Report.Warnings.push_back(fmt::format("prefab '{}': the parent of '{}' is gone, so it moved to the root", name, NameOf(record)));
 						*parent = RecordId(flat[0]);
 					}
 				if (!CheckRecords(flat, name, outError))
@@ -1120,9 +1206,9 @@ namespace Basalt {
 		json* ExpandText(std::string_view text, const std::string& key, const std::string& name, Expansion& expansion, std::string& outError)
 		{
 			json entities;
-			if (!ParseRecords(text, name, entities, outError))
+			if (!ParseRecords(text, name, expansion, entities, outError))
 				return nullptr;
-			expansion.Chain.emplace_back(key, name);
+			expansion.Chain.push_back({ key, name });
 			const bool expanded = ExpandRecords(entities, name, expansion, outError);
 			expansion.Chain.pop_back();
 			return expanded ? &expansion.Files.insert_or_assign(key, std::move(entities)).first->second : nullptr;
@@ -1131,16 +1217,16 @@ namespace Basalt {
 		json* ReadExpanded(const std::filesystem::path& path, const std::string& name, Expansion& expansion, std::string& outError)
 		{
 			const std::string key = Prefab::FileKey(path);
-			expansion.Report.Files.insert(key);
+			expansion.Report.Files[key] = name;
 			if (const auto known = expansion.Files.find(key); known != expansion.Files.end())
 				return &known->second;
 			const auto& chain = expansion.Chain;
-			if (std::any_of(chain.begin(), chain.end(), [&](const auto& file) { return file.first == key; }))
+			if (std::any_of(chain.begin(), chain.end(), [&](const Expansion::File& file) { return file.Key == key; }))
 			{
 				std::vector<std::string> names;
 				names.reserve(chain.size());
-				for (const auto& file : chain)
-					names.push_back(file.second);
+				for (const Expansion::File& file : chain)
+					names.push_back(file.Name);
 				outError = fmt::format("prefab cycle: {} -> {}", fmt::join(names, " -> "), name);
 				return nullptr;
 			}
@@ -1159,15 +1245,91 @@ namespace Basalt {
 			return ExpandText(*text, key, name, expansion, outError);
 		}
 
-		// A nested instance inside a tree about to be saved: its entities, by their IDs in its prefab.
+		// How messages name a file: project-relative where it can.
+		std::string DisplayName(const std::filesystem::path& path)
+		{
+			if (const auto& project = Project::GetActive())
+			{
+				const std::filesystem::path relative = path.lexically_relative(project->GetDirectory());
+				if (!relative.empty() && *relative.begin() != "..")
+					return FileSystem::PathToGenericUtf8(relative);
+			}
+			return FileSystem::PathToGenericUtf8(path);
+		}
+
+		// Calls visit on every instance in a tree that is not part of an instance visited before: the outermost, and those
+		// added under their entities, which track themselves. visit may start tracking the instance it gets.
+		void ForEachOutermostInstance(Entity root, const std::function<void(Entity)>& visit)
+		{
+			IdSet owned;
+			std::function<void(Entity)> walk = [&](Entity entity) {
+				if (entity.HasComponent<PrefabComponent>() && !owned.contains(IdOf(entity)))
+				{
+					visit(entity);
+					if (const auto* link = entity.TryGetComponent<PrefabComponent>())
+						owned.merge(MemberIds(*link));
+				}
+				for (Entity child : entity.GetChildren())
+					walk(child);
+			};
+			walk(root);
+		}
+
+		// Makes an instance track its prefab, its entities being those instanceId names by their IDs under nestedRoot.
+		void TrackSource(Entity entity, const json& source, uint64_t nestedRoot, const std::function<uint64_t(uint64_t)>& instanceId)
+		{
+			auto& link = entity.GetComponent<PrefabComponent>();
+			link.Members = json::object();
+			for (const auto& [inner, flat] : NestedIds(source, nestedRoot))
+				link.Members[KeyOf(inner)] = instanceId(flat);
+			link.Baseline = ToRecords(source).ByKey;
+		}
+
+		// The source ID an instance tracks entity by; 0 when it does not.
+		uint64_t SourceIdIn(const PrefabComponent& link, Entity entity)
+		{
+			for (const auto& [key, value] : link.Members.items())
+				if (IsId(value) && value.get<uint64_t>() == IdOf(entity))
+					return ParseKey(key);
+			return 0;
+		}
+
+		// A nested instance inside a tree about to be saved: its entities below the root, by their IDs in its prefab.
 		struct NestedTree
 		{
 			uint64_t Root = 0;
 			IdMap Members;
 		};
 
-		// The outermost nested instances of serialized records, leaving out those in skipped (and what they hold is
-		// looked at on its own). One without tracking is matched to its prefab by name, or reported when that cannot be read.
+		// Which entities a nested root without tracking of its own holds. The instance around it knows exactly; on its own
+		// (a copy, or a tree that stopped being an instance) only names can tell.
+		IdMap FindMembers(Scene& scene, Entity entity, const std::string& prefab, std::vector<std::string>& outWarnings)
+		{
+			json source;
+			std::string error;
+			if (!Prefab::ReadSource(Project::ResolvePath(prefab), source, error))
+			{
+				outWarnings.push_back(fmt::format("'{}' keeps its entities' IDs: {}", entity.GetName(), error));
+				return {};
+			}
+			IdMap members;
+			if (const Entity enclosing = Prefab::EnclosingInstance(entity))
+			{
+				const auto& link = enclosing.GetComponent<PrefabComponent>();
+				for (const auto& [inner, flat] : NestedIds(source, SourceIdIn(link, entity)))
+					if (const auto member = link.Members.find(KeyOf(flat)); member != link.Members.end() && IsId(*member) && EntityOf(scene, member->get<uint64_t>()))
+						members[inner] = member->get<uint64_t>();
+				return members;
+			}
+			members = MatchByName(source, entity);
+			for (const json& record : source)
+				if (!members.contains(RecordId(record)))
+					outWarnings.push_back(fmt::format("'{}' of '{}' has no entity of that name in '{}', so it counts as deleted there", NameOf(record), prefab, entity.GetName()));
+			return members;
+		}
+
+		// The outermost nested instances of serialized records, leaving out those in skipped (and what they hold is looked
+		// at on its own).
 		std::vector<NestedTree> FindNestedTrees(Scene& scene, const json& entities, IdSet skipped, std::vector<std::string>& outWarnings)
 		{
 			std::vector<NestedTree> trees;
@@ -1179,7 +1341,7 @@ namespace Basalt {
 				if (skipped.contains(id) || !link || link->Prefab.empty())
 					continue;
 				NestedTree tree{ id, {} };
-				if (!link->Members.empty())
+				if (Prefab::ListsMembers(*link))
 				{
 					const IdSet members = MemberIds(*link);
 					for (const auto& [key, value] : link->Members.items())
@@ -1187,53 +1349,100 @@ namespace Basalt {
 							tree.Members[ParseKey(key)] = value.get<uint64_t>();
 				}
 				else
-				{
-					json source;
-					std::string error;
-					if (Prefab::ReadSource(Project::ResolvePath(link->Prefab), source, error))
-						tree.Members = MatchByName(source, entity);
-					else
-						outWarnings.push_back(fmt::format("'{}' keeps its entities' IDs: {}", entity.GetName(), error));
-				}
+					tree.Members = FindMembers(scene, entity, link->Prefab, outWarnings);
+				std::erase_if(tree.Members, [&](const auto& member) { return member.second == id; });
 				for (const auto& [key, member] : tree.Members)
-					if (member != id)
-						skipped.insert(member);
+					skipped.insert(member);
 				trees.push_back(std::move(tree));
 			}
 			return trees;
 		}
 
-		void RenumberTree(json& entities, const IdMap& ids)
+		// A nested root unpacked in place cannot be written while it holds nested instances: their entities' IDs derive from
+		// the unpacked root, which the file no longer has. Opening the prefab that holds it renumbers them when saved.
+		bool CheckUnpackedNesting(const json& baseline, const json& records, std::string& outError)
 		{
-			for (json& record : entities)
+			const auto holds = [](const std::string& outerKey, const json& outer, const std::string& key) {
+				json source;
+				std::string error;
+				if (!Prefab::ReadSource(Project::ResolvePath(LinkPath(outer)), source, error))
+					return false;
+				const IdMap ids = NestedIds(source, ParseKey(outerKey));
+				return std::any_of(ids.begin(), ids.end(), [&](const auto& id) { return KeyOf(id.second) == key; });
+			};
+			for (const auto& [key, before] : baseline.items())
 			{
-				record["ID"] = ids.at(RecordId(record));
-				RenumberReferences(record, ids);
+				const auto now = records.find(key);
+				if (LinkPath(before).empty() || now == records.end() || !LinkPath(*now).empty())
+					continue;
+				json source;
+				if (std::string error; !Prefab::ReadSource(Project::ResolvePath(LinkPath(before)), source, error))
+					continue;
+				const bool nests = std::any_of(source.begin() + 1, source.end(), [](const json& record) { return !LinkPath(record).empty(); });
+				bool insideAnother = false;
+				for (const auto& [otherKey, other] : records.items())
+					insideAnother = insideAnother || (!LinkPath(other).empty() && holds(otherKey, other, key));
+				if (nests && !insideAnother)
+				{
+					outError = fmt::format("'{}' was unpacked but holds nested instances: revert that, and unpack it in the prefab holding it (prefab.open)", NameOf(before));
+					return false;
+				}
 			}
+			return true;
+		}
+	}
+
+	namespace {
+		// Takes a root's position and rotation out of overrides, with whatever that leaves empty.
+		void DropPlacement(json& overrides, const std::string& key)
+		{
+			const json::json_pointer transform("/" + key + "/Components/Transform");
+			if (!overrides.contains(transform))
+				return;
+			for (const char* field : PlacementFields)
+				overrides[transform].erase(field);
+			for (json::json_pointer path = transform; !path.empty() && overrides[path].empty(); path = path.parent_pointer())
+				overrides[path.parent_pointer()].erase(path.back());
 		}
 	}
 
 	std::string Prefab::FileKey(const std::filesystem::path& absolutePath)
 	{
-		return FileSystem::PathToGenericUtf8(absolutePath.lexically_normal());
+		std::string key = FileSystem::PathToGenericUtf8(absolutePath.lexically_normal());
+		// These platforms' file systems usually ignore case, so one file can go by several spellings. A file that only
+		// differs from another by case on a case-sensitive volume is not worth a wrong answer the other way.
+#if defined(_WIN32) || defined(__APPLE__)
+		std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : static_cast<char>(c); });
+#endif
+		return key;
+	}
+
+	std::string Prefab::FileKeyOf(const std::string& projectPath)
+	{
+		return FileKey(Project::ResolvePath(NormalizePath(projectPath)));
+	}
+
+	bool Prefab::ListsMembers(const PrefabComponent& link)
+	{
+		return !link.Members.empty();
 	}
 
 	bool Prefab::ReadFile(const std::filesystem::path& path, json& outEntities, std::string& outError, ReadReport* outReport)
 	{
 		ReadReport report;
 		Expansion expansion{ outReport ? *outReport : report };
-		json* entities = ReadExpanded(path, FileSystem::PathToGenericUtf8(path), expansion, outError);
+		json* entities = ReadExpanded(path, DisplayName(path), expansion, outError);
 		if (!entities)
 			return false;
 		outEntities = std::move(*entities);
 		return true;
 	}
 
-	bool Prefab::ReadText(std::string_view text, const std::string& name, json& outEntities, std::string& outError, ReadReport* outReport)
+	bool Prefab::ReadText(std::string_view text, const std::filesystem::path& path, json& outEntities, std::string& outError, ReadReport* outReport)
 	{
 		ReadReport report;
 		Expansion expansion{ outReport ? *outReport : report };
-		json* entities = ExpandText(text, name, name, expansion, outError);
+		json* entities = ExpandText(text, FileKey(path), DisplayName(path), expansion, outError);
 		if (!entities)
 			return false;
 		outEntities = std::move(*entities);
@@ -1242,7 +1451,7 @@ namespace Basalt {
 
 	bool Prefab::ReadSource(const std::filesystem::path& path, json& outEntities, std::string& outError, ReadReport* outReport)
 	{
-		return ReadFile(path, outEntities, outError, outReport) && Normalize(outEntities, FileSystem::PathToGenericUtf8(path), outError);
+		return ReadFile(path, outEntities, outError, outReport) && Normalize(outEntities, DisplayName(path), outError);
 	}
 
 	bool Prefab::Normalize(json& entities, const std::string& name, std::string& outError)
@@ -1263,66 +1472,65 @@ namespace Basalt {
 		for (const json& entity : entities)
 			normalized.push_back(SerializeMember(EntityOf(scratch, RecordId(entity)), root, identity, {}));
 		if (!base.empty())
-			normalized[0]["Components"][LinkComponent] = json{ { LinkComponent, base } };
+			normalized[0]["Components"][LinkComponent] = LinkMarker(base);
 		entities = std::move(normalized);
 		return true;
 	}
 
-	bool Prefab::ToFileEntities(json entities, const std::filesystem::path& path, bool variant, json& outEntities, std::string& outError)
+	bool Prefab::ToFileEntities(json entities, const std::filesystem::path& path, PrefabFileRoot root, json& outEntities, std::vector<std::string>& outWarnings, std::string& outError)
 	{
 		// Tracking belongs to scenes: a record's link names its prefab and nothing else.
 		for (json& record : entities)
 			if (auto link = record["Components"].find(LinkComponent); link != record["Components"].end())
-				*link = json{ { LinkComponent, link->value(LinkComponent, std::string()) } };
-		if (!variant)
+				*link = LinkMarker(link->value(LinkComponent, std::string()));
+		if (root == PrefabFileRoot::Plain)
 			entities[0]["Components"].erase(LinkComponent);
 
+		// The nested instances, by their index in entities, and what they hold below their roots. A nested instance's own
+		// nested instances are part of what its overrides describe, so they are not read again.
 		struct Instance
 		{
-			size_t Index = 0;
 			std::string Prefab;
 			// Keyed by the entities' IDs in this file.
 			json Expected = json::object();
 		};
-		std::vector<Instance> instances;
+		std::unordered_map<size_t, Instance> instances;
+		std::unordered_set<std::string> held;
 		const std::string target = FileKey(path);
 		for (size_t i = 0; i < entities.size(); ++i)
 		{
 			const std::string prefab = LinkPath(entities[i]);
-			if (prefab.empty())
+			const std::string key = KeyOf(RecordId(entities[i]));
+			if (prefab.empty() || held.contains(key))
 				continue;
 			json inner;
 			ReadReport report;
 			if (!ReadSource(Project::ResolvePath(prefab), inner, outError, &report))
+			{
+				outError = fmt::format("nested instance '{}': {}", NameOf(entities[i]), outError);
 				return false;
+			}
 			if (report.Files.contains(target))
 			{
-				outError = fmt::format("'{}' is nested in '{}' and holds that prefab itself", prefab, FileSystem::PathToGenericUtf8(path));
+				outError = fmt::format("'{}' is nested in '{}' and holds that prefab itself", prefab, DisplayName(path));
 				return false;
 			}
+			outWarnings.insert(outWarnings.end(), report.Warnings.begin(), report.Warnings.end());
 			NestRecords(inner, RecordId(entities[i]), entities[i]["Parent"].get<uint64_t>(), prefab);
-			Instance instance{ i, prefab };
+			Instance instance{ prefab };
 			for (json& record : inner)
 			{
-				const std::string key = KeyOf(RecordId(record));
-				instance.Expected[key] = std::move(record);
+				const std::string id = KeyOf(RecordId(record));
+				if (id != key)
+					held.insert(id);
+				instance.Expected[id] = std::move(record);
 			}
-			instances.push_back(std::move(instance));
+			instances.emplace(i, std::move(instance));
 		}
-		// What the instances hold below their roots: that includes the roots of instances nested deeper, which are part of
-		// what the outer one's overrides describe.
-		std::unordered_set<std::string> held;
-		for (const Instance& instance : instances)
-			for (const auto& [key, record] : instance.Expected.items())
-				if (key != KeyOf(RecordId(entities[instance.Index])))
-					held.insert(key);
 
 		json current = json::object();
 		for (const json& record : entities)
 			current[KeyOf(RecordId(record))] = record;
-		std::unordered_map<size_t, const Instance*> byIndex;
-		for (const Instance& instance : instances)
-			byIndex[instance.Index] = &instance;
 
 		outEntities = json::array();
 		for (size_t i = 0; i < entities.size(); ++i)
@@ -1331,25 +1539,27 @@ namespace Basalt {
 			const std::string key = KeyOf(RecordId(record));
 			if (held.contains(key))
 				continue;
-			const auto found = byIndex.find(i);
-			if (found == byIndex.end())
+			const auto instance = instances.find(i);
+			if (instance == instances.end())
 			{
 				outEntities.push_back(record);
 				continue;
 			}
-			const Instance& instance = *found->second;
 			json mine = json::object();
-			for (const auto& [id, expected] : instance.Expected.items())
+			for (const auto& [id, expected] : instance->second.Expected.items())
 				if (const auto it = current.find(id); it != current.end())
 					mine[id] = *it;
-			json overrides = DiffObjects(instance.Expected, mine);
-			// The root's place in this prefab is its own, as in a scene: moving the nested prefab's root never moves it.
-			if (i != 0)
-				if (const auto transform = record["Components"].find("Transform"); transform != record["Components"].end())
-					for (const char* field : PlacementFields)
-						if (const auto value = transform->find(field); value != transform->end())
-							overrides[key]["Components"]["Transform"][field] = *value;
-			json link = { { LinkComponent, instance.Prefab } };
+			json overrides = DiffObjects(instance->second.Expected, mine);
+			// A nested root's place in this prefab is its own, as in a scene: moving the nested prefab's root never moves it.
+			// A variant's root has no such place, so it follows its base's.
+			const auto transform = record["Components"].find("Transform");
+			if (i != 0 && transform != record["Components"].end())
+				for (const char* field : PlacementFields)
+					if (const auto value = transform->find(field); value != transform->end())
+						overrides[key]["Components"]["Transform"][field] = *value;
+			if (i == 0)
+				DropPlacement(overrides, key);
+			json link = LinkMarker(instance->second.Prefab);
 			if (!overrides.empty())
 				link[OverridesKey] = std::move(overrides);
 			outEntities.push_back({ { "ID", record["ID"] }, { "Parent", record["Parent"] }, { "Components", { { LinkComponent, std::move(link) } } } });
@@ -1357,21 +1567,61 @@ namespace Basalt {
 		return true;
 	}
 
-	bool Prefab::SaveTree(Entity root, const std::filesystem::path& path, bool variant, std::vector<std::string>& outWarnings, std::string& outError)
+	bool Prefab::MergeOutdatedNested(Entity root, const std::string& prefabPath, PrefabFileRoot rootKind, bool& outChanged, std::string& outError)
+	{
+		if (root.GetScene()->IsRunning())
+			return true;
+		bool failed = false;
+		ForEachOutermostInstance(root, [&](Entity instance) {
+			const auto& link = instance.GetComponent<PrefabComponent>();
+			const bool savedFile = instance == root && NormalizePath(link.Prefab) == NormalizePath(prefabPath);
+			if (failed || !IsTracked(link) || (instance == root && rootKind == PrefabFileRoot::Plain && !savedFile))
+				return;
+			json source;
+			ReadReport report;
+			std::string error;
+			// A plain prefab written over itself replaces its source; one that nests must first hold what it nests as it is.
+			if (!ReadSource(Project::ResolvePath(link.Prefab), source, error, &report))
+			{
+				failed = true;
+				outError = fmt::format("instance '{}' of {}: {}", instance.GetName(), link.Prefab, error);
+				return;
+			}
+			if ((savedFile && report.Nested.empty()) || !IsOutdated(link, source))
+				return;
+			const RefreshResult result = Refresh(instance, source, RefreshMode::Merge, error);
+			outChanged = outChanged || ChangedScene(result);
+			if (Failed(result))
+			{
+				failed = true;
+				outError = fmt::format("instance '{}' could not take its prefab's changes, so saving would freeze the old values: {}", instance.GetName(), error);
+			}
+		});
+		return !failed;
+	}
+
+	bool Prefab::SaveTree(Entity root, const std::filesystem::path& path, PrefabFileRoot rootKind, std::vector<std::string>& outWarnings, std::string& outError)
 	{
 		json entities = SceneSerializer::SerializeEntityTree(root);
 		IdMap fileIds;
 		for (const json& record : entities)
 			fileIds[RecordId(record)] = RecordId(record);
 		IdSet skipped;
-		if (!variant)
+		if (rootKind == PrefabFileRoot::Plain)
 			skipped.insert(IdOf(root));
 		for (const NestedTree& tree : FindNestedTrees(*root.GetScene(), entities, skipped, outWarnings))
 			for (const auto& [source, entity] : tree.Members)
-				if (entity != tree.Root)
-					fileIds[entity] = NestedId(tree.Root, source);
+				fileIds[entity] = NestedId(tree.Root, source);
 		RenumberTree(entities, fileIds);
-		return SceneSerializer::SavePrefabEntities(std::move(entities), path, outError, variant);
+		if (const auto* link = root.TryGetComponent<PrefabComponent>(); rootKind == PrefabFileRoot::Variant && link && IsTracked(*link))
+		{
+			const auto baseline = link->Baseline.find(RootKey(*link, root));
+			const json& now = entities[0]["Components"]["Transform"];
+			const auto moved = [&](const char* field) { return baseline != link->Baseline.end() && now.contains(field) && !Equivalent((*baseline)["Components"]["Transform"].value(field, json()), now[field], field == std::string("Rotation")); };
+			if (std::any_of(std::begin(PlacementFields), std::end(PlacementFields), moved))
+				outWarnings.push_back(fmt::format("'{}' keeps its base's position and rotation: a variant's root has no place of its own, so moving it is not saved", root.GetName()));
+		}
+		return SceneSerializer::SavePrefabEntities(std::move(entities), path, outError, rootKind, &outWarnings);
 	}
 
 	bool Prefab::CreateVariant(const std::string& basePath, const std::filesystem::path& path, std::string& outError)
@@ -1383,58 +1633,51 @@ namespace Basalt {
 		while (!root.IsValid())
 			root = UUID();
 		NestRecords(entities, static_cast<uint64_t>(root), 0, NormalizePath(basePath));
-		return SceneSerializer::SavePrefabEntities(std::move(entities), path, outError, true);
+		return SceneSerializer::SavePrefabEntities(std::move(entities), path, outError, PrefabFileRoot::Variant);
 	}
 
 	void Prefab::TrackNestedInstances(Scene& scene, std::vector<std::string>& outWarnings)
 	{
-		std::function<void(Entity)> visit = [&](Entity entity) {
-			if (!entity.HasComponent<PrefabComponent>())
-			{
-				for (Entity child : entity.GetChildren())
-					visit(child);
-				return;
-			}
-			auto& link = entity.GetComponent<PrefabComponent>();
-			json source;
-			if (std::string error; !ReadSource(Project::ResolvePath(link.Prefab), source, error))
-			{
-				outWarnings.push_back(fmt::format("'{}' is not tracked: {}", entity.GetName(), error));
-				return;
-			}
-			const uint64_t sourceRoot = RecordId(source[0]);
-			for (const json& record : source)
-				link.Members[KeyOf(RecordId(record))] = RecordId(record) == sourceRoot ? IdOf(entity) : NestedId(IdOf(entity), RecordId(record));
-			link.Baseline = ToRecords(source).ByKey;
-		};
 		for (Entity root : scene.GetRootEntities())
-			visit(root);
+			ForEachOutermostInstance(root, [&](Entity entity) {
+				json source;
+				if (std::string error; ReadSource(Project::ResolvePath(entity.GetComponent<PrefabComponent>().Prefab), source, error))
+					TrackSource(entity, source, IdOf(entity), [](uint64_t id) { return id; });
+				else
+					outWarnings.push_back(fmt::format("'{}' is not tracked, so its overrides are not listed: {}", entity.GetName(), error));
+			});
 	}
 
-	void Prefab::AdoptNestedInstances(Entity root, std::vector<std::string>& outWarnings)
-	{
-		std::function<void(Entity)> visit = [&](Entity entity) {
-			const auto* link = entity.TryGetComponent<PrefabComponent>();
-			if (!link)
-			{
-				for (Entity child : entity.GetChildren())
-					visit(child);
-				return;
-			}
-			if (!link->Members.empty())
-				return;
-			json source;
-			std::string error;
-			if (!ReadSource(Project::ResolvePath(link->Prefab), source, error) || Failed(Refresh(entity, source, RefreshMode::Merge, error)))
-				outWarnings.push_back(fmt::format("'{}' stays untracked: {}", entity.GetName(), error));
-		};
-		for (Entity child : root.GetChildren())
-			visit(child);
-	}
-
-	void Prefab::AssignSourceIds(Entity root, const std::string& prefabPath, json& entities, bool& inOutVariant, std::vector<std::string>& outWarnings)
+	void Prefab::AdoptNestedInstances(Entity root, const PrefabComponent& formerLink, std::vector<std::string>& outWarnings)
 	{
 		Scene& scene = *root.GetScene();
+		IdSet taken = MemberIds(formerLink);
+		for (Entity child : root.GetChildren())
+			ForEachOutermostInstance(child, [&](Entity entity) {
+				const auto& link = entity.GetComponent<PrefabComponent>();
+				const uint64_t nestedRoot = SourceIdIn(formerLink, entity);
+				if (ListsMembers(link) || !nestedRoot)
+					return;
+				json source;
+				std::string error;
+				if (!ReadSource(Project::ResolvePath(link.Prefab), source, error))
+				{
+					outWarnings.push_back(fmt::format("'{}' stays untracked: {}", entity.GetName(), error));
+					BS_CORE_WARN("Prefab: {}", outWarnings.back());
+					return;
+				}
+				// The former link knows the entities exactly, renamed ones included.
+				TrackSource(entity, source, nestedRoot, [&](uint64_t flat) {
+					const auto member = formerLink.Members.find(KeyOf(flat));
+					return member != formerLink.Members.end() && IsId(*member) ? member->get<uint64_t>() : ClaimNewId(scene, taken);
+				});
+			});
+	}
+
+	std::optional<PrefabFileRoot> Prefab::AssignSourceIds(Entity root, const std::string& prefabPath, json& entities, PrefabFileRoot requested, std::vector<std::string>& outWarnings, std::string& outError)
+	{
+		Scene& scene = *root.GetScene();
+		PrefabFileRoot rootKind = requested;
 		IdMap sourceOf;
 		IdSet taken;
 		// An instance of this very file keeps its members' source IDs.
@@ -1454,31 +1697,36 @@ namespace Basalt {
 		std::error_code exists;
 		json existing;
 		bool readExisting = false;
-		if (std::filesystem::exists(absolute, exists))
+		if (std::filesystem::exists(absolute, exists) || exists)
 		{
 			std::string error;
 			readExisting = ReadFile(absolute, existing, error);
+			// The file may be a variant, which this could not tell, and rewriting it would turn it into a plain copy.
+			if (!readExisting && isInstance)
+			{
+				outError = fmt::format("{} cannot be read, and saving this instance over it could lose what it holds: {}", prefabPath, error);
+				return std::nullopt;
+			}
 			if (!readExisting)
 				outWarnings.push_back("the existing prefab's entity IDs could not be kept (" + error + "); its instances will need to be instantiated again");
 		}
 		// Saving an instance of a variant writes the variant.
 		if (isInstance && readExisting && !LinkPath(existing[0]).empty())
 		{
-			inOutVariant = true;
+			rootKind = PrefabFileRoot::Variant;
 			entities[0]["Components"][LinkComponent] = existing[0]["Components"][LinkComponent];
 		}
 		// Nested instances take the IDs their root derives, whatever matches below.
 		IdSet skipped;
 		for (const auto& [entity, source] : sourceOf)
 			skipped.insert(entity);
-		if (!inOutVariant)
+		if (rootKind == PrefabFileRoot::Plain)
 			skipped.insert(IdOf(root));
 		const std::vector<NestedTree> trees = FindNestedTrees(scene, entities, skipped, outWarnings);
 		IdSet derived;
 		for (const NestedTree& tree : trees)
 			for (const auto& [source, entity] : tree.Members)
-				if (entity != tree.Root)
-					derived.insert(entity);
+				derived.insert(entity);
 		// The rest match the existing file by name (untracked instances and unrelated trees entirely).
 		if (readExisting)
 			for (const auto& [source, entity] : MatchByName(existing, root))
@@ -1492,15 +1740,23 @@ namespace Basalt {
 				sourceOf[RecordId(record)] = ClaimNewId(scene, taken);
 		for (const NestedTree& tree : trees)
 			for (const auto& [source, entity] : tree.Members)
-				if (entity != tree.Root)
-					sourceOf[entity] = NestedId(sourceOf.at(tree.Root), source);
+				sourceOf[entity] = NestedId(sourceOf.at(tree.Root), source);
 		RenumberTree(entities, sourceOf);
+		if (isInstance)
+		{
+			json records = json::object();
+			for (const json& record : entities)
+				records[KeyOf(RecordId(record))] = record;
+			if (!CheckUnpackedNesting(link->Baseline, records, outError))
+				return std::nullopt;
+		}
+		return rootKind;
 	}
 
 	Entity Prefab::EnclosingInstance(Entity entity)
 	{
 		for (Entity ancestor = entity.GetParent(); ancestor; ancestor = ancestor.GetParent())
-			if (const auto* link = ancestor.TryGetComponent<PrefabComponent>(); link && !link->Members.empty())
+			if (const auto* link = ancestor.TryGetComponent<PrefabComponent>(); link && ListsMembers(*link))
 				if (const IdSet members = MemberIds(*link); members.contains(IdOf(entity)) && IsOwnMember(ancestor, entity, members))
 					return ancestor;
 		return {};
@@ -1640,14 +1896,14 @@ namespace Basalt {
 		return IsTracked(link) && !Equivalent(link.Baseline, ToRecords(sourceEntities).ByKey);
 	}
 
-	Prefab::RefreshResult Prefab::Refresh(Entity root, const json& sourceEntities, RefreshMode mode, std::string& outError)
+	Prefab::RefreshResult Prefab::Refresh(Entity root, const json& sourceEntities, RefreshMode mode, std::string& outError, std::vector<std::string>* outWarnings)
 	{
-		return MergeInto(root, sourceEntities, mode == RefreshMode::RevertAll ? MergeKind::RevertAll : MergeKind::Merge, {}, outError);
+		return MergeInto(root, sourceEntities, mode == RefreshMode::RevertAll ? MergeKind::RevertAll : MergeKind::Merge, {}, outError, outWarnings);
 	}
 
-	Prefab::RefreshResult Prefab::RevertOverride(Entity root, const json& sourceEntities, const std::string& path, std::string& outError)
+	Prefab::RefreshResult Prefab::RevertOverride(Entity root, const json& sourceEntities, const std::string& path, std::string& outError, std::vector<std::string>* outWarnings)
 	{
-		return MergeInto(root, sourceEntities, MergeKind::RevertField, path, outError);
+		return MergeInto(root, sourceEntities, MergeKind::RevertField, path, outError, outWarnings);
 	}
 
 	bool Prefab::Apply(Entity root, const std::filesystem::path& path, std::vector<std::string>& outWarnings, std::string& outError)
@@ -1710,12 +1966,14 @@ namespace Basalt {
 		Scene scratch("Apply prefab overrides");
 		if (!SceneSerializer::DeserializeScene(scratch, SceneSerializer::SceneDocument(InOrder(merged, { &in.Next.Order, &in.Current.Order })), outError))
 			return false;
+		if (!CheckUnpackedNesting(in.Link.Baseline, merged, outError))
+			return false;
 		json entities = SceneSerializer::SerializeEntityTree(EntityOf(scratch, ParseKey(in.RootKey)));
 		// A variant stays one: instances keep their own link where the file has its base.
 		const std::string base = LinkPath(source[0]);
 		if (!base.empty())
-			entities[0]["Components"][LinkComponent] = json{ { LinkComponent, base } };
-		return SceneSerializer::SavePrefabEntities(std::move(entities), path, outError, !base.empty());
+			entities[0]["Components"][LinkComponent] = LinkMarker(base);
+		return SceneSerializer::SavePrefabEntities(std::move(entities), path, outError, base.empty() ? PrefabFileRoot::Plain : PrefabFileRoot::Variant, &outWarnings);
 	}
 
 }

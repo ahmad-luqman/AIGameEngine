@@ -871,9 +871,15 @@ namespace Basalt {
 				Scene& activeScene = RequireScene(context);
 				Entity parentEntity = parent ? parent->ResolveOrThrow() : Entity{};
 				std::string error;
-				Entity root = SceneSerializer::InstantiatePrefab(activeScene, Project::ResolvePath(prefab), prefab, parentEntity, error);
+				std::vector<std::string> warnings;
+				Entity root = SceneSerializer::InstantiatePrefab(activeScene, Project::ResolvePath(prefab), prefab, parentEntity, error, &warnings);
 				if (!root)
 					throw std::runtime_error(error);
+				// Spawning can repeat every frame: once per prefab says it.
+				static std::unordered_set<std::string> s_ReportedPrefabs;
+				if (!warnings.empty() && s_ReportedPrefabs.insert(prefab).second)
+					for (const std::string& warning : warnings)
+						BS_CORE_WARN("Scene.Instantiate: {}", warning);
 				if (position)
 					root.GetTransform().Translation = *position;
 				if (context.Host)

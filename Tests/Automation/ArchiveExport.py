@@ -46,12 +46,15 @@ def main():
         # Saving the scenes (and the project) stores their references as UUID/path objects, with .meta files.
         scenes = sorted(str(path.relative_to(project).as_posix()) for path in (project / "Assets" / "Scenes").glob("*.bscene"))
         batch = [step for scene in scenes for step in ({"command": "scene.open", "params": {"path": scene}}, {"command": "scene.save"})]
+        # The same for prefabs that nest or inherit, so the archive resolves those links through its index.
+        for prefab in ("LampPair", "LampVariant"):
+            batch += [{"command": "prefab.open", "params": {"path": f"Assets/Prefabs/{prefab}.bprefab"}}, {"command": "prefab.save"}, {"command": "prefab.close"}]
         batch.append({"command": "project.set", "params": {"startScene": "Assets/Scenes/FeatureTest.bscene"}})
         (root / "Resave.batch.json").write_text(json.dumps(batch))
         resaved = subprocess.run([str(cli), "--project", str(project), "batch", str(root / "Resave.batch.json")], capture_output=True, text=True, timeout=300, env=env)
         if resaved.returncode != 0:
             fail(f"saving the scenes again failed: {resaved.stdout}{resaved.stderr}")
-        if '"UUID"' not in (project / "Assets" / "Scenes" / "FeatureTest.bscene").read_text() or '"UUID"' not in (project / "Project.bproject").read_text():
+        if '"UUID"' not in (project / "Assets" / "Prefabs" / "LampPair.bprefab").read_text() or '"UUID"' not in (project / "Assets" / "Scenes" / "FeatureTest.bscene").read_text() or '"UUID"' not in (project / "Project.bproject").read_text():
             fail("the saved scene or project holds no UUID references")
 
         logs = {}

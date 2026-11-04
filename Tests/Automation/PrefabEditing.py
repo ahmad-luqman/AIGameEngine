@@ -72,7 +72,7 @@ def check_prefabs(call, require, output=None):
     call("assert.entity_exists", {"entity": "Discarded", "count": 0})
 
 
-def check_nesting(call, require):
+def check_nesting(call, require, editor=False):
     """An inner prefab's edit reaches the instances of the prefabs nesting and inheriting it, across a save and reload."""
     call("scene.new", {"empty": True})
     inner, outer, variant = (f"Assets/Prefabs/{name}.bprefab" for name in ("Inner", "Outer", "InnerVariant"))
@@ -94,6 +94,18 @@ def check_nesting(call, require):
     for entity in (nested, inheriting):
         call("assert.component", {"entity": entity, "component": "PointLight", "fields": {"Radius": 11}})
     require(not call("prefab.overrides", {"entity": nesting})["overrides"], "An inner edit read as an outer override")
+    if editor:
+        # An inner edit reaches the waiting scene through the outer prefab as one undo step.
+        call("prefab.open", {"path": inner})
+        call("component.set", {"entity": "Inner", "component": "PointLight", "data": {"Radius": 30}})
+        call("prefab.save")
+        call("prefab.close")
+        call("assert.component", {"entity": nested, "component": "PointLight", "fields": {"Radius": 30}})
+        require(call("editor.history")["undo"] == "Merge Prefab Changes", "Merging through a nested prefab is not an undo step")
+        call("editor.undo")
+        call("assert.component", {"entity": nested, "component": "PointLight", "fields": {"Radius": 11}})
+        call("editor.redo")
+        call("assert.component", {"entity": nested, "component": "PointLight", "fields": {"Radius": 30}})
     call("scene.save", {"path": "Assets/Scenes/PrefabNesting.bscene"})
     # The prefab changes behind the scene's back, as a pull would: opening merges it through the outer prefab.
     call("scene.new", {"empty": True})
@@ -105,6 +117,12 @@ def check_nesting(call, require):
     require(opened.get("prefabInstances", 0) >= 3, f"Opening did not merge the outdated instances: {opened}")
     call("assert.component", {"entity": nested, "component": "PointLight", "fields": {"Radius": 12}})
     require(call("prefab.overrides", {"entity": nested})["enclosing"] == nesting, "The nested root lost its instance")
+    if editor:
+        # Undoing an unpack brings back the link and the marker inside it.
+        call("prefab.unpack", {"entity": nesting})
+        require("enclosing" not in call("prefab.overrides", {"entity": nested}), "The nested root outlived the unpacked instance")
+        call("editor.undo")
+        require(call("prefab.overrides", {"entity": nested})["enclosing"] == nesting, "Undoing an unpack lost the nesting")
 
 
 def main():

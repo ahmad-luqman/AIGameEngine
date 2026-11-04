@@ -353,7 +353,7 @@ GPU copies of the assets it draws.
   are previewed on the CPU (an HDR is tonemapped with the ACES fit). Previews are cached in `<project>/Cache/Thumbnails`
   (outside `Assets/`, so never exported; new projects ignore `Cache/` in git) and remade when the size or modification
   time changes of the source file or of a file its preview reads: a glTF's external buffers and images, a material
-  file's textures (and their models' files), a prefab's models and materials (and theirs). Only then are the model,
+  file's textures (and their models' files), a prefab's models and materials (and theirs), through the prefabs it nests and their overrides. Only then are the model,
   prefab or material file and those files read into `AssetManager` again (the open scene then shows the new version
   too), as with `editor.thumbnail` `refresh`; a preview the cache still matches reuses what `AssetManager` holds. A file
   that disappears and comes back is previewed again. Shown previews check their files every 2 seconds, and at once

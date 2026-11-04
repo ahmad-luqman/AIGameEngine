@@ -19,11 +19,6 @@ using namespace BasaltTest;
 using json = nlohmann::json;
 
 namespace {
-	uint64_t IdOf(Entity entity)
-	{
-		return static_cast<uint64_t>(entity.GetUUID());
-	}
-
 	// An authoring tree Source > Child saved as Assets/Prefabs/Test.bprefab. prefab.create links the tree as an instance
 	// of its prefab, so SaveSource writes it again with the same IDs, which merges it into the scene's other instances
 	// like any prefab write (and the authoring tree counts among the instances when others change the file).
@@ -562,8 +557,10 @@ TEST_SUITE("PrefabEditing")
 		file["Entities"][0]["Name"] = "Renamed";
 		f.Directory.WriteFile(f.Path, file.dump());
 		const json result = f.Run("prefab.apply", { { "entity", IdOf(first) } });
-		REQUIRE(result["warnings"].size() == 1);
+		REQUIRE(result["warnings"].size() == 2);
 		CHECK(Contains(result["warnings"][0].get<std::string>(), "outside the prefab"));
+		// The other instance's addition under the deleted Child had to move.
+		CHECK(Contains(result["warnings"][1].get<std::string>(), "moved to"));
 		const json source = f.ReadSource();
 		REQUIRE(source.size() == 1);
 		CHECK(source[0]["Name"] == "Renamed");
@@ -1169,7 +1166,7 @@ TEST_SUITE("PrefabEditing")
 		f.Run("prefab.create", { { "entity", IdOf(nested) }, { "path", "Assets/Prefabs/Nested.bprefab" } });
 		REQUIRE(nested.HasComponent<PrefabComponent>());
 		scene->SetParent(nested, instance, false);
-		// A local addition of the nested instance, which the nested instance never lists as a member.
+		// A local addition of the inner instance, which it never lists as a member.
 		Entity local = scene->CreateEntity("Local");
 		local.AddComponent<AudioListenerComponent>();
 		scene->SetParent(local, nested, false);

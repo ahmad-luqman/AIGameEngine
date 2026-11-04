@@ -358,6 +358,8 @@ namespace Basalt {
 				m_Context.SetStatus("Hot reloaded, but a script raised an error: see Console", true);
 			else if (!report.PrefabErrors.empty())
 				m_Context.SetStatus(fmt::format("{} prefab instance(s) could not merge the changed prefab: see Console", report.PrefabErrors.size()), true);
+			else if (!report.PrefabWarnings.empty())
+				m_Context.SetStatus(fmt::format("The changed prefab merged with {} warning(s): see Console", report.PrefabWarnings.size()), true);
 			else if (openPrefabChanged)
 				m_Context.SetStatus("The open prefab changed on disk: saving needs File > Overwrite Prefab File", true);
 			else if (!report.Scripts.Reloaded.empty())
@@ -1144,7 +1146,7 @@ namespace Basalt {
 	{
 		const std::string extension = FileSystem::GetLowercaseExtension(FileSystem::PathFromUtf8(path));
 		if (extension == ".bprefab")
-			m_Context.Execute("prefab.open", { { "path", path } });
+			ExecuteAndWarn("prefab.open", { { "path", path } });
 		else if (extension == ".bscene")
 		{
 			Stop();
@@ -2458,15 +2460,21 @@ namespace Basalt {
 		ImGui::BeginDisabled(m_Session.IsPlaying());
 		ImGui::BeginDisabled(m_Session.IsEditingPrefab());
 		if (ImGui::Button("Open Prefab"))
-			m_Context.Execute("prefab.open", { { "path", path } });
+			ExecuteAndWarn("prefab.open", { { "path", path } });
 		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
 			ImGui::SetTooltip("Edit the prefab in its own scene; saving merges it into this scene's instances and keeps their overrides");
+		ImGui::EndDisabled();
 		if (enclosing)
 		{
-			ImGui::EndDisabled();
+			ImGui::SameLine();
+			if (ImGui::Button("Unpack"))
+				ExecuteAndWarn("prefab.unpack", { { "entity", id } });
+			if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+				ImGui::SetTooltip("Stop this being an instance: an override of the instance holding it, which that instance can apply or revert");
 			ImGui::EndDisabled();
 			return;
 		}
+		ImGui::BeginDisabled(m_Session.IsEditingPrefab());
 		ImGui::SameLine();
 		if (ImGui::Button("Apply All"))
 			ExecuteAndWarn("prefab.apply", { { "entity", id } });
@@ -2480,17 +2488,17 @@ namespace Basalt {
 		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
 			ImGui::SetTooltip("Save this instance's overrides as a new prefab that inherits the rest from this one, and make this an instance of it");
 		ImGui::EndDisabled();
-		// Two rows, so the actions fit the default inspector width.
+		// Three rows, so the actions fit the default inspector width.
 		if (ImGui::Button("Revert All"))
-			m_Context.Execute("prefab.revert", { { "entity", id } });
+			ExecuteAndWarn("prefab.revert", { { "entity", id } });
 		ImGui::SameLine();
 		if (ImGui::Button("Refresh"))
-			m_Context.Execute("prefab.refresh", { { "entity", id } });
+			ExecuteAndWarn("prefab.refresh", { { "entity", id } });
 		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
 			ImGui::SetTooltip("Merge the prefab file into this instance now (prefab saves and opening the scene do this automatically)");
 		ImGui::SameLine();
 		if (ImGui::Button("Unpack"))
-			m_Context.Execute("prefab.unpack", { { "entity", id } });
+			ExecuteAndWarn("prefab.unpack", { { "entity", id } });
 		ImGui::EndDisabled();
 		// A button may have unlinked or replaced the instance.
 		if (!entity.IsValid() || !entity.HasComponent<PrefabComponent>())
@@ -2498,7 +2506,7 @@ namespace Basalt {
 		const auto& link = entity.GetComponent<PrefabComponent>();
 		if (link.Members.empty())
 		{
-			ImGui::TextDisabled("Overrides are not tracked yet (saved before tracking existed); Refresh starts tracking.");
+			ImGui::TextDisabled("Overrides are not tracked yet (saved before tracking existed, or copied out of an instance); Refresh starts tracking.");
 			return;
 		}
 		if (link.Baseline.empty())
@@ -2549,7 +2557,7 @@ namespace Basalt {
 		}
 		// After the loop, which iterates the overrides the revert replaces.
 		if (!reverted.empty())
-			m_Context.Execute("prefab.revert", { { "entity", id }, { "field", reverted } });
+			ExecuteAndWarn("prefab.revert", { { "entity", id }, { "field", reverted } });
 	}
 
 	void EditorLayer::DrawMaterialPreview(Entity entity)
@@ -2989,7 +2997,7 @@ namespace Basalt {
 						ok = ExecuteAndWarn("scene.open", { { "path", m_PromptPath } }).has_value();
 						break;
 					case PromptKind::OpenPrefab:
-						ok = m_Context.Execute("prefab.open", { { "path", m_PromptPath } }).has_value();
+						ok = ExecuteAndWarn("prefab.open", { { "path", m_PromptPath } }).has_value();
 						break;
 					case PromptKind::SavePrefabAs:
 						ok = ExecuteAndWarn("prefab.create", { { "entity", static_cast<uint64_t>(m_Session.GetSelection()) }, { "path", m_PromptPath } }).has_value();

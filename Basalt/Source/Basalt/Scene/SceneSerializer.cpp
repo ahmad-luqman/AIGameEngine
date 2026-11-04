@@ -656,34 +656,55 @@ namespace Basalt {
 	bool SceneSerializer::SavePrefab(Entity root, const std::filesystem::path& path, std::string& outError)
 	{
 		std::vector<std::string> warnings;
-		return Prefab::SaveTree(root, path, false, warnings, outError);
+		const bool saved = Prefab::SaveTree(root, path, PrefabFileRoot::Plain, warnings, outError);
+		for (const std::string& warning : warnings)
+			BS_CORE_WARN("Prefab: {}", warning);
+		return saved;
 	}
 
-	bool SceneSerializer::SavePrefabEntities(json entities, const std::filesystem::path& path, std::string& outError, bool variant)
+	bool SceneSerializer::SavePrefabEntities(json entities, const std::filesystem::path& path, std::string& outError, PrefabFileRoot root, std::vector<std::string>* outWarnings)
 	{
+		std::vector<std::string> warnings;
 		json data;
 		data["Format"] = "BasaltPrefab";
 		data["Version"] = FormatVersion;
-		if (!Prefab::ToFileEntities(std::move(entities), path, variant, data["Entities"], outError))
+		if (!Prefab::ToFileEntities(std::move(entities), path, root, data["Entities"], warnings, outError))
 			return false;
+		// What the file says now and this write stops saying (overrides of entities their prefab dropped).
+		json previous;
+		Prefab::ReadReport report;
+		if (std::string ignored; Prefab::ReadFile(path, previous, ignored, &report))
+			warnings.insert(warnings.end(), report.Warnings.begin(), report.Warnings.end());
 		if (Project::GetActive() && !Project::GetActive()->GetAssets().Refresh(outError))
 			return false;
 		if (!EncodeAssetReferences(data, outError))
 			return false;
 
-		if (!FileSystem::WriteTextFile(path, data.dump(1, '\t')))
+		const std::string text = data.dump(1, '\t');
+		json written;
+		if (!Prefab::ReadText(text, path, written, outError))
+			return false;
+		if (!FileSystem::WriteTextFile(path, text))
 		{
 			outError = "cannot write '" + FileSystem::PathToUtf8(path) + "'";
 			return false;
 		}
+		if (outWarnings)
+			outWarnings->insert(outWarnings->end(), warnings.begin(), warnings.end());
+		else
+			for (const std::string& warning : warnings)
+				BS_CORE_WARN("Prefab: {}", warning);
 		return true;
 	}
 
-	Entity SceneSerializer::InstantiatePrefab(Scene& scene, const std::filesystem::path& absolutePath, const std::string& prefabPath, Entity parent, std::string& outError)
+	Entity SceneSerializer::InstantiatePrefab(Scene& scene, const std::filesystem::path& absolutePath, const std::string& prefabPath, Entity parent, std::string& outError, std::vector<std::string>* outWarnings)
 	{
 		json entities;
-		if (!Prefab::ReadFile(absolutePath, entities, outError))
+		Prefab::ReadReport report;
+		if (!Prefab::ReadFile(absolutePath, entities, outError, &report))
 			return {};
+		if (outWarnings)
+			outWarnings->insert(outWarnings->end(), report.Warnings.begin(), report.Warnings.end());
 		std::vector<Entity> created;
 		if (!CreateEntities(scene, entities, true, parent, created, outError))
 		{

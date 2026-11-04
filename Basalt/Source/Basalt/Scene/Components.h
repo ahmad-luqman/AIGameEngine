@@ -1329,18 +1329,20 @@ namespace Basalt {
 
 	// Marks a prefab instance root: the prefab it came from, which entities belong to the instance, and the source as
 	// last merged, so later prefab edits merge without losing the instance's own edits (Scene/Prefab). Overrides are
-	// derived from these (Prefab::ComputeOverrides, prefab.overrides), never stored. The root of a nested instance inside
-	// an instance holds Prefab alone: the outer instance tracks all of its entities.
+	// derived from these (Prefab::ComputeOverrides, prefab.overrides), never stored. What it is follows from its fields and
+	// its place, so copies and unpacking need no bookkeeping:
+	// - Members and Baseline: a tracked instance.
+	// - Members alone: created during Play; it records membership only.
+	// - Neither, listed by an instance around it: a nested root, which that instance tracks with its entities.
+	// - Neither, anywhere else: untracked (saved before tracking existed, a copy of a nested root), adopted on merge.
 	struct PrefabComponent
 	{
 		std::string Prefab;
 		// Source entity ID (decimal key) -> instance UUID, keeping the IDs of entities the instance deleted so Revert
-		// recreates them with the same IDs. Empty for instances saved before tracking existed (adopted on merge) and for
-		// nested instances.
+		// recreates them with the same IDs.
 		nlohmann::json Members = nlohmann::json::object();
 		// The source's entity records as last merged: keyed by source ID, with source-space entity references and asset
-		// paths (UUID/path objects on disk). Empty for instances saved before tracking existed, created during Play, or
-		// pointed at another prefab without new tracking, and for nested instances.
+		// paths (UUID/path objects on disk). Pointing the component at another prefab without new tracking clears both.
 		nlohmann::json Baseline = nlohmann::json::object();
 	};
 
