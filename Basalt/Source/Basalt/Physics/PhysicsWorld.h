@@ -8,6 +8,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -55,6 +56,36 @@ namespace Basalt {
 		// Skipped entirely, e.g. the caster itself; 0 (never a valid entity UUID) skips nothing.
 		UUID IgnoreEntity = 0;
 		bool IncludeTriggers = false;
+	};
+
+	// Bodies near a region, gathered once (PhysicsWorld::CollectShapes) for many sphere queries, such as spring bone points
+	// against walls and floors: each body's shape and transform as they were when gathered, so queries never lock bodies.
+	class PhysicsShapeSnapshot
+	{
+	public:
+		// Bodies kept at most; CollectShapes keeps the ones nearest the region's center.
+		static constexpr uint32_t MaxShapes = 32;
+		// Spheres smaller than this (meters) query as this size: physics shapes need a radius.
+		static constexpr float MinRadius = 0.001f;
+
+		PhysicsShapeSnapshot();
+		~PhysicsShapeSnapshot();
+		PhysicsShapeSnapshot(PhysicsShapeSnapshot&&) noexcept;
+		PhysicsShapeSnapshot& operator=(PhysicsShapeSnapshot&&) noexcept;
+		PhysicsShapeSnapshot(const PhysicsShapeSnapshot&) = delete;
+		PhysicsShapeSnapshot& operator=(const PhysicsShapeSnapshot&) = delete;
+
+		bool Empty() const;
+		// Whether more than MaxShapes bodies were near (the farthest were left out).
+		bool Truncated() const;
+		// The sphere (the radius CollectShapes was given) at `point` pushed out of the gathered shape it penetrates most
+		// deeply, along the shortest way out; nullopt when it touches none. Mesh triangles push from their front faces only.
+		std::optional<glm::vec3> PushOut(const glm::vec3& point) const;
+
+	private:
+		friend class PhysicsWorld;
+		struct Impl;
+		Scope<Impl> m_Impl;
 	};
 
 	enum class ContactEventType
@@ -225,6 +256,10 @@ namespace Basalt {
 		std::vector<RaycastHit> BoxCastAll(const glm::vec3& origin, const glm::vec3& halfExtents, const glm::quat& rotation, const glm::vec3& direction, float maxDistance, const PhysicsQueryFilter& filter = {}) const;
 		std::vector<UUID> OverlapSphere(const glm::vec3& center, float radius, const PhysicsQueryFilter& filter = {}) const;
 		std::vector<UUID> OverlapBox(const glm::vec3& center, const glm::vec3& halfExtents, const glm::quat& rotation, const PhysicsQueryFilter& filter = {}) const;
+		// The bodies whose bounds touch the box [min, max], for PushOut queries of spheres of `radius` (at least
+		// PhysicsShapeSnapshot::MinRadius), seen through `filter` and, when given, `accept` (by entity UUID). Non-finite or
+		// inverted bounds, or a radius that is not finite and nonnegative, gather nothing.
+		PhysicsShapeSnapshot CollectShapes(const glm::vec3& min, const glm::vec3& max, float radius, const PhysicsQueryFilter& filter = {}, const std::function<bool(UUID)>& accept = {}) const;
 
 		// The layers this world filters with (resolved when it was built).
 		const PhysicsLayers& GetLayers() const;

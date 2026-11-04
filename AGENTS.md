@@ -21,7 +21,7 @@ changing code. Task-specific procedures live in `.claude/skills/*/SKILL.md`.
 Engine modules (`Basalt/Source/Basalt/<Module>/`): `Core` (application, window, input incl. gamepads, log, file
 system, `.bpak` archives and file watching, command line, crash reports), `Events`, `Math`, `Renderer` (device, scene renderer, IBL, debug lines), `ImGui`, `Scene`
 (EnTT scene, components, component registry, serialization, prefab instances and overrides), `Asset` (glTF, images, primitives, material
-files, asset cache), `Physics` (Jolt), `Audio` (miniaudio: buses, per-source low-pass and Doppler, reverb sends into per-bus reverbs), `Particles` (CPU particle simulation), `Animation` (glTF TRS sampling, blends, crossfades, 1D/2D blend spaces with phase sync and velocity matching, animation events, bone transforms and attachments, data-driven state machines and per-state root motion, layers with joint masks, shared mask assets, additive clips and their own state machines, two-bone/look-at/FABRIK IK with foot placement and foot locking, spring bones, morph targets, retargeted clip libraries, per-entity playback), `UI` (game UI: UI
+files, asset cache), `Physics` (Jolt), `Audio` (miniaudio: buses, per-source low-pass and Doppler, reverb sends into per-bus reverbs), `Particles` (CPU particle simulation), `Animation` (glTF TRS sampling, blends, crossfades, 1D/2D blend spaces with phase sync and velocity matching, animation events, bone transforms and attachments, data-driven state machines and per-state root motion, layers with joint masks, shared mask assets, additive clips and their own state machines, two-bone/look-at/FABRIK IK with foot placement and foot locking, spring bones with angle limits, per-chain colliders and physics-body collisions, morph targets, retargeted clip libraries with shared joint maps and reference poses, per-entity playback), `UI` (game UI: UI
 component layout, widgets and their mouse/keyboard/gamepad interaction, immediate-mode `UI.*`, TrueType fonts;
 drawn through ImGui after the scene), `Scripting` (Lua 5.4 + sol2; timers, coroutines, events), `Project`
 (project files, exporter and platform packages, save data), `Automation` (command API, session, TCP server, editor history and selection).
@@ -57,7 +57,10 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   LateUpdate, before particles.
 - **Animation authoring.** The editor's Animation Graph draft saves through `asset.write`; it preserves graph state/parameter
   references on rename and prunes dependent edges on deletion. `PropertyAnimationComponent` stores same-entity
-  numeric registry-field tracks with normalized keys (registry-tagged quaternion rotations use slerp; physics configuration components are excluded). `PropertyAnimationSystem` owns runtime clocks in Play/Simulate,
+  registry-field tracks with normalized keys: numbers (registry-tagged quaternion rotations use slerp) and always-stepped
+  integers, booleans, strings and enums (`Text` keys), top-level or through list elements picked by index or unique name
+  (`PropertyAnimation::ResolveField`, shared by validation, sampling, capture and the editor's `ListFields`; each list is
+  patched once per sample); physics configuration components are excluded. `PropertyAnimationSystem` owns runtime clocks in Play/Simulate,
   samples after scripts and before skeletal animation/physics through grouped `ComponentRegistry` patches, and
   logs/suspends failed timelines until edited or explicitly repaired. `animation.key/sample/control` share these paths;
   Lua uses `ControlPropertyAnimation` and `GetPropertyAnimationStatus`. See `Docs/ScriptingAPI.md`.
@@ -81,7 +84,10 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   stateless free functions that handle mirrored (negative-determinant) parents. `SpringBoneComponent` chains swing right
   after IK, from `Pose` plus the IK overlay (never their own last solution), as world-space points
   (`Animation/SpringBones.h`, substeps of at most 1/120 s) kept in the system by entity; their joints go into a second overlay
-  that `Finish` applies after the IK one.
+  that `Finish` applies after the IK one. Each substep limits a point's swing (`MaxAngle`), then pushes it out of the
+  chain's named colliders and, with `CollidePhysics` (Play/Simulate only), out of the bodies a per-chain, per-frame
+  `PhysicsShapeSnapshot` (`PhysicsWorld::CollectShapes`: nearest 32, the character's own bodies skipped as for IK foot
+  rays) gathered. The edit preview swings springs too, without physics.
 - **Ragdolls.** `RagdollComponent` holds authored settings; `PhysicsWorld` owns the Jolt ragdoll, its selected skin
   joints and frozen recovery pose. Capsules and swing-twist frames derive from the rest skeleton, and activation starts
   on the current pose. Active ragdolls suspend the entity's body/controller and inherit the body's linear/angular motion (a controller's linear motion); live rebuilds preserve
@@ -106,7 +112,9 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   `Animator.ClipLibraries` clips are baked onto the model's nodes (`Animation/Retargeting`: model-space rest-relative
   rotations, root displacement scaled by the leg-length ratio) into an immutable `AnimationClipSet` (`Load` and `Plan` are
   shared with the inspector warnings and `animator.retarget`; `Build` bakes) that the `AnimationSystem` caches by model
-  and loaded libraries, resolving library sources once per update; every playback clip index refers to that set, never
+  and loaded libraries and joint maps (`.bjointmap`, `AnimationJointMap`, loaded like masks; inline `Joints` override its
+  pairs), resolving both once per update; reference clips (`ReferenceClip`, `ModelReferenceClip`) replace a skeleton's rest
+  orientations, never its positions, and a missing reference or unloadable map adds no clips; every playback clip index refers to that set, never
   to `MeshSource::Animations` directly. List elements declare asset fields as `List[].Field` (`ForEachAssetValue`), which
   persistence, moves, validation and thumbnails share.
 - **Game UI geometry.** `UILayout` is shared by drawing, hit testing, `ui.layout` and viewport handles.

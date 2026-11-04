@@ -48,8 +48,13 @@
 		{ "ID": 918, "Name": "SpringRig", "Components": {
 			"Transform": { "Translation": [1000, 0, 30] },
 			"Animator": { "Mesh": "Assets/Models/Biped.gltf", "Clip": "Lean", "PlayOnStart": false },
-			"SpringBone": { "Chains": [ { "Name": "RightArm", "Joint": "RightUpperArm", "Stiffness": 5 } ],
-				"Colliders": [ { "Joint": "Chest", "Offset": [-0.3026, -0.1319, 0], "Radius": 0.1 } ] } } },
+			"SpringBone": { "Chains": [ { "Name": "RightArm", "Joint": "RightUpperArm", "Stiffness": 5, "Colliders": [ { "Name": "Chest" } ] },
+					{ "Name": "LeftArm", "Joint": "LeftUpperArm", "Stiffness": 0, "MaxAngle": 30, "Colliders": [ { "Name": "Nothing" } ], "CollidePhysics": true } ],
+				"Colliders": [ { "Name": "Chest", "Joint": "Chest", "Offset": [-0.3026, -0.1319, 0], "Radius": 0.1 }, { "Name": "Nothing", "Offset": [0, -5, 0], "Radius": 0.1 } ] } } },
+		{ "ID": 951, "Name": "SpringShelf", "Components": {
+			"Transform": { "Translation": [1000.85, 1.45, 30] },
+			"RigidBody": {},
+			"BoxCollider": { "HalfExtents": [0.35, 0.05, 0.3] } } },
 		{ "ID": 926, "Name": "MorphFace", "Components": {
 			"Transform": { "Translation": [1000, 0, 40] },
 			"Animator": { "Mesh": "Assets/Models/Morph.gltf", "Clip": "Talk" } } },

@@ -318,6 +318,10 @@ namespace Basalt {
 			std::map<uint32_t, const SpringChain*> turned;
 			for (const SpringChain& chain : springs.Chains)
 			{
+				// Chains name colliders by Name, which needs no model.
+				for (const SpringChainCollider& named : chain.Colliders)
+					if (std::ranges::find(springs.Colliders, named.Name, &SpringCollider::Name) == springs.Colliders.end())
+						warnings.push_back(fmt::format("SpringBone chain '{}': Colliders: no collider is named '{}'", chain.Name, named.Name));
 				if (chain.Joint.empty())
 				{
 					warnings.push_back(fmt::format("SpringBone chain '{}': Joint is empty", chain.Name));

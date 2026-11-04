@@ -11,6 +11,7 @@
 #include <Jolt/Physics/Collision/ShapeCast.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
+#include <Jolt/Physics/Collision/TransformedShape.h>
 
 #include <algorithm>
 #include <cmath>
@@ -271,6 +272,98 @@ namespace Basalt {
 			return {};
 		const JPH::Ref<JPH::Shape> sphere = new JPH::SphereShape(radius);
 		return Overlap(*m_Impl->System, *sphere, center, IdentityRotation, filter);
+	}
+
+	struct PhysicsShapeSnapshot::Impl
+	{
+		std::vector<JPH::TransformedShape> Shapes;
+		JPH::Ref<JPH::Shape> Sphere;
+		bool Truncated = false;
+	};
+
+	PhysicsShapeSnapshot::PhysicsShapeSnapshot() = default;
+	PhysicsShapeSnapshot::~PhysicsShapeSnapshot() = default;
+	PhysicsShapeSnapshot::PhysicsShapeSnapshot(PhysicsShapeSnapshot&&) noexcept = default;
+	PhysicsShapeSnapshot& PhysicsShapeSnapshot::operator=(PhysicsShapeSnapshot&&) noexcept = default;
+
+	bool PhysicsShapeSnapshot::Empty() const
+	{
+		return !m_Impl || m_Impl->Shapes.empty();
+	}
+
+	bool PhysicsShapeSnapshot::Truncated() const
+	{
+		return m_Impl && m_Impl->Truncated;
+	}
+
+	std::optional<glm::vec3> PhysicsShapeSnapshot::PushOut(const glm::vec3& point) const
+	{
+		if (Empty() || !IsFiniteVec(point))
+			return std::nullopt;
+		JPH::CollideShapeSettings settings;
+		settings.mActiveEdgeMode = JPH::EActiveEdgeMode::CollideOnlyWithActive;
+		const JPH::RMat44 transform = JPH::RMat44::sTranslation(ToJolt(point));
+		// The deepest penetration over every shape (the collector keeps the deepest hit of all the calls).
+		JPH::ClosestHitCollisionCollector<JPH::CollideShapeCollector> collector;
+		for (const JPH::TransformedShape& shape : m_Impl->Shapes)
+			shape.CollideShape(m_Impl->Sphere, JPH::Vec3::sOne(), transform, settings, JPH::RVec3::sZero(), collector);
+		if (!collector.HadHit() || !(collector.mHit.mPenetrationDepth > 0.0f))
+			return std::nullopt;
+		// The axis moves the body's shape out; the sphere goes the other way.
+		const glm::vec3 axis = FromJolt(collector.mHit.mPenetrationAxis);
+		const float length = glm::length(axis);
+		if (!std::isfinite(length) || length < 1e-12f)
+			return std::nullopt;
+		return point - axis / length * collector.mHit.mPenetrationDepth;
+	}
+
+	PhysicsShapeSnapshot PhysicsWorld::CollectShapes(const glm::vec3& min, const glm::vec3& max, float radius, const PhysicsQueryFilter& filter, const std::function<bool(UUID)>& accept) const
+	{
+		PhysicsShapeSnapshot snapshot;
+		if (!IsFiniteVec(min) || !IsFiniteVec(max) || glm::any(glm::greaterThan(min, max)) || !std::isfinite(radius) || radius < 0.0f)
+			return snapshot;
+		const JPH::PhysicsSystem& system = *m_Impl->System;
+		JPH::AllHitCollisionCollector<JPH::CollideShapeBodyCollector> collector;
+		const QueryObjectLayerFilter layerFilter(filter.LayerMask);
+		system.GetBroadPhaseQuery().CollideAABox(JPH::AABox(ToJolt(min), ToJolt(max)), collector, {}, layerFilter);
+		const QueryBodyFilter bodyFilter(filter);
+		const glm::vec3 center = (min + max) * 0.5f;
+		struct Candidate
+		{
+			float Distance = 0;
+			UUID Entity = 0;
+			JPH::TransformedShape Shape;
+		};
+		std::vector<Candidate> candidates;
+		for (const JPH::BodyID& id : collector.mHits)
+		{
+			const JPH::BodyLockRead lock(system.GetBodyLockInterface(), id);
+			if (!lock.Succeeded() || !bodyFilter.ShouldCollideLocked(lock.GetBody()))
+				continue;
+			const UUID entity = lock.GetBody().GetUserData();
+			if (accept && !accept(entity))
+				continue;
+			JPH::TransformedShape shape = lock.GetBody().GetTransformedShape();
+			const JPH::AABox bounds = shape.GetWorldSpaceBounds();
+			const glm::vec3 closest = glm::clamp(center, FromJolt(JPH::Vec3(bounds.mMin)), FromJolt(JPH::Vec3(bounds.mMax)));
+			candidates.push_back({ glm::length(closest - center), entity, std::move(shape) });
+		}
+		// Nearest first, then by entity and body (broad-phase order is not stable), so the kept bodies do not depend on it.
+		std::ranges::sort(candidates, [](const Candidate& a, const Candidate& b) {
+			if (a.Distance != b.Distance)
+				return a.Distance < b.Distance;
+			if (a.Entity != b.Entity)
+				return a.Entity < b.Entity;
+			return a.Shape.mBodyID < b.Shape.mBodyID;
+		});
+		snapshot.m_Impl = CreateScope<PhysicsShapeSnapshot::Impl>();
+		snapshot.m_Impl->Truncated = candidates.size() > PhysicsShapeSnapshot::MaxShapes;
+		if (candidates.size() > PhysicsShapeSnapshot::MaxShapes)
+			candidates.resize(PhysicsShapeSnapshot::MaxShapes);
+		for (Candidate& candidate : candidates)
+			snapshot.m_Impl->Shapes.push_back(std::move(candidate.Shape));
+		snapshot.m_Impl->Sphere = new JPH::SphereShape(std::max(radius, PhysicsShapeSnapshot::MinRadius));
+		return snapshot;
 	}
 
 	std::vector<UUID> PhysicsWorld::OverlapBox(const glm::vec3& center, const glm::vec3& halfExtents, const glm::quat& rotation, const PhysicsQueryFilter& filter) const

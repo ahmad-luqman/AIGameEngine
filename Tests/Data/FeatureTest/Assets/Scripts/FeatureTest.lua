@@ -270,6 +270,9 @@ local function TestEntities(self)
 	ExpectError("ResetSpringBones without component", function() rig:ResetSpringBones() end, "needs the SpringBone component")
 	ExpectError("Spring chain validation", function() springRig:SetComponent("SpringBone", { Chains = { { Name = "A", Stiffness = -1 } } }) end, "Stiffness -1 must be between 0 and 10000")
 	Check("SpringBone lists", springRig:GetComponent("SpringBone").Chains[1].Joint == "RightUpperArm" and springRig:GetComponent("SpringBone").Colliders[1].Joint == "Chest")
+	local springs = springRig:GetComponent("SpringBone")
+	Check("SpringBone follow-up fields", springs.Chains[2].MaxAngle == 30 and springs.Chains[2].CollidePhysics and springs.Chains[1].Colliders[1].Name == "Chest" and springs.Colliders[1].Name == "Chest")
+	ExpectError("Spring MaxAngle validation", function() springRig:SetComponent("SpringBone", { Chains = { { Name = "A", MaxAngle = 181 } } }) end, "MaxAngle 181 must be between 0 and 180")
 
 	-- Passive skeleton physics and get-up recovery.
 	local ragdoll = Scene.FindEntityByName("RagdollRig")
@@ -1011,6 +1014,12 @@ function Driver:OnUpdate(dt)
 		local collider = chest + chestRotation * Vec3(-0.3026, -0.1319, 0)
 		Check("Spring bones swing", hand.y < shoulder.y - 0.3 and Near((elbow - shoulder):Length(), 0.3, 1e-3) and Near((hand - elbow):Length(), 0.3, 1e-3)
 			and NearVec(collider, shoulder + Vec3(0, -0.3, 0), 0.01) and (elbow - collider):Length() > 0.115)
+		-- The left arm rests 20 degrees up; MaxAngle stops its upper arm 30 degrees below that, and its hand rests on the
+		-- SpringShelf body (top at y = 1.5) instead of hanging further.
+		local leftShoulder, leftElbow, leftHand = springRig:GetBoneTransform("LeftUpperArm"), springRig:GetBoneTransform("LeftForeArm"), springRig:GetBoneTransform("LeftHand")
+		local upperDrop = math.deg(math.asin((leftShoulder.y - leftElbow.y) / 0.3))
+		Check("Spring MaxAngle", Near(upperDrop, 10, 0.5) and Near((leftHand - leftElbow):Length(), 0.3, 1e-3))
+		Check("Spring CollidePhysics", leftHand.y > 1.515 and leftHand.y < 1.53 and leftHand.x > 1000.5)
 		local hit = Physics.Raycast(Vec3(0, 10, 8), Vec3(0, -1, 0), 50)
 		Check("Physics.Raycast hit", hit ~= nil and hit.Entity.Name == "Ground" and Near(hit.Point.y, 0, 0.05) and NearVec(hit.Normal, Vec3(0, 1, 0), 1e-3) and Near(hit.Distance, 10, 0.05))
 		Check("Physics.Raycast miss", Physics.Raycast(Vec3(0, 10, 8), Vec3(0, 1, 0), 50) == nil)

@@ -10,6 +10,7 @@
 #include "Basalt/Scene/Scene.h"
 
 #include <algorithm>
+#include <span>
 
 // The spring bone pass of AnimationSystem. It runs in LateUpdate right after inverse kinematics, so springs hang from
 // the solved pose and attachments follow them.
@@ -55,6 +56,13 @@ namespace Basalt {
 		for (auto handle : m_Scene.GetAllEntitiesWith<SpringBoneComponent>())
 		{
 			Entity entity(handle, &m_Scene);
+			// A preview swings only the Animators it plays; the others keep their rest pose without a word.
+			if (m_Preview)
+				if (const auto* animator = entity.TryGetComponent<AnimatorComponent>(); !animator || !animator->Preview)
+				{
+					m_Springs.erase(entity.GetUUID());
+					continue;
+				}
 			if (m_Scene.GetPhysicsWorld() && m_Scene.GetPhysicsWorld()->HasRagdollPose(entity))
 				continue;
 			const auto& component = entity.GetComponent<SpringBoneComponent>();
@@ -78,7 +86,7 @@ namespace Basalt {
 		}
 	}
 
-	void AnimationSystem::ResolveSpringColliders(const Ref<MeshSource>& source, const SpringBoneComponent& component, SpringState& state, const glm::mat4& world, const std::vector<glm::mat4>& globals, std::vector<SpringCollisionShape>& out, std::vector<std::string>& problems)
+	void AnimationSystem::ResolveSpringColliders(const Ref<MeshSource>& source, const SpringBoneComponent& component, SpringState& state, const glm::mat4& world, const std::vector<glm::mat4>& globals, std::vector<SpringCollisionShape>& out, std::vector<uint32_t>& outSources, std::vector<std::string>& problems)
 	{
 		if (state.ColliderSource != source || !std::ranges::equal(state.Colliders, component.Colliders, {}, &SpringState::ColliderBinding::Joint, &SpringCollider::Joint))
 		{
@@ -91,6 +99,7 @@ namespace Basalt {
 			}
 		}
 		out.clear();
+		outSources.clear();
 		for (size_t index = 0; index < component.Colliders.size(); index++)
 		{
 			const SpringCollider& collider = component.Colliders[index];
@@ -108,6 +117,7 @@ namespace Basalt {
 			const glm::mat4 transform = node >= 0 ? world * globals[node] : world;
 			const glm::vec3 axis(0, collider.HalfHeight, 0);
 			out.push_back({ .A = glm::vec3(transform * glm::vec4(collider.Offset - axis, 1)), .B = glm::vec3(transform * glm::vec4(collider.Offset + axis, 1)), .Radius = collider.Radius * AverageScale(transform) });
+			outSources.push_back(static_cast<uint32_t>(index));
 		}
 	}
 
@@ -166,7 +176,23 @@ namespace Basalt {
 			gravity = glm::vec3(0);
 		}
 		std::vector<SpringCollisionShape>& colliders = m_SpringColliders;
-		ResolveSpringColliders(playback.Source, component, state, world, globals, colliders, problems);
+		std::vector<uint32_t>& colliderSources = m_SpringColliderSources;
+		ResolveSpringColliders(playback.Source, component, state, world, globals, colliders, colliderSources, problems);
+		// Physics bodies (Play and Simulate): the entity's own bodies are not obstacles, nor those of the character
+		// controller it belongs to (on it or an ancestor) and that controller's descendants, as for IK ground rays.
+		PhysicsWorld* bodies = m_Preview ? nullptr : m_Scene.GetPhysicsWorld();
+		Entity body = entity;
+		if (bodies)
+			for (Entity holder = entity; holder; holder = holder.GetParent())
+				if (holder.HasComponent<CharacterControllerComponent>() && bodies->HasCharacter(holder))
+				{
+					body = holder;
+					break;
+				}
+		const auto obstacle = [&](UUID id) {
+			const Entity hit = m_Scene.GetEntityByUUID(id);
+			return !hit || !(hit == entity || hit == body || m_Scene.IsDescendantOf(hit, entity) || m_Scene.IsDescendantOf(hit, body));
+		};
 
 		// A move of a chain's first joint (with its entity) faster than TeleportSpeed restarts the chain on the animated
 		// pose instead of swinging it across the jump; as in MatchVelocity, physics moves bodies at most once per fixed
@@ -189,6 +215,7 @@ namespace Basalt {
 			const float gravityFactor = ClampSetting(config.GravityFactor, -SpringChain::MaxGravityFactor, SpringChain::MaxGravityFactor, defaults.GravityFactor, "GravityFactor", chainProblems);
 			const float radius = ClampSetting(config.Radius, 0, SpringChain::MaxRadius, defaults.Radius, "Radius", chainProblems);
 			const float weight = ClampSetting(config.Weight, 0, 1, defaults.Weight, "Weight", chainProblems);
+			const float maxAngle = glm::radians(ClampSetting(config.MaxAngle, 0, SpringChain::MaxAngleLimit, defaults.MaxAngle, "MaxAngle", chainProblems));
 			const auto reportChain = [&] {
 				if (!(chainProblems.empty() && chain.HoldProblem))
 					ReportProblem(chain.Problem, JoinProblems(chainProblems), entity, Owner, &config.Name);
@@ -219,6 +246,20 @@ namespace Basalt {
 				animated.emplace_back(world * globals[joint][3]);
 			if (chain.Sim && glm::length(animated.front() - chain.Sim->Animated.front()) > TeleportSpeed * window)
 				chain.Sim.reset();
+			// The colliders the chain names (all of them when it names none); a name that matches nothing is a problem.
+			std::span<const SpringCollisionShape> chainColliders = colliders;
+			if (!config.Colliders.empty())
+			{
+				std::vector<SpringCollisionShape>& filtered = m_SpringChainColliders;
+				filtered.clear();
+				for (size_t i = 0; i < colliders.size(); i++)
+					if (std::ranges::find(config.Colliders, component.Colliders[colliderSources[i]].Name, &SpringChainCollider::Name) != config.Colliders.end())
+						filtered.push_back(colliders[i]);
+				for (const SpringChainCollider& named : config.Colliders)
+					if (std::ranges::find(component.Colliders, named.Name, &SpringCollider::Name) == component.Colliders.end())
+						chainProblems.push_back(fmt::format("Colliders: no collider is named '{}'", named.Name));
+				chainColliders = filtered;
+			}
 			if (!chain.Sim)
 			{
 				SpringChainState::Simulation sim{ .Animated = animated };
@@ -228,7 +269,24 @@ namespace Basalt {
 			}
 			else
 			{
-				SimulateSpringChain({ .Animated = animated, .PreviousAnimated = chain.Sim->Animated, .Colliders = colliders, .Stiffness = stiffness, .Damping = damping, .Radius = radius * entityScale, .Acceleration = acceleration, .Seconds = seconds }, chain.Sim->Points);
+				SpringSimulationRequest request{ .Animated = animated, .PreviousAnimated = chain.Sim->Animated, .Colliders = chainColliders, .Stiffness = stiffness, .Damping = damping, .Radius = radius * entityScale, .MaxAngle = maxAngle, .Acceleration = acceleration, .Seconds = seconds };
+				PhysicsShapeSnapshot nearby;
+				if (config.CollidePhysics && bodies)
+				{
+					// Every point stays within the chain's reach of its first joint, which moved from where it was at the last
+					// simulation to where it is now.
+					float reach = request.Radius;
+					for (size_t i = 1; i < animated.size(); i++)
+						reach += glm::length(animated[i] - animated[i - 1]);
+					const glm::vec3 low = glm::min(animated.front(), chain.Sim->Animated.front()) - glm::vec3(reach);
+					const glm::vec3 high = glm::max(animated.front(), chain.Sim->Animated.front()) + glm::vec3(reach);
+					nearby = bodies->CollectShapes(low, high, request.Radius, {}, obstacle);
+					if (nearby.Truncated())
+						chainProblems.push_back(fmt::format("more than {} physics bodies are within its reach; it collides with the nearest {}", PhysicsShapeSnapshot::MaxShapes, PhysicsShapeSnapshot::MaxShapes));
+					if (!nearby.Empty())
+						request.World = [&nearby](const glm::vec3& point) { return nearby.PushOut(point); };
+				}
+				SimulateSpringChain(request, chain.Sim->Points);
 				chain.Sim->Animated = animated;
 				// Checked whatever the weight, so a hidden chain does not keep non-finite points until it shows again.
 				if (!std::ranges::all_of(chain.Sim->Points, [](const SpringPoint& point) { return Math::IsFinite(point.Position) && Math::IsFinite(point.Velocity); }))

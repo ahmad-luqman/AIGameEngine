@@ -60,23 +60,27 @@ The features most games need, roughly in order of impact.
 Skeletal playback, crossfades, two-clip blends, 1D/2D blend spaces with phase sync and velocity matching,
 animation events, bone attachments, data-driven state machines and per-state root motion, layers with joint masks,
 shared mask assets, additive clips and their own state machines, inverse kinematics (two-bone, look-at and FABRIK chains,
-foot placement and foot locking), spring bones, powered ragdolls, morph targets, retargeted clip libraries and an
-edit-mode preview (`AnimationSystem`) are implemented;
+foot placement and foot locking), spring bones (angle limits, per-chain colliders, physics-body collisions), powered
+ragdolls, morph targets, retargeted clip libraries (shared joint maps, reference poses for other rest styles), property
+animation of numeric and discrete fields (nested in lists too) and an edit-mode preview (`AnimationSystem`) are implemented;
 physics provides character controllers (`MoveCharacter`, `IsCharacterGrounded`, ground normal) and raycasts. The items
 below extend character movement, in order of impact.
 
 - **IK and layer follow-ups II — S each.** Joint limits for FABRIK chains (cones and twist ranges), a mask editor in the
   editor (masks are authored as `.banimmask` JSON through `asset.write` today), layer graph events and per-layer
   parameters that the base graph does not share, and edit-mode ground placement against static colliders.
-- **Spring bone follow-ups — S.** Collide chains with physics bodies (a cape against walls, hair on the ground),
-  colliders per chain instead of per component, angle limits for stiff appendages, and an edit-mode preview.
+- **Spring bone follow-ups II — S.** Physics layer filtering for `CollidePhysics` chains (today they collide with every
+  layer), continuous collision so fast points cannot pass through thin bodies within one substep, and edit-mode
+  collisions against static colliders.
 - **Powered ragdoll follow-ups — M.** Partial ragdolls whose root follows the animation kinematically (an upper body
   reacting to hits while the legs keep walking and the character controller stays), per-bone motor strengths, and
   active balance that keeps a powered ragdoll upright.
-- **Retargeting follow-ups — S.** Rest-pose matching for libraries authored in a different rest style (an A-pose clip
-  on a T-pose character) through a reference pose, and a reusable joint map asset shared by Animators.
-- **Property animation follow-ups — S.** Stepped boolean/integer/string/enum tracks and nested registry
-  field paths, stable Euler serialization at exact gimbal lock, and physics configuration tracks that preserve contacts; current authoring supports scalar/vector numeric fields on the same entity.
+- **Retargeting follow-ups II — S.** A joint map editor in the editor (`.bjointmap` files are authored as JSON through
+  `asset.write` today) and reference poses built from per-joint rotation offsets, for libraries without a frame in the
+  model's rest style.
+- **Property animation follow-ups — S.** Stable Euler serialization at exact gimbal lock, physics configuration tracks
+  that preserve contacts, asset reference tracks (texture flipbooks), and tracks on other entities; current authoring
+  covers numeric, integer, boolean, string and enum fields of the same entity, including fields inside list elements.
 - **Later: motion matching and procedural creatures — L each.** Motion matching (search a mocap database
   every few frames for the pose and future trajectory that best match the desired movement); procedural
   leg stepping for multi-legged creatures built on IK.
