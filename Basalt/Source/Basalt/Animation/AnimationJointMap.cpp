@@ -12,53 +12,32 @@ namespace Basalt {
 
 	std::optional<AnimationJointMap> AnimationJointMap::FromJson(const nlohmann::json& data, std::string& outError)
 	{
-		outError.clear();
-		if (!data.is_object() || !RejectUnknownKeys(data, { "Joints" }, "joint map", outError))
-		{
-			if (outError.empty())
-				outError = "a joint map must be an object";
+		const nlohmann::json* joints = ReadEntryArray(data, "Joints", "joint map", "a joint map must be an object", AnimationClipLibrary::MaxJoints, outError);
+		if (!joints)
 			return std::nullopt;
-		}
-		// contains/at rather than find: GCC cannot see that a found iterator is not null.
-		if (!data.contains("Joints") || !data.at("Joints").is_array() || data.at("Joints").size() > AnimationClipLibrary::MaxJoints)
-		{
-			outError = fmt::format("Joints must be an array with at most {} entries", AnimationClipLibrary::MaxJoints);
-			return std::nullopt;
-		}
 		AnimationJointMap map;
 		std::unordered_set<std::string> sources, targets;
-		const nlohmann::json& joints = data.at("Joints");
-		for (size_t i = 0; i < joints.size(); i++)
+		for (size_t i = 0; i < joints->size(); i++)
 		{
-			const nlohmann::json& entry = joints[i];
+			const nlohmann::json& entry = (*joints)[i];
 			const std::string location = fmt::format("Joints[{}]", i);
-			if (!entry.is_object() || !RejectUnknownKeys(entry, { "Source", "Target" }, location, outError))
+			if (!RequireEntryObject(entry, { "Source", "Target" }, location, outError))
+				return std::nullopt;
+			const std::string* source = ReadNonemptyString(entry, "Source", location, outError);
+			const std::string* target = source ? ReadNonemptyString(entry, "Target", location, outError) : nullptr;
+			if (!target)
+				return std::nullopt;
+			if (!sources.insert(*source).second)
 			{
-				if (outError.empty())
-					outError = location + " must be an object";
+				outError = fmt::format("{}.Source '{}' is listed twice", location, *source);
 				return std::nullopt;
 			}
-			AnimationRetargetJoint parsed;
-			for (const auto& [key, value] : { std::pair{ "Source", &parsed.Source }, std::pair{ "Target", &parsed.Target } })
+			if (!targets.insert(*target).second)
 			{
-				if (!entry.contains(key) || !entry.at(key).is_string() || entry.at(key).get_ref<const std::string&>().empty())
-				{
-					outError = fmt::format("{}.{} must be a nonempty string", location, key);
-					return std::nullopt;
-				}
-				*value = entry.at(key).get<std::string>();
-			}
-			if (!sources.insert(parsed.Source).second)
-			{
-				outError = fmt::format("{}.Source '{}' is listed twice", location, parsed.Source);
+				outError = fmt::format("{}.Target '{}' is listed twice", location, *target);
 				return std::nullopt;
 			}
-			if (!targets.insert(parsed.Target).second)
-			{
-				outError = fmt::format("{}.Target '{}' is listed twice", location, parsed.Target);
-				return std::nullopt;
-			}
-			map.Joints.push_back(std::move(parsed));
+			map.Joints.push_back({ .Source = *source, .Target = *target });
 		}
 		return map;
 	}
@@ -87,8 +66,10 @@ namespace Basalt {
 		std::vector<AnimationRetargetJoint> pairs = library.Joints;
 		if (!map)
 			return pairs;
+		// Only complete entries override: a half-named one (an inspector addition being filled in) is skipped by BuildMap,
+		// so letting it hide the map's pair would leave that joint paired by neither.
 		const auto named = [&](const std::string& joint, std::string AnimationRetargetJoint::* side) {
-			return std::ranges::any_of(library.Joints, [&](const AnimationRetargetJoint& entry) { return entry.*side == joint; });
+			return std::ranges::any_of(library.Joints, [&](const AnimationRetargetJoint& entry) { return !entry.Source.empty() && !entry.Target.empty() && entry.*side == joint; });
 		};
 		for (const AnimationRetargetJoint& pair : map->Joints)
 			if (!named(pair.Source, &AnimationRetargetJoint::Source) && !named(pair.Target, &AnimationRetargetJoint::Target))

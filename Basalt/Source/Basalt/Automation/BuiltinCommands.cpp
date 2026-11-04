@@ -1260,6 +1260,7 @@ namespace Basalt {
 				std::vector<AnimationClipSet::Library> resolved = AnimationClipSet::Load(*animator);
 				AnimationClipSet::Plan(*model, resolved);
 				json libraries = json::array();
+				const auto reference = [](const std::string& clip, float time) { return clip.empty() ? json() : json{ { "clip", clip }, { "time", time } }; };
 				for (const AnimationClipSet::Library& library : resolved)
 				{
 					json joints = json::array(), unmatched = json::array();
@@ -1276,8 +1277,8 @@ namespace Basalt {
 						{ "mesh", library.Entry.Mesh },
 						{ "error", library.Error.empty() ? json() : json(library.Error) },
 						{ "jointMap", library.Entry.JointMap.empty() ? json() : json(library.Entry.JointMap) },
-						{ "reference", library.Entry.ReferenceClip.empty() ? json() : json{ { "clip", library.Entry.ReferenceClip }, { "time", library.Entry.ReferenceTime } } },
-						{ "modelReference", library.Entry.ModelReferenceClip.empty() ? json() : json{ { "clip", library.Entry.ModelReferenceClip }, { "time", library.Entry.ModelReferenceTime } } },
+						{ "reference", reference(library.Entry.ReferenceClip, library.Entry.ReferenceTime) },
+						{ "modelReference", reference(library.Entry.ModelReferenceClip, library.Entry.ModelReferenceTime) },
 						{ "joints", std::move(joints) },
 						{ "unmatchedHumanoidBones", std::move(unmatched) },
 						{ "root", rooted ? json{ { "target", model->Nodes[library.Map.TargetRoot].Name }, { "source", library.Source->Nodes[library.Map.SourceRoot].Name }, { "scale", library.Map.RootScale } } : json() },

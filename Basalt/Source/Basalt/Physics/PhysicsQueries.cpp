@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <cmath>
 #include <optional>
+#include <tuple>
 #include <vector>
 
 namespace Basalt {
@@ -278,6 +279,7 @@ namespace Basalt {
 	{
 		std::vector<JPH::TransformedShape> Shapes;
 		JPH::Ref<JPH::Shape> Sphere;
+		float Radius = 0;
 		bool Truncated = false;
 	};
 
@@ -296,6 +298,11 @@ namespace Basalt {
 		return m_Impl && m_Impl->Truncated;
 	}
 
+	float PhysicsShapeSnapshot::GetRadius() const
+	{
+		return m_Impl ? m_Impl->Radius : 0.0f;
+	}
+
 	std::optional<glm::vec3> PhysicsShapeSnapshot::PushOut(const glm::vec3& point) const
 	{
 		if (Empty() || !IsFiniteVec(point))
@@ -309,12 +316,15 @@ namespace Basalt {
 			shape.CollideShape(m_Impl->Sphere, JPH::Vec3::sOne(), transform, settings, JPH::RVec3::sZero(), collector);
 		if (!collector.HadHit() || !(collector.mHit.mPenetrationDepth > 0.0f))
 			return std::nullopt;
-		// The axis moves the body's shape out; the sphere goes the other way.
-		const glm::vec3 axis = FromJolt(collector.mHit.mPenetrationAxis);
+		// The axis moves the body's shape out, so the sphere goes the other way. Should Jolt report no usable axis, the way
+		// out is away from the body's contact point (a penetration must not read as "clear").
+		glm::vec3 axis = -FromJolt(collector.mHit.mPenetrationAxis);
+		if (!(glm::length(axis) > 1e-12f))
+			axis = point - FromJolt(JPH::Vec3(collector.mHit.mContactPointOn2));
 		const float length = glm::length(axis);
 		if (!std::isfinite(length) || length < 1e-12f)
 			return std::nullopt;
-		return point - axis / length * collector.mHit.mPenetrationDepth;
+		return point + axis / length * collector.mHit.mPenetrationDepth;
 	}
 
 	PhysicsShapeSnapshot PhysicsWorld::CollectShapes(const glm::vec3& min, const glm::vec3& max, float radius, const PhysicsQueryFilter& filter, const std::function<bool(UUID)>& accept) const
@@ -337,32 +347,33 @@ namespace Basalt {
 		std::vector<Candidate> candidates;
 		for (const JPH::BodyID& id : collector.mHits)
 		{
-			const JPH::BodyLockRead lock(system.GetBodyLockInterface(), id);
-			if (!lock.Succeeded() || !bodyFilter.ShouldCollideLocked(lock.GetBody()))
+			Candidate candidate;
+			{
+				const JPH::BodyLockRead lock(system.GetBodyLockInterface(), id);
+				if (!lock.Succeeded() || !bodyFilter.ShouldCollideLocked(lock.GetBody()))
+					continue;
+				candidate.Entity = lock.GetBody().GetUserData();
+				candidate.Shape = lock.GetBody().GetTransformedShape();
+			}
+			// After the lock is released: `accept` may query the world.
+			if (accept && !accept(candidate.Entity))
 				continue;
-			const UUID entity = lock.GetBody().GetUserData();
-			if (accept && !accept(entity))
-				continue;
-			JPH::TransformedShape shape = lock.GetBody().GetTransformedShape();
-			const JPH::AABox bounds = shape.GetWorldSpaceBounds();
+			const JPH::AABox bounds = candidate.Shape.GetWorldSpaceBounds();
 			const glm::vec3 closest = glm::clamp(center, FromJolt(JPH::Vec3(bounds.mMin)), FromJolt(JPH::Vec3(bounds.mMax)));
-			candidates.push_back({ glm::length(closest - center), entity, std::move(shape) });
+			candidate.Distance = glm::length(closest - center);
+			candidates.push_back(std::move(candidate));
 		}
 		// Nearest first, then by entity and body (broad-phase order is not stable), so the kept bodies do not depend on it.
-		std::ranges::sort(candidates, [](const Candidate& a, const Candidate& b) {
-			if (a.Distance != b.Distance)
-				return a.Distance < b.Distance;
-			if (a.Entity != b.Entity)
-				return a.Entity < b.Entity;
-			return a.Shape.mBodyID < b.Shape.mBodyID;
-		});
+		std::ranges::sort(candidates, [](const Candidate& a, const Candidate& b) { return std::tie(a.Distance, a.Entity, a.Shape.mBodyID) < std::tie(b.Distance, b.Entity, b.Shape.mBodyID); });
 		snapshot.m_Impl = CreateScope<PhysicsShapeSnapshot::Impl>();
-		snapshot.m_Impl->Truncated = candidates.size() > PhysicsShapeSnapshot::MaxShapes;
-		if (candidates.size() > PhysicsShapeSnapshot::MaxShapes)
+		const bool truncated = candidates.size() > PhysicsShapeSnapshot::MaxShapes;
+		snapshot.m_Impl->Truncated = truncated;
+		if (truncated)
 			candidates.resize(PhysicsShapeSnapshot::MaxShapes);
 		for (Candidate& candidate : candidates)
 			snapshot.m_Impl->Shapes.push_back(std::move(candidate.Shape));
-		snapshot.m_Impl->Sphere = new JPH::SphereShape(std::max(radius, PhysicsShapeSnapshot::MinRadius));
+		snapshot.m_Impl->Radius = std::max(radius, PhysicsShapeSnapshot::MinRadius);
+		snapshot.m_Impl->Sphere = new JPH::SphereShape(snapshot.m_Impl->Radius);
 		return snapshot;
 	}
 

@@ -24,7 +24,7 @@ namespace Basalt {
 				if (ImGui::BeginCombo("Component", m_Component.c_str()))
 				{
 					for (const auto& info : ComponentRegistry::GetAll())
-						if (info.Has(entity) && !PropertyAnimation::ListFields(entity, info.Name).empty() && ImGui::Selectable(info.Name.c_str(), info.Name == m_Component))
+						if (!PropertyAnimation::ListFields(entity, info.Name).empty() && ImGui::Selectable(info.Name.c_str(), info.Name == m_Component))
 						{
 							m_Component = info.Name;
 							m_Field.clear();

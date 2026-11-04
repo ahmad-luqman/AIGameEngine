@@ -30,9 +30,10 @@ namespace Basalt {
 			size_t Index = 0; // Position in ClipLibraries (unnamed entries are skipped).
 			AnimationClipLibrary Entry;
 			Ref<MeshSource> Source; // Null when it failed to load.
-			// Entry.JointMap loaded; null when it names none or failed to load (JointMapError says why).
+			// Entry.JointMap loaded; null when it names none or failed to load.
 			Ref<const AnimationJointMap> JointMap;
-			std::string JointMapError;
+			// Why Load could not load the model or its joint map (both, joined); Match starts Error from it.
+			std::string LoadError;
 			// Why the library cannot add any clip (it or its joint map does not load, a reference clip is missing, it has no
 			// clips, matches no joint or has no finite rest or reference pose); empty when it may.
 			std::string Error;

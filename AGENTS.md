@@ -85,9 +85,10 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   after IK, from `Pose` plus the IK overlay (never their own last solution), as world-space points
   (`Animation/SpringBones.h`, substeps of at most 1/120 s) kept in the system by entity; their joints go into a second overlay
   that `Finish` applies after the IK one. Each substep limits a point's swing (`MaxAngle`), then pushes it out of the
-  chain's named colliders and, with `CollidePhysics` (Play/Simulate only), out of the bodies a per-chain, per-frame
-  `PhysicsShapeSnapshot` (`PhysicsWorld::CollectShapes`: nearest 32, the character's own bodies skipped as for IK foot
-  rays) gathered. The edit preview swings springs too, without physics.
+  chain's colliders (all of the component's, or those its `Colliders` list names) and, with `CollidePhysics`
+  (Play/Simulate only), out of the bodies a per-chain, per-frame `PhysicsShapeSnapshot` (`PhysicsWorld::CollectShapes`:
+  nearest 32, the character's own bodies skipped through `FindCharacter`, as for IK foot rays) gathered. The edit preview
+  swings springs too, without physics bodies.
 - **Ragdolls.** `RagdollComponent` holds authored settings; `PhysicsWorld` owns the Jolt ragdoll, its selected skin
   joints and frozen recovery pose. Capsules and swing-twist frames derive from the rest skeleton, and activation starts
   on the current pose. Active ragdolls suspend the entity's body/controller and inherit the body's linear/angular motion (a controller's linear motion); live rebuilds preserve

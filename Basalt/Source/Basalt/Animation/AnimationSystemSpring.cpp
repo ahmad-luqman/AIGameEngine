@@ -181,17 +181,11 @@ namespace Basalt {
 		// Physics bodies (Play and Simulate): the entity's own bodies are not obstacles, nor those of the character
 		// controller it belongs to (on it or an ancestor) and that controller's descendants, as for IK ground rays.
 		PhysicsWorld* bodies = m_Preview ? nullptr : m_Scene.GetPhysicsWorld();
-		Entity body = entity;
-		if (bodies)
-			for (Entity holder = entity; holder; holder = holder.GetParent())
-				if (holder.HasComponent<CharacterControllerComponent>() && bodies->HasCharacter(holder))
-				{
-					body = holder;
-					break;
-				}
+		// `body` is the entity or an ancestor of it, so the entity and its descendants are below it.
+		const Entity body = bodies ? FindCharacter(entity, *bodies).value_or(entity) : entity;
 		const auto obstacle = [&](UUID id) {
 			const Entity hit = m_Scene.GetEntityByUUID(id);
-			return !hit || !(hit == entity || hit == body || m_Scene.IsDescendantOf(hit, entity) || m_Scene.IsDescendantOf(hit, body));
+			return !hit || !(hit == body || m_Scene.IsDescendantOf(hit, body));
 		};
 
 		// A move of a chain's first joint (with its entity) faster than TeleportSpeed restarts the chain on the animated
@@ -248,15 +242,15 @@ namespace Basalt {
 				chain.Sim.reset();
 			// The colliders the chain names (all of them when it names none); a name that matches nothing is a problem.
 			std::span<const SpringCollisionShape> chainColliders = colliders;
-			if (!config.Colliders.empty())
+			if (NamesSpringColliders(config))
 			{
 				std::vector<SpringCollisionShape>& filtered = m_SpringChainColliders;
 				filtered.clear();
 				for (size_t i = 0; i < colliders.size(); i++)
-					if (std::ranges::find(config.Colliders, component.Colliders[colliderSources[i]].Name, &SpringChainCollider::Name) != config.Colliders.end())
+					if (SpringChainNames(config, component.Colliders[colliderSources[i]].Name))
 						filtered.push_back(colliders[i]);
 				for (const SpringChainCollider& named : config.Colliders)
-					if (std::ranges::find(component.Colliders, named.Name, &SpringCollider::Name) == component.Colliders.end())
+					if (!named.Name.empty() && std::ranges::find(component.Colliders, named.Name, &SpringCollider::Name) == component.Colliders.end())
 						chainProblems.push_back(fmt::format("Colliders: no collider is named '{}'", named.Name));
 				chainColliders = filtered;
 			}
@@ -281,10 +275,15 @@ namespace Basalt {
 					const glm::vec3 low = glm::min(animated.front(), chain.Sim->Animated.front()) - glm::vec3(reach);
 					const glm::vec3 high = glm::max(animated.front(), chain.Sim->Animated.front()) + glm::vec3(reach);
 					nearby = bodies->CollectShapes(low, high, request.Radius, {}, obstacle);
-					if (nearby.Truncated())
-						chainProblems.push_back(fmt::format("more than {} physics bodies are within its reach; it collides with the nearest {}", PhysicsShapeSnapshot::MaxShapes, PhysicsShapeSnapshot::MaxShapes));
+					// Warned once per chain, outside its problem list: the count rises and falls as the character moves.
+					if (nearby.Truncated() && !chain.TruncationWarned)
+						BS_CORE_WARN("{} '{}': chain '{}': more than {} physics bodies are within its reach; it collides with the nearest {}", Owner, entity.GetName(), config.Name, PhysicsShapeSnapshot::MaxShapes, PhysicsShapeSnapshot::MaxShapes);
+					chain.TruncationWarned = chain.TruncationWarned || nearby.Truncated();
 					if (!nearby.Empty())
+					{
+						BS_CORE_ASSERT(nearby.GetRadius() == std::max(request.Radius, PhysicsShapeSnapshot::MinRadius), "the bodies push out the chain's points");
 						request.World = [&nearby](const glm::vec3& point) { return nearby.PushOut(point); };
+					}
 				}
 				SimulateSpringChain(request, chain.Sim->Points);
 				chain.Sim->Animated = animated;

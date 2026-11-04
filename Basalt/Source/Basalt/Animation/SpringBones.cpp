@@ -31,6 +31,15 @@ namespace Basalt {
 			return head + glm::normalize(offset) * length;
 		}
 
+		// `candidate`, or (when it vanishes) a direction across `along`, unnormalized.
+		glm::vec3 AcrossIfVanished(glm::vec3 candidate, const glm::vec3& along)
+		{
+			for (const glm::vec3 fallback : { glm::vec3(0, 1, 0), glm::vec3(1, 0, 0) })
+				if (glm::length(candidate) < Epsilon)
+					candidate = glm::cross(along, fallback);
+			return candidate;
+		}
+
 		// `point` pushed out of the shape grown by `radius`, or nullopt when it is outside already. A point on the shape's
 		// axis leaves across `bone` (its bone's direction), which keeps it near its bone length.
 		std::optional<glm::vec3> PushOut(const SpringCollisionShape& shape, const glm::vec3& point, float radius, const glm::vec3& bone)
@@ -48,19 +57,16 @@ namespace Basalt {
 			{
 				// Across both the bone and a capsule's axis; failing that (parallel or vanishing), any direction across
 				// whichever of the two is there.
-				const glm::vec3 along = lengthSquared > 0 ? axis : bone;
-				offset = lengthSquared > 0 ? glm::cross(axis, bone) : glm::vec3(0);
-				for (const glm::vec3 fallback : { glm::vec3(0, 1, 0), glm::vec3(1, 0, 0) })
-					if (glm::length(offset) < Epsilon)
-						offset = glm::cross(along, fallback);
+				offset = AcrossIfVanished(lengthSquared > 0 ? glm::cross(axis, bone) : glm::vec3(0), lengthSquared > 0 ? axis : bone);
 				if (glm::length(offset) < Epsilon)
 					offset = glm::vec3(0, 1, 0);
 			}
 			return closest + glm::normalize(offset) * reach;
 		}
 
-		// `point` turned about `head` to within `maxAngle` of the direction `head` to `target`, at its distance from head.
-		glm::vec3 LimitAngle(const glm::vec3& head, const glm::vec3& point, const glm::vec3& target, float maxAngle)
+		// `point` turned about `head` to within the angle whose cosine and sine are given of the direction `head` to `target`,
+		// at its distance from head.
+		glm::vec3 LimitAngle(const glm::vec3& head, const glm::vec3& point, const glm::vec3& target, float cosMax, float sinMax)
 		{
 			const glm::vec3 offset = point - head, axisOffset = target - head;
 			const float length = glm::length(offset), axisLength = glm::length(axisOffset);
@@ -68,15 +74,11 @@ namespace Basalt {
 				return point;
 			const glm::vec3 direction = offset / length, axis = axisOffset / axisLength;
 			const float cosine = glm::dot(direction, axis);
-			if (cosine >= std::cos(maxAngle))
+			if (cosine >= cosMax)
 				return point;
 			// Toward `direction` from the axis; any side for a point straight behind it.
-			glm::vec3 side = direction - axis * cosine;
-			for (const glm::vec3 fallback : { glm::vec3(0, 1, 0), glm::vec3(1, 0, 0) })
-				if (glm::length(side) < Epsilon)
-					side = glm::cross(axis, fallback);
-			side = glm::normalize(side);
-			return head + (axis * std::cos(maxAngle) + side * std::sin(maxAngle)) * length;
+			const glm::vec3 side = glm::normalize(AcrossIfVanished(direction - axis * cosine, axis));
+			return head + (axis * cosMax + side * sinMax) * length;
 		}
 	}
 
@@ -108,6 +110,7 @@ namespace Basalt {
 		const float decay = std::exp(-request.Damping * step);
 		// Below pi the limit can bind; at pi every direction is inside it.
 		const bool limited = request.MaxAngle < std::numbers::pi_v<float>;
+		const float cosMax = std::cos(request.MaxAngle), sinMax = std::sin(request.MaxAngle);
 		std::array<glm::vec3, SpringChain::MaxChainLength + 1> animated{};
 		for (uint32_t substep = 1; substep <= steps; substep++)
 		{
@@ -130,7 +133,7 @@ namespace Basalt {
 				point.Velocity = point.Velocity * decay + (request.Stiffness * (target - point.Position) + request.Acceleration) * step;
 				glm::vec3 next = KeepLength(head, point.Position + point.Velocity * step, length, target);
 				if (limited)
-					next = LimitAngle(head, next, target, request.MaxAngle);
+					next = LimitAngle(head, next, target, cosMax, sinMax);
 				for (uint32_t iteration = 0; iteration < SpringConstraintIterations; iteration++)
 				{
 					bool pushed = false;
@@ -159,6 +162,16 @@ namespace Basalt {
 				head = next;
 			}
 		}
+	}
+
+	bool NamesSpringColliders(const SpringChain& chain)
+	{
+		return std::ranges::any_of(chain.Colliders, [](const SpringChainCollider& named) { return !named.Name.empty(); });
+	}
+
+	bool SpringChainNames(const SpringChain& chain, const std::string& name)
+	{
+		return !name.empty() && std::ranges::find(chain.Colliders, name, &SpringChainCollider::Name) != chain.Colliders.end();
 	}
 
 	int32_t FirstChild(const MeshSource& source, uint32_t node)

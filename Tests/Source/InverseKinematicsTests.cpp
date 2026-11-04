@@ -1685,16 +1685,22 @@ TEST_SUITE("Animation")
 		ball.GetTransform().Translation = { 0.35f, 1.2f, 0.2f };
 		scene.UpdateAnimationPreview(Step);
 		CHECK(Near(handWorld(), glm::vec3(0.35f, 1.2f, 0.2f), 1e-3f));
-		// The layer plays (Wave raises the right arm, -90 degrees half a second in), and the spring chain on the arm swings
-		// it behind.
+		// The layer plays (Wave raises the right arm, -90 degrees half a second in): exactly the clip's while the spring
+		// chain on the arm has no weight, and swung behind once it has.
+		auto& springs = biped.GetComponent<SpringBoneComponent>();
+		springs.Chains[0].Weight = 0;
 		scene.UpdateAnimationPreview(0.5f - 2 * Step);
 		const auto& pose = *preview.GetPose(biped);
 		const uint32_t upper = Node(*source, "RightUpperArm");
-		const glm::quat local = glm::quat_cast(glm::mat3(glm::inverse(pose[source->Nodes[upper].Parent]) * pose[upper]));
-		CHECK_FALSE(NearRotation(local, glm::angleAxis(glm::radians(-90.0f), glm::vec3(0, 0, 1)), 1e-3f));
+		const auto upperLocal = [&] { return glm::quat_cast(glm::mat3(glm::inverse(pose[source->Nodes[upper].Parent]) * pose[upper])); };
+		CHECK(NearRotation(upperLocal(), glm::angleAxis(glm::radians(-90.0f), glm::vec3(0, 0, 1)), 1e-3f));
+		springs.Chains[0].Weight = 1;
+		scene.UpdateAnimationPreview(0);
+		CHECK_FALSE(NearRotation(upperLocal(), glm::angleAxis(glm::radians(-90.0f), glm::vec3(0, 0, 1)), 1e-3f));
+		CHECK(Math::IsFinite(pose[upper]));
 		CHECK(CountLogMessages(since, "not solved") == 0);
 		CHECK(preview.GetPose(still) == nullptr);
-		// Only the ball moved: the preview wrote nothing.
+		// Only the ball and the spring weight moved: the preview wrote nothing.
 		ball.GetTransform().Translation = { 0.3f, 1.2f, 0.3f };
 		CHECK(SceneSerializer::SerializeScene(scene) == before);
 

@@ -78,6 +78,8 @@ namespace Basalt {
 		bool Empty() const;
 		// Whether more than MaxShapes bodies were near (the farthest were left out).
 		bool Truncated() const;
+		// The radius PushOut queries with (CollectShapes' radius, at least MinRadius); 0 when empty.
+		float GetRadius() const;
 		// The sphere (the radius CollectShapes was given) at `point` pushed out of the gathered shape it penetrates most
 		// deeply, along the shortest way out; nullopt when it touches none. Mesh triangles push from their front faces only.
 		std::optional<glm::vec3> PushOut(const glm::vec3& point) const;
@@ -257,8 +259,9 @@ namespace Basalt {
 		std::vector<UUID> OverlapSphere(const glm::vec3& center, float radius, const PhysicsQueryFilter& filter = {}) const;
 		std::vector<UUID> OverlapBox(const glm::vec3& center, const glm::vec3& halfExtents, const glm::quat& rotation, const PhysicsQueryFilter& filter = {}) const;
 		// The bodies whose bounds touch the box [min, max], for PushOut queries of spheres of `radius` (at least
-		// PhysicsShapeSnapshot::MinRadius), seen through `filter` and, when given, `accept` (by entity UUID). Non-finite or
-		// inverted bounds, or a radius that is not finite and nonnegative, gather nothing.
+		// PhysicsShapeSnapshot::MinRadius), seen through `filter` and, when given, `accept` (by entity UUID; called with no
+		// body locked, so it may query this world). Non-finite or inverted bounds, or a radius that is not finite and
+		// nonnegative, gather nothing, as other queries return nothing for invalid input.
 		PhysicsShapeSnapshot CollectShapes(const glm::vec3& min, const glm::vec3& max, float radius, const PhysicsQueryFilter& filter = {}, const std::function<bool(UUID)>& accept = {}) const;
 
 		// The layers this world filters with (resolved when it was built).

@@ -195,13 +195,13 @@ namespace Basalt {
 	{
 		static constexpr const char* TypeName = "AnimationClipLibrary";
 		static constexpr uint32_t MaxJoints = 256;
-		// Upper bound of the reference times (seconds), like animation event times.
+		// Upper bound of the reference times (seconds, one day): keeps them finite and sane; clips are far shorter.
 		static constexpr float MaxReferenceTime = 86400.0f;
 
 		std::string Mesh;
 		std::vector<AnimationRetargetJoint> Joints;
-		// A project-relative .bjointmap shared between Animators: its pairs follow Joints (an entry of Joints wins over a
-		// map pair that names one of its joints). One that cannot load makes the library add no clips.
+		// A project-relative .bjointmap shared between Animators: its pairs follow Joints, and a map pair is dropped when a
+		// complete Joints entry has the same Source or the same Target. One that cannot load makes the library add no clips.
 		std::string JointMap;
 		// Rest-pose matching for skeletons authored in different rest styles (an A-pose library on a T-pose model): a clip
 		// of the library whose pose at ReferenceTime seconds stands like the model's rest pose, and a clip of the model
@@ -322,7 +322,7 @@ namespace Basalt {
 		// retargeted onto Mesh's skeleton. Clip names (Clip, blend space samples, layers, events, graph states) resolve in
 		// Mesh first, then in each library in order. Joints match by the library's Joints, then by name (ignoring
 		// "prefix:" and "prefix|"), then as humanoid bones; skeletons in different rest pose styles (T-pose and A-pose)
-		// need a reference pose (AnimationClipLibrary::ReferenceClip).
+		// need a reference pose (AnimationClipLibrary::ReferenceClip or ModelReferenceClip).
 		std::vector<AnimationClipLibrary> ClipLibraries;
 		// Edit mode only: plays the Animator in the scene view (its clip or state machine, layers, inverse kinematics and
 		// spring bones), regardless of PlayOnStart, without moving the entity. Events, root-motion displacement, spring
@@ -465,17 +465,19 @@ namespace Basalt {
 		float Damping = 4.0f;
 		// Scales the physics gravity (-MaxGravityFactor..MaxGravityFactor); 0 ignores gravity.
 		float GravityFactor = 1.0f;
-		// Radius of each simulated point against the colliders (0..MaxRadius, in the entity's units: it scales with
-		// the entity).
+		// Radius of each simulated point against the colliders and, with CollidePhysics, physics bodies (0..MaxRadius, in
+		// the entity's units: it scales with the entity).
 		float Radius = 0.02f;
 		// 0..1. Blend between the animated pose (0) and the simulation (1); the simulation keeps running at 0.
 		float Weight = 1.0f;
 		// Degrees (0..MaxAngleLimit): how far each bone may swing away from where the animated shape (turned with the
-		// swung bones before it) points it; MaxAngleLimit leaves it free, 0 keeps the animated shape. Colliders win over
-		// the limit.
+		// swung bones before it) points it; MaxAngleLimit leaves it free, 0 keeps the animated shape. Colliders and physics
+		// bodies win over the limit.
 		float MaxAngle = MaxAngleLimit;
-		// The component's colliders this chain stays outside: every collider (empty), or only those whose Name is listed
-		// (at most SpringBoneComponent::MaxColliders entries).
+		// The component's colliders this chain stays outside: only those whose Name is listed (at most
+		// SpringBoneComponent::MaxColliders entries), or every collider when no entry has a Name (entries without one are
+		// the inspector's unnamed additions). Listed names that match no collider are warned about; when none matches, the
+		// chain collides with no collider.
 		std::vector<SpringChainCollider> Colliders;
 		// Play and Simulate only: also stays outside physics bodies (not triggers, nor the entity, its descendants or its
 		// character controller's entity and descendants). One way: the points never push the bodies.

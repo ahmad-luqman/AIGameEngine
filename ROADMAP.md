@@ -71,7 +71,7 @@ below extend character movement, in order of impact.
   parameters that the base graph does not share, and edit-mode ground placement against static colliders.
 - **Spring bone follow-ups II — S.** Physics layer filtering for `CollidePhysics` chains (today they collide with every
   layer), continuous collision so fast points cannot pass through thin bodies within one substep, and edit-mode
-  collisions against static colliders.
+  collisions against static physics bodies.
 - **Powered ragdoll follow-ups — M.** Partial ragdolls whose root follows the animation kinematically (an upper body
   reacting to hits while the legs keep walking and the character controller stays), per-bone motor strengths, and
   active balance that keeps a powered ragdoll upright.

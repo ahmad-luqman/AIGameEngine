@@ -1204,11 +1204,14 @@ other selector picks the element whose unique name field (the `Name` of layers, 
 is usable: nonempty, not only digits, without `]` and used once; otherwise by index). A sample fails, naming the track,
 when the element is not there. Tracks into the same list compose, and each list is patched once per sample, with the
 component's own validation and update signals (a nested Animator layer weight, for instance, applies at once, as when a
-script sets it). Paths are compared as written: `Layers[0].Weight` and `Layers[Upper].Weight` are different tracks
-even when they reach the same field.
+script sets it). Tracks that reach the same field through different spellings (`Layers[0].Weight` and
+`Layers[Upper].Weight`) follow the repeated-target rule below, and Capture Key finds the existing track by the field it
+reaches, whichever way its path is written.
 
-Empty tracks do nothing; targets must exist when sampling. Entity, asset (including list elements' asset fields),
-object and list fields, the names that identify list elements, and per-axis enums are excluded. The registry also
+Empty tracks do nothing; targets must exist when sampling (the inspector and `scene.info` warn about tracks whose
+component or list element is not there). Entity, asset (including list elements' asset fields), object and list
+fields, the names that identify list elements, and multi-value booleans and enums are excluded. A key's `Text` must be
+empty on fields other than strings and enums, so a string key on a boolean track is an error rather than `false`. The registry also
 excludes physics configuration components (RigidBody, all colliders, Joint, CharacterController and Ragdoll): their
 update signals reconstruct physics objects and reset contacts. Animate Transform on a kinematic rigid body to move a
 physics platform or door.
@@ -1361,7 +1364,8 @@ Pairs shared by many Animators (every character rigged one way, every library do
 
 Every entry names both joints, and each source and each target appears once (`asset.write` and `project.validate` reject
 other files). The file's pairs follow the entry's own `Joints`: an inline pair overrides every file pair that names one
-of its joints. Joint maps are saved by identity and follow `asset.move` like other asset references; a map that cannot
+of its joints (a map pair is dropped when a complete inline entry has the same `Source` or the same `Target`; entries
+still missing a name drop nothing). Joint maps are saved by identity and follow `asset.move` like other asset references; a map that cannot
 load makes its library add no clips (rather than pairing by name alone and posing joints wrongly), and an edited map
 retargets the library again on the next update.
 
@@ -1373,7 +1377,7 @@ not other libraries') whose pose at `ModelReferenceTime` stands like the library
 skeleton's rest orientations as the pose joints turn from; positions keep the rest pose, so limb lengths and the root's
 scale do not change. A single-frame clip of the matching pose is enough (`{ Mesh = "...", ReferenceClip = "TPose" }`).
 A reference clip that is not there makes the library add no clips; a time past the clip's end takes its last pose, with
-a warning. Paired joints keep the target's rest translation, so limbs keep their length. The hips (or
+a warning, as does a nonzero time without its clip (the rest pose is used). Paired joints keep the target's rest translation, so limbs keep their length. The hips (or
 the topmost paired node) also move by their source joint's displacement scaled by the ratio of the skeletons' leg lengths
 (hips height above the lowest paired joint), so root motion matches the character's stride; a warning says when the hips
 have nothing paired below them and move unscaled. Morph weight tracks keep their keys and move to target nodes of the
@@ -1722,10 +1726,10 @@ hero:SetComponent("SpringBone", springs)
 | `Stiffness` | Pull (1/s², 0..10000, default 40) of each point back toward where the animated shape puts it, measured from the swung points before it; 0 hangs freely |
 | `Damping` | Velocity decay (1/s, 0..1000, default 4): higher settles sooner. It acts on world-space velocity, like air drag, so moving chains trail behind |
 | `GravityFactor` | Scales the physics gravity (-100..100, default 1) |
-| `Radius` | Radius (0..100, default 0.02) of each point against the colliders, in the entity's units: it scales with the entity |
+| `Radius` | Radius (0..100, default 0.02) of each point against the colliders and, with `CollidePhysics`, physics bodies (at least 1 mm there), in the entity's units: it scales with the entity |
 | `Weight` | 0..1 blend from the animated pose (0) to the simulation (1); the simulation keeps running at 0 |
 | `MaxAngle` | Degrees (0..180, default 180 = free): how far each bone may swing away from where the animated shape, turned with the swung bones before it, points it, for stiff appendages (a tail that bends at most 20° per joint). 0 keeps the animated shape. Colliders and physics bodies win over the limit |
-| `Colliders` | The component's colliders this chain stays outside, by `Name` (`{ { Name = "Head" } }`); empty (default): every collider. Several colliders may share a name, which then names all of them |
+| `Colliders` | The component's colliders this chain stays outside, by `Name` (`{ { Name = "Head" } }`); empty (default), or only entries without a `Name` (the inspector's unnamed additions): every collider. Several colliders may share a name, which then names all of them |
 | `CollidePhysics` | Also stay outside physics bodies (default false): see below |
 
 `Colliders` are spheres or capsules attached to joints (`Joint`; empty: the entity itself), optionally named (`Name`, for
@@ -1755,11 +1759,11 @@ moves faster than 100 m/s (a teleport or respawn: about 1.7 m in one 60 Hz frame
 raises an error without a SpringBone component.
 
 Problems are logged once and the chain (or the component) skipped: chains whose joints are missing, have no child,
-are fewer than `ChainLength` in a line or have fixed glTF matrices; unknown collider joints; chain `Colliders` names that
-match no collider (the chain still collides with the ones that match); more physics bodies near a chain than it reads; a
-non-finite physics
-gravity or `Wind`, or the two overflowing together (ignored); points that go non-finite (the chain restarts); and a
-SpringBone whose Animator cannot animate. A chain the animation scales to nothing (hiding it) has nothing to swing,
+are fewer than `ChainLength` in a line or have fixed glTF matrices; unknown collider joints; a non-finite physics gravity
+or `Wind`, or the two overflowing together (ignored); points that go non-finite (the chain restarts); and a SpringBone
+whose Animator cannot animate. Two problems are logged without skipping anything: chain `Colliders` names that match no
+collider (the chain collides with the ones that match, so with none when none does), and, once per chain, more physics
+bodies near a chain than it reads (it collides with the nearest 32). A chain the animation scales to nothing (hiding it) has nothing to swing,
 quietly. The inspector and `scene.info` show the authoring problems too and warn when two chains turn the same joint
 (the later one wins), when a chain joint has several children (the first is followed), when a `ChainLength` 0 chain
 goes on past 16 joints and when a chain's bones have zero length in the model's rest pose. The simulated points are gameplay state: they survive playback resets and end with the component.

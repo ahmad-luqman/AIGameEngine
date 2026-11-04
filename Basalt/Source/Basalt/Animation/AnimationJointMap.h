@@ -31,7 +31,8 @@ namespace Basalt {
 	};
 
 	// The joint pairs a clip library matches first: its inline Joints, then the pairs of its loaded JointMap (`map`, may be
-	// null) whose source and target no inline entry names, so an inline entry overrides the shared map for its joints.
+	// null) whose Source is no complete inline entry's Source and whose Target is no complete inline entry's Target, so an
+	// inline entry overrides the shared map for its joints.
 	std::vector<AnimationRetargetJoint> CombineJointPairs(const AnimationClipLibrary& library, const AnimationJointMap* map);
 
 }

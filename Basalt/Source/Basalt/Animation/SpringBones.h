@@ -40,8 +40,9 @@ namespace Basalt {
 		std::span<const glm::vec3> Animated;
 		std::span<const glm::vec3> PreviousAnimated;
 		std::span<const SpringCollisionShape> Colliders;
-		// Other things points stay outside (physics bodies): the point (with Radius) moved out of what it penetrates, or
-		// nullopt when it is clear. Empty: none.
+		// Other things points stay outside (physics bodies): the point, as a sphere of the callback's own radius (callers
+		// match Radius, as a PhysicsShapeSnapshot of that radius does), moved out of what it penetrates, or nullopt when it
+		// is clear. Empty: none.
 		std::function<std::optional<glm::vec3>(const glm::vec3&)> World;
 		// Pull (1/s², 0..SpringChain::MaxStiffness) toward the animated shape, velocity decay (1/s, nonnegative), and the
 		// points' radius against the colliders.
@@ -75,6 +76,11 @@ namespace Basalt {
 	// or returns why it cannot (an empty or unknown joint, a joint without a child, fewer than ChainLength joints and a
 	// tip in a line, a fixed-matrix joint other than the tip) and leaves outJoints empty.
 	[[nodiscard]] std::string ResolveSpringChain(const MeshSource& source, const SpringChain& chain, std::vector<uint32_t>& outJoints);
+	// Whether a chain's Colliders list names a collider. Entries without a Name (the inspector's unnamed additions) name
+	// none, and a chain that names none collides with every collider of its component.
+	bool NamesSpringColliders(const SpringChain& chain);
+	// Whether the chain's Colliders list names a collider called `name` (an empty name is never named).
+	bool SpringChainNames(const SpringChain& chain, const std::string& name);
 	// The first node whose parent is `node`, or -1.
 	int32_t FirstChild(const MeshSource& source, uint32_t node);
 	// How many nodes have `node` as their parent.

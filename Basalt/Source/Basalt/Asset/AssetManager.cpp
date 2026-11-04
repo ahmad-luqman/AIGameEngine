@@ -164,13 +164,14 @@ namespace Basalt {
 
 		// A JSON asset (an animation graph, mask or joint map: T::FromText), read through FileSystem so a mounted archive serves it.
 		template<typename T>
-		Ref<const T> LoadJsonAsset(const std::string& key, const char* kind, std::string& outError)
+		Ref<const T> LoadJsonAsset(const std::string& key, std::string& outError)
 		{
 			std::string readError;
 			const auto text = FileSystem::ReadTextFile(Project::ResolvePath(key), &readError);
 			if (!text)
 			{
-				outError = fmt::format("cannot read animation {} '{}' ({})", kind, key, readError);
+				// GetJsonAsset's log line names the kind and key.
+				outError = fmt::format("cannot read the file ({})", readError);
 				return nullptr;
 			}
 			auto asset = T::FromText(*text, outError);
@@ -187,7 +188,7 @@ namespace Basalt {
 			if (auto it = cache.find(key); it != cache.end())
 				return it->second.Asset;
 			CacheEntry<const T> entry;
-			entry.Asset = LoadJsonAsset<T>(key, kind, entry.Error);
+			entry.Asset = LoadJsonAsset<T>(key, entry.Error);
 			if (!entry.Asset)
 				BS_CORE_ERROR("Animation {} '{}': {}", kind, key, entry.Error);
 			return cache.emplace(key, std::move(entry)).first->second.Asset;
@@ -593,15 +594,15 @@ namespace Basalt {
 			if (changed.contains(source) || keys.contains(source))
 				keys.insert(key);
 		}
-		for (const auto& [key, entry] : s_Graphs)
-			if (changed.contains(key))
-				keys.insert(key);
-		for (const auto& [key, entry] : s_Masks)
-			if (changed.contains(key))
-				keys.insert(key);
-		for (const auto& [key, entry] : s_JointMaps)
-			if (changed.contains(key))
-				keys.insert(key);
+		// JSON assets are one file each.
+		const auto byPath = [&](const auto& cache) {
+			for (const auto& [key, entry] : cache)
+				if (changed.contains(key))
+					keys.insert(key);
+		};
+		byPath(s_Graphs);
+		byPath(s_Masks);
+		byPath(s_JointMaps);
 		// A material file's entry holds decoded texture paths: it drops when the file or a texture it names (or that texture's
 		// sidecar: a reassigned UUID) changes. A reference that did not resolve can only resolve through metadata, so such an
 		// entry drops when any sidecar changes or a file returns next to its sidecar. Imported materials drop with their model.

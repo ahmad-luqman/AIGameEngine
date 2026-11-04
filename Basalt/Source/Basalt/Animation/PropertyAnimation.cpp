@@ -12,9 +12,10 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <charconv>
 #include <map>
-#include <set>
 #include <string_view>
+#include <variant>
 
 namespace Basalt {
 	namespace {
@@ -38,15 +39,21 @@ namespace Basalt {
 			return true;
 		}
 
-		// Lanes a key's Value uses for the field (scalars use X).
-		int UsedLanes(const ComponentFieldType& type)
-		{
-			return std::max(1, static_cast<int>(type.Count));
-		}
-
 		bool IsIndex(std::string_view selector)
 		{
 			return !selector.empty() && std::ranges::all_of(selector, [](char c) { return c >= '0' && c <= '9'; });
+		}
+
+		bool HasName(const nlohmann::json& element, const std::string& uniqueField, const std::string& name)
+		{
+			return element.is_object() && element.contains(uniqueField) && element.at(uniqueField) == name;
+		}
+
+		// "a number[5] field", "an enum[3] field", "a list field": what kind of field `type` is, for messages.
+		std::string DescribeKind(const ComponentFieldType& type)
+		{
+			const std::string kind = type.Kind == ComponentFieldKind::List ? "list" : type.ToString();
+			return fmt::format("{} {} field", std::string_view("aeiou").find(kind.front()) != std::string_view::npos ? "an" : "a", kind);
 		}
 
 		// Why a key does not fit its field, or empty.
@@ -57,6 +64,10 @@ namespace Basalt {
 					return "Value must be finite";
 			if (key.Text.size() > PropertyAnimationKey::MaxTextLength)
 				return fmt::format("Text holds at most {} bytes", PropertyAnimationKey::MaxTextLength);
+			const bool text = field.Type.Kind == ComponentFieldKind::String || field.Type.Kind == ComponentFieldKind::Enum;
+			// Text on another field would be ignored: say so rather than animate the Value an agent did not mean.
+			if (!text && !key.Text.empty())
+				return fmt::format("Text must be empty: {} is {} (keys use Value)", field.Leaf, DescribeKind(field.Type));
 			switch (field.Type.Kind)
 			{
 				case ComponentFieldKind::Integer:
@@ -84,7 +95,6 @@ namespace Basalt {
 			const auto& left = next == track.Keys.begin() ? *next : *std::prev(next);
 			const auto& right = next == track.Keys.end() ? left : *next;
 			const ComponentFieldType& type = field.Type;
-			const int lanes = UsedLanes(type);
 			switch (type.Kind)
 			{
 				case ComponentFieldKind::Integer:
@@ -98,6 +108,7 @@ namespace Basalt {
 					break;
 			}
 			const double blend = track.Stepped || left.Time == right.Time ? 0 : std::clamp((static_cast<double>(time) - left.Time) / (right.Time - left.Time), 0.0, 1.0);
+			// Stepped rotations keep their keys' Euler bits: a slerp at blend 0 would still round-trip them.
 			if (type.QuaternionRotation && !track.Stepped)
 			{
 				const auto first = Math::QuatFromEuler(glm::radians(glm::vec3(left.Value)));
@@ -105,16 +116,27 @@ namespace Basalt {
 				const auto degrees = glm::degrees(Math::EulerFromQuat(glm::normalize(glm::slerp(first, second, static_cast<float>(blend)))));
 				return { degrees.x, degrees.y, degrees.z };
 			}
-			nlohmann::json value;
-			for (int lane = 0; lane < lanes; lane++)
-			{
-				const float sample = static_cast<float>(std::lerp(static_cast<double>(left.Value[lane]), static_cast<double>(right.Value[lane]), blend));
-				if (type.Count == 0)
-					value = sample;
-				else
-					value.push_back(sample);
-			}
+			const auto lerpLane = [&](int lane) { return static_cast<float>(std::lerp(static_cast<double>(left.Value[lane]), static_cast<double>(right.Value[lane]), blend)); };
+			if (type.Count == 0)
+				return lerpLane(0);
+			nlohmann::json value = nlohmann::json::array();
+			for (int lane = 0; lane < static_cast<int>(type.Count); lane++)
+				value.push_back(lerpLane(lane));
 			return value;
+		}
+
+		// How a path picks element `index` of `list`: by its unique name when that picks it alone and reads as a name
+		// (nonempty, not only digits, without ']'), otherwise by index.
+		std::string ElementSelector(const ComponentObjectSchema& element, const nlohmann::json& list, size_t index)
+		{
+			if (!element.UniqueField.empty())
+				if (const auto unique = list[index].find(element.UniqueField); unique != list[index].end() && unique->is_string())
+				{
+					const std::string& name = unique->get_ref<const std::string&>();
+					if (!name.empty() && !IsIndex(name) && name.find(']') == std::string::npos && std::ranges::count_if(list, [&](const nlohmann::json& other) { return HasName(other, element.UniqueField, name); }) == 1)
+						return name;
+				}
+			return std::to_string(index);
 		}
 
 		// Appends the paths of `fields` (described by `types`) found in `data` that `component` can animate.
@@ -126,32 +148,19 @@ namespace Basalt {
 				const auto value = data.find(name);
 				if (type == types.end() || value == data.end())
 					continue;
+				const std::string path = prefix + name;
 				if (type->second.Kind != ComponentFieldKind::List)
 				{
-					if (PropertyAnimation::ResolveField(component, prefix + name))
-						out.push_back(prefix + name);
+					if (PropertyAnimation::ResolveField(component, path))
+						out.push_back(path);
 					continue;
 				}
-				const ComponentObjectSchema& element = *type->second.Element;
 				if (!value->is_array())
 					continue;
+				const ComponentObjectSchema& element = *type->second.Element;
 				for (size_t i = 0; i < value->size(); i++)
-				{
-					const nlohmann::json& item = (*value)[i];
-					if (!item.is_object())
-						continue;
-					// The element's name, when it picks this element and no other.
-					std::string selector = std::to_string(i);
-					if (!element.UniqueField.empty())
-						if (const auto unique = item.find(element.UniqueField); unique != item.end() && unique->is_string())
-						{
-							const auto& candidate = unique->get_ref<const std::string&>();
-							const auto sameName = [&](const nlohmann::json& other) { return other.is_object() && other.contains(element.UniqueField) && other.at(element.UniqueField) == candidate; };
-							if (!candidate.empty() && !IsIndex(candidate) && candidate.find(']') == std::string::npos && std::ranges::count_if(*value, sameName) == 1)
-								selector = candidate;
-						}
-					CollectFields(component, element.Fields, element.FieldTypes, item, fmt::format("{}{}[{}].", prefix, name, selector), out);
-				}
+					if ((*value)[i].is_object())
+						CollectFields(component, element.Fields, element.FieldTypes, (*value)[i], fmt::format("{}[{}].", path, ElementSelector(element, *value, i)), out);
 			}
 		}
 	}
@@ -172,21 +181,22 @@ namespace Basalt {
 				return nullptr;
 			}
 			nlohmann::json& list = node->at(step.List);
-			if (step.Index)
+			if (const size_t* index = std::get_if<size_t>(&step.Selector))
 			{
-				if (*step.Index >= list.size())
+				if (*index >= list.size())
 				{
-					outError = fmt::format("{} has no element {} (it has {})", step.List, *step.Index, list.size());
+					outError = fmt::format("{} has no element {} (it has {})", step.List, *index, list.size());
 					return nullptr;
 				}
-				node = &list[*step.Index];
+				node = &list[*index];
 			}
 			else
 			{
-				const auto found = std::ranges::find_if(list, [&](const nlohmann::json& element) { return element.is_object() && element.contains(step.UniqueField) && element.at(step.UniqueField) == step.Name; });
+				const std::string& name = std::get<std::string>(step.Selector);
+				const auto found = std::ranges::find_if(list, [&](const nlohmann::json& element) { return HasName(element, step.UniqueField, name); });
 				if (found == list.end())
 				{
-					outError = fmt::format("{} has no element whose {} is '{}'", step.List, step.UniqueField, step.Name);
+					outError = fmt::format("{} has no element whose {} is '{}'", step.List, step.UniqueField, name);
 					return nullptr;
 				}
 				node = &*found;
@@ -200,8 +210,10 @@ namespace Basalt {
 		return &node->at(Leaf);
 	}
 
-	std::string ValidatePropertyAnimation(const PropertyAnimationComponent& c)
+	std::string ValidatePropertyAnimation(const PropertyAnimationComponent& c, std::vector<PropertyAnimationField>* outFields)
 	{
+		if (outFields)
+			outFields->clear();
 		if (!std::isfinite(c.Duration) || c.Duration <= 0 || c.Duration > 86400)
 			return "Duration must be in (0, 86400]";
 		if (!std::isfinite(c.Speed) || c.Speed < 0 || c.Speed > 1000)
@@ -213,7 +225,7 @@ namespace Basalt {
 			const auto& track = c.Tracks[i];
 			const auto location = [&] { return fmt::format("Tracks[{}] ({}.{})", i, track.Component, track.Field); };
 			std::string problem;
-			const auto field = PropertyAnimation::ResolveField(track.Component, track.Field, &problem);
+			auto field = PropertyAnimation::ResolveField(track.Component, track.Field, &problem);
 			if (!field)
 				return location() + ": " + problem;
 			if (track.Keys.size() > PropertyAnimationComponent::MaxKeys)
@@ -229,6 +241,8 @@ namespace Basalt {
 				if (std::string keyProblem = CheckKey(*field, key); !keyProblem.empty())
 					return keyLocation() + ": " + keyProblem;
 			}
+			if (outFields)
+				outFields->push_back(std::move(*field));
 		}
 		return {};
 	}
@@ -240,15 +254,19 @@ namespace Basalt {
 				*outError = std::move(problem);
 			return std::nullopt;
 		};
+		const auto notAPath = [&] { return fail(fmt::format("'{}' is not a field path (Field or List[index or name].Field)", field)); };
 		const auto* info = ComponentRegistry::Find(component);
 		if (!info)
 			return fail(fmt::format("there is no component '{}'", component));
 		if (!info->SupportsPropertyAnimation)
 			return fail(fmt::format("{} cannot be animated (physics configuration and PropertyAnimation are excluded)", component));
-		const std::map<std::string, ComponentFieldType>* types = &info->FieldTypes;
-		const std::map<std::string, std::vector<std::string>>* enums = &info->EnumOptions;
-		const std::vector<std::string>* assets = &info->AssetFields;
-		std::string unique;
+		// The schema the next name is looked up in: the component's, then each picked element's.
+		struct Schema
+		{
+			const std::map<std::string, ComponentFieldType>* Types;
+			const std::map<std::string, std::vector<std::string>>* Enums;
+			const std::vector<std::string>* Assets;
+		} schema{ &info->FieldTypes, &info->EnumOptions, &info->AssetFields };
 		PropertyAnimationField result;
 		std::string_view rest = field;
 		while (true)
@@ -256,9 +274,9 @@ namespace Basalt {
 			const size_t end = rest.find_first_of("[.");
 			const std::string name(rest.substr(0, end));
 			if (name.empty())
-				return fail(fmt::format("'{}' is not a field path (Field or List[index or name].Field)", field));
-			const auto type = types->find(name);
-			if (type == types->end())
+				return notAPath();
+			const auto type = schema.Types->find(name);
+			if (type == schema.Types->end())
 				return fail(fmt::format("{} has no field '{}'", component, name));
 			if (end == std::string_view::npos)
 			{
@@ -266,58 +284,46 @@ namespace Basalt {
 				result.Type = type->second;
 				break;
 			}
-			if (rest[end] == '.' || type->second.Kind != ComponentFieldKind::List)
-				return fail(fmt::format("'{}' is not a list, so '{}' cannot pick an element of it", name, field));
+			if (type->second.Kind != ComponentFieldKind::List)
+				return fail(fmt::format("{} is not a list, so it takes no [element] or .Field (a track animates a whole field; vector keys hold all its lanes)", name));
+			if (rest[end] == '.')
+				return fail(fmt::format("{} is a list: pick an element first, e.g. {}[0].{}", name, name, rest.substr(end + 1)));
 			const size_t close = rest.find(']', end);
 			if (close == std::string_view::npos || close + 1 >= rest.size() || rest[close + 1] != '.')
-				return fail(fmt::format("'{}' is not a field path (Field or List[index or name].Field)", field));
+				return notAPath();
 			const std::string_view selector = rest.substr(end + 1, close - end - 1);
 			const ComponentObjectSchema& element = *type->second.Element;
 			PropertyAnimationField::Step step{ .List = name, .UniqueField = element.UniqueField };
 			if (IsIndex(selector))
 			{
-				// Lists hold at most MaxCount elements, so a longer index can never pick one.
-				if (selector.size() > 9 || std::stoul(std::string(selector)) >= type->second.MaxCount)
+				// Lists hold at most MaxCount elements, so a larger index (or one past size_t) can never pick one.
+				size_t index = 0;
+				const auto [parsed, error] = std::from_chars(selector.data(), selector.data() + selector.size(), index);
+				if (error != std::errc{} || index >= type->second.MaxCount)
 					return fail(fmt::format("{} holds at most {} elements, so [{}] picks none", name, type->second.MaxCount, selector));
-				step.Index = std::stoul(std::string(selector));
+				step.Selector = index;
 			}
 			else if (selector.empty() || element.UniqueField.empty())
 				return fail(fmt::format("{} elements have no names, so pick one by index ({}[0])", name, name));
 			else
-				step.Name = selector;
+				step.Selector = std::string(selector);
 			result.Steps.push_back(std::move(step));
-			types = &element.FieldTypes;
-			enums = &element.EnumOptions;
-			assets = &element.AssetFields;
-			unique = element.UniqueField;
+			schema = { &element.FieldTypes, &element.EnumOptions, &element.AssetFields };
 			rest = rest.substr(close + 2);
 		}
 		const ComponentFieldType& type = result.Type;
-		if (std::ranges::find(*assets, result.Leaf) != assets->end())
+		if (std::ranges::find(*schema.Assets, result.Leaf) != schema.Assets->end())
 			return fail(fmt::format("{} names an asset, which tracks do not animate", result.Leaf));
-		if (!unique.empty() && result.Leaf == unique)
+		// Renaming the element mid-timeline would lose it (and the state systems key by that name).
+		if (!result.Steps.empty() && result.Leaf == result.Steps.back().UniqueField)
 			return fail(fmt::format("{} names its list element, which tracks do not animate", result.Leaf));
-		bool supported = false;
-		switch (type.Kind)
-		{
-			case ComponentFieldKind::Number:
-				supported = type.Count <= 4 && (!type.QuaternionRotation || type.Count == 3);
-				break;
-			case ComponentFieldKind::Boolean:
-			case ComponentFieldKind::Integer:
-			case ComponentFieldKind::String:
-			case ComponentFieldKind::Enum:
-				supported = type.Count == 0;
-				break;
-			default:
-				break;
-		}
+		const bool supported = result.IsDiscrete() ? type.Count == 0 : type.Kind == ComponentFieldKind::Number && type.Count <= 4 && (!type.QuaternionRotation || type.Count == 3);
 		if (!supported)
-			return fail(fmt::format("{} is {} field; tracks animate numbers (up to 4 lanes), integers, booleans, strings and enums", result.Leaf, type.ToString() == "object[]" ? "a list" : "an " + type.ToString()));
+			return fail(fmt::format("{} is {}; tracks animate numbers (up to 4 lanes) and single integers, booleans, strings and enums", result.Leaf, DescribeKind(type)));
 		if (type.Kind == ComponentFieldKind::Enum)
 		{
-			const auto options = enums->find(result.Leaf);
-			if (options == enums->end())
+			const auto options = schema.Enums->find(result.Leaf);
+			if (options == schema.Enums->end())
 				return fail(fmt::format("{} has no enum values", result.Leaf));
 			result.EnumOptions = options->second;
 		}
@@ -341,29 +347,28 @@ namespace Basalt {
 			outError = "sample requires a live entity and normalized time in [0, 1]";
 			return false;
 		}
-		outError = ValidatePropertyAnimation(animation);
+		std::vector<PropertyAnimationField> fields;
+		outError = ValidatePropertyAnimation(animation, &fields);
 		if (!outError.empty())
 			return false;
-		// Each component's JSON as serialized and as the tracks leave it, and the top-level fields they wrote, so tracks
-		// into one list compose and the list is patched once.
+		// Each component's JSON as serialized and as the tracks leave it, so tracks into one list compose and the list is
+		// patched once.
 		struct Working
 		{
 			nlohmann::json Original;
 			nlohmann::json Current;
-			std::set<std::string> Touched;
 		};
 		std::map<std::string, Working> components;
-		for (const auto& track : animation.Tracks)
+		for (size_t i = 0; i < animation.Tracks.size(); i++)
 		{
+			const PropertyAnimationTrack& track = animation.Tracks[i];
 			if (track.Keys.empty())
 				continue;
 			const auto location = [&] { return track.Component + "." + track.Field; };
-			// ValidatePropertyAnimation resolved every track.
-			const auto field = ResolveField(track.Component, track.Field);
 			const auto* info = ComponentRegistry::Find(track.Component);
-			if (!field || !info->Has(entity))
+			if (!info->Has(entity))
 			{
-				outError = location() + " must name a field of an existing component";
+				outError = fmt::format("{}: the entity has no {}", location(), track.Component);
 				return false;
 			}
 			auto [entry, inserted] = components.try_emplace(track.Component);
@@ -374,26 +379,23 @@ namespace Basalt {
 				working.Current = working.Original;
 			}
 			std::string problem;
-			nlohmann::json* current = field->Find(working.Current, problem);
+			nlohmann::json* current = fields[i].Find(working.Current, problem);
 			if (!current)
 			{
 				outError = location() + ": " + problem;
 				return false;
 			}
-			nlohmann::json value = SampleTrack(track, *field, time);
 			// Held keys and zero-speed timelines must not emit redundant system update signals.
-			if (!SameValue(field->Type, *current, value))
-			{
+			if (nlohmann::json value = SampleTrack(track, fields[i], time); !SameValue(fields[i].Type, *current, value))
 				*current = std::move(value);
-				working.Touched.insert(field->TopField());
-			}
 		}
 		for (const auto& [component, working] : components)
 		{
+			// Only fields a track changed differ (a list two tracks changed and changed back does not).
 			nlohmann::json patch = nlohmann::json::object();
-			for (const std::string& top : working.Touched)
-				if (working.Current.at(top) != working.Original.at(top))
-					patch[top] = working.Current.at(top);
+			for (const auto& [name, value] : working.Current.items())
+				if (value != working.Original.at(name))
+					patch[name] = value;
 			if (!patch.empty() && !ComponentRegistry::AddOrPatch(entity, component, patch, outError))
 				return false;
 		}
@@ -402,57 +404,59 @@ namespace Basalt {
 
 	bool PropertyAnimation::Key(Entity entity, const std::string& component, const std::string& field, float time, std::string& outError)
 	{
-		std::string problem;
-		const auto resolved = ResolveField(component, field, &problem);
 		if (!entity || !std::isfinite(time) || time < 0 || time > 1)
 		{
 			outError = "key requires a live entity and normalized time in [0, 1]";
 			return false;
 		}
-		if (!resolved)
-		{
-			outError = fmt::format("cannot key {}.{}: {}", component, field, problem);
+		std::string problem;
+		const auto resolved = ResolveField(component, field, &problem);
+		const auto fail = [&](const std::string& reason) {
+			outError = fmt::format("cannot key {}.{}: {}", component, field, reason);
 			return false;
-		}
+		};
+		if (!resolved)
+			return fail(problem);
 		const auto* info = ComponentRegistry::Find(component);
 		if (!info->Has(entity))
-		{
-			outError = fmt::format("cannot key {}.{}: the entity has no {}", component, field, component);
-			return false;
-		}
+			return fail("the entity has no " + component);
 		nlohmann::json data = info->Serialize(entity);
 		const nlohmann::json* value = resolved->Find(data, problem);
 		if (!value)
-		{
-			outError = fmt::format("cannot key {}.{}: {}", component, field, problem);
-			return false;
-		}
+			return fail(problem);
 		nlohmann::json lanes = nlohmann::json::array({ 0.0f, 0.0f, 0.0f, 0.0f });
 		std::string text;
 		const ComponentFieldType& type = resolved->Type;
+		// The registry writes each field as its declared kind; a value of another type is reported, never thrown on.
+		const auto mismatched = [&] { return fail(fmt::format("its value {} is not {}", value->dump(), DescribeKind(type))); };
 		switch (type.Kind)
 		{
 			case ComponentFieldKind::Integer:
-				if (value->get<uint64_t>() > PropertyAnimationField::MaxInteger)
-				{
-					outError = fmt::format("cannot key {}.{}: its value {} is past {}, the largest integer a key holds", component, field, value->get<uint64_t>(), PropertyAnimationField::MaxInteger);
-					return false;
-				}
-				lanes[0] = static_cast<float>(value->get<uint64_t>());
+			{
+				if (!value->is_number_unsigned())
+					return mismatched();
+				const uint64_t integer = value->get<uint64_t>();
+				if (integer > PropertyAnimationField::MaxInteger)
+					return fail(fmt::format("its value {} is past {}, the largest integer a key holds", integer, PropertyAnimationField::MaxInteger));
+				lanes[0] = static_cast<float>(integer);
 				break;
+			}
 			case ComponentFieldKind::Boolean:
+				if (!value->is_boolean())
+					return mismatched();
 				lanes[0] = value->get<bool>() ? 1.0f : 0.0f;
 				break;
 			case ComponentFieldKind::String:
 			case ComponentFieldKind::Enum:
+				if (!value->is_string())
+					return mismatched();
 				text = value->get<std::string>();
 				if (text.size() > PropertyAnimationKey::MaxTextLength)
-				{
-					outError = fmt::format("cannot key {}.{}: its value is longer than {} bytes", component, field, PropertyAnimationKey::MaxTextLength);
-					return false;
-				}
+					return fail(fmt::format("its value is longer than {} bytes", PropertyAnimationKey::MaxTextLength));
 				break;
 			default:
+				if (type.Count == 0 ? !value->is_number() : !value->is_array() || value->size() != type.Count)
+					return mismatched();
 				if (type.Count == 0)
 					lanes[0] = *value;
 				else
@@ -463,9 +467,17 @@ namespace Basalt {
 		const auto* animationInfo = ComponentRegistry::Find("PropertyAnimation");
 		auto animation = animationInfo->Has(entity) ? animationInfo->Serialize(entity) : nlohmann::json{ { "Tracks", nlohmann::json::array() } };
 		auto& tracks = animation["Tracks"];
+		// Tracks match by the field they reach, so "Layers[0].Weight" keys the track written "Layers[Upper].Weight".
+		const auto reaches = [&](const nlohmann::json& existing) {
+			if (existing.at("Component") != component)
+				return false;
+			std::string ignored;
+			const auto other = ResolveField(component, existing.at("Field").get<std::string>());
+			return other && other->Find(data, ignored) == value;
+		};
 		auto track = tracks.end(), fallback = tracks.end();
 		for (auto it = tracks.begin(); it != tracks.end(); ++it)
-			if (it->at("Component") == component && it->at("Field") == field)
+			if (reaches(*it))
 			{
 				fallback = it;
 				if (!it->at("Keys").empty())

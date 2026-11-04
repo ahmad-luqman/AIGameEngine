@@ -966,15 +966,20 @@ TEST_SUITE("Retargeting")
 			return true;
 		};
 		const glm::quat lowered = glm::angleAxis(glm::radians(40.0f), glm::vec3(0, 0, 1));
+		// Lowers `node`'s rest by 40 degrees and adds a one-key "TPose" clip holding its old rest, which stands in the other
+		// rest style.
+		const auto lowerRest = [&](MeshSource& mesh, uint32_t node, AnimationInterpolation interpolation) -> const AnimationClip& {
+			const glm::quat rest = mesh.Nodes[node].Rotation;
+			AnimationClip clip{ .Name = "TPose", .Duration = 1 };
+			clip.Tracks.push_back({ .Node = node, .Path = AnimationPath::Rotation, .Interpolation = interpolation, .Times = { 0 }, .Values = { glm::vec4(rest.x, rest.y, rest.z, rest.w) } });
+			mesh.Nodes[node].Rotation = rest * lowered;
+			mesh.Animations.push_back(std::move(clip));
+			return mesh.Animations.back();
+		};
 
 		// A library authored in another rest style: its left arm rests lowered, while its clips pose the arm as before.
 		auto library = CreateRef<MeshSource>(*rigs.Source);
-		const uint32_t sourceArm = Node(*library, "mixamorig:LeftArm");
-		AnimationClip tPose{ .Name = "TPose", .Duration = 1 };
-		const glm::quat sourceRest = library->Nodes[sourceArm].Rotation;
-		tPose.Tracks.push_back({ .Node = sourceArm, .Path = AnimationPath::Rotation, .Interpolation = AnimationInterpolation::Linear, .Times = { 0 }, .Values = { glm::vec4(sourceRest.x, sourceRest.y, sourceRest.z, sourceRest.w) } });
-		library->Nodes[sourceArm].Rotation = sourceRest * lowered;
-		library->Animations.push_back(tPose);
+		const AnimationClip tPose = lowerRest(*library, Node(*library, "mixamorig:LeftArm"), AnimationInterpolation::Linear);
 		std::vector<std::string> warnings;
 		AnimationClip baked;
 		std::string error;
@@ -991,11 +996,8 @@ TEST_SUITE("Retargeting")
 
 		// The model side: a model whose arm rests lowered, with a clip that stands like the library's rest pose.
 		auto model = CreateRef<MeshSource>(*rigs.Target);
-		AnimationClip modelTPose{ .Name = "TPose", .Duration = 1 };
-		const glm::quat targetRest = model->Nodes[upperArm].Rotation;
-		modelTPose.Tracks.push_back({ .Node = upperArm, .Path = AnimationPath::Rotation, .Interpolation = AnimationInterpolation::Step, .Times = { 0 }, .Values = { glm::vec4(targetRest.x, targetRest.y, targetRest.z, targetRest.w) } });
-		model->Nodes[upperArm].Rotation = targetRest * lowered;
-		model->Animations.push_back(modelTPose);
+		// A copy: model->Animations grows below.
+		const AnimationClip modelTPose = AnimationClip(lowerRest(*model, upperArm, AnimationInterpolation::Step));
 		const RetargetMap modelPlain = Retargeting::BuildMap(*model, *rigs.Source, {}, warnings);
 		REQUIRE(Retargeting::BakeClip(*model, *rigs.Source, modelPlain, wave, baked, warnings, error));
 		CHECK_FALSE(samePoses(*model, baked));
@@ -1023,9 +1025,58 @@ TEST_SUITE("Retargeting")
 		broken.Tracks[0].Values[0] = glm::vec4(std::numeric_limits<float>::quiet_NaN());
 		broken.Name = "Broken";
 		library->Animations.push_back(broken);
-		const auto nonFinite = plan({ .Mesh = "Library.gltf", .ReferenceClip = "Broken" });
+		// A reference pose that is not finite says which, on both sides at once.
+		AnimationClip brokenModel = modelTPose;
+		brokenModel.Tracks[0].Values[0] = glm::vec4(std::numeric_limits<float>::quiet_NaN());
+		brokenModel.Name = "BrokenModel";
+		model->Animations.push_back(brokenModel);
+		const auto nonFinite = plan({ .Mesh = "Library.gltf", .ReferenceClip = "Broken", .ModelReferenceClip = "BrokenModel" });
 		CHECK(nonFinite.Error == "a rest or reference pose is not finite");
-		CHECK(HasText(nonFinite.Warnings, "the rest or reference pose of"));
+		CHECK(HasText(nonFinite.Warnings, fmt::format("the pose of reference clip 'Broken' at 0 s of '{}' is not finite, so no clip can be retargeted", library->Key)));
+		CHECK(HasText(nonFinite.Warnings, fmt::format("the pose of reference clip 'BrokenModel' at 0 s of '{}' is not finite", model->Key)));
+		// A time without its clip does nothing, which is most likely a half-done setup.
+		CHECK(HasText(plan({ .Mesh = "Library.gltf", .ModelReferenceTime = 0.5f }).Warnings, "ModelReferenceTime 0.5 has no ModelReferenceClip, so the rest pose is used"));
+	}
+
+	TEST_CASE("Reference corrections of joints a clip leaves alone are baked, at the reference time")
+	{
+		const Rigs rigs;
+		const uint32_t upperArm = Node(*rigs.Target, "upperarm_l");
+		const glm::quat lowered = glm::angleAxis(glm::radians(40.0f), glm::vec3(0, 0, 1));
+		// A model whose arm rests lowered, with a two-key clip that stands in the library's rest style only at 1 s.
+		auto model = CreateRef<MeshSource>(*rigs.Target);
+		const glm::quat targetRest = model->Nodes[upperArm].Rotation;
+		const glm::quat aPose = targetRest * lowered;
+		model->Nodes[upperArm].Rotation = aPose;
+		AnimationClip reference{ .Name = "TPose", .Duration = 1 };
+		reference.Tracks.push_back({ .Node = upperArm, .Path = AnimationPath::Rotation, .Interpolation = AnimationInterpolation::Linear, .Times = { 0, 1 }, .Values = { glm::vec4(aPose.x, aPose.y, aPose.z, aPose.w), glm::vec4(targetRest.x, targetRest.y, targetRest.z, targetRest.w) } });
+		model->Animations.push_back(reference);
+		// A library clip that turns only the head: the arm's corrected rotation is constant, yet it must play.
+		auto library = CreateRef<MeshSource>(*rigs.Source);
+		const uint32_t head = Node(*library, "mixamorig:Head");
+		const glm::quat nod = library->Nodes[head].Rotation * glm::angleAxis(glm::radians(20.0f), glm::vec3(1, 0, 0));
+		AnimationClip headOnly{ .Name = "HeadOnly", .Duration = 1 };
+		headOnly.Tracks.push_back({ .Node = head, .Path = AnimationPath::Rotation, .Interpolation = AnimationInterpolation::Linear, .Times = { 0, 1 }, .Values = { glm::vec4(library->Nodes[head].Rotation.x, library->Nodes[head].Rotation.y, library->Nodes[head].Rotation.z, library->Nodes[head].Rotation.w), glm::vec4(nod.x, nod.y, nod.z, nod.w) } });
+		library->Animations.push_back(headOnly);
+		const auto armAt = [&](const Ref<const AnimationClipSet>& set) {
+			std::vector<glm::mat4> globals;
+			REQUIRE(EvaluateAnimation(*model, &(*set)[set->Find("HeadOnly")], 0.5f, globals));
+			return GlobalRotation(globals, upperArm);
+		};
+		std::vector<glm::mat4> rest;
+		REQUIRE(EvaluateAnimation(*rigs.Target, nullptr, 0, rest));
+		const glm::quat tPoseArm = GlobalRotation(rest, upperArm);
+		// At 1 s the reference stands in the library's style: the arm plays raised, as on the T-pose model.
+		const auto referenced = AnimationClipSet::Build(model, { AnimationClipSet::Library{ .Entry = { .Mesh = "Library.gltf", .ModelReferenceClip = "TPose", .ModelReferenceTime = 1 }, .Source = library } });
+		REQUIRE(referenced->GetLibraries()[0].Error.empty());
+		CHECK(NearRotation(armAt(referenced), tPoseArm));
+		// At 0 s it is the A-pose itself, so nothing is corrected and the arm keeps its lowered rest.
+		const auto early = AnimationClipSet::Build(model, { AnimationClipSet::Library{ .Entry = { .Mesh = "Library.gltf", .ModelReferenceClip = "TPose", .ModelReferenceTime = 0 }, .Source = library } });
+		CHECK_FALSE(NearRotation(armAt(early), tPoseArm));
+		// Without a reference no constant track is added: the baked clip moves only what the source moves.
+		const auto plain = AnimationClipSet::Build(rigs.Target, { AnimationClipSet::Library{ .Entry = { .Mesh = "Library.gltf" }, .Source = library } });
+		const AnimationClip& baked = (*plain)[plain->Find("HeadOnly")];
+		CHECK(std::ranges::none_of(baked.Tracks, [&](const AnimationTrack& track) { return track.Node == upperArm; }));
 	}
 
 	TEST_CASE("Joint map files parse strictly and their pairs follow a library's own Joints")
@@ -1073,6 +1124,19 @@ TEST_SUITE("Retargeting")
 		CHECK(CombineJointPairs(entry, nullptr) == entry.Joints);
 		const AnimationClipLibrary targetOverride{ .Joints = { { "mixamorig:Neck", "head" } } };
 		CHECK(CombineJointPairs(targetOverride, &*map).size() == 2);
+		// An inline entry still missing a name (an inspector addition) overrides nothing.
+		const AnimationClipLibrary halfNamed{ .Joints = { { "", "head" }, { "mixamorig:LeftArm", "" } } };
+		CHECK(CombineJointPairs(halfNamed, &*map).size() == 4);
+
+		// Loading reports a model and a joint map that both fail, together.
+		const AnimatorComponent animator{ .ClipLibraries = { { .Mesh = "Gone.gltf", .JointMap = "Gone.bjointmap" } } };
+		const AnimationClipSet::Resolver failing{
+			.Mesh = [](const std::string&, std::string& outError) { outError = "no such model"; return Ref<MeshSource>(); },
+			.JointMap = [](const std::string&, std::string& outError) { outError = "no such map"; return Ref<const AnimationJointMap>(); },
+		};
+		const auto loaded = AnimationClipSet::Load(animator, failing);
+		REQUIRE(loaded.size() == 1);
+		CHECK(loaded[0].Error == "cannot load: no such model; cannot load joint map 'Gone.bjointmap': no such map");
 	}
 
 	TEST_CASE("Joint map assets are shared, saved by identity, validated and reload the clip set")
@@ -1135,9 +1199,16 @@ TEST_SUITE("Retargeting")
 		Run(registry, session, "asset.refresh", nlohmann::json::object());
 		const auto since = Log::GetHistory().GetTotalCount();
 		Run(registry, session, "play.step", { { "frames", 1 } });
-		CHECK(CountLogMessages(since, "clip library 'Assets/Models/MixamoRig.gltf' adds no clips: cannot load joint map 'Assets/Rigs/Mixamo.bjointmap'") == 1);
+		CHECK(CountLogMessages(since, "clip library 'Assets/Models/MixamoRig.gltf' adds no clips: cannot load joint map 'Assets/Rigs/Mixamo.bjointmap': Joints must be an array") == 1);
 		CHECK(HasText(GetAnimationWarnings(play.FindEntityByName("Hero")), "adds no clips: cannot load joint map 'Assets/Rigs/Mixamo.bjointmap'"));
+		// Fixing the file retargets again and the problem goes.
+		Run(registry, session, "asset.write", { { "path", "Assets/Rigs/Mixamo.bjointmap" }, { "content", R"({ "Joints": [ { "Source": "mixamorig:LeftArm", "Target": "clavicle_l" } ] })" } });
+		Run(registry, session, "asset.refresh", nlohmann::json::object());
+		Run(registry, session, "play.step", { { "frames", 1 } });
+		CHECK(NearRotation(clavicleRotation(), mapped));
+		CHECK_FALSE(HasText(GetAnimationWarnings(play.FindEntityByName("Hero")), "cannot load joint map"));
 		Run(registry, session, "play.stop", nlohmann::json::object());
+		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/Rigs/Mixamo.bjointmap"), "{}"));
 
 		// project.validate reports the broken file.
 		ValidationReport report = ValidateProject(*Project::GetActive());
