@@ -58,6 +58,26 @@ namespace Basalt {
 			}
 			return closest + glm::normalize(offset) * reach;
 		}
+
+		// `point` turned about `head` to within `maxAngle` of the direction `head` to `target`, at its distance from head.
+		glm::vec3 LimitAngle(const glm::vec3& head, const glm::vec3& point, const glm::vec3& target, float maxAngle)
+		{
+			const glm::vec3 offset = point - head, axisOffset = target - head;
+			const float length = glm::length(offset), axisLength = glm::length(axisOffset);
+			if (length < Epsilon || axisLength < Epsilon)
+				return point;
+			const glm::vec3 direction = offset / length, axis = axisOffset / axisLength;
+			const float cosine = glm::dot(direction, axis);
+			if (cosine >= std::cos(maxAngle))
+				return point;
+			// Toward `direction` from the axis; any side for a point straight behind it.
+			glm::vec3 side = direction - axis * cosine;
+			for (const glm::vec3 fallback : { glm::vec3(0, 1, 0), glm::vec3(1, 0, 0) })
+				if (glm::length(side) < Epsilon)
+					side = glm::cross(axis, fallback);
+			side = glm::normalize(side);
+			return head + (axis * std::cos(maxAngle) + side * std::sin(maxAngle)) * length;
+		}
 	}
 
 	void SimulateSpringChain(const SpringSimulationRequest& request, std::span<SpringPoint> points)
@@ -66,6 +86,7 @@ namespace Basalt {
 		BS_CORE_ASSERT(request.Animated.size() == count + 1 && request.PreviousAnimated.size() == count + 1, "one animated position per joint plus the tip");
 		BS_CORE_ASSERT(count <= SpringChain::MaxChainLength, "chains have at most MaxChainLength joints");
 		BS_CORE_ASSERT(request.Stiffness >= 0 && request.Stiffness <= SpringChain::MaxStiffness && request.Damping >= 0 && request.Radius >= 0, "settings outside their ranges add energy or overflow");
+		BS_CORE_ASSERT(request.MaxAngle >= 0 && request.MaxAngle <= std::numbers::pi_v<float>, "MaxAngle is between 0 and pi");
 		constexpr float longest = static_cast<float>(MaxSpringSteps) / SpringStepRate;
 		// The buffers below hold MaxChainLength joints: a longer chain (only C++ callers past the assert) is not
 		// simulated.
@@ -85,6 +106,8 @@ namespace Basalt {
 		const uint32_t steps = std::clamp(static_cast<uint32_t>(std::ceil(seconds * SpringStepRate)), 1u, MaxSpringSteps);
 		const float step = seconds / static_cast<float>(steps);
 		const float decay = std::exp(-request.Damping * step);
+		// Below pi the limit can bind; at pi every direction is inside it.
+		const bool limited = request.MaxAngle < std::numbers::pi_v<float>;
 		std::array<glm::vec3, SpringChain::MaxChainLength + 1> animated{};
 		for (uint32_t substep = 1; substep <= steps; substep++)
 		{
@@ -106,11 +129,19 @@ namespace Basalt {
 				// correctly; updating it before the position (semi-implicit Euler) keeps the stiff pull stable.
 				point.Velocity = point.Velocity * decay + (request.Stiffness * (target - point.Position) + request.Acceleration) * step;
 				glm::vec3 next = KeepLength(head, point.Position + point.Velocity * step, length, target);
+				if (limited)
+					next = LimitAngle(head, next, target, request.MaxAngle);
 				for (uint32_t iteration = 0; iteration < SpringConstraintIterations; iteration++)
 				{
 					bool pushed = false;
 					for (const SpringCollisionShape& shape : request.Colliders)
 						if (const auto out = PushOut(shape, next, request.Radius, next - head))
+						{
+							next = *out;
+							pushed = true;
+						}
+					if (request.World)
+						if (const auto out = request.World(next))
 						{
 							next = *out;
 							pushed = true;

@@ -960,12 +960,13 @@ namespace Basalt {
 		// Update already reported an invalid step; attachments still follow the rigs.
 		const bool validStep = std::isfinite(seconds) && seconds >= 0;
 		if (validStep)
+		{
 			SolveIK(seconds);
-		// Spring bones, ragdolls and attachments wait for Play in a preview (attachments would move edit entities).
+			SolveSprings(seconds);
+		}
+		// Ragdolls and attachments wait for Play in a preview (attachments would move edit entities).
 		if (m_Preview)
 			return;
-		if (validStep)
-			SolveSprings(seconds);
 		ApplyRagdolls();
 		UpdateAttachments();
 	}

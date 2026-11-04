@@ -45,8 +45,8 @@ namespace Basalt {
 	// playback crossed (TakeEvents). The scene runs LateUpdate (inverse kinematics, spring bones, ragdoll physics, then attachments) after
 	// physics and OnLateUpdate; standalone callers get it at the end of Update by default.
 	// A preview system (Scene::UpdateAnimationPreview) animates only Animators with Preview in an edit scene: clips, state
-	// machines, layers and inverse kinematics, never writing the scene (no root-motion displacement, events, spring bones,
-	// ragdolls or attachments).
+	// machines, layers, inverse kinematics and spring bones (without physics bodies), never writing the scene (no
+	// root-motion displacement, events, ragdolls or attachments).
 	class AnimationSystem
 	{
 	public:
@@ -604,8 +604,9 @@ namespace Basalt {
 		void SolveSprings(float seconds);
 		void SolveEntitySprings(Entity entity, Playback& playback, const SpringBoneComponent& component, SpringState& state, float seconds);
 		SpringState& SyncSprings(Entity entity, const SpringBoneComponent& component);
-		// Fills `out` with the colliders in world space from the pose's globals, resolving their joints when needed.
-		static void ResolveSpringColliders(const Ref<MeshSource>& source, const SpringBoneComponent& component, SpringState& state, const glm::mat4& world, const std::vector<glm::mat4>& globals, std::vector<SpringCollisionShape>& out, std::vector<std::string>& problems);
+		// Fills `out` with the colliders in world space from the pose's globals, resolving their joints when needed, and
+		// `outSources` with each one's index in the component's Colliders (invalid colliders are left out).
+		static void ResolveSpringColliders(const Ref<MeshSource>& source, const SpringBoneComponent& component, SpringState& state, const glm::mat4& world, const std::vector<glm::mat4>& globals, std::vector<SpringCollisionShape>& out, std::vector<uint32_t>& outSources, std::vector<std::string>& problems);
 		void OnSpringDestroy(entt::registry& registry, entt::entity handle);
 		// A pass's overlay: &Playback::IKOverlay, &Playback::SpringOverlay or &Playback::RagdollOverlay.
 		using Overlay = std::vector<OverlayEntry> Playback::*;
@@ -733,6 +734,8 @@ namespace Basalt {
 		std::vector<float> m_Weights;
 		std::vector<glm::mat4> m_OverlayGlobals;
 		std::vector<SpringCollisionShape> m_SpringColliders;
+		std::vector<uint32_t> m_SpringColliderSources;
+		std::vector<SpringCollisionShape> m_SpringChainColliders;
 		std::vector<glm::vec3> m_SpringAnimated;
 		std::vector<glm::vec3> m_SpringTargets;
 		// The nodes a pass moved (IK, then springs).

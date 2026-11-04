@@ -2,6 +2,9 @@
 
 #include "Basalt/Animation/AnimationPose.h"
 
+#include <functional>
+#include <numbers>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -37,11 +40,17 @@ namespace Basalt {
 		std::span<const glm::vec3> Animated;
 		std::span<const glm::vec3> PreviousAnimated;
 		std::span<const SpringCollisionShape> Colliders;
+		// Other things points stay outside (physics bodies): the point (with Radius) moved out of what it penetrates, or
+		// nullopt when it is clear. Empty: none.
+		std::function<std::optional<glm::vec3>(const glm::vec3&)> World;
 		// Pull (1/s², 0..SpringChain::MaxStiffness) toward the animated shape, velocity decay (1/s, nonnegative), and the
 		// points' radius against the colliders.
 		float Stiffness = 0;
 		float Damping = 0;
 		float Radius = 0;
+		// Radians (0..pi): how far each bone may swing away from where the animated shape (turned with the simulated bones
+		// before it) points it; pi leaves it free.
+		float MaxAngle = std::numbers::pi_v<float>;
 		// Gravity and wind (m/s²).
 		glm::vec3 Acceleration = glm::vec3(0);
 		float Seconds = 0;
@@ -51,13 +60,14 @@ namespace Basalt {
 	// Substeps per frame at most. A longer frame (a hitch) simulates only its last MaxSpringSteps / SpringStepRate
 	// seconds; the points first move along with the chain's first joint for the rest, so the hitch does not whip them.
 	inline constexpr uint32_t MaxSpringSteps = 8;
-	// How many times each substep alternates pushing a point out of the colliders and back to its bone length. A point
-	// that can stay outside every collider at its length usually ends up there; overlapping colliders can leave it
-	// slightly inside.
+	// How many times each substep alternates pushing a point out of the colliders (then the world) and back to its bone
+	// length. A point that can stay outside every collider at its length usually ends up there; overlapping colliders
+	// can leave it slightly inside.
 	inline constexpr uint32_t SpringConstraintIterations = 4;
 	// Advances `points` (one per joint) by request.Seconds. Each point keeps its animated distance from the point
 	// before it (from the first joint for the first point), is pulled toward where the animated chain shape puts it
-	// relative to the simulated points before it, and is pushed out of the colliders.
+	// relative to the simulated points before it, swings at most MaxAngle away from there, and is pushed out of the
+	// colliders and the world, which win over the angle limit.
 	void SimulateSpringChain(const SpringSimulationRequest& request, std::span<SpringPoint> points);
 
 	// Fills outJoints with the chain's joints followed by its tip (Joint, then each joint's first child, ChainLength

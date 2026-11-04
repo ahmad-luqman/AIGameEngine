@@ -1302,10 +1302,11 @@ the selected clip is held at time 0 until played. Edit mode shows the authored r
 
 **Edit-mode preview.** With the Animator's `Preview` on, the editor plays it in the scene view while editing (regardless
 of `PlayOnStart`): its clip or state machine (a state machine at its parameters' defaults, so its blend-space states
-sample at those values; a `Clip` naming a blend space plays it at (0, 0)), layers (clips and graphs) and inverse kinematics
+sample at those values; a `Clip` naming a blend space plays it at (0, 0)), layers (clips and graphs), inverse kinematics
 (script-free targets: `FollowTarget` chains follow `Target`; foot locks work, ground placement does not, as edit mode has
-no physics). The preview never changes the scene: root motion plays in place (the entity stays where it was
-authored), events are not delivered, and spring bones, ragdolls and bone attachments wait for Play. Component edits
+no physics) and spring bones (they swing as the entity is moved in the editor and stay outside the component's colliders;
+`CollidePhysics` waits for Play). The preview never changes the scene: root motion plays in place (the entity stays where
+it was authored), events are not delivered, and ragdolls and bone attachments wait for Play. Component edits
 apply at the next frame; turning `Preview` off returns the rest pose, and Play starts every Animator afresh.
 
 `LODDistance` (default 0, disabled) and `LODInterval` (1–60 updates, default 1) opt into
@@ -1692,9 +1693,10 @@ scripts drive them; a MeshComponent draws its mesh's default weights.
 ### Spring bones
 
 A `SpringBone` component on an Animator's entity adds secondary motion to hair, capes, tails and ears every frame the
-scene plays or simulates, right after inverse kinematics (so chains hang from the solved pose) and before attachments.
-Each chain's joints follow simulated points that lag behind the character's motion, sag under gravity and wind, stay
-outside colliders and spring back toward the animated shape.
+scene plays or simulates (and in the editor's Animator preview), right after inverse kinematics (so chains hang from the
+solved pose) and before attachments. Each chain's joints follow simulated points that lag behind the character's motion,
+sag under gravity and wind, stay outside colliders (and, optionally, physics bodies) within an optional angle limit, and
+spring back toward the animated shape.
 
 ```lua
 hero:AddComponent("SpringBone", {
@@ -1722,14 +1724,26 @@ hero:SetComponent("SpringBone", springs)
 | `GravityFactor` | Scales the physics gravity (-100..100, default 1) |
 | `Radius` | Radius (0..100, default 0.02) of each point against the colliders, in the entity's units: it scales with the entity |
 | `Weight` | 0..1 blend from the animated pose (0) to the simulation (1); the simulation keeps running at 0 |
+| `MaxAngle` | Degrees (0..180, default 180 = free): how far each bone may swing away from where the animated shape, turned with the swung bones before it, points it, for stiff appendages (a tail that bends at most 20° per joint). 0 keeps the animated shape. Colliders and physics bodies win over the limit |
+| `Colliders` | The component's colliders this chain stays outside, by `Name` (`{ { Name = "Head" } }`); empty (default): every collider. Several colliders may share a name, which then names all of them |
+| `CollidePhysics` | Also stay outside physics bodies (default false): see below |
 
-`Colliders` are spheres or capsules attached to joints (`Joint`; empty: the entity itself) at `Offset` in the joint's
-space, with `Radius` (default 0.1) and `HalfHeight` (0: a sphere; otherwise a capsule along the joint's local Y axis,
+`Colliders` are spheres or capsules attached to joints (`Joint`; empty: the entity itself), optionally named (`Name`, for
+chains' `Colliders` lists), at `Offset` in the joint's space, with `Radius` (default 0.1) and `HalfHeight` (0: a sphere; otherwise a capsule along the joint's local Y axis,
 `HalfHeight` to each side of `Offset`), both in the joint's space (they scale with it, by its average axis scale) or
 the entity's. They keep the points of every chain of the component outside them as far as a point can stay outside at
 its bone length (overlapping colliders may leave it slightly inside). They follow the pose before
-any chain swings, so a collider on a swinging joint stays where the animation puts it. `Wind` is a world-space
-acceleration (m/s²) added to every point.
+any chain swings, so a collider on a swinging joint stays where the animation puts it. A chain with a `Colliders` list
+collides only with the colliders it names (so hair can rest on the head while a cape brushes the legs); a name that
+matches no collider is warned about. `Wind` is a world-space acceleration (m/s²) added to every point.
+
+With `CollidePhysics`, a chain's points also stay outside physics bodies while the scene plays or simulates (a cape against
+walls, hair on the ground): every body whose bounds come within the chain's reach of its first joint, at most the nearest
+32 (a problem is logged when more are near), except triggers, the entity's own bodies and its descendants', and the
+character controller it belongs to (on it or an ancestor) and that controller's descendants. Each point is pushed out
+of the body it penetrates most deeply along the shortest way out, then back to its bone length, as for colliders; mesh
+triangles push from their front faces only, and dynamic bodies are not pushed back. The bodies are read once per frame,
+where physics left them. Each substep, the angle limit applies first, then the colliders, then the bodies.
 
 Points simulate in world space in equal substeps of at most 1/120 s, so a moving or turning character swings its
 chains, and every bone keeps its animated length (scaled with the entity). A frame longer than 1/15 s (a hitch)
@@ -1741,7 +1755,9 @@ moves faster than 100 m/s (a teleport or respawn: about 1.7 m in one 60 Hz frame
 raises an error without a SpringBone component.
 
 Problems are logged once and the chain (or the component) skipped: chains whose joints are missing, have no child,
-are fewer than `ChainLength` in a line or have fixed glTF matrices; unknown collider joints; a non-finite physics
+are fewer than `ChainLength` in a line or have fixed glTF matrices; unknown collider joints; chain `Colliders` names that
+match no collider (the chain still collides with the ones that match); more physics bodies near a chain than it reads; a
+non-finite physics
 gravity or `Wind`, or the two overflowing together (ignored); points that go non-finite (the chain restarts); and a
 SpringBone whose Animator cannot animate. A chain the animation scales to nothing (hiding it) has nothing to swing,
 quietly. The inspector and `scene.info` show the authoring problems too and warn when two chains turn the same joint
