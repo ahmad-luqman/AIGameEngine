@@ -95,6 +95,14 @@ namespace Basalt {
 			BS_CORE_CRITICAL("{}", error);
 		if (!commandLine.GetErrors().empty())
 			return nullptr;
+		// A player sees a message box after a crash or a failed start; automated runs (no window, or a frame count) never
+		// block on one. Decided first: the project and its assets load before the rest of the options are read.
+		CrashReporter::SetDialogEnabled(!commandLine.HasFlag("headless") && !commandLine.HasFlag("offscreen") && commandLine.GetInteger("frames").value_or(0) <= 0);
+		const auto fail = [](const std::string& message) -> Application* {
+			BS_CORE_CRITICAL("{}", message);
+			CrashReporter::ShowErrorDialog(message);
+			return nullptr;
+		};
 
 		RuntimeOptions options;
 		// An exported game ships its project file next to the executable (in Contents/Resources of a macOS bundle).
@@ -106,29 +114,17 @@ namespace Basalt {
 		std::error_code directoryError;
 		const bool isDirectory = std::filesystem::is_directory(projectPath, directoryError);
 		if (directoryError && directoryError != std::errc::no_such_file_or_directory)
-		{
-			BS_CORE_CRITICAL("Cannot inspect '{}': {}", FileSystem::PathToUtf8(projectPath), directoryError.message());
-			return nullptr;
-		}
+			return fail(fmt::format("Cannot inspect '{}': {}", FileSystem::PathToUtf8(projectPath), directoryError.message()));
 		const std::filesystem::path projectDirectory = isDirectory ? projectPath : projectPath.parent_path();
 		if (!Exporter::MountExportedArchive(projectDirectory, error))
-		{
-			BS_CORE_CRITICAL("Cannot open the game's assets: {}", error);
-			return nullptr;
-		}
+			return fail("Cannot open the game's assets: " + error);
 		Ref<Project> project = Project::Load(projectPath, error);
 		if (!project)
-		{
-			BS_CORE_CRITICAL("Cannot load project: {}", error);
-			return nullptr;
-		}
+			return fail("Cannot load project: " + error);
 		// The asset registry only reads UUIDs from an archive mounted at its project's folder; a mismatch (another spelling
 		// of the path) would leave every UUID reference unresolved without saying why.
 		if (FileSystem::Exists(projectDirectory / Project::ArchiveFileName) && !FileSystem::GetMountedArchive(project->GetDirectory()))
-		{
-			BS_CORE_CRITICAL("The game's {} is not mounted at its project folder '{}'", Project::ArchiveFileName, FileSystem::PathToUtf8(project->GetDirectory()));
-			return nullptr;
-		}
+			return fail(fmt::format("The game's {} is not mounted at its project folder '{}'", Project::ArchiveFileName, FileSystem::PathToUtf8(project->GetDirectory())));
 		Project::SetActive(project);
 		CrashReporter::SetContext("Project: " + project->GetConfig().Name + " " + project->GetConfig().Version);
 
@@ -247,8 +243,6 @@ namespace Basalt {
 				return nullptr;
 			}
 		}
-		// A player sees a message box after a crash; automated runs (no window, or a frame count) never block on one.
-		CrashReporter::SetDialogEnabled(!specification.Headless && !specification.Offscreen && options.MaxFrames == 0);
 		return new RuntimeApplication(specification, options);
 	}
 

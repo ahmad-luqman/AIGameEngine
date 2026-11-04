@@ -1,6 +1,7 @@
 #include "Basalt/Core/JobSystem.h"
 
 #include "Basalt/Core/Assert.h"
+#include "Basalt/Core/CrashReporter.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Core/Profiler.h"
 
@@ -142,6 +143,7 @@ namespace Basalt {
 	void JobSystem::Worker(size_t queue)
 	{
 		BS_PROFILE_THREAD("Basalt worker");
+		const CrashReporter::ThreadStack crashStack;
 		for (;;)
 		{
 			Task task;

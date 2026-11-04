@@ -2784,12 +2784,13 @@ Creates a new project directory (Project.bproject + Assets/) and opens it.
 
 ### `project.export`
 
-Validates the project (unless validate is false), exports a standalone, distributable build of the game (runtime + assets; with package: true a platform package, see Docs/Shipping.md) and optionally smoke-tests it: runs the exported game headless for smokeTestFrames frames and fails unless it exits cleanly without script errors. Returns {executable (what the smoke test runs), package (what to distribute), files, validation, archive? ({files, compressed (files kept zstd-compressed), size (uncompressed bytes), archiveSize (bytes on disk)}), warnings?, smokeTest?}.
+Validates the project (unless validate is false), exports a standalone, distributable build of the game (runtime + assets; with package: true a platform package, see Docs/Shipping.md) and optionally smoke-tests it: runs the exported game headless for smokeTestFrames frames and fails unless it exits cleanly without script errors. Returns {executable (what the smoke test runs), package (what to distribute), files, validation, archive? ({files, compressed (files kept zstd-compressed), size (uncompressed bytes), archiveSize (bytes on disk), omitted (original images left out for their .ktx2 replacements)}), warnings?, smokeTest?}.
 
 | Parameter | Type / description |
 |-----------|--------------------|
 | `appImageTool` | string, path of appimagetool for Linux packages (default: $APPIMAGETOOL, then PATH); requires package: true |
 | `archive` | bool (default false): pack Assets into one Assets.bpak archive (zstd-compressed where that helps, asset UUIDs in its index instead of .meta files) instead of copying the folder; see archive.inspect |
+| `keepOriginals` | bool (default false), with archive: keep the original images that a .ktx2 beside them replaces and no file mentions, for scripts that build such names at run time |
 | `output` | string, output directory |
 | `package` | bool (default false): package for this platform with the project's icon, version and company: <Name>.app on macOS, an executable with icon and version resources on Windows, <Name>.AppDir plus <Name>-<version>-<arch>.AppImage on Linux (the AppImage needs appimagetool: appImageTool, $APPIMAGETOOL or PATH); <Name> is the executable's name: the project name with spaces as _ and other characters other than letters, digits, - and _ dropped |
 | `smokeTestFrames` | integer (default 0: no smoke test), frames the exported game runs headless |
@@ -2825,6 +2826,18 @@ Validates the project (unless validate is false), exports a standalone, distribu
         }
       ],
       "description": "bool (default false): pack Assets into one Assets.bpak archive (zstd-compressed where that helps, asset UUIDs in its index instead of .meta files) instead of copying the folder; see archive.inspect"
+    },
+    "keepOriginals": {
+      "anyOf": [
+        {
+          "description": "bool (default false), with archive: keep the original images that a .ktx2 beside them replaces and no file mentions, for scripts that build such names at run time",
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "bool (default false), with archive: keep the original images that a .ktx2 beside them replaces and no file mentions, for scripts that build such names at run time"
     },
     "output": {
       "description": "string, output directory",

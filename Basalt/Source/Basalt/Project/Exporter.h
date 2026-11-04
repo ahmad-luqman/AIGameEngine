@@ -24,8 +24,12 @@ namespace Basalt {
 		// appimagetool for Linux packages; empty: $APPIMAGETOOL, then PATH.
 		std::filesystem::path AppImageTool;
 		// Pack Assets into Assets.bpak (Project::ArchiveFileName) instead of copying the folder: one file to ship, with
-		// the asset UUIDs in its index instead of .meta files. The project and input files stay beside it.
+		// the asset UUIDs in its index instead of .meta files. The project and input files stay beside it. Docs/Shipping.md
+		// lists what the archive leaves out.
 		bool Archive = false;
+		// Keep every original image in the archive. By default one with a compressed replacement beside it (Wall.ktx2 next
+		// to Wall.png) that no file mentions stays out; a script that builds such a name at run time needs this.
+		bool KeepOriginals = false;
 	};
 
 	struct ExportResult
@@ -41,6 +45,8 @@ namespace Basalt {
 		uint32_t FileCount = 0;
 		// What ExportOptions::Archive packed; set only on success.
 		std::optional<PackArchiveWriter::Statistics> ArchiveStatistics;
+		// The original images ExportOptions::Archive left out (project-relative, sorted).
+		std::vector<std::string> ArchiveOmitted;
 	};
 
 	// Produces a standalone game: the runtime executable (named after the project, sanitized), the project file, its input

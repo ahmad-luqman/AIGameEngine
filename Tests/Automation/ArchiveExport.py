@@ -57,6 +57,13 @@ def main():
         if '"UUID"' not in (project / "Assets" / "Prefabs" / "LampPair.bprefab").read_text() or '"UUID"' not in (project / "Assets" / "Scenes" / "FeatureTest.bscene").read_text() or '"UUID"' not in (project / "Project.bproject").read_text():
             fail("the saved scene or project holds no UUID references")
 
+        # A compressed replacement beside an image nothing mentions: the archive leaves the image out, and the game must not
+        # miss it. The folder form still copies every file.
+        for name, content in (("Replaced.png", "original"), ("Replaced.ktx2", "replacement")):
+            (project / "Assets" / "Textures").mkdir(exist_ok=True)
+            (project / "Assets" / "Textures" / name).write_text(content)
+        replaced = "Assets/Textures/Replaced.png"
+
         logs = {}
         for form, archive in (("folder", False), ("archive", True)):
             output = root / form
@@ -67,6 +74,10 @@ def main():
                 fail(f"{form} export: {run.stdout}{run.stderr}")
             if archive != (output / "Assets.bpak").is_file() or archive == (output / "Assets").is_dir():
                 fail(f"{form} export has the wrong layout: {sorted(p.name for p in output.iterdir())}")
+            if archive and response["result"]["archive"]["omitted"] != [replaced]:
+                fail(f"the archive left out {response['result']['archive']['omitted']}, not {replaced}")
+            if not archive and not (output / replaced).is_file():
+                fail(f"the folder export lacks {replaced}")
             game = subprocess.run([response["result"]["executable"], "--headless", "--frames", str(FRAMES), "--fail-on-script-errors"], capture_output=True, text=True, errors="replace", timeout=300, env=env, cwd=output)
             if game.returncode != 0:
                 fail(f"the {form} export exited with {game.returncode}: {game.stdout}{game.stderr}")
@@ -82,6 +93,16 @@ def main():
         only_folder = sorted((logs["folder"] - logs["archive"]).elements())
         if only_archive or only_folder:
             fail("the exports' logs differ:\n  only archived:\n    " + "\n    ".join(only_archive) + "\n  only folder:\n    " + "\n    ".join(only_folder))
+        kept = root / "kept"
+        run = subprocess.run([str(cli), "--project", str(project), "--no-save", "project.export", json.dumps({"output": str(kept), "archive": True, "keepOriginals": True})], capture_output=True, text=True, timeout=300, env=env)
+        response = json.loads(run.stdout[run.stdout.find("{"):])
+        if not response.get("ok") or response["result"]["archive"]["omitted"]:
+            fail(f"keepOriginals still left files out: {run.stdout}{run.stderr}")
+        # An archive that does not open stops the game with the reason; automated runs never wait on a dialog for it.
+        (kept / "Assets.bpak").write_bytes(b"not an archive at all, but long enough for its header to be read")
+        broken = subprocess.run([response["result"]["executable"], "--headless", "--frames", "1"], capture_output=True, text=True, errors="replace", timeout=60, env=env, cwd=kept)
+        if broken.returncode != 1 or "not a .bpak archive" not in broken.stdout + broken.stderr:
+            fail(f"a broken archive: exit code {broken.returncode}: {broken.stdout}{broken.stderr}")
         print(f"ArchiveExport: both exports logged the same {sum(logs['folder'].values())} lines over {FRAMES} frames")
 
 

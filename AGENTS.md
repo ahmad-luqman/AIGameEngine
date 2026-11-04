@@ -185,8 +185,12 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   module is in the archive), and `AssetRegistry::Refresh` reads the UUIDs from the index
   (`GetMountedArchive`). A new reader that bypasses `FileSystem` must do one of these. `Core/CrashReporter`
   (installed in `EntryPoint.h` and the CLI's `main`, off under ASan) writes reports with stack traces and the last log
-  lines to `<user data>/<app>/Crashes`, formatting only into fixed buffers (no allocation or fork on POSIX), then ends the
-  process (re-raising the signal on POSIX; the exception code, or the C runtime's abort code 3, on Windows).
+  lines (Linux adds `addr2line` names, Windows a minidump from a watchdog thread) to `<user data>/<app>/Crashes`, formatting only into fixed buffers (no allocation or fork on POSIX), then ends the
+  process (re-raising the signal on POSIX; the exception code, or the C runtime's abort code 3, on Windows). A thread the
+  engine starts holds a `CrashReporter::ThreadStack` for its life, so its stack overflow is reported too. Dialogs are the
+  windowed runtime's only (`SetDialogEnabled`), which also shows failed starts through `ShowErrorDialog`. A `.bpak` Store
+  entry can be read in part (`PackArchive::ReadStored`, unhashed), which is how audio streams from it; `PackArchiveWriter`
+  compresses a batch at a time on the job system and writes in path order, so its bytes stay deterministic.
   Tags run `.github/workflows/release.yml` (`scripts/package_release.py`, `scripts/sign-macos.sh`). See
   `Docs/Shipping.md`.
 - **Editor file dialogs.** Path prompts add native pickers (`Basalt-Editor/Source/FileDialogs`, nativefiledialog-extended,

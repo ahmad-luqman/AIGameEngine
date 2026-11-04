@@ -1,6 +1,7 @@
 #include "RuntimeLayer.h"
 
 #include "Basalt/Core/Application.h"
+#include "Basalt/Core/CrashReporter.h"
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/Input.h"
 #include "Basalt/Core/Window.h"
@@ -28,12 +29,16 @@ namespace Basalt {
 	void RuntimeLayer::OnAttach()
 	{
 		Application& application = Application::Get();
+		const auto fail = [&application](const std::string& message) {
+			BS_CORE_CRITICAL("Runtime: {}", message);
+			CrashReporter::ShowErrorDialog(message);
+			application.SetExitCode(1);
+			application.Close();
+		};
 
 		if (m_Options.ScenePath.empty())
 		{
-			BS_CORE_CRITICAL("Runtime: no scene to play (set StartScene in the project or pass --scene)");
-			application.SetExitCode(1);
-			application.Close();
+			fail("no scene to play (set StartScene in the project or pass --scene)");
 			return;
 		}
 
@@ -41,9 +46,7 @@ namespace Basalt {
 		m_Scene = SceneSerializer::LoadScene(Project::ResolvePath(m_Options.ScenePath), error);
 		if (!m_Scene)
 		{
-			BS_CORE_CRITICAL("Runtime: {}", error);
-			application.SetExitCode(1);
-			application.Close();
+			fail(error);
 			return;
 		}
 
@@ -53,8 +56,7 @@ namespace Basalt {
 			if (!m_Renderer->Initialize())
 			{
 				m_Renderer.reset();
-				application.SetExitCode(1);
-				application.Close();
+				fail("the renderer could not start");
 				return;
 			}
 			m_CommandList = device->GetDevice()->createCommandList();

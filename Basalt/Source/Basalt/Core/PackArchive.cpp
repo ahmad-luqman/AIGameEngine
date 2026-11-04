@@ -3,6 +3,7 @@
 #include "Basalt/Core/Assert.h"
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/Hash.h"
+#include "Basalt/Core/JobSystem.h"
 #include "Basalt/Core/Log.h"
 
 #include <zstd.h>
@@ -113,6 +114,64 @@ namespace Basalt {
 		{
 			const int reason = errno;
 			return reason != 0 ? ": " + std::generic_category().message(reason) : std::string();
+		}
+
+		// An entry ready to write, made on a job: its bytes and what its index record needs.
+		struct PreparedEntry
+		{
+			// Set when the job finished; a job that never ran leaves it false.
+			bool Finished = false;
+			// Why the entry cannot be written; empty when it can.
+			std::string Error;
+			// The compressed bytes, or the file read from disk; empty when the writer's own bytes (AddData) are stored as is.
+			std::vector<uint8_t> Owned;
+			// The bytes to write: Owned's, or the writer's own.
+			const uint8_t* Stored = nullptr;
+			size_t StoredSize = 0;
+			uint64_t Size = 0;
+			uint64_t Hash = 0;
+			bool UseZstd = false;
+		};
+
+		// One entry's job: reads source, or takes pendingData when source is empty, and compresses it.
+		void PrepareEntry(PreparedEntry& out, const std::string& path, const std::filesystem::path& source, const std::vector<uint8_t>& pendingData, int level)
+		{
+			std::optional<std::vector<uint8_t>> read;
+			if (!source.empty())
+			{
+				std::string readError;
+				read = ReadSource(source, readError);
+				if (!read)
+				{
+					out.Error = "cannot read '" + FileSystem::PathToUtf8(source) + "' (" + readError + ")";
+					return;
+				}
+			}
+			const std::vector<uint8_t>& data = read ? *read : pendingData;
+			if (data.size() > PackArchive::MaxEntrySize)
+			{
+				out.Error = "'" + path + "' is larger than an archive entry may be (" + std::to_string(PackArchive::MaxEntrySize) + " bytes)";
+				return;
+			}
+			std::vector<uint8_t> compressed(ZSTD_compressBound(data.size()));
+			const size_t compressedSize = ZSTD_compress(compressed.data(), compressed.size(), data.data(), data.size(), level);
+			// Still a valid archive (the file is stored), but a failing compressor is worth knowing about.
+			if (ZSTD_isError(compressedSize))
+				BS_CORE_WARN("Archive: cannot compress '{}' ({}); storing it uncompressed", path, ZSTD_getErrorName(compressedSize));
+			out.UseZstd = !ZSTD_isError(compressedSize) && compressedSize < data.size();
+			out.Size = data.size();
+			out.Hash = HashBytes64(data.data(), data.size());
+			if (out.UseZstd)
+			{
+				compressed.resize(compressedSize);
+				out.Owned = std::move(compressed);
+			}
+			else if (read)
+				out.Owned = std::move(*read);
+			const std::vector<uint8_t>& stored = out.UseZstd || !source.empty() ? out.Owned : pendingData;
+			out.Stored = stored.data();
+			out.StoredSize = stored.size();
+			out.Finished = true;
 		}
 
 	}
@@ -345,11 +404,38 @@ namespace Basalt {
 		return it != m_ByAsset.end() && m_Entries[*it].AssetID == assetID ? &m_Entries[*it] : nullptr;
 	}
 
+	bool PackArchive::Owns(const Entry& entry) const
+	{
+		const Entry* first = m_Entries.data();
+		return !std::less<const Entry*>()(&entry, first) && std::less<const Entry*>()(&entry, first + m_Entries.size());
+	}
+
+	std::optional<size_t> PackArchive::ReadStored(const Entry& entry, uint64_t offset, void* destination, size_t size, std::string& outError) const
+	{
+		// Only entries Parse checked: the offset and size of any other Entry were never bounded.
+		if (!Owns(entry))
+		{
+			outError = "'" + entry.Path + "' is not an entry of this archive";
+			return std::nullopt;
+		}
+		if (entry.Compression != Method::Store)
+		{
+			outError = "'" + entry.Path + "' is compressed, so it cannot be read in part";
+			return std::nullopt;
+		}
+		const size_t count = offset < entry.StoredSize ? static_cast<size_t>(std::min<uint64_t>(size, entry.StoredSize - offset)) : 0;
+		if (!ReadRange(entry.Offset + offset, count, static_cast<uint8_t*>(destination)))
+		{
+			outError = "cannot read '" + entry.Path + "' from the archive";
+			return std::nullopt;
+		}
+		return count;
+	}
+
 	std::optional<std::vector<uint8_t>> PackArchive::Read(const Entry& entry, std::string& outError) const
 	{
 		// Only entries Parse checked: the sizes of any other Entry were never bounded, so allocating for them is unsafe.
-		const Entry* first = m_Entries.data();
-		if (std::less<const Entry*>()(&entry, first) || !std::less<const Entry*>()(&entry, first + m_Entries.size()))
+		if (!Owns(entry))
 		{
 			outError = "'" + entry.Path + "' is not an entry of this archive";
 			return std::nullopt;
@@ -467,7 +553,7 @@ namespace Basalt {
 		return AddPending({ std::move(path), {}, std::move(data), assetID }, outError);
 	}
 
-	std::optional<PackArchiveWriter::Statistics> PackArchiveWriter::Write(const std::filesystem::path& file, std::string& outError, int compressionLevel) const
+	std::optional<PackArchiveWriter::Statistics> PackArchiveWriter::Write(const std::filesystem::path& file, std::string& outError, int compressionLevel, uint64_t batchBytes) const
 	{
 		// Sorted indices rather than sorting m_Pending: Write leaves the writer as it was.
 		std::vector<size_t> order(m_Pending.size());
@@ -505,43 +591,64 @@ namespace Basalt {
 		Statistics statistics;
 		uint64_t offset = PackArchive::HeaderSize;
 		std::vector<uint8_t> index;
-		std::vector<uint8_t> compressed;
-		for (const size_t pendingIndex : order)
+		for (size_t begin = 0; begin < order.size();)
 		{
-			const Pending& pending = m_Pending[pendingIndex];
-			std::optional<std::vector<uint8_t>> read;
-			if (!pending.Source.empty())
+			// Sizes only plan the batch: a file that cannot be sized here fails with its reason on its job.
+			size_t end = begin;
+			uint64_t held = 0;
+			while (end < order.size() && end - begin < MaxBatchEntries)
 			{
-				std::string readError;
-				read = ReadSource(pending.Source, readError);
-				if (!read)
-					return fail("cannot read '" + FileSystem::PathToUtf8(pending.Source) + "' (" + readError + ")");
+				const Pending& pending = m_Pending[order[end]];
+				std::error_code sizeError;
+				const uint64_t onDisk = pending.Source.empty() ? pending.Data.size() : std::filesystem::file_size(pending.Source, sizeError);
+				const uint64_t size = sizeError ? 0 : onDisk;
+				if (end > begin && size > batchBytes - std::min(held, batchBytes))
+					break;
+				held += size;
+				end++;
 			}
-			const std::vector<uint8_t>& data = read ? *read : pending.Data;
-			if (data.size() > PackArchive::MaxEntrySize)
-				return fail("'" + pending.Path + "' is larger than an archive entry may be (" + std::to_string(PackArchive::MaxEntrySize) + " bytes)");
-			compressed.resize(ZSTD_compressBound(data.size()));
-			const size_t compressedSize = ZSTD_compress(compressed.data(), compressed.size(), data.data(), data.size(), level);
-			// Still a valid archive (the file is stored), but a failing compressor is worth knowing about.
-			if (ZSTD_isError(compressedSize))
-				BS_CORE_WARN("Archive: cannot compress '{}' ({}); storing it uncompressed", pending.Path, ZSTD_getErrorName(compressedSize));
-			const bool useZstd = !ZSTD_isError(compressedSize) && compressedSize < data.size();
-			const uint8_t* stored = useZstd ? compressed.data() : data.data();
-			const size_t storedSize = useZstd ? compressedSize : data.size();
-			stream.write(reinterpret_cast<const char*>(stored), static_cast<std::streamsize>(storedSize));
 
-			PutU32(index, static_cast<uint32_t>(pending.Path.size()));
-			index.insert(index.end(), pending.Path.begin(), pending.Path.end());
-			PutU64(index, pending.AssetID);
-			PutU64(index, offset);
-			PutU64(index, storedSize);
-			PutU64(index, data.size());
-			index.push_back(static_cast<uint8_t>(useZstd ? PackArchive::Method::Zstd : PackArchive::Method::Store));
-			PutU64(index, HashBytes64(data.data(), data.size()));
-			offset += storedSize;
-			statistics.Entries++;
-			statistics.CompressedEntries += useZstd ? 1 : 0;
-			statistics.UncompressedSize += data.size();
+			const auto count = static_cast<uint32_t>(end - begin);
+			std::vector<PreparedEntry> prepared(count);
+			JobSystem::Get().ParallelFor(count, 1, [&](uint32_t first, uint32_t last) {
+				for (uint32_t i = first; i < last; i++)
+				{
+					const Pending& pending = m_Pending[order[begin + i]];
+					try
+					{
+						PrepareEntry(prepared[i], pending.Path, pending.Source, pending.Data, level);
+					}
+					catch (const std::exception& exception)
+					{
+						prepared[i].Error = "cannot prepare '" + pending.Path + "': " + exception.what();
+					}
+				}
+			});
+			// The first failure in path order, whichever job met one first.
+			for (uint32_t i = 0; i < count; i++)
+			{
+				const Pending& pending = m_Pending[order[begin + i]];
+				const PreparedEntry& entry = prepared[i];
+				if (!entry.Error.empty())
+					return fail(entry.Error);
+				if (!entry.Finished)
+					return fail("the job for '" + pending.Path + "' did not run");
+				stream.write(reinterpret_cast<const char*>(entry.Stored), static_cast<std::streamsize>(entry.StoredSize));
+
+				PutU32(index, static_cast<uint32_t>(pending.Path.size()));
+				index.insert(index.end(), pending.Path.begin(), pending.Path.end());
+				PutU64(index, pending.AssetID);
+				PutU64(index, offset);
+				PutU64(index, entry.StoredSize);
+				PutU64(index, entry.Size);
+				index.push_back(static_cast<uint8_t>(entry.UseZstd ? PackArchive::Method::Zstd : PackArchive::Method::Store));
+				PutU64(index, entry.Hash);
+				offset += entry.StoredSize;
+				statistics.Entries++;
+				statistics.CompressedEntries += entry.UseZstd ? 1 : 0;
+				statistics.UncompressedSize += entry.Size;
+			}
+			begin = end;
 		}
 		stream.write(reinterpret_cast<const char*>(index.data()), static_cast<std::streamsize>(index.size()));
 		const std::vector<uint8_t> header = BuildHeader(static_cast<uint32_t>(order.size()), offset, index.size(), HashBytes64(index.data(), index.size()));

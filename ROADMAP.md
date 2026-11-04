@@ -112,13 +112,6 @@ Native file dialogs, prefab editing with per-instance overrides, nested prefabs 
   Windows: switch them to `FileSystem::DescribeError`. Directory scans (asset registry, file watcher, exporter, content
   browser) turn NTFS names with unpaired surrogates into keys with U+FFFD that no longer name the file: skip and report
   such entries.
-- **Archive follow-ups — S.** Stream stored (uncompressed) audio straight from `Assets.bpak` instead of reading clips
-  into memory whole, compress large entries on the job system during export, and leave out originals that only a
-  compressed `.ktx2` replacement references.
-- **Crash report follow-ups — S.** Symbolize Linux frames (ship symbols or call `addr2line` at report time), report
-  stack overflows on threads other than the one that installed the handlers (alternate stacks for job threads), write
-  Windows minidumps from a watchdog thread, show fatal startup errors (a broken archive) in a message box in the
-  windowed runtime, and offer to send or open the report from the crash dialog.
 
 ---
 

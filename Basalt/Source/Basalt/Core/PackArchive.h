@@ -31,7 +31,7 @@ namespace Basalt {
 	// entry is a file under a '/'-separated relative path, stored as is or zstd-compressed, with the asset UUID of its
 	// .meta sidecar, so an archive replaces both the files and their sidecars. Opening reads and checks the whole index;
 	// Read checks an entry's bytes against its hash. Archives are untrusted input: every size and offset is checked
-	// before anything is allocated for it. Read is thread-safe (asset workers load in parallel).
+	// before anything is allocated for it. Read and ReadStored are thread-safe (asset workers load in parallel).
 	class PackArchive
 	{
 		// Only Open and OpenMemory make archives (CreateRef needs a public constructor): an archive is always parsed.
@@ -88,6 +88,11 @@ namespace Basalt {
 		// The uncompressed bytes of one of this archive's entries (from GetEntries, Find or FindAsset), checked against its
 		// size and hash.
 		std::optional<std::vector<uint8_t>> Read(const Entry& entry, std::string& outError) const;
+		// Copies up to size bytes of a stored entry of this archive (Method::Store, from GetEntries, Find or FindAsset),
+		// starting at offset within it, without touching the rest: a streaming reader's Read. Returns how many bytes it
+		// copied, fewer only at the entry's end. nullopt with outError for a compressed or foreign entry or a failed read.
+		// A part of an entry cannot be checked against its hash: streamed bytes stay inside the entry but may be damaged.
+		std::optional<size_t> ReadStored(const Entry& entry, uint64_t offset, void* destination, size_t size, std::string& outError) const;
 		// The file Open read; empty for OpenMemory.
 		const std::filesystem::path& GetFile() const { return m_File; }
 		PackArchiveStatistics GetStatistics() const;
@@ -98,6 +103,8 @@ namespace Basalt {
 
 	private:
 		bool ReadRange(uint64_t offset, uint64_t size, uint8_t* destination) const;
+		// Whether entry is an element of m_Entries, the only entries Parse checked.
+		bool Owns(const Entry& entry) const;
 		// Read after the ownership check; may throw std::bad_alloc, which Read turns into an error.
 		std::optional<std::vector<uint8_t>> ReadChecked(const Entry& entry, std::string& outError) const;
 		bool Parse(uint64_t fileSize, std::string& outError);
@@ -123,14 +130,21 @@ namespace Basalt {
 	public:
 		using Statistics = PackArchiveStatistics;
 
+		// How many uncompressed bytes Write holds at once, and in how many entries (a batch passes the bytes only for a
+		// single larger entry).
+		static constexpr uint64_t DefaultBatchBytes = uint64_t{ 256 } * 1024 * 1024;
+		static constexpr size_t MaxBatchEntries = 256;
+
 		// AddFile reads source when Write runs; AddData takes the bytes now. Both return false (outError set) for an
 		// invalid or duplicate path, a duplicate nonzero asset UUID, more than MaxEntries files, (AddData) more than
 		// MaxEntrySize bytes, or (AddFile) an empty source path (a missing file fails Write).
 		bool AddFile(std::string path, std::filesystem::path source, uint64_t assetID, std::string& outError);
 		bool AddData(std::string path, std::vector<uint8_t> data, uint64_t assetID, std::string& outError);
 		// Writes the archive atomically (a temporary sibling renamed over the target), at a zstd level clamped to
-		// 1..ZSTD_maxCLevel() (22). The added entries stay, so Write may run again (a retry after a full disk).
-		std::optional<Statistics> Write(const std::filesystem::path& file, std::string& outError, int compressionLevel = 9) const;
+		// 1..ZSTD_maxCLevel() (22). Entries are read and compressed on the job system a batch at a time (batchBytes) and
+		// written in path order, so the bytes do not depend on the batches or the number of workers. The added entries
+		// stay, so Write may run again (a retry after a full disk).
+		std::optional<Statistics> Write(const std::filesystem::path& file, std::string& outError, int compressionLevel = 9, uint64_t batchBytes = DefaultBatchBytes) const;
 
 	private:
 		struct Pending

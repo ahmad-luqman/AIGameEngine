@@ -2,6 +2,7 @@
 
 #include "Basalt/Audio/AudioEngine.h"
 #include "Basalt/Core/Assert.h"
+#include "Basalt/Core/CrashReporter.h"
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/Input.h"
 #include "Basalt/Core/Profiler.h"
@@ -10,6 +11,7 @@
 #include "Basalt/Renderer/GraphicsDevice.h"
 #include "Basalt/Renderer/VulkanLoader.h"
 
+#include <algorithm>
 #include <ranges>
 #include <system_error>
 
@@ -150,7 +152,11 @@ namespace Basalt {
 	{
 		if (!m_Initialized)
 		{
+			// The window or device logged why; that is what a player needs to see.
+			const std::vector<LogMessage> messages = Log::GetHistory().GetAll();
+			const auto reason = std::find_if(messages.rbegin(), messages.rend(), [](const LogMessage& message) { return message.Level >= LogLevel::Error; });
 			BS_CORE_CRITICAL("Application '{}' failed to initialize", m_Specification.Name);
+			CrashReporter::ShowErrorDialog(fmt::format("{} could not start.\n\n{}", m_Specification.Name, reason != messages.rend() ? reason->Text : "The log has the details."));
 			return 1;
 		}
 

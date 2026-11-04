@@ -875,6 +875,220 @@ TEST_SUITE("Archive")
 		CHECK_FALSE(FileSystem::GetMountedArchive(directory.GetPath()));
 	}
 
+	TEST_CASE("Stored entries read in part, from a file and from memory")
+	{
+		BasaltTest::TempDirectory directory("ArchiveStoredReads");
+		const std::vector<uint8_t> noise = Noise(5000);
+		const std::vector<uint8_t> bytes = BuildArchive({ { "Assets/Noise.bin", noise, 0 }, { "Assets/Text.txt", Repetitive(5000), 0 } }, directory.GetPath() / "Stored.bpak");
+		std::string error;
+		const Ref<PackArchive> file = PackArchive::Open(directory.GetPath() / "Stored.bpak", error);
+		REQUIRE_MESSAGE(file, error);
+		const Ref<PackArchive> memory = PackArchive::OpenMemory(bytes, error);
+		REQUIRE_MESSAGE(memory, error);
+		for (const Ref<PackArchive>& archive : { file, memory })
+		{
+			const PackArchive::Entry& stored = RequireEntry(*archive, "Assets/Noise.bin");
+			REQUIRE(stored.Compression == PackArchive::Method::Store);
+			std::vector<uint8_t> part(100);
+			CHECK(archive->ReadStored(stored, 200, part.data(), part.size(), error) == size_t{ 100 });
+			CHECK(std::equal(part.begin(), part.end(), noise.begin() + 200));
+			// The end of the entry, not the next entry's bytes.
+			CHECK(archive->ReadStored(stored, 4950, part.data(), part.size(), error) == size_t{ 50 });
+			CHECK(std::equal(part.begin(), part.begin() + 50, noise.begin() + 4950));
+			CHECK(archive->ReadStored(stored, 5000, part.data(), part.size(), error) == size_t{ 0 });
+			CHECK(archive->ReadStored(stored, UINT64_MAX, part.data(), part.size(), error) == size_t{ 0 });
+
+			error.clear();
+			CHECK_FALSE(archive->ReadStored(RequireEntry(*archive, "Assets/Text.txt"), 0, part.data(), part.size(), error));
+			CHECK(error.find("compressed") != std::string::npos);
+			// A forged copy's offset and size were never checked.
+			PackArchive::Entry forged = stored;
+			forged.StoredSize = UINT64_MAX;
+			error.clear();
+			CHECK_FALSE(archive->ReadStored(forged, 0, part.data(), part.size(), error));
+			CHECK(error.find("not an entry of this archive") != std::string::npos);
+		}
+	}
+
+	TEST_CASE("Stored clips stream from the archive, unlike whole reads that check their hash")
+	{
+		BasaltTest::TempProject temp("ArchiveStreamedAudio");
+		REQUIRE(temp.IsValid());
+		// Noise for samples, which zstd cannot shrink, behind the 44 bytes of a WAV header.
+		std::string wav = BasaltTest::MakeWav(0.5f);
+		const std::vector<uint8_t> noise = Noise(wav.size() - 44);
+		std::copy(noise.begin(), noise.end(), wav.begin() + 44);
+		const std::filesystem::path file = temp.GetDirectory() / Project::ArchiveFileName;
+		std::vector<uint8_t> bytes = BuildArchive({ { "Assets/Audio/Noise.wav", Bytes(wav), 0 } }, file);
+		std::string error;
+		Ref<PackArchive> archive = PackArchive::Open(file, error);
+		REQUIRE_MESSAGE(archive, error);
+		const PackArchive::Entry stored = RequireEntry(*archive, "Assets/Audio/Noise.wav");
+		REQUIRE(stored.Compression == PackArchive::Method::Store);
+
+		// A flipped sample fails every whole read: playing anyway shows the clip was never read whole.
+		bytes[static_cast<size_t>(stored.Offset + stored.Size - 1)] ^= 0xFF;
+		archive = nullptr;
+		REQUIRE(FileSystem::WriteBinaryFile(file, bytes.data(), bytes.size()));
+		archive = PackArchive::Open(file, error);
+		REQUIRE_MESSAGE(archive, error);
+		CHECK_FALSE(archive->Read(RequireEntry(*archive, "Assets/Audio/Noise.wav"), error));
+		CHECK(error.find("hash mismatch") != std::string::npos);
+
+		const ScopedMount mount(temp.GetDirectory(), archive);
+		const Ref<Scene> scene = CreateRef<Scene>();
+		auto& decoded = scene->CreateEntity("Decoded").AddComponent<AudioSourceComponent>();
+		decoded.Clip = "Assets/Audio/Noise.wav";
+		decoded.PlayOnStart = true;
+		auto& streamed = scene->CreateEntity("Streamed").AddComponent<AudioSourceComponent>();
+		streamed.Clip = "Assets/Audio/Noise.wav";
+		streamed.PlayOnStart = true;
+		streamed.Stream = true;
+		// Seeks back to the entry's start, not the archive's.
+		streamed.Loop = true;
+		scene->CreateEntity("Listener").AddComponent<AudioListenerComponent>();
+		const BasaltTest::HeadlessAudio audio;
+		scene->OnRuntimeStart();
+		REQUIRE(scene->GetAudioSystem());
+		CHECK(scene->GetAudioSystem()->IsPlaying(scene->FindEntityByName("Decoded")));
+		CHECK(scene->GetAudioSystem()->IsPlaying(scene->FindEntityByName("Streamed")));
+		CHECK(scene->GetAudioSystem()->IsStreaming(scene->FindEntityByName("Streamed")));
+		std::vector<float> mix;
+		REQUIRE(AudioEngine::ReadDeviceless(1.0f, mix));
+		REQUIRE_FALSE(mix.empty());
+		float lateLevel = 0.0f;
+		for (size_t i = mix.size() * 3 / 4; i < mix.size(); i++)
+			lateLevel = std::max(lateLevel, std::abs(mix[i]));
+		CHECK(lateLevel > 0.01f);
+		scene->OnRuntimeStop();
+	}
+
+	TEST_CASE("An archive's bytes do not depend on how Write batches its entries")
+	{
+		BasaltTest::TempDirectory directory("ArchiveBatches");
+		// More entries than one batch holds, in no particular order.
+		std::vector<std::tuple<std::string, std::vector<uint8_t>, uint64_t>> entries;
+		entries.reserve(PackArchiveWriter::MaxBatchEntries + 44);
+		for (uint32_t i = 0; i < PackArchiveWriter::MaxBatchEntries + 44; i++)
+			entries.emplace_back("Assets/File" + std::to_string((i * 37) % 1000) + ".bin", i % 3 == 0 ? Noise(200 + i, i) : Repetitive(300 + i), i + 1);
+		const std::vector<uint8_t> expected = BuildArchive(entries, directory.GetPath() / "Default.bpak");
+		PackArchiveWriter writer;
+		std::string error;
+		for (const auto& [path, data, id] : entries)
+			REQUIRE_MESSAGE(writer.AddData(path, data, id, error), error);
+		std::optional<PackArchiveStatistics> first;
+		for (const uint64_t batchBytes : { uint64_t{ 1 }, uint64_t{ 2000 }, PackArchiveWriter::DefaultBatchBytes })
+		{
+			const std::filesystem::path file = directory.GetPath() / ("Batch" + std::to_string(batchBytes) + ".bpak");
+			const auto statistics = writer.Write(file, error, 9, batchBytes);
+			REQUIRE_MESSAGE(statistics, error);
+			CHECK(FileSystem::ReadBinaryFile(file) == expected);
+			if (first)
+			{
+				CHECK(statistics->Entries == first->Entries);
+				CHECK(statistics->CompressedEntries == first->CompressedEntries);
+				CHECK(statistics->ArchiveSize == first->ArchiveSize);
+			}
+			first = statistics;
+		}
+		// Files read on jobs go in the same place as bytes added directly.
+		const Ref<PackArchive> archive = PackArchive::OpenMemory(expected, error);
+		REQUIRE_MESSAGE(archive, error);
+		PackArchiveWriter fromFiles;
+		for (const auto& [path, data, id] : entries)
+		{
+			const std::filesystem::path source = directory.GetPath() / "Sources" / FileSystem::PathFromUtf8(path);
+			REQUIRE(FileSystem::WriteBinaryFile(source, data.data(), data.size()));
+			REQUIRE_MESSAGE(fromFiles.AddFile(path, source, id, error), error);
+		}
+		REQUIRE_MESSAGE(fromFiles.Write(directory.GetPath() / "Files.bpak", error, 9, 2000), error);
+		CHECK(FileSystem::ReadBinaryFile(directory.GetPath() / "Files.bpak") == expected);
+	}
+
+	TEST_CASE("Write reports the first entry in path order that fails, in any batch")
+	{
+		BasaltTest::TempDirectory directory("ArchiveBatchFailure");
+		const std::filesystem::path file = directory.GetPath() / "Out.bpak";
+		PackArchiveWriter writer;
+		std::string error;
+		REQUIRE(writer.AddData("Assets/A.bin", Noise(100), 0, error));
+		REQUIRE(writer.AddFile("Assets/C.bin", directory.GetPath() / "MissingC", 0, error));
+		REQUIRE(writer.AddFile("Assets/B.bin", directory.GetPath() / "MissingB", 0, error));
+		for (const uint64_t batchBytes : { uint64_t{ 1 }, PackArchiveWriter::DefaultBatchBytes })
+		{
+			error.clear();
+			CHECK_FALSE(writer.Write(file, error, 9, batchBytes));
+			CHECK_MESSAGE(error.find("MissingB") != std::string::npos, error);
+			// Neither the archive nor its temporary file stays behind.
+			CHECK(std::filesystem::is_empty(directory.GetPath()));
+		}
+	}
+
+	TEST_CASE("Archived exports leave out originals only their compressed replacement stands for")
+	{
+		BasaltTest::TempProject temp("ArchiveOmittedOriginals");
+		REQUIRE(temp.IsValid());
+		const Ref<Project>& project = Project::GetActive();
+		std::string error;
+		temp.WriteFile("Assets/Scenes/Main.bscene", R"({"Entities":[]})");
+		for (const char* name : { "Wall", "Named", "Spaced Out", "ByUuid", "Icon" })
+		{
+			temp.WriteFile(std::string("Assets/Textures/") + name + ".png", "original");
+			temp.WriteFile(std::string("Assets/Textures/") + name + ".ktx2", "replacement");
+		}
+		// A replacement elsewhere is not recognized, and an image without one is never touched.
+		temp.WriteFile("Assets/Textures/Moved.png", "original");
+		temp.WriteFile("Assets/Compressed/Moved.ktx2", "replacement");
+		temp.WriteFile("Assets/Textures/Lonely.png", "original");
+		// Mentions a walk over declared asset fields would miss.
+		temp.WriteFile("Assets/Scripts/Sky.lua", "local texture = 'Textures/Named.png'");
+		temp.WriteFile("Assets/Models/Ship.gltf", R"({"images":[{"uri":"../Textures/Spaced%20Out.png"}]})");
+		const auto id = project->GetAssets().Ensure("Assets/Textures/ByUuid.png", error);
+		REQUIRE_MESSAGE(id, error);
+		temp.WriteFile("Assets/Materials/Old.bmaterial", "{\"Albedo\":{\"UUID\":\"" + std::to_string(static_cast<uint64_t>(*id)) + "\",\"Path\":\"Assets/Textures/Renamed.png\"}}");
+		project->GetConfig().StartScene = "Assets/Scenes/Main.bscene";
+		project->GetConfig().Icon = "Assets/Textures/Icon.png";
+		REQUIRE_MESSAGE(project->Save(error), error);
+		temp.WriteFile("FakeRuntime", "binary");
+		const BasaltTest::ScopedFakeVulkanSdk sdk(temp);
+
+		ExportOptions options;
+		options.RuntimeExecutable = temp.GetDirectory() / "FakeRuntime";
+		options.Archive = true;
+		const std::filesystem::path output = temp.GetDirectory().parent_path() / "ArchiveOmittedOriginalsOut";
+		std::error_code removeError;
+		std::filesystem::remove_all(output, removeError);
+		const auto exportedPaths = [&](const ExportOptions& exportOptions, ExportResult& result) {
+			result = Exporter::Export(*project, output, exportOptions);
+			REQUIRE_MESSAGE(result.Success, result.Error);
+			std::string openError;
+			const Ref<PackArchive> archive = PackArchive::Open(output / Project::ArchiveFileName, openError);
+			REQUIRE_MESSAGE(archive, openError);
+			std::vector<std::string> paths;
+			paths.reserve(archive->GetEntries().size());
+			for (const PackArchive::Entry& entry : archive->GetEntries())
+				paths.push_back(entry.Path);
+			return paths;
+		};
+		const auto holds = [](const std::vector<std::string>& paths, const std::string& path) { return std::find(paths.begin(), paths.end(), path) != paths.end(); };
+
+		ExportResult result;
+		const std::vector<std::string> paths = exportedPaths(options, result);
+		CHECK(result.ArchiveOmitted == std::vector<std::string>{ "Assets/Textures/Wall.png" });
+		CHECK(result.ArchiveStatistics->Entries == paths.size());
+		CHECK_FALSE(holds(paths, "Assets/Textures/Wall.png"));
+		CHECK(holds(paths, "Assets/Textures/Wall.ktx2"));
+		for (const char* kept : { "Named", "Spaced Out", "ByUuid", "Icon", "Moved", "Lonely" })
+			CHECK_MESSAGE(holds(paths, std::string("Assets/Textures/") + kept + ".png"), kept);
+
+		options.KeepOriginals = true;
+		const std::vector<std::string> everything = exportedPaths(options, result);
+		CHECK(result.ArchiveOmitted.empty());
+		CHECK(holds(everything, "Assets/Textures/Wall.png"));
+		CHECK(everything.size() == paths.size() + 1);
+		std::filesystem::remove_all(output, removeError);
+	}
+
 	TEST_CASE("File archives read in parallel")
 	{
 		BasaltTest::TempDirectory directory("ArchiveParallel");
