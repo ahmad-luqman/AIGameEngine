@@ -218,7 +218,7 @@ Fields: `Name` (string), `Type` (enum: TwoBone, LookAt, Fabrik), `Joint` (string
 
 ### SpringChain
 
-Fields: `Name` (string), `Joint` (string), `ChainLength` (integer), `Stiffness` (number), `Damping` (number), `GravityFactor` (number), `Radius` (number), `Weight` (number), `MaxAngle` (number), `Colliders` (list of [SpringChainCollider](#springchaincollider), at most 32), `CollidePhysics` (boolean)
+Fields: `Name` (string), `Joint` (string), `ChainLength` (integer), `Stiffness` (number), `Damping` (number), `GravityFactor` (number), `Radius` (number), `Weight` (number), `MaxAngle` (number), `Colliders` (list of [SpringChainCollider](#springchaincollider), at most 32), `CollidePhysics` (boolean), `Layer` (string), `Continuous` (boolean)
 
 ### SpringChainCollider
 

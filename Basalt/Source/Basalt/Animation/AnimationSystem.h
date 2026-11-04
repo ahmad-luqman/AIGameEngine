@@ -30,6 +30,7 @@ namespace Basalt {
 	struct AnimationJointMap;
 	struct AnimationMask;
 	class PhysicsWorld;
+	class StaticPhysicsShapes;
 
 	// An AnimationEvent marker that playback crossed, waiting to be delivered.
 	struct AnimationEventRecord
@@ -608,6 +609,8 @@ namespace Basalt {
 		// character; nullopt when none.
 		static std::optional<Entity> FindCharacter(Entity entity, const PhysicsWorld& physics);
 		void SolveSprings(float seconds);
+		// The edit scene's static bodies for a preview, brought up to date once per spring pass.
+		StaticPhysicsShapes& GetStaticShapes();
 		void SolveEntitySprings(Entity entity, Playback& playback, const SpringBoneComponent& component, SpringState& state, float seconds);
 		SpringState& SyncSprings(Entity entity, const SpringBoneComponent& component);
 		// Fills `out` with the colliders in world space from the pose's globals, resolving their joints when needed, and
@@ -739,6 +742,9 @@ namespace Basalt {
 		std::vector<const AnimationEvent*> m_Markers;
 		std::vector<float> m_Weights;
 		std::vector<glm::mat4> m_OverlayGlobals;
+		// Created when a preview first swings a CollidePhysics chain.
+		Scope<StaticPhysicsShapes> m_StaticShapes;
+		bool m_StaticShapesFresh = false;
 		std::vector<SpringCollisionShape> m_SpringColliders;
 		std::vector<uint32_t> m_SpringColliderSources;
 		std::vector<SpringCollisionShape> m_SpringChainColliders;

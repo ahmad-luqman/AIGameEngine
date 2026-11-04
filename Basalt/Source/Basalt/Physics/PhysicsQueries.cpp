@@ -1,6 +1,7 @@
 // PhysicsWorld: raycasts, shape casts and overlap queries.
 #include "Basalt/Physics/PhysicsWorld.h"
 
+#include "Basalt/Physics/PhysicsShapeSnapshotImpl.h"
 #include "Basalt/Physics/PhysicsWorldImpl.h"
 
 #include <Jolt/Physics/Body/BodyLock.h>
@@ -275,14 +276,6 @@ namespace Basalt {
 		return Overlap(*m_Impl->System, *sphere, center, IdentityRotation, filter);
 	}
 
-	struct PhysicsShapeSnapshot::Impl
-	{
-		std::vector<JPH::TransformedShape> Shapes;
-		JPH::Ref<JPH::Shape> Sphere;
-		float Radius = 0;
-		bool Truncated = false;
-	};
-
 	PhysicsShapeSnapshot::PhysicsShapeSnapshot() = default;
 	PhysicsShapeSnapshot::~PhysicsShapeSnapshot() = default;
 	PhysicsShapeSnapshot::PhysicsShapeSnapshot(PhysicsShapeSnapshot&&) noexcept = default;
@@ -323,6 +316,25 @@ namespace Basalt {
 		return point + PushOutDirection(FromJolt(collector.mHit.mPenetrationAxis), point, center) * collector.mHit.mPenetrationDepth;
 	}
 
+	std::optional<PhysicsSweepHit> PhysicsShapeSnapshot::Sweep(const glm::vec3& from, const glm::vec3& to) const
+	{
+		if (Empty() || !IsFiniteVec(from) || !IsFiniteVec(to) || from == to)
+			return std::nullopt;
+		const JPH::RShapeCast cast = JPH::RShapeCast::sFromWorldTransform(m_Impl->Sphere, JPH::Vec3::sOne(), JPH::RMat44::sTranslation(ToJolt(from)), ToJolt(to - from));
+		JPH::ShapeCastSettings settings;
+		// A sphere that starts inside gets the shortest way out as its normal. Back faces stay ignored, which is what
+		// lets it leave: Jolt reports such a start only when the sphere moves deeper.
+		settings.mReturnDeepestPoint = true;
+		JPH::ClosestHitCollisionCollector<JPH::CastShapeCollector> collector;
+		for (const JPH::TransformedShape& shape : m_Impl->Shapes)
+			shape.CastShape(cast, settings, JPH::RVec3::sZero(), collector);
+		if (!collector.HadHit())
+			return std::nullopt;
+		// The axis points from the sphere into the body.
+		const JPH::Vec3 axis = collector.mHit.mPenetrationAxis;
+		return PhysicsSweepHit{ .Fraction = collector.mHit.mFraction, .Normal = axis.LengthSq() > 1e-12f ? FromJolt(-axis.Normalized()) : glm::normalize(from - to) };
+	}
+
 	glm::vec3 PushOutDirection(const glm::vec3& penetrationAxis, const glm::vec3& point, const glm::vec3& bodyCenter)
 	{
 		// The axis moves the body out, so the sphere goes the other way.
@@ -346,16 +358,10 @@ namespace Basalt {
 		system.GetBroadPhaseQuery().CollideAABox(JPH::AABox(ToJolt(min), ToJolt(max)), collector, {}, layerFilter);
 		const QueryBodyFilter bodyFilter(filter);
 		const glm::vec3 center = (min + max) * 0.5f;
-		struct Candidate
-		{
-			float Distance = 0;
-			UUID Entity = 0;
-			JPH::TransformedShape Shape;
-		};
-		std::vector<Candidate> candidates;
+		std::vector<PhysicsShapeSnapshot::Candidate> candidates;
 		for (const JPH::BodyID& id : collector.mHits)
 		{
-			Candidate candidate;
+			PhysicsShapeSnapshot::Candidate candidate;
 			{
 				const JPH::BodyLockRead lock(system.GetBodyLockInterface(), id);
 				if (!lock.Succeeded() || !bodyFilter.ShouldCollideLocked(lock.GetBody()))
@@ -371,16 +377,22 @@ namespace Basalt {
 			candidate.Distance = glm::length(closest - center);
 			candidates.push_back(std::move(candidate));
 		}
+		return PhysicsShapeSnapshot::FromCandidates(std::move(candidates), radius);
+	}
+
+	PhysicsShapeSnapshot PhysicsShapeSnapshot::FromCandidates(std::vector<Candidate> candidates, float radius)
+	{
+		PhysicsShapeSnapshot snapshot;
 		// Nearest first, then by entity and body (broad-phase order is not stable), so the kept bodies do not depend on it.
 		std::ranges::sort(candidates, [](const Candidate& a, const Candidate& b) { return std::tie(a.Distance, a.Entity, a.Shape.mBodyID) < std::tie(b.Distance, b.Entity, b.Shape.mBodyID); });
-		snapshot.m_Impl = CreateScope<PhysicsShapeSnapshot::Impl>();
-		const bool truncated = candidates.size() > PhysicsShapeSnapshot::MaxShapes;
+		snapshot.m_Impl = CreateScope<Impl>();
+		const bool truncated = candidates.size() > MaxShapes;
 		snapshot.m_Impl->Truncated = truncated;
 		if (truncated)
-			candidates.resize(PhysicsShapeSnapshot::MaxShapes);
+			candidates.resize(MaxShapes);
 		for (Candidate& candidate : candidates)
 			snapshot.m_Impl->Shapes.push_back(std::move(candidate.Shape));
-		snapshot.m_Impl->Radius = std::max(radius, PhysicsShapeSnapshot::MinRadius);
+		snapshot.m_Impl->Radius = std::max(radius, MinRadius);
 		snapshot.m_Impl->Sphere = new JPH::SphereShape(snapshot.m_Impl->Radius);
 		return snapshot;
 	}

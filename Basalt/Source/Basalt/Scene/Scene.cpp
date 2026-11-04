@@ -144,6 +144,14 @@ namespace Basalt {
 		m_AnimationPreview->Update(ts);
 	}
 
+	PhysicsLayers Scene::ResolvePhysicsLayers() const
+	{
+		if (m_PhysicsLayers)
+			return *m_PhysicsLayers;
+		const Ref<Project>& project = Project::GetActive();
+		return project ? project->GetConfig().Physics : PhysicsLayers();
+	}
+
 	void Scene::ResetAnimationPreview()
 	{
 		m_AnimationPreview.reset();

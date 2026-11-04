@@ -18,6 +18,8 @@ namespace Basalt {
 
 	namespace {
 		constexpr float Epsilon = 1e-6f;
+		// How close a swept sphere comes to a surface: above the rounding of positions at a few hundred meters.
+		constexpr float SpringContactGap = 1e-4f;
 
 		// `point` moved to `length` from `head` along its direction; along `fallback`'s direction when it sits on the
 		// head.
@@ -40,14 +42,22 @@ namespace Basalt {
 			return candidate;
 		}
 
+		// The point of the shape's axis (its segment A..B) nearest `point`.
+		glm::vec3 ClosestOnAxis(const SpringCollisionShape& shape, const glm::vec3& point)
+		{
+			const glm::vec3 axis = shape.B - shape.A;
+			const float lengthSquared = glm::dot(axis, axis);
+			const float t = lengthSquared > 0 ? std::clamp(glm::dot(point - shape.A, axis) / lengthSquared, 0.0f, 1.0f) : 0.0f;
+			return shape.A + axis * t;
+		}
+
 		// `point` pushed out of the shape grown by `radius`, or nullopt when it is outside already. A point on the shape's
 		// axis leaves across `bone` (its bone's direction), which keeps it near its bone length.
 		std::optional<glm::vec3> PushOut(const SpringCollisionShape& shape, const glm::vec3& point, float radius, const glm::vec3& bone)
 		{
 			const glm::vec3 axis = shape.B - shape.A;
 			const float lengthSquared = glm::dot(axis, axis);
-			const float t = lengthSquared > 0 ? std::clamp(glm::dot(point - shape.A, axis) / lengthSquared, 0.0f, 1.0f) : 0.0f;
-			const glm::vec3 closest = shape.A + axis * t;
+			const glm::vec3 closest = ClosestOnAxis(shape, point);
 			const float reach = shape.Radius + radius;
 			glm::vec3 offset = point - closest;
 			const float distance = glm::length(offset);
@@ -62,6 +72,64 @@ namespace Basalt {
 					offset = glm::vec3(0, 1, 0);
 			}
 			return closest + glm::normalize(offset) * reach;
+		}
+
+		// Where a sphere of `radius` moving from `from` to `to` first touches the shape, by sphere tracing: the distance to
+		// the surface is a step that cannot overshoot it, however thin the shape. Like the world's sweeps it does not
+		// stop a sphere that starts inside and moves out. A sphere still grazing after the last step counts as clear, and
+		// PushOut has the final word on where it ends.
+		std::optional<SpringSweepHit> SweepShape(const SpringCollisionShape& shape, float radius, const glm::vec3& from, const glm::vec3& to)
+		{
+			constexpr uint32_t Steps = 32;
+			const float distance = glm::length(to - from);
+			if (distance < Epsilon)
+				return std::nullopt;
+			const glm::vec3 direction = (to - from) / distance;
+			const float reach = shape.Radius + radius;
+			float travelled = 0;
+			for (uint32_t i = 0; i < Steps && travelled <= distance; i++)
+			{
+				const glm::vec3 point = from + direction * travelled;
+				const glm::vec3 offset = point - ClosestOnAxis(shape, point);
+				const float gap = glm::length(offset) - reach;
+				if (gap <= SpringContactGap)
+				{
+					const glm::vec3 normal = glm::length(offset) < Epsilon ? -direction : glm::normalize(offset);
+					if (glm::dot(direction, normal) >= 0)
+						return std::nullopt;
+					return SpringSweepHit{ .Fraction = travelled / distance, .Normal = normal };
+				}
+				travelled += gap;
+			}
+			return std::nullopt;
+		}
+
+		// The nearest of what the colliders and the world put between the two positions.
+		std::optional<SpringSweepHit> FirstHit(const SpringSimulationRequest& request, const glm::vec3& from, const glm::vec3& to)
+		{
+			std::optional<SpringSweepHit> first = request.WorldSweep ? request.WorldSweep(from, to) : std::nullopt;
+			for (const SpringCollisionShape& shape : request.Colliders)
+				if (const auto hit = SweepShape(shape, request.Radius, from, to); hit && (!first || hit->Fraction < first->Fraction))
+					first = hit;
+			return first;
+		}
+
+		// The sphere's way from `from` toward `to`: up to what it meets, then along that surface with the rest of the move,
+		// a little off it so the slide does not count as touching again.
+		glm::vec3 SweepPoint(const SpringSimulationRequest& request, const glm::vec3& from, const glm::vec3& to)
+		{
+			glm::vec3 position = from, goal = to;
+			for (uint32_t iteration = 0; iteration < SpringSweepIterations; iteration++)
+			{
+				const auto hit = FirstHit(request, position, goal);
+				if (!hit)
+					return goal;
+				const glm::vec3 reached = glm::mix(position, goal, hit->Fraction);
+				const glm::vec3 rest = goal - reached;
+				position = reached + hit->Normal * SpringContactGap;
+				goal = position + rest - hit->Normal * glm::dot(rest, hit->Normal);
+			}
+			return position;
 		}
 
 		// `point` turned about `head` to within the angle whose cosine and sine are given of the direction `head` to `target`,
@@ -153,6 +221,10 @@ namespace Basalt {
 						break;
 					next = KeepLength(head, next, length, target);
 				}
+				// Last: keeping the bone's length can carry a point across what the sweep stopped it at.
+				if (request.Continuous)
+					if (const glm::vec3 swept = SweepPoint(request, point.Position, next); glm::length(swept - head) <= length * SpringSweepStretch)
+						next = swept;
 				// The constraints' corrections become velocity, as in position-based dynamics.
 				point.Velocity = (next - point.Position) / step;
 				point.Position = next;

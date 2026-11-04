@@ -131,10 +131,7 @@ namespace Basalt {
 		m_Impl->TempAllocator = CreateScope<JPH::TempAllocatorImpl>(16 * 1024 * 1024);
 		m_Impl->JobSystem = &PhysicsJobs::Get();
 
-		if (const auto& layers = scene->GetPhysicsLayers())
-			m_Impl->Layers = *layers;
-		else if (const Ref<Project>& project = Project::GetActive())
-			m_Impl->Layers = project->GetConfig().Physics;
+		m_Impl->Layers = scene->ResolvePhysicsLayers();
 		m_Impl->ObjectLayerPairFilter.SetLayers(m_Impl->Layers);
 
 		m_Impl->System = CreateScope<JPH::PhysicsSystem>();

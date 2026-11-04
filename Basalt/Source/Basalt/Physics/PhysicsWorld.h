@@ -19,6 +19,7 @@ namespace Basalt {
 	class Entity;
 	class Scene;
 	class MeshSource;
+	class StaticPhysicsShapes;
 
 	// World-space capsule hemispheres for the live ragdoll collider overlay. Equal endpoints form a sphere.
 	struct RagdollCapsule
@@ -58,8 +59,17 @@ namespace Basalt {
 		bool IncludeTriggers = false;
 	};
 
-	// Bodies near a region, gathered once (PhysicsWorld::CollectShapes) for many sphere queries, such as spring bone points
-	// against walls and floors: each body's shape and transform as they were when gathered, so queries never lock bodies.
+	// Where a swept sphere first touches a body: how far along its move (0..1), and the surface's normal there (away from
+	// the body).
+	struct PhysicsSweepHit
+	{
+		float Fraction = 0;
+		glm::vec3 Normal = glm::vec3(0);
+	};
+
+	// Bodies near a region, gathered once (PhysicsWorld::CollectShapes, or StaticPhysicsShapes without a world) for many
+	// sphere queries, such as spring bone points against walls and floors: each body's shape and transform as they were when
+	// gathered, so queries never lock bodies.
 	class PhysicsShapeSnapshot
 	{
 	public:
@@ -84,10 +94,18 @@ namespace Basalt {
 		// The sphere (GetRadius) at `point` pushed out of the gathered shape it penetrates most deeply, along the shortest way
 		// out (PushOutDirection); nullopt when it touches none. Mesh triangles push from their front faces only.
 		std::optional<glm::vec3> PushOut(const glm::vec3& point) const;
+		// The first gathered shape the sphere (GetRadius) meets moving from `from` to `to`, or nullopt. One that starts inside
+		// a shape meets it only if it moves deeper (Fraction 0); moving out, it is free. Mesh triangles stop it from their
+		// front faces only.
+		std::optional<PhysicsSweepHit> Sweep(const glm::vec3& from, const glm::vec3& to) const;
 
 	private:
 		friend class PhysicsWorld;
+		friend class StaticPhysicsShapes;
 		struct Impl;
+		struct Candidate;
+		// Keeps the MaxShapes nearest candidates (ties by entity, then body), so what is kept never depends on their order.
+		static PhysicsShapeSnapshot FromCandidates(std::vector<Candidate> candidates, float radius);
 		Scope<Impl> m_Impl;
 	};
 
