@@ -156,19 +156,21 @@ namespace Basalt {
 			return DecomposedRotation(global).value_or(glm::quat(1, 0, 0, 0));
 		}
 
-		// Model-space rest positions and rotations; false for a non-finite rest pose. Joints whose rest transform is not affine get
-		// the identity rotation and are listed in outDegenerate.
-		bool Rest(const MeshSource& source, RestPose& out, std::vector<uint32_t>& outDegenerate)
+		// Model-space rest positions and rotations, the rotations from `reference` (sampled at `time`) when given; false for a
+		// non-finite rest or reference pose. Joints whose transform is not affine get the identity rotation and are listed in
+		// outDegenerate.
+		bool Rest(const MeshSource& source, const AnimationClip* reference, float time, RestPose& out, std::vector<uint32_t>& outDegenerate)
 		{
-			std::vector<glm::mat4> globals;
-			if (!EvaluateAnimation(source, nullptr, 0, globals))
+			std::vector<glm::mat4> globals, oriented;
+			if (!EvaluateAnimation(source, nullptr, 0, globals) || (reference && !EvaluateAnimation(source, reference, time, oriented)))
 				return false;
+			const std::vector<glm::mat4>& rotations = reference ? oriented : globals;
 			out.Positions.resize(globals.size());
 			out.Rotations.resize(globals.size());
 			for (size_t i = 0; i < globals.size(); i++)
 			{
 				out.Positions[i] = glm::vec3(globals[i][3]);
-				const auto rotation = DecomposedRotation(globals[i]);
+				const auto rotation = DecomposedRotation(rotations[i]);
 				out.Rotations[i] = rotation.value_or(glm::quat(1, 0, 0, 0));
 				if (!rotation)
 					outDegenerate.push_back(static_cast<uint32_t>(i));
@@ -325,7 +327,7 @@ namespace Basalt {
 			return side + found->second;
 		}
 
-		RetargetMap BuildMap(const MeshSource& target, const MeshSource& source, const std::vector<AnimationRetargetJoint>& joints, std::vector<std::string>& outWarnings)
+		RetargetMap BuildMap(const MeshSource& target, const MeshSource& source, const std::vector<AnimationRetargetJoint>& joints, std::vector<std::string>& outWarnings, const RetargetReferences& references)
 		{
 			RetargetMap map;
 			map.SourceOf.assign(target.Nodes.size(), -1);
@@ -395,22 +397,24 @@ namespace Basalt {
 				map.SourceRoot = map.SourceOf[map.TargetRoot];
 
 			std::vector<uint32_t> targetDegenerate, sourceDegenerate;
-			const bool targetFinite = Rest(target, map.TargetRest, targetDegenerate);
-			if (!targetFinite || !Rest(source, map.SourceRest, sourceDegenerate))
+			const bool targetFinite = Rest(target, references.Target, references.TargetTime, map.TargetRest, targetDegenerate);
+			if (!targetFinite || !Rest(source, references.Source, references.SourceTime, map.SourceRest, sourceDegenerate))
 			{
-				outWarnings.push_back(fmt::format("the rest pose of '{}' is not finite, so no clip can be retargeted", targetFinite ? source.Key : target.Key));
+				const bool reference = targetFinite ? references.Source != nullptr : references.Target != nullptr;
+				outWarnings.push_back(fmt::format("the rest {}pose of '{}' is not finite, so no clip can be retargeted", reference ? "or reference " : "", targetFinite ? source.Key : target.Key));
 				map.TargetRest = {};
 				map.SourceRest = {};
 				return map;
 			}
 			// A joint without a rest rotation has no orientation to correct from; its children still pose, but it turns from
 			// identity.
+			const auto describe = [](const AnimationClip* reference) { return reference ? fmt::format("transform in reference clip '{}'", reference->Name) : std::string("rest transform"); };
 			for (uint32_t node : targetDegenerate)
 				if (map.SourceOf[node] >= 0)
-					outWarnings.push_back(fmt::format("joint '{}' of '{}' has a rest transform that is not affine; its rest orientation counts as identity", target.Nodes[node].Name, target.Key));
+					outWarnings.push_back(fmt::format("joint '{}' of '{}' has a {} that is not affine; its rest orientation counts as identity", target.Nodes[node].Name, target.Key, describe(references.Target)));
 			for (uint32_t node : sourceDegenerate)
 				if (used[node])
-					outWarnings.push_back(fmt::format("joint '{}' of '{}' has a rest transform that is not affine; its rest orientation counts as identity", source.Nodes[node].Name, source.Key));
+					outWarnings.push_back(fmt::format("joint '{}' of '{}' has a {} that is not affine; its rest orientation counts as identity", source.Nodes[node].Name, source.Key, describe(references.Source)));
 			if (map.TargetRoot < 0)
 				return map;
 			std::vector<int32_t> targetMapped, sourceMapped;

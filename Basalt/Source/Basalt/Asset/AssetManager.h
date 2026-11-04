@@ -12,6 +12,7 @@ namespace Basalt {
 
 	class Scene;
 	struct AnimationGraph;
+	struct AnimationJointMap;
 	struct AnimationMask;
 
 	// Loads and caches CPU-side assets by key. Keys are project-relative paths ("Assets/Models/Ship.glb"),
@@ -26,6 +27,8 @@ namespace Basalt {
 		static Ref<const AnimationGraph> GetAnimationGraph(const std::string& key);
 		// A layer mask file (.banimmask, AnimationMask::FromJson); failures are cached and logged once.
 		static Ref<const AnimationMask> GetAnimationMask(const std::string& key);
+		// A clip library joint map file (.bjointmap, AnimationJointMap::FromJson); failures are cached and logged once.
+		static Ref<const AnimationJointMap> GetAnimationJointMap(const std::string& key);
 		// A material file (.bmaterial, parsed on the main thread) or a model's imported material ("<model>#material/<n>",
 		// n below the model's glTF material count; it shares the model's lifetime). GetMaterial loads the model if needed;
 		// RequestMaterial returns null while the model streams in and caches nothing until it is published. Failures are
@@ -85,6 +88,7 @@ namespace Basalt {
 			std::vector<std::string> m_Textures;
 			std::vector<std::string> m_Graphs;
 			std::vector<std::string> m_Masks;
+			std::vector<std::string> m_JointMaps;
 			std::vector<std::string> m_Materials;
 		};
 

@@ -301,6 +301,8 @@ local function TestEntities(self)
 	Check("Animator ClipLibraries", #heroClips == 4 and heroClips[1] == "Idle" and heroClips[2] == "Wave" and hero:PlayAnimation("Walk") and hero:GetAnimationDuration() == 1)
 	local library = hero:GetComponent("Animator").ClipLibraries[1]
 	Check("Animator clip library lists", library.Mesh == "Assets/Models/MixamoRig.gltf" and library.Joints[1].Target == "spine_02")
+	Check("Animator clip library joint map and reference pose", library.JointMap == "Assets/Animations/Humanoid.bjointmap" and library.ReferenceClip == "Idle" and library.ReferenceTime == 0 and library.ModelReferenceClip == "")
+	ExpectError("Clip library joint map type", function() hero:SetComponent("Animator", { ClipLibraries = { { Mesh = library.Mesh, JointMap = "Assets/Animations/UpperBody.banimmask" } } }) end, "must be a .bjointmap file")
 	ExpectError("Clip library joint validation", function() hero:SetComponent("Animator", { ClipLibraries = { { Mesh = library.Mesh, Joints = { { Target = "pelvis" }, { Target = "pelvis" } } } } }) end, "is already used by Joints[0]")
 
 	-- Other scripts.

@@ -1351,9 +1351,28 @@ chest, neck, head, and per side shoulder, upper and lower arm, hand, upper and l
 part, not only skin joints; a paired joint given as a glTF matrix cannot be animated and is warned about. Unpaired
 joints keep their rest pose.
 
+Pairs shared by many Animators (every character rigged one way, every library downloaded from one source) go in a
+`.bjointmap` file named by the entry's `JointMap`:
+
+```json
+{ "Joints": [ { "Source": "mixamorig:Spine2", "Target": "spine_05" }, { "Source": "mixamorig:LeftArm", "Target": "upperarm_l" } ] }
+```
+
+Every entry names both joints, and each source and each target appears once (`asset.write` and `project.validate` reject
+other files). The file's pairs follow the entry's own `Joints`: an inline pair overrides every file pair that names one
+of its joints. Joint maps are saved by identity and follow `asset.move` like other asset references; a map that cannot
+load makes its library add no clips (rather than pairing by name alone and posing joints wrongly), and an edited map
+retargets the library again on the next update.
+
 Each paired joint turns in model space by its source joint's turn away from the source rest pose, so skeletons whose
-joints have different axes and rest orientations still pose alike; both models must stand in the same rest pose style
-(both T-pose or both A-pose). Paired joints keep the target's rest translation, so limbs keep their length. The hips (or
+joints have different axes and rest orientations still pose alike. Skeletons authored in different rest styles (an
+A-pose library on a T-pose character) need a reference pose: `ReferenceClip` names a clip of the library whose pose at
+`ReferenceTime` seconds stands like the model's rest pose, and `ModelReferenceClip` a clip of the model (its own clips,
+not other libraries') whose pose at `ModelReferenceTime` stands like the library's rest pose. Either replaces its
+skeleton's rest orientations as the pose joints turn from; positions keep the rest pose, so limb lengths and the root's
+scale do not change. A single-frame clip of the matching pose is enough (`{ Mesh = "...", ReferenceClip = "TPose" }`).
+A reference clip that is not there makes the library add no clips; a time past the clip's end takes its last pose, with
+a warning. Paired joints keep the target's rest translation, so limbs keep their length. The hips (or
 the topmost paired node) also move by their source joint's displacement scaled by the ratio of the skeletons' leg lengths
 (hips height above the lowest paired joint), so root motion matches the character's stride; a warning says when the hips
 have nothing paired below them and move unscaled. Morph weight tracks keep their keys and move to target nodes of the
@@ -1364,9 +1383,10 @@ steps; in a mixed clip, stepped channels are also sampled just before each key, 
 Clips are retargeted when an Animator first needs them (again after the model or a library reloads) and shared by
 Animators with the same model and libraries. A clip past the decoded animation budget, one that moves no paired joint or
 fails to bake, and an Animator's retargeted clips past 256 MiB are left out with a warning, and a later library may then
-supply the name. A library that cannot load, has no clips, pairs no joint or has no finite rest pose is logged as an
-error and adds no clips. Clip-not-found errors name the model and how many clip libraries were searched.
-`animator.retarget` (automation) lists each library's joint pairs and how they matched, the model's humanoid bones left
+supply the name. A library that cannot load, has no clips, pairs no joint, has no finite rest (or reference) pose, names a
+joint map that cannot load or a reference clip that is not there is logged as an error and adds no clips. Clip-not-found
+errors name the model and how many clip libraries were searched.
+`animator.retarget` (automation) lists each library's joint map and reference poses, its joint pairs and how they matched, the model's humanoid bones left
 unpaired, the root's scale, the clips it adds or hides, and its warnings, resolved as playback resolves them but without
 baking: a listed clip can still be left out when it fails to bake or passes the 256 MiB budget, which the log reports.
 

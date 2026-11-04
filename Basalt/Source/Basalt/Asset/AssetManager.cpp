@@ -1,6 +1,7 @@
 #include "Basalt/Asset/AssetManager.h"
 
 #include "Basalt/Animation/AnimationGraph.h"
+#include "Basalt/Animation/AnimationJointMap.h"
 #include "Basalt/Animation/AnimationMask.h"
 #include "Basalt/Asset/AssetKey.h"
 #include "Basalt/Asset/AssetRegistry.h"
@@ -53,6 +54,7 @@ namespace Basalt {
 		std::unordered_map<std::string, CacheEntry<TextureSource>> s_Textures;
 		std::unordered_map<std::string, CacheEntry<const AnimationGraph>> s_Graphs;
 		std::unordered_map<std::string, CacheEntry<const AnimationMask>> s_Masks;
+		std::unordered_map<std::string, CacheEntry<const AnimationJointMap>> s_JointMaps;
 		// Material files and imported "<model>#material/<n>" materials (the latter alias their published model).
 		std::unordered_map<std::string, CacheEntry<const MaterialData>> s_Materials;
 
@@ -160,7 +162,7 @@ namespace Basalt {
 			return s_Materials.emplace(key, std::move(entry)).first->second.Asset;
 		}
 
-		// A JSON asset (an animation graph or mask: T::FromText), read through FileSystem so a mounted archive serves it.
+		// A JSON asset (an animation graph, mask or joint map: T::FromText), read through FileSystem so a mounted archive serves it.
 		template<typename T>
 		Ref<const T> LoadJsonAsset(const std::string& key, const char* kind, std::string& outError)
 		{
@@ -196,6 +198,11 @@ namespace Basalt {
 	Ref<const AnimationMask> AssetManager::GetAnimationMask(const std::string& key)
 	{
 		return GetJsonAsset(s_Masks, key, "mask");
+	}
+
+	Ref<const AnimationJointMap> AssetManager::GetAnimationJointMap(const std::string& key)
+	{
+		return GetJsonAsset(s_JointMaps, key, "joint map");
 	}
 
 	Ref<const AnimationGraph> AssetManager::GetAnimationGraph(const std::string& key)
@@ -366,6 +373,7 @@ namespace Basalt {
 				s_Textures.clear();
 				s_Graphs.clear();
 				s_Masks.clear();
+				s_JointMaps.clear();
 				s_Materials.clear();
 				s_Project = project;
 				s_Root = root;
@@ -538,6 +546,8 @@ namespace Basalt {
 			return it->second.Error;
 		if (auto it = s_Masks.find(key); it != s_Masks.end())
 			return it->second.Error;
+		if (auto it = s_JointMaps.find(key); it != s_JointMaps.end())
+			return it->second.Error;
 		if (auto it = s_Materials.find(key); it != s_Materials.end())
 			return it->second.Error;
 		return {};
@@ -548,6 +558,7 @@ namespace Basalt {
 		CheckProject();
 		s_Graphs.erase(key);
 		s_Masks.erase(key);
+		s_JointMaps.erase(key);
 		s_Meshes.erase(key);
 		s_Textures.erase(key);
 		s_Materials.erase(key);
@@ -588,6 +599,9 @@ namespace Basalt {
 		for (const auto& [key, entry] : s_Masks)
 			if (changed.contains(key))
 				keys.insert(key);
+		for (const auto& [key, entry] : s_JointMaps)
+			if (changed.contains(key))
+				keys.insert(key);
 		// A material file's entry holds decoded texture paths: it drops when the file or a texture it names (or that texture's
 		// sidecar: a reassigned UUID) changes. A reference that did not resolve can only resolve through metadata, so such an
 		// entry drops when any sidecar changes or a file returns next to its sidecar. Imported materials drop with their model.
@@ -623,6 +637,7 @@ namespace Basalt {
 	{
 		s_Graphs.clear();
 		s_Masks.clear();
+		s_JointMaps.clear();
 		s_Meshes.clear();
 		s_Textures.clear();
 		s_Materials.clear();
@@ -632,7 +647,7 @@ namespace Basalt {
 	{
 		CheckProject();
 		std::vector<std::string> keys;
-		keys.reserve(s_Meshes.size() + s_Textures.size() + s_Graphs.size() + s_Masks.size() + s_Materials.size());
+		keys.reserve(s_Meshes.size() + s_Textures.size() + s_Graphs.size() + s_Masks.size() + s_JointMaps.size() + s_Materials.size());
 		for (const auto& [key, entry] : s_Meshes)
 			keys.push_back(key);
 		for (const auto& [key, entry] : s_Textures)
@@ -640,6 +655,8 @@ namespace Basalt {
 		for (const auto& [key, entry] : s_Graphs)
 			keys.push_back(key);
 		for (const auto& [key, entry] : s_Masks)
+			keys.push_back(key);
+		for (const auto& [key, entry] : s_JointMaps)
 			keys.push_back(key);
 		for (const auto& [key, entry] : s_Materials)
 			keys.push_back(key);
@@ -678,6 +695,7 @@ namespace Basalt {
 		m_Textures = SortedKeys(s_Textures);
 		m_Graphs = SortedKeys(s_Graphs);
 		m_Masks = SortedKeys(s_Masks);
+		m_JointMaps = SortedKeys(s_JointMaps);
 		m_Materials = SortedKeys(s_Materials);
 	}
 
@@ -687,6 +705,7 @@ namespace Basalt {
 		EraseAddedSince(s_Textures, m_Textures);
 		EraseAddedSince(s_Graphs, m_Graphs);
 		EraseAddedSince(s_Masks, m_Masks);
+		EraseAddedSince(s_JointMaps, m_JointMaps);
 		EraseAddedSince(s_Materials, m_Materials);
 	}
 

@@ -236,14 +236,19 @@ namespace Basalt {
 
 	Ref<const AnimationClipSet> AnimationSystem::ResolveClips(Entity entity, const AnimatorComponent& component, const Ref<MeshSource>& model)
 	{
-		// Library sources resolve once per update for crowds (like the models in Update); a reload shows next update.
-		const AnimationClipSet::Resolver resolve = [this](const std::string& key, std::string& outError) {
-			auto [entry, inserted] = m_LibrarySources.try_emplace(key);
+		// Library sources and joint maps resolve once per update for crowds (like the models in Update); a reload shows next
+		// update.
+		const auto cached = [](auto& cache, const std::string& key, std::string& outError, auto load) {
+			auto [entry, inserted] = cache.try_emplace(key);
 			if (inserted)
-				entry->second = AssetManager::GetMesh(key);
+				entry->second = load(key);
 			if (!entry->second)
 				outError = AssetManager::GetError(key);
 			return entry->second;
+		};
+		const AnimationClipSet::Resolver resolve{
+			.Mesh = [&](const std::string& key, std::string& outError) { return cached(m_LibrarySources, key, outError, &AssetManager::GetMesh); },
+			.JointMap = [&](const std::string& key, std::string& outError) { return cached(m_LibraryJointMaps, key, outError, &AssetManager::GetAnimationJointMap); },
 		};
 		// A reloaded model or library is a new source, so its set is built again. Compared in place: crowds call this
 		// every frame.
@@ -704,6 +709,7 @@ namespace Basalt {
 
 		m_PoseJobs.clear();
 		m_LibrarySources.clear();
+		m_LibraryJointMaps.clear();
 		// Layer assets resolve once per update, like the Animators' models and graphs; script calls between updates see edits
 		// and reloads at once.
 		struct LayerAssetCache

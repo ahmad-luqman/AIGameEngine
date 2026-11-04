@@ -178,7 +178,7 @@ Scrubs this entity's PropertyAnimation at normalized time [0,1] through the comp
 
 ### `animator.retarget`
 
-How an Animator's named ClipLibraries map onto its model, resolved as playback resolves them but without baking (a listed clip can still be left out when it fails to bake or passes the 256 MiB per-Animator budget; the log reports it): per library its index in ClipLibraries, why it adds no clips (error), the joint pairs (target, source, matched by joint map, name or humanoid bone), the model's humanoid bones left unmatched, the root pair with its leg-length scale, the clips it adds, the clips earlier clips hide, and warnings. Read-only; works in edit mode.
+How an Animator's named ClipLibraries map onto its model, resolved as playback resolves them but without baking (a listed clip can still be left out when it fails to bake or passes the 256 MiB per-Animator budget; the log reports it): per library its index in ClipLibraries, why it adds no clips (error: also a joint map that does not load or a reference clip that is not there), its joint map file (jointMap) and reference poses (reference, modelReference: {clip, time}, or null for the rest pose), the joint pairs (target, source, matched by joint map (Joints or the jointMap file), name or humanoid bone), the model's humanoid bones left unmatched, the root pair with its leg-length scale, the clips it adds, the clips earlier clips hide, and warnings. Read-only; works in edit mode.
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -796,7 +796,7 @@ Resolves an asset UUID (decimal string) to its current project-relative path. Re
 
 ### `asset.write`
 
-Writes a text asset (script, prefab, scene, animation graph or mask, material...) to a project-relative path and reloads it. A .banimgraph, .banimmask or .bmaterial is validated before replacing the file; a material's texture problems (missing, wrong letter case, unresolved, not a texture, outside Assets/, an embedded image the model lacks) are reported in 'warnings', as project.validate reports them. A script written while the game runs (Play, not Simulate) is hot reloaded (see 'scripts'). A .bprefab merges into the edit scene's instances ('prefabInstances'; instances that cannot merge are 'warnings').
+Writes a text asset (script, prefab, scene, animation graph, mask or joint map, material...) to a project-relative path and reloads it. A .banimgraph, .banimmask, .bjointmap or .bmaterial is validated before replacing the file; a material's texture problems (missing, wrong letter case, unresolved, not a texture, outside Assets/, an embedded image the model lacks) are reported in 'warnings', as project.validate reports them. A script written while the game runs (Play, not Simulate) is hot reloaded (see 'scripts'). A .bprefab merges into the edit scene's instances ('prefabInstances'; instances that cannot merge are 'warnings').
 
 | Parameter | Type / description |
 |-----------|--------------------|

@@ -27,6 +27,7 @@ namespace Basalt {
 
 	class Entity;
 	class Scene;
+	struct AnimationJointMap;
 	struct AnimationMask;
 
 	// An AnimationEvent marker that playback crossed, waiting to be delivered.
@@ -702,8 +703,9 @@ namespace Basalt {
 		std::unordered_map<UUID, std::vector<MorphOverride>> m_DetachedMorphOverrides;
 		// Script morph weights waiting for a model with their target, warned once each.
 		std::set<std::pair<UUID, std::string>> m_WaitingMorphOverrides;
-		// Clip library sources by key, resolved once per update.
+		// Clip library sources and joint maps by key, resolved once per update.
 		std::unordered_map<std::string, Ref<MeshSource>> m_LibrarySources;
+		std::unordered_map<std::string, Ref<const AnimationJointMap>> m_LibraryJointMaps;
 		std::vector<AnimationEventRecord> m_PendingEvents;
 		// The last problem reported per BoneAttachment entity, so each is logged once.
 		std::unordered_map<UUID, std::string> m_AttachmentProblems;
