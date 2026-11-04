@@ -323,13 +323,16 @@ namespace Basalt {
 				outWarnings.push_back(std::move(warning));
 			}
 			std::vector<ArchiveFile> files;
+			std::vector<std::string> skipped;
 			const std::filesystem::path assets = project.GetDirectory() / Project::AssetDirectoryName;
 			std::error_code error;
 			for (auto it = std::filesystem::recursive_directory_iterator(assets, error); !error && it != std::filesystem::recursive_directory_iterator(); it.increment(error))
 			{
+				if (FileSystem::SkipNonUtf8Entry(it, project.GetDirectory(), skipped))
+					continue;
 				const std::string key = FileSystem::PathToGenericUtf8(it->path().lexically_relative(project.GetDirectory()));
 				const auto inspectFailed = [&]() {
-					outError = "cannot inspect '" + key + "': " + error.message();
+					outError = "cannot inspect '" + key + "': " + FileSystem::DescribeError(error);
 					return std::nullopt;
 				};
 				// The iterator does not enter linked folders (a folder export's copy does): refuse rather than ship a game
@@ -368,9 +371,13 @@ namespace Basalt {
 			}
 			if (error)
 			{
-				outError = "cannot list '" + FileSystem::PathToUtf8(assets) + "': " + error.message();
+				outError = "cannot list '" + FileSystem::PathToUtf8(assets) + "': " + FileSystem::DescribeError(error);
 				return std::nullopt;
 			}
+			// Nothing in the game can name them, so the game does not change.
+			std::sort(skipped.begin(), skipped.end());
+			for (const std::string& entry : skipped)
+				outWarnings.push_back("'" + entry + "' is left out of the archive: " + FileSystem::NonUtf8NameProblem);
 			WrittenArchive written;
 			if (!keepOriginals)
 				written.Omitted = FindReplacedOriginals(project, files, outWarnings);
@@ -404,14 +411,14 @@ namespace Basalt {
 				std::filesystem::remove_all(directory / previous, error);
 				if (error)
 				{
-					outError = "cannot remove the previous export's '" + FileSystem::PathToUtf8(directory / previous) + "': " + error.message();
+					outError = "cannot remove the previous export's '" + FileSystem::PathToUtf8(directory / previous) + "': " + FileSystem::DescribeError(error);
 					return false;
 				}
 			}
 			std::filesystem::create_directories(directory, error);
 			if (error)
 			{
-				outError = "cannot create '" + FileSystem::PathToUtf8(directory) + "': " + error.message();
+				outError = "cannot create '" + FileSystem::PathToUtf8(directory) + "': " + FileSystem::DescribeError(error);
 				return false;
 			}
 			if (options.Archive)
@@ -429,7 +436,7 @@ namespace Basalt {
 				std::filesystem::copy_file(project.GetProjectFilePath(), directory / Project::FileName, std::filesystem::copy_options::overwrite_existing, error);
 			if (error)
 			{
-				outError = "cannot copy project files: " + error.message();
+				outError = "cannot copy project files: " + FileSystem::DescribeError(error);
 				return false;
 			}
 			// The input actions are optional; a previous export's copy must not outlive the project's file. A file that
@@ -444,7 +451,7 @@ namespace Basalt {
 				std::filesystem::copy_file(project.GetInputFilePath(), directory / Project::InputFileName, std::filesystem::copy_options::overwrite_existing, error);
 			if (error)
 			{
-				outError = "cannot copy '" + FileSystem::PathToUtf8(project.GetInputFilePath()) + "': " + error.message();
+				outError = "cannot copy '" + FileSystem::PathToUtf8(project.GetInputFilePath()) + "': " + FileSystem::DescribeError(error);
 				return false;
 			}
 			return true;
@@ -493,7 +500,7 @@ namespace Basalt {
 			std::filesystem::create_directories(libraryDirectory, error);
 			if (error)
 			{
-				outError = "cannot create '" + FileSystem::PathToUtf8(libraryDirectory) + "': " + error.message();
+				outError = "cannot create '" + FileSystem::PathToUtf8(libraryDirectory) + "': " + FileSystem::DescribeError(error);
 				return false;
 			}
 			for (const auto& [source, name] : { std::pair{ &libraries.Loader, LoaderFileName }, std::pair{ &libraries.MoltenVK, MoltenVKFileName } })
@@ -507,7 +514,7 @@ namespace Basalt {
 					std::filesystem::permissions(libraryDirectory / name, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write | std::filesystem::perms::group_read | std::filesystem::perms::others_read, std::filesystem::perm_options::replace, error);
 				if (error)
 				{
-					outError = "cannot copy '" + FileSystem::PathToUtf8(*source) + "' to '" + FileSystem::PathToUtf8(libraryDirectory / name) + "': " + error.message();
+					outError = "cannot copy '" + FileSystem::PathToUtf8(*source) + "' to '" + FileSystem::PathToUtf8(libraryDirectory / name) + "': " + FileSystem::DescribeError(error);
 					return false;
 				}
 			}
@@ -585,14 +592,14 @@ namespace Basalt {
 			}
 			if (error)
 			{
-				outError = "cannot list '" + FileSystem::PathToUtf8(output) + "': " + error.message();
+				outError = "cannot list '" + FileSystem::PathToUtf8(output) + "': " + FileSystem::DescribeError(error);
 				return false;
 			}
 			for (const auto& path : old)
 			{
 				if (!std::filesystem::remove(path, error) && error)
 				{
-					outError = "cannot remove the earlier AppImage '" + FileSystem::PathToUtf8(path) + "': " + error.message();
+					outError = "cannot remove the earlier AppImage '" + FileSystem::PathToUtf8(path) + "': " + FileSystem::DescribeError(error);
 					return false;
 				}
 				BS_CORE_INFO("Exporter: removed the earlier AppImage '{}'", FileSystem::PathToUtf8(path));
@@ -623,7 +630,7 @@ namespace Basalt {
 				std::filesystem::create_symlink(target, appDir / link, error);
 				if (error)
 				{
-					result.Error = "cannot create '" + FileSystem::PathToUtf8(appDir / link) + "': " + error.message();
+					result.Error = "cannot create '" + FileSystem::PathToUtf8(appDir / link) + "': " + FileSystem::DescribeError(error);
 					return false;
 				}
 			}
@@ -753,7 +760,7 @@ namespace Basalt {
 		const bool outputEmpty = !error && (!outputExists || std::filesystem::is_empty(output, error));
 		if (error)
 		{
-			result.Error = "cannot inspect the output directory '" + FileSystem::PathToUtf8(output) + "': " + error.message();
+			result.Error = "cannot inspect the output directory '" + FileSystem::PathToUtf8(output) + "': " + FileSystem::DescribeError(error);
 			return result;
 		}
 		if (!outputEmpty && !IsPreviousExport(output, executableName))
@@ -809,7 +816,7 @@ namespace Basalt {
 			std::filesystem::remove_all(package, error);
 			if (error)
 			{
-				result.Error = "cannot replace '" + FileSystem::PathToUtf8(package) + "': " + error.message();
+				result.Error = "cannot replace '" + FileSystem::PathToUtf8(package) + "': " + FileSystem::DescribeError(error);
 				return result;
 			}
 		}
@@ -836,7 +843,7 @@ namespace Basalt {
 			std::filesystem::permissions(executable, std::filesystem::perms::owner_exec | std::filesystem::perms::group_exec | std::filesystem::perms::others_exec, std::filesystem::perm_options::add, error);
 		if (error)
 		{
-			result.Error = "cannot copy the runtime: " + error.message();
+			result.Error = "cannot copy the runtime: " + FileSystem::DescribeError(error);
 			return fail();
 		}
 

@@ -19,6 +19,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <optional>
 #include <span>
 #include <string>
@@ -63,9 +64,9 @@ namespace BasaltTest {
 		{
 			std::error_code error;
 			std::filesystem::remove_all(m_Path, error);
-			REQUIRE_MESSAGE(!error, "cannot empty '", Basalt::FileSystem::PathToUtf8(m_Path), "': ", error.message());
+			REQUIRE_MESSAGE(!error, "cannot empty '", Basalt::FileSystem::PathToUtf8(m_Path), "': ", Basalt::FileSystem::DescribeError(error));
 			std::filesystem::create_directories(m_Path, error);
-			REQUIRE_MESSAGE(!error, "cannot create '", Basalt::FileSystem::PathToUtf8(m_Path), "': ", error.message());
+			REQUIRE_MESSAGE(!error, "cannot create '", Basalt::FileSystem::PathToUtf8(m_Path), "': ", Basalt::FileSystem::DescribeError(error));
 		}
 		~TempDirectory()
 		{
@@ -81,6 +82,44 @@ namespace BasaltTest {
 	private:
 		std::filesystem::path m_Path;
 	};
+
+	// A file name no asset key can hold (FileSystem::IsUtf8Path): an unpaired surrogate on Windows, a byte that is not UTF-8
+	// elsewhere, between stem and extension. `variant` picks which, so two names can differ only there and share a U+FFFD
+	// text.
+	inline std::filesystem::path NonUtf8Name(const std::string& stem, const std::string& extension = "", int variant = 0)
+	{
+#if defined(_WIN32)
+		std::wstring name = Basalt::FileSystem::PathFromUtf8(stem).native();
+		name.push_back(static_cast<wchar_t>(0xD800 + variant));
+		return std::filesystem::path(name + Basalt::FileSystem::PathFromUtf8(extension).native());
+#else
+		return std::filesystem::path(stem + std::string(1, static_cast<char>(0xFF - variant)) + extension);
+#endif
+	}
+
+	// The same name as FileSystem::PathToEscapedUtf8 writes it.
+	inline std::string EscapedNonUtf8Name(const std::string& stem, const std::string& extension = "", int variant = 0)
+	{
+#if defined(_WIN32)
+		return stem + (variant == 0 ? "\\uD800" : "\\uD801") + extension;
+#else
+		return stem + (variant == 0 ? "\\xFF" : "\\xFE") + extension;
+#endif
+	}
+
+	// False where the file system refuses such names (APFS on macOS). Everywhere else one must be created, so that a scan
+	// test cannot pass without having seen one.
+	inline bool CanCreateNonUtf8Names(const std::filesystem::path& directory)
+	{
+		const std::filesystem::path probe = directory / NonUtf8Name("Probe");
+		const bool created = static_cast<bool>(std::ofstream(probe, std::ios::binary));
+		std::error_code error;
+		std::filesystem::remove(probe, error);
+#if !defined(__APPLE__)
+		REQUIRE_MESSAGE(created, "this file system must take a name that is not valid Unicode");
+#endif
+		return created;
+	}
 
 	// Sets an environment variable for the scope and restores its previous value (or absence) afterwards.
 	class ScopedEnvVar

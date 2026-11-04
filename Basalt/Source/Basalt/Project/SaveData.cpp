@@ -30,7 +30,7 @@ namespace Basalt {
 				const bool taken = std::filesystem::exists(candidate, error);
 				if (error)
 				{
-					outError = "cannot check '" + FileSystem::PathToUtf8(candidate) + "': " + error.message();
+					outError = "cannot check '" + FileSystem::PathToUtf8(candidate) + "': " + FileSystem::DescribeError(error);
 					return std::nullopt;
 				}
 				if (!taken)
@@ -139,7 +139,7 @@ namespace Basalt {
 		std::error_code error;
 		const bool exists = std::filesystem::exists(m_Path, error);
 		if (error)
-			return BlockSave("cannot access " + where + ": " + error.message(), outError);
+			return BlockSave("cannot access " + where + ": " + FileSystem::DescribeError(error), outError);
 		if (!exists)
 		{
 			m_Values = nlohmann::json::object();
@@ -149,7 +149,7 @@ namespace Basalt {
 
 		const uintmax_t size = std::filesystem::file_size(m_Path, error);
 		if (error)
-			return BlockSave("cannot read " + where + ": " + error.message(), outError);
+			return BlockSave("cannot read " + where + ": " + FileSystem::DescribeError(error), outError);
 		if (size > MaxFileSize)
 			return MoveMalformedAside(where, "it is larger than " + std::to_string(MaxFileSizeMB) + " MB", outError);
 
@@ -192,7 +192,7 @@ namespace Basalt {
 		{
 			std::filesystem::rename(m_Path, *backup, error);
 			if (error)
-				reason = error.message();
+				reason = FileSystem::DescribeError(error);
 		}
 		if (!backup || error)
 			return BlockSave(where + " is unreadable (" + problem + "); moving it aside failed (" + reason + "), so it will not be overwritten", outError);
@@ -219,7 +219,7 @@ namespace Basalt {
 		std::filesystem::create_directories(m_Path.parent_path(), error);
 		if (error)
 		{
-			outError = "cannot create the save data directory '" + FileSystem::PathToUtf8(m_Path.parent_path()) + "': " + error.message();
+			outError = "cannot create the save data directory '" + FileSystem::PathToUtf8(m_Path.parent_path()) + "': " + FileSystem::DescribeError(error);
 			return false;
 		}
 		std::string reason;

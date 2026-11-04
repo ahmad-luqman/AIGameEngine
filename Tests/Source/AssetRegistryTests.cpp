@@ -5,6 +5,7 @@
 #include <Basalt/Asset/MeshImporter.h>
 #include <Basalt/Asset/MeshOptimizer.h>
 #include <Basalt/Asset/Thumbnails.h>
+#include <Basalt/Core/FileSystem.h>
 #include <Basalt/Core/JsonUtils.h>
 #include <Basalt/Project/ProjectValidator.h>
 #include <Basalt/Scene/ComponentRegistry.h>
@@ -188,7 +189,7 @@ TEST_SUITE("AssetPipeline")
 		std::filesystem::create_symlink("real.lua", Project::ResolvePath("Assets/alias.lua"), linkError);
 		if (linkError)
 		{
-			WARN_MESSAGE(false, "Symlink creation unavailable: ", linkError.message());
+			WARN_MESSAGE(false, "Symlink creation unavailable: ", FileSystem::DescribeError(linkError));
 			return;
 		}
 		CHECK_FALSE(assets.Remove("Assets/alias.lua", error));

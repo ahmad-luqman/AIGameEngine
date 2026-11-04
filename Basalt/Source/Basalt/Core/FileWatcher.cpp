@@ -75,7 +75,7 @@ namespace Basalt {
 		Scan result;
 		const std::filesystem::path base = FileSystem::PathFromUtf8(subdirectory);
 		const std::filesystem::path folder = root / base;
-		const auto describe = [](const std::filesystem::path& path, const std::error_code& error) { return "cannot read '" + FileSystem::PathToUtf8(path) + "': " + error.message(); };
+		const auto describe = [](const std::filesystem::path& path, const std::error_code& error) { return "cannot read '" + FileSystem::PathToUtf8(path) + "': " + FileSystem::DescribeError(error); };
 		std::error_code error;
 		const std::filesystem::file_status status = std::filesystem::status(folder, error);
 		if (error && !IsMissing(error))
@@ -92,6 +92,8 @@ namespace Basalt {
 		for (auto it = std::filesystem::recursive_directory_iterator(folder, error); !error && it != std::filesystem::recursive_directory_iterator(); it.increment(error))
 		{
 			last = it->path();
+			if (FileSystem::SkipNonUtf8Entry(it, root, result.Skipped))
+				continue;
 			std::error_code entryError;
 			const bool regular = it->is_regular_file(entryError);
 			Stamp stamp;
@@ -114,6 +116,7 @@ namespace Basalt {
 		}
 		if (error)
 			result.Error = describe(last, error);
+		std::sort(result.Skipped.begin(), result.Skipped.end());
 		return result;
 	}
 
@@ -131,6 +134,7 @@ namespace Basalt {
 		m_LastScan.clear();
 		m_Acknowledged.clear();
 		m_LastError.clear();
+		m_Skipped.clear();
 		m_BaselinePending = false;
 		m_LateBaseline = false;
 		if (!IsWatching())
@@ -148,6 +152,7 @@ namespace Basalt {
 		{
 			m_Reported = baseline.Files;
 			m_LastScan = baseline.Files;
+			m_Skipped = baseline.Skipped;
 		}
 		if (IsPolling())
 			StartWorker();
@@ -249,6 +254,10 @@ namespace Basalt {
 			BS_CORE_INFO("FileWatcher: '{}' can be read again", FileSystem::PathToUtf8(m_Root / FileSystem::PathFromUtf8(m_Subdirectory)));
 			m_LastError.clear();
 		}
+		for (const std::string& entry : scan.Skipped)
+			if (!std::binary_search(m_Skipped.begin(), m_Skipped.end(), entry))
+				BS_CORE_WARN("FileWatcher: '{}': {}", entry, FileSystem::NonUtf8NameProblem);
+		m_Skipped = scan.Skipped;
 		std::erase_if(m_Acknowledged, [sequence](const auto& entry) { return entry.second <= sequence; });
 		if (m_BaselinePending)
 		{
@@ -393,7 +402,7 @@ namespace Basalt {
 			}
 			catch (const std::exception& e)
 			{
-				scan = Scan{ {}, "cannot scan '" + FileSystem::PathToUtf8(root / FileSystem::PathFromUtf8(subdirectory)) + "': " + e.what() };
+				scan = Scan{ {}, "cannot scan '" + FileSystem::PathToUtf8(root / FileSystem::PathFromUtf8(subdirectory)) + "': " + e.what(), {} };
 			}
 			lock.lock();
 			// An unread older scan is replaced: the newest one knows every file it did (a change it settled on may then be

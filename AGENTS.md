@@ -333,9 +333,12 @@ Other rules:
   `PathToUtf8`/`PathToGenericUtf8` (none of them throws), and use `Platform::Utf8ToWide`/`WideToUtf8` for other wide
   Windows APIs. On Windows `std::filesystem::path(std::string)` reads the ANSI code page, `path::string()` throws for names
   outside it, and narrow C APIs (`fopen`, `LoadLibraryA`, miniaudio's narrow file and VFS entry points) cannot open such
-  names: read through `FileSystem`, or pass `path.c_str()` to the wide variant. New code takes system error text from
+  names: read through `FileSystem`, or pass `path.c_str()` to the wide variant. System error text comes from
   `Platform::GetErrorMessage` or `FileSystem::DescribeError` (`FormatMessageA` and MSVC's `std::error_code::message()`
-  are ANSI; ROADMAP lists the older calls).
+  are ANSI; a Core test fails on a raw `.message()` call). A directory scan whose entries become text keys calls
+  `FileSystem::SkipNonUtf8Entry` first and reports what it skipped: an NTFS name with unpaired surrogates, or a name
+  elsewhere that is not UTF-8, has no text that leads back to the file. Skipping is not a failure: one odd name must not
+  stop a scan, and folder exports still copy such files byte for byte.
 - Ownership: `Scope<T>` (unique) / `Ref<T>` (shared) from `Basalt/Core/Base.h`; raw pointers are
   non-owning. GPU objects use nvrhi handles (`nvrhi::TextureHandle`, ...).
 - No exceptions across module boundaries. Fallible operations return `bool`/`std::optional`/a result

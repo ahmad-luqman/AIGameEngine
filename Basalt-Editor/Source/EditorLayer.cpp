@@ -780,7 +780,7 @@ namespace Basalt {
 		std::error_code statusError;
 		if (!std::filesystem::is_directory(*directory, statusError))
 		{
-			BS_CORE_WARN("Editor: cannot create '{}' ({}); the window layout stays in ./imgui.ini", FileSystem::PathToUtf8(*directory), (createError ? createError : statusError).message());
+			BS_CORE_WARN("Editor: cannot create '{}' ({}); the window layout stays in ./imgui.ini", FileSystem::PathToUtf8(*directory), FileSystem::DescribeError(createError ? createError : statusError));
 			return;
 		}
 		const std::filesystem::path layout = *directory / EditorPreferences::LayoutFileName;
@@ -791,7 +791,7 @@ namespace Basalt {
 		const bool hasLayout = std::filesystem::exists(layout, fsError);
 		if (fsError)
 		{
-			BS_CORE_WARN("Editor: cannot read '{}' ({}); the window layout stays in ./imgui.ini", FileSystem::PathToUtf8(layout), fsError.message());
+			BS_CORE_WARN("Editor: cannot read '{}' ({}); the window layout stays in ./imgui.ini", FileSystem::PathToUtf8(layout), FileSystem::DescribeError(fsError));
 			return;
 		}
 		if (!hasLayout && std::filesystem::is_regular_file(legacyLayout, fsError))
@@ -799,7 +799,7 @@ namespace Basalt {
 			std::filesystem::copy_file(legacyLayout, layout, fsError);
 			if (fsError)
 			{
-				BS_CORE_WARN("Editor: cannot copy the window layout from ./imgui.ini ({}); it stays there", fsError.message());
+				BS_CORE_WARN("Editor: cannot copy the window layout from ./imgui.ini ({}); it stays there", FileSystem::DescribeError(fsError));
 				return;
 			}
 		}

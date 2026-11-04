@@ -254,7 +254,7 @@ namespace Basalt {
 					available = fileSize.value_or(0);
 					if (!fileSize)
 					{
-						outError = fmt::format("{}: buffer {} file '{}' is not a readable file{}", name, i, file, error ? " (" + error.message() + ")" : "");
+						outError = fmt::format("{}: buffer {} file '{}' is not a readable file{}", name, i, file, error ? " (" + FileSystem::DescribeError(error) + ")" : "");
 						return false;
 					}
 					// cgltf reads the whole file when no byteLength is declared.

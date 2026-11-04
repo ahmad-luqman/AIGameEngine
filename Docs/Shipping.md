@@ -120,6 +120,9 @@ basalt archive.inspect '{"path": "Dist/MyGame/Assets.bpak", "verify": true}'
   `archive.omitted`, and `warnings` names up to five of them. A script that builds such a name from separate pieces at run
   time would no longer find the file: pass `"keepOriginals": true` with `archive` (a checkbox in the editor's export
   prompt) to keep every original. Folder exports copy every file.
+- **Names no key can hold.** A file or folder whose name has no UTF-8 form stays out, with a warning for each
+  (`Docs/AssetPipeline.md`): nothing in a game can name it, so the game does not change. Folder exports copy these
+  byte for byte, and their `validation` warns instead.
 - **Compression.** Each file except MP3 and FLAC audio is compressed with zstd (level 9) on the job system, up to 256 files
   or 256 MiB of them at a time (a larger file goes alone), and kept compressed only when that makes it smaller. Files are
   written in path order, so the same files and Basalt build give the same bytes however many cores the machine has.

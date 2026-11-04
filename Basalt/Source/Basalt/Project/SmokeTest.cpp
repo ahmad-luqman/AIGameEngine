@@ -75,11 +75,11 @@ namespace Basalt {
 		std::error_code error;
 		const std::filesystem::path program = std::filesystem::absolute(executable, error);
 		if (error)
-			return Fail("invalid executable path '" + FileSystem::PathToUtf8(executable) + "': " + error.message());
+			return Fail("invalid executable path '" + FileSystem::PathToUtf8(executable) + "': " + FileSystem::DescribeError(error));
 		// The game's save data goes to a fresh directory, never the player's (and never next to the game).
 		const std::filesystem::path temporary = std::filesystem::temp_directory_path(error);
 		if (error || !temporary.is_absolute())
-			return Fail("cannot find the temporary directory for the game's save data" + (error ? ": " + error.message() : std::string()));
+			return Fail("cannot find the temporary directory for the game's save data" + (error ? ": " + FileSystem::DescribeError(error) : std::string()));
 		// Unique without std::random_device (which may throw): the clock, plus a counter for runs in the same tick.
 		static std::atomic<uint32_t> s_Run{ 0 };
 		const std::filesystem::path userData = temporary / fmt::format("BasaltSmokeTest-{:x}-{}", std::chrono::steady_clock::now().time_since_epoch().count(), s_Run++);
@@ -95,7 +95,7 @@ namespace Basalt {
 		result.Process = RunProcess(spec);
 		std::filesystem::remove_all(userData, error);
 		if (error)
-			BS_CORE_WARN("Smoke test: cannot remove its save data directory '{}': {}", FileSystem::PathToUtf8(userData), error.message());
+			BS_CORE_WARN("Smoke test: cannot remove its save data directory '{}': {}", FileSystem::PathToUtf8(userData), FileSystem::DescribeError(error));
 
 		switch (result.Process.Outcome)
 		{

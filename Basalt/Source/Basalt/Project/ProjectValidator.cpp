@@ -225,14 +225,17 @@ namespace Basalt {
 					m_Report.Add(ValidationSeverity::Error, Project::AssetDirectoryName, "the Assets directory is missing");
 					return lists;
 				}
+				std::vector<std::string> skipped;
 				for (auto it = std::filesystem::recursive_directory_iterator(assets, error); !error && it != std::filesystem::recursive_directory_iterator(); it.increment(error))
 				{
+					if (FileSystem::SkipNonUtf8Entry(it, m_Directory, skipped))
+						continue;
 					std::error_code entryError;
 					const bool regular = it->is_regular_file(entryError);
 					if (entryError)
 					{
 						// A broken link or an unreadable entry: say so rather than leave it out of the checks.
-						m_Report.Add(ValidationSeverity::Warning, Relative(it->path()), "cannot be read: " + entryError.message());
+						m_Report.Add(ValidationSeverity::Warning, Relative(it->path()), "cannot be read: " + FileSystem::DescribeError(entryError));
 						continue;
 					}
 					if (!regular)
@@ -254,8 +257,11 @@ namespace Basalt {
 						lists.Scripts.push_back(it->path());
 				}
 				if (error)
-					m_Report.Add(ValidationSeverity::Error, Project::AssetDirectoryName, "cannot list all the assets (the walk stopped with: " + error.message() + "); the remaining files were not checked");
+					m_Report.Add(ValidationSeverity::Error, Project::AssetDirectoryName, "cannot list all the assets (the walk stopped with: " + FileSystem::DescribeError(error) + "); the remaining files were not checked");
 				// Directory order differs between platforms; reports should not.
+				std::sort(skipped.begin(), skipped.end());
+				for (const std::string& entry : skipped)
+					m_Report.Add(ValidationSeverity::Warning, entry, FileSystem::NonUtf8NameProblem);
 				for (auto* list : lists.All())
 					std::sort(list->begin(), list->end());
 				return lists;

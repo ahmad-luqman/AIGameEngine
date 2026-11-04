@@ -99,7 +99,8 @@ automatic reload, or the opening of the project in this process), reloads change
 again on their next use, so the scene shows them) and hot reloads changed scripts, and returns `{changed: [{path,
 type: Added|Modified|Removed}], reloaded, scripts}`. Without `paths` it fails when `Assets/` cannot be read (nothing is
 reported as removed then), and when `Assets/` could not be read until now its `warnings` say that earlier changes were
-not seen. `asset.refresh {"paths": [...]}` reloads the files named, changed or not; a path that does not exist and was
+not seen; they also list entries of `Assets/` skipped because their names are not valid Unicode. `asset.refresh {"paths":
+[...]}` reloads the files named, changed or not; a path that does not exist and was
 not known, or a folder, rejects the whole request (nothing is reloaded or recorded). Files the session writes itself
 (`asset.write`, `scene.save`, `prefab.create`, `prefab.save`, `prefab.apply`, `prefab.variant`, `replay.record_stop`) are never reported as
 changes. A changed `.bprefab` merges into the instances of the edit scene and of a scene waiting for prefab editing

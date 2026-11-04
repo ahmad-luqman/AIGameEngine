@@ -32,7 +32,7 @@ namespace Basalt {
 			std::filesystem::current_path(m_Specification.WorkingDirectory, error);
 			if (error)
 			{
-				BS_CORE_ERROR("Cannot change working directory to '{}': {}", FileSystem::PathToUtf8(m_Specification.WorkingDirectory), error.message());
+				BS_CORE_ERROR("Cannot change working directory to '{}': {}", FileSystem::PathToUtf8(m_Specification.WorkingDirectory), FileSystem::DescribeError(error));
 				return;
 			}
 		}

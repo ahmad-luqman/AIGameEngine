@@ -4,6 +4,7 @@
 #include "Basalt/Core/Assert.h"
 #include "Basalt/Core/Base.h"
 #include "Basalt/Core/CrashReporter.h"
+#include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/Log.h"
 
 #if defined(BS_PLATFORM_WINDOWS)
@@ -62,7 +63,7 @@ namespace Basalt {
 			const int code = WSAGetLastError();
 			if (code == WSAETIMEDOUT || code == WSAEWOULDBLOCK)
 				return "timed out (the client stopped reading)";
-			return std::system_category().message(code);
+			return FileSystem::DescribeError(std::error_code(code, std::system_category()));
 #else
 			const int code = errno;
 			if (code == EAGAIN || code == EWOULDBLOCK)

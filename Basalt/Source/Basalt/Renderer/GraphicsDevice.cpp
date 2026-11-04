@@ -39,7 +39,7 @@ namespace Basalt {
 			const std::filesystem::path temp = std::filesystem::temp_directory_path(ec);
 			if (ec)
 			{
-				BS_CORE_WARN("GraphicsDevice: no temporary folder for the validation layer manifest copy: {}", ec.message());
+				BS_CORE_WARN("GraphicsDevice: no temporary folder for the validation layer manifest copy: {}", FileSystem::DescribeError(ec));
 				return;
 			}
 			std::vector<std::string> messages;

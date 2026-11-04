@@ -80,6 +80,11 @@ same selected range. This initial policy has no crossfade/hysteresis or screen-s
 that path then receives a fresh identity. When deleting manually, remove both files. Orphan sidecars are
 reported as validator warnings; restoring a source together with its old sidecar intentionally restores
 its ID. `asset.write` warns when creating a source next to an existing orphan sidecar.
+A file or folder whose name has no UTF-8 form (an NTFS name with an unpaired surrogate, or elsewhere a name that is not
+UTF-8) cannot have an asset key, since no text would lead back to it. Scans leave it out, with everything in such a
+folder, and say so: a warning in `project.validate`, in the log when a project opens or the file appears, in the
+`warnings` of `asset.list`, `asset.refresh`, `asset.move` and archived `project.export`, and a line in the editor's Content
+Browser. Reports write the odd part as `\uD800` or `\xFF`, so you can tell what to rename.
 Cooperating first-time importers use a sibling `.meta.importing` lock directory and atomic file writes;
 manual filesystem writers must not modify the sidecar during import.
 If an importer crashes, remove its stale lock only after confirming the importer has stopped.

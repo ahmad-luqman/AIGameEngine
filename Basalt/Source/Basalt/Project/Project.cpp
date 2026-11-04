@@ -86,7 +86,7 @@ namespace Basalt {
 			std::filesystem::create_directories(absolute / sub, error);
 			if (error)
 			{
-				outError = "cannot create '" + FileSystem::PathToUtf8(absolute / sub) + "': " + error.message();
+				outError = "cannot create '" + FileSystem::PathToUtf8(absolute / sub) + "': " + FileSystem::DescribeError(error);
 				return nullptr;
 			}
 		}
@@ -162,6 +162,8 @@ namespace Basalt {
 		}
 		for (const auto& [asset, problem] : project->m_Assets.GetProblems())
 			BS_CORE_ERROR("Asset metadata {}.meta: {}", asset, problem);
+		for (const std::string& entry : project->m_Assets.GetSkipped())
+			BS_CORE_WARN("Asset '{}': {}", entry, FileSystem::NonUtf8NameProblem);
 		ProjectConfig& config = project->m_Config;
 		try
 		{
@@ -265,7 +267,7 @@ namespace Basalt {
 			return InputActionMap{};
 		std::string reason;
 		if (statusError)
-			reason = ": " + statusError.message();
+			reason = ": " + FileSystem::DescribeError(statusError);
 		else if (status.type() != std::filesystem::file_type::regular)
 			reason = ": it is not a file";
 		const auto text = reason.empty() ? FileSystem::ReadTextFile(path) : std::nullopt;
@@ -350,7 +352,7 @@ namespace Basalt {
 			if (inputExisted)
 				FileSystem::WriteTextFile(GetInputFilePath(), previousInputRead ? previousInput : m_SavedInputActions.ToJson().dump(1, '\t'), restoreError);
 			else if (!std::filesystem::remove(GetInputFilePath(), removeError) && removeError)
-				restoreError = removeError.message();
+				restoreError = FileSystem::DescribeError(removeError);
 			if (!restoreError.empty())
 				outError += "; " + FileSystem::PathToUtf8(GetInputFilePath()) + " was already updated and could not be put back: " + restoreError;
 			return false;
