@@ -7,6 +7,7 @@
 #include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <exception>
 #include <iterator>
@@ -211,6 +212,13 @@ namespace Basalt {
 	{
 		std::scoped_lock lock(m_Mutex);
 		return m_ErrorCount;
+	}
+
+	std::optional<std::string> LogHistory::GetLastError() const
+	{
+		const std::vector<LogMessage> messages = GetAll();
+		const auto last = std::find_if(messages.rbegin(), messages.rend(), [](const LogMessage& message) { return message.Level >= LogLevel::Error; });
+		return last != messages.rend() ? std::optional<std::string>(last->Text) : std::nullopt;
 	}
 
 	void Log::Init(const std::string& logFilePath)

@@ -7,6 +7,7 @@
 #include <fstream>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_set>
@@ -47,8 +48,8 @@ namespace Basalt {
 			Zstd = 1
 		};
 
-		// One file, as the index lists it. Pass Read the reference GetEntries, Find or FindAsset gave, never a copy: Read
-		// refuses anything else (another archive's entry, an edited copy).
+		// One file, as the index lists it. Pass Read and ReadStored the reference GetEntries, Find or FindAsset gave, never a
+		// copy: they refuse anything else (another archive's entry, an edited copy).
 		struct Entry
 		{
 			// Relative, normalized and '/'-separated ("Assets/Models/Ship.glb"); entries are sorted by it (byte order).
@@ -122,29 +123,32 @@ namespace Basalt {
 	};
 
 	// Builds a .bpak file. Entries may be added in any order and are written sorted by path. Write compresses each
-	// entry with zstd and keeps the compressed form only when it is smaller, so files zstd cannot shrink (PNG, JPEG,
-	// Ogg) are stored as they are. The output is deterministic: the same entries, level and zstd version always give the
-	// same bytes.
+	// entry with zstd and keeps the compressed form only when it is smaller, so files zstd cannot shrink (PNG, JPEG) are
+	// stored as they are, unless AddFile is told to store it anyway. The output is deterministic: the same entries, level
+	// and zstd version always give the same bytes.
 	class PackArchiveWriter
 	{
 	public:
 		using Statistics = PackArchiveStatistics;
 
-		// How many uncompressed bytes Write holds at once, and in how many entries (a batch passes the bytes only for a
-		// single larger entry).
+		// How many uncompressed bytes and entries Write takes on at once. Each job holds its compressed form too, so the
+		// peak is about twice the bytes. Only a single larger entry passes them, and 0 bytes gives every entry its own batch.
 		static constexpr uint64_t DefaultBatchBytes = uint64_t{ 256 } * 1024 * 1024;
 		static constexpr size_t MaxBatchEntries = 256;
 
 		// AddFile reads source when Write runs; AddData takes the bytes now. Both return false (outError set) for an
 		// invalid or duplicate path, a duplicate nonzero asset UUID, more than MaxEntries files, (AddData) more than
-		// MaxEntrySize bytes, or (AddFile) an empty source path (a missing file fails Write).
-		bool AddFile(std::string path, std::filesystem::path source, uint64_t assetID, std::string& outError);
+		// MaxEntrySize bytes, or (AddFile) an empty source path (a missing file fails Write). With storeUncompressed the file
+		// stays readable in part (PackArchive::ReadStored), however little zstd could save.
+		bool AddFile(std::string path, std::filesystem::path source, uint64_t assetID, std::string& outError, bool storeUncompressed = false);
 		bool AddData(std::string path, std::vector<uint8_t> data, uint64_t assetID, std::string& outError);
 		// Writes the archive atomically (a temporary sibling renamed over the target), at a zstd level clamped to
 		// 1..ZSTD_maxCLevel() (22). Entries are read and compressed on the job system a batch at a time (batchBytes) and
 		// written in path order, so the bytes do not depend on the batches or the number of workers. The added entries
 		// stay, so Write may run again (a retry after a full disk).
 		std::optional<Statistics> Write(const std::filesystem::path& file, std::string& outError, int compressionLevel = 9, uint64_t batchBytes = DefaultBatchBytes) const;
+		// Where the batch starting at begin ends, for entries of these sizes in write order.
+		static size_t FindBatchEnd(std::span<const uint64_t> sizes, size_t begin, uint64_t batchBytes);
 
 	private:
 		struct Pending
@@ -154,6 +158,7 @@ namespace Basalt {
 			std::filesystem::path Source;
 			std::vector<uint8_t> Data;
 			uint64_t AssetID = 0;
+			bool StoreUncompressed = false;
 		};
 		bool AddPending(Pending pending, std::string& outError);
 

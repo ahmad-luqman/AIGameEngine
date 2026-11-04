@@ -106,6 +106,17 @@ namespace {
 		return result + frame[0];
 	}
 
+	Basalt::CrashDialogKind ParseDialogKind(std::string_view kind)
+	{
+		if (kind == "kdialog")
+			return Basalt::CrashDialogKind::KDialog;
+		if (kind == "xmessage")
+			return Basalt::CrashDialogKind::XMessage;
+		if (kind == "osascript")
+			return Basalt::CrashDialogKind::Osascript;
+		return Basalt::CrashDialogKind::Zenity;
+	}
+
 	// A real crash of the requested kind (crash-report).
 	void CrashNow(std::string_view kind)
 	{
@@ -196,10 +207,11 @@ namespace {
 	// once, logs "crash-test sentinel 42", then crashes: kind is segv, abort, terminate, throw-int, purecall,
 	// invalid-parameter (Windows), trap, stackoverflow, thread-segv, thread-stackoverflow, job-stackoverflow or
 	// two-thread-segv; exits 77 when crash reports are unavailable, as under AddressSanitizer;
-	// Tests/Automation/CrashReport.py checks the report), crash-dialog <zenity|kdialog|xmessage> <program> <opener>
-	// <crash|error|disabled> (macOS, Linux: installs with those tools and dialogs on, then crashes with a report or
-	// shows an error; disabled shows an error with dialogs off, then one with them on), crash-script <title> <message>
-	// <report path> (prints the macOS dialog's AppleScript).
+	// Tests/Automation/CrashReport.py checks the report), crash-dialog <zenity|kdialog|xmessage|osascript> <program>
+	// <opener> <crash|error|long|disabled|off> (installs with those tools and dialogs on, then crashes with a report or
+	// shows an error, a long one with long; disabled shows an error with dialogs off, then one with them on; off only
+	// the first, the one mode for Windows, whose dialogs need no tools), crash-script <title> <message> <report path>
+	// (prints the macOS dialog's AppleScript).
 	int RunChild(const std::vector<std::string>& actions)
 	{
 		for (size_t i = 0; i < actions.size(); i++)
@@ -292,26 +304,37 @@ namespace {
 			{
 				if (i + 4 >= actions.size())
 					return 2;
-				const std::string_view kind = actions[i + 1];
+				const std::string& mode = actions[i + 4];
 				Basalt::CrashReporterOptions options;
 				options.ApplicationName = "CrashChild";
-				options.DialogTools = Basalt::CrashDialogTools{ Basalt::FileSystem::PathFromUtf8(actions[i + 2]), kind == "kdialog" ? Basalt::CrashDialogKind::KDialog : (kind == "xmessage" ? Basalt::CrashDialogKind::XMessage : Basalt::CrashDialogKind::Zenity), Basalt::FileSystem::PathFromUtf8(actions[i + 3]) };
+				options.DialogTools = Basalt::CrashDialogTools{ Basalt::FileSystem::PathFromUtf8(actions[i + 2]), ParseDialogKind(actions[i + 1]), Basalt::FileSystem::PathFromUtf8(actions[i + 3]) };
 				Basalt::Log::Init();
 				if (!Basalt::CrashReporter::Install(options))
 					return 77;
 				// Automated runs leave dialogs off: nothing may show, or a run would wait on a box nobody closes.
-				if (actions[i + 4] == "disabled")
-					Basalt::CrashReporter::ShowErrorDialog("no dialog");
-				Basalt::CrashReporter::SetDialogEnabled(true);
-				if (actions[i + 4] == "disabled")
+				if (mode == "off")
 				{
+					Basalt::CrashReporter::ShowErrorDialog("no dialog");
+					return 0;
+				}
+				if (mode == "disabled")
+				{
+					Basalt::CrashReporter::ShowErrorDialog("no dialog");
 					// Tells the test the call above has had its chance: it cannot wait for something that must not happen.
+					Basalt::CrashReporter::SetDialogEnabled(true);
 					Basalt::CrashReporter::ShowErrorDialog("dialogs on");
 					return 0;
 				}
-				if (actions[i + 4] == "error")
+				Basalt::CrashReporter::SetDialogEnabled(true);
+				if (mode == "error")
 				{
 					Basalt::CrashReporter::ShowErrorDialog("The \"archive\" is broken: $(touch injected)\nsecond line");
+					return 0;
+				}
+				if (mode == "long")
+				{
+					// Quotes, which AppleScript doubles in size, past what any buffer holds.
+					Basalt::CrashReporter::ShowErrorDialog(std::string(40000, '"'));
 					return 0;
 				}
 				CrashNow("segv");
@@ -320,8 +343,12 @@ namespace {
 			{
 				Basalt::Log::Init();
 				// This thread installs (it gets the alternate signal stack the stack overflow needs); later calls, two of them at
-				// once, return the first call's result and change nothing.
-				if (!Basalt::CrashReporter::Install({ "CrashChild" }))
+				// once, return the first call's result and change nothing. A stand-in dialog: whatever goes wrong with the check
+				// that keeps dialogs off here, these crashes must never open real alerts on a developer's screen.
+				Basalt::CrashReporterOptions options;
+				options.ApplicationName = "CrashChild";
+				options.DialogTools = Basalt::CrashDialogTools{ "/usr/bin/true", Basalt::CrashDialogKind::Zenity, {} };
+				if (!Basalt::CrashReporter::Install(options))
 				{
 					std::printf("crash reports unavailable\n");
 					return 77;

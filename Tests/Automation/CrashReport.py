@@ -3,16 +3,17 @@
 Runs `BasaltTests --basalt-child crash-report <kind>` (Tests/Source/TestMain.cpp), which installs the crash reporter,
 logs a sentinel line and crashes: an invalid memory access, abort(), an uncaught C++ exception (a std::exception and an
 int), a pure virtual call, an invalid C runtime parameter (Windows), a trap, stack overflows on the installing thread, on
-a thread holding a ThreadStack and on a job worker, and invalid memory accesses on worker threads. The child installs the reporter, then calls Install again from two threads at once, and
-fails if the calls disagree. Each run must die by its signal on macOS and Linux (the reporter re-raises it), or with the
-exception code or the C runtime's abort code 3 on Windows, and leave exactly one report in
+a thread holding a ThreadStack and on a job worker, and invalid memory accesses on worker threads. The child installs
+the reporter, then calls Install again from two threads at once, and fails if the calls disagree. Each run must die by
+its signal on macOS and Linux (the reporter re-raises it), or with the exception code or the C runtime's abort code 3 on Windows, and leave exactly one report in
 <user data>/CrashChild/Crashes naming the reason, with a stack trace, the context line and the last log lines; Windows
 reports add a minidump. More runs check the report folders: a user data directory whose ancestors do not exist yet (they
 are created, up to eight missing levels), one that cannot hold folders at all, and (macOS, Linux) one whose report
 folder path is too long for the handler's buffers while its parent fits; the last two put the report in CrashReports
 next to the executable. On Linux with addr2line, reports must name the executable's frames. On macOS and Linux, stand-ins
 for the dialog program and opener check what the dialogs run, through a crash and through CrashReporter::ShowErrorDialog
-(Windows' message boxes cannot be answered here); on macOS osacompile checks the AppleScript.
+(Windows' message boxes cannot be answered here, but a run with dialogs off must not wait on one); on macOS osacompile
+checks the AppleScript. Crashing children use a stand-in dialog too, so a broken check cannot open real alerts.
 Exits 77 (skipped) when crash reports are unavailable (AddressSanitizer builds).
 """
 import os
@@ -99,11 +100,11 @@ def check_report(kind, run, folder):
 
 
 def check_source_lines(kind, report):
-    if "\nSource lines (addr2line):\n" not in report:
+    _, heading, section = report.partition("\nSource lines (addr2line):\n")
+    if not heading:
         fail(f"{kind}: no source lines:\n{report}")
-    section = report.split("\nSource lines (addr2line):\n", 1)[1]
     # "0x...: function at file:line", or "?? ??:0" for a frame addr2line cannot name.
-    named = [line for line in section.splitlines() if re.match(r"\s*(0x[0-9a-f]+: )?(?!\?\?)\S", line) and "did not finish" not in line]
+    named = [line for line in section.splitlines() if re.match(r"\s*(0x[0-9a-f]+: )?(?!\?\?)\S", line) and "did not finish" not in line and "failed" not in line]
     if not named:
         fail(f"{kind}: addr2line named no frame:\n{section}")
     if kind == "segv" and "CrashNow" not in section:
@@ -126,19 +127,23 @@ def wait_for(path, what):
     return path.read_text()
 
 
-def run_dialog(tests, kind, mode, answer, folder):
-    """Runs a child with stand-in tools: the dialog logs its arguments and answers with exit code answer; the opener logs what it opens."""
+def run_dialog(tests, kind, mode, answer, folder, delay=0, opener=True, program=None):
+    """Runs a child with stand-in tools: the dialog logs its arguments and answers with exit code answer after delay seconds; the opener logs what it opens."""
     log, opened = folder / "dialog.log", folder / "opened.log"
-    write_program(folder / "dialog", f'for argument in "$@"; do printf "%s\\n" "$argument"; done >> "{log}"\nexit {answer}\n')
+    write_program(folder / "dialog", f'sleep {delay}\nfor argument in "$@"; do printf "%s\\n" "$argument"; done >> "{log}"\nexit {answer}\n')
     write_program(folder / "opener", f'printf "%s" "$1" > "{opened}"\n')
     # A quote, a space and a command substitution in the path: it reaches the tools only as an argument.
     user_data = folder / "it's $(touch injected) here"
     environment = dict(os.environ, BASALT_USER_DATA_DIR=str(user_data))
     environment.pop("BASALT_TEST_CHILD_ACTIONS", None)
-    run = subprocess.run([str(tests), "--basalt-child", "crash-dialog", kind, str(folder / "dialog"), str(folder / "opener"), mode], env=environment, cwd=folder, capture_output=True, text=True, errors="replace", timeout=120)
+    run = subprocess.run([str(tests), "--basalt-child", "crash-dialog", kind, program or str(folder / "dialog"), str(folder / "opener") if opener else "", mode], env=environment, cwd=folder, capture_output=True, text=True, errors="replace", timeout=120)
     if run.returncode == 77:
         print(run.stdout.strip())
         sys.exit(77)
+    if mode == "crash" and (WINDOWS or run.returncode >= 0):
+        fail(f"{kind}: exit code {run.returncode}, not death by a signal; stderr: {run.stderr}")
+    if mode != "crash" and run.returncode != 0:
+        fail(f"{kind} {mode}: exit code {run.returncode}; stderr: {run.stderr}")
     return run, log, opened, user_data
 
 
@@ -159,49 +164,113 @@ def check_dialogs(tests):
             if (folder / "injected").exists():
                 fail(f"{kind}: text from the report's path ran as a command")
 
-    # Closing the dialog opens nothing.
-    with tempfile.TemporaryDirectory(prefix="BasaltCrash-") as directory:
-        folder = pathlib.Path(directory)
-        run, log, opened, _ = run_dialog(tests, "zenity", "crash", 1, folder)
-        wait_for(log, "closed dialog")
-        # Starting a new script can take a while on macOS.
-        time.sleep(1)
-        if opened.exists():
-            fail("closing the dialog opened the report")
+        # Closing the dialog opens nothing.
+        with tempfile.TemporaryDirectory(prefix="BasaltCrash-") as directory:
+            folder = pathlib.Path(directory)
+            run, log, opened, _ = run_dialog(tests, kind, "crash", 1, folder)
+            wait_for(log, f"closed {kind} dialog")
+            # Starting a new script can take a while on macOS.
+            time.sleep(1)
+            if opened.exists():
+                fail(f"closing the {kind} dialog opened the report")
 
-    # A failed start: the plain error dialog, with no report to offer.
+        # A failed start: the plain error dialog, with no report to offer.
+        with tempfile.TemporaryDirectory(prefix="BasaltCrash-") as directory:
+            folder = pathlib.Path(directory)
+            run, log, opened, _ = run_dialog(tests, kind, "error", 0, folder)
+            arguments = wait_for(log, f"{kind} error dialog").splitlines()
+            if 'The "archive" is broken: $(touch injected)' not in arguments or "second line" not in arguments or label in arguments:
+                fail(f"unexpected {kind} error dialog arguments: {arguments}")
+            if kind != "xmessage" and "CrashChild" not in arguments:
+                fail(f"the {kind} error dialog has no title: {arguments}")
+            if opened.exists() or (folder / "injected").exists():
+                fail(f"the {kind} error dialog ran something it should not")
+
+    # Without an opener the dialog only shows the path.
     with tempfile.TemporaryDirectory(prefix="BasaltCrash-") as directory:
         folder = pathlib.Path(directory)
-        run, log, opened, _ = run_dialog(tests, "zenity", "error", 0, folder)
-        if run.returncode != 0:
-            fail(f"ShowErrorDialog: exit code {run.returncode}; stderr: {run.stderr}")
-        arguments = wait_for(log, "error dialog").splitlines()
-        if "--error" not in arguments or "CrashChild" not in arguments or 'The "archive" is broken: $(touch injected)' not in arguments or "second line" not in arguments:
-            fail(f"unexpected error dialog arguments: {arguments}")
-        if opened.exists() or (folder / "injected").exists():
-            fail("the error dialog ran something it should not")
+        run, log, opened, _ = run_dialog(tests, "zenity", "crash", 0, folder, opener=False)
+        arguments = wait_for(log, "dialog without an opener").splitlines()
+        if "--error" not in arguments or opened.exists():
+            fail(f"unexpected dialog without an opener: {arguments}")
+
+    # A dialog program that cannot run costs nothing but the dialog.
+    with tempfile.TemporaryDirectory(prefix="BasaltCrash-") as directory:
+        folder = pathlib.Path(directory)
+        run, _, _, user_data = run_dialog(tests, "zenity", "crash", 0, folder, program=str(folder / "missing"))
+        check_one_report(run, user_data, "missing dialog program")
+
+    # The crashed process does not wait for the dialog, and leaves the test's pipes alone (subprocess.run returning shows it).
+    with tempfile.TemporaryDirectory(prefix="BasaltCrash-") as directory:
+        folder = pathlib.Path(directory)
+        run, log, _, user_data = run_dialog(tests, "zenity", "crash", 1, folder, delay=5)
+        if log.exists():
+            fail("the crashed process waited for its dialog")
+        check_one_report(run, user_data, "slow dialog")
+        wait_for(log, "slow dialog")
+
+    # The macOS kind, through a stand-in: never /usr/bin/osascript, which would show it.
+    with tempfile.TemporaryDirectory(prefix="BasaltCrash-") as directory:
+        folder = pathlib.Path(directory)
+        run, log, _, _ = run_dialog(tests, "osascript", "crash", 0, folder)
+        arguments = wait_for(log, "osascript dialog")
+        if "-e\n" not in arguments or "display alert" not in arguments or "Open Report" not in arguments:
+            fail(f"unexpected osascript arguments:\n{arguments}")
+
+    # A message too long for any buffer still gives a whole script.
+    with tempfile.TemporaryDirectory(prefix="BasaltCrash-") as directory:
+        folder = pathlib.Path(directory)
+        run, log, _, _ = run_dialog(tests, "osascript", "long", 0, folder)
+        script = wait_for(log, "long osascript dialog").split("-e\n", 1)[1].rstrip("\n")
+        if not script.endswith('as critical buttons {"OK"}'):
+            fail(f"a long message broke the script: ...{script[-200:]}")
+        if sys.platform == "darwin":
+            compile_apple_script(script, folder / "long.scpt")
 
     # Dialogs stay off unless the host turns them on.
     with tempfile.TemporaryDirectory(prefix="BasaltCrash-") as directory:
         folder = pathlib.Path(directory)
         run, log, _, _ = run_dialog(tests, "zenity", "disabled", 0, folder)
         arguments = wait_for(log, "dialog after turning dialogs on")
-        if run.returncode != 0 or "dialogs on" not in arguments or "no dialog" in arguments:
-            fail(f"a dialog showed while dialogs were off (exit code {run.returncode}):\n{arguments}")
-    print("dialogs: open, close, error and off")
+        if "dialogs on" not in arguments or "no dialog" in arguments:
+            fail(f"a dialog showed while dialogs were off:\n{arguments}")
+    print("dialogs: open, close, error, fallbacks and off")
+
+
+def check_one_report(run, user_data, what):
+    reports = sorted((user_data / "CrashChild" / "Crashes").glob("crash-*.txt"))
+    if len(reports) != 1 or "Last log lines" not in reports[0].read_text(encoding="utf-8", errors="replace"):
+        fail(f"{what}: no whole report in {reports}; stderr: {run.stderr}")
+
+
+def check_dialogs_off(tests):
+    # On Windows too: a message box here would hang until this timeout, as it would hang any automated run.
+    with tempfile.TemporaryDirectory(prefix="BasaltCrash-") as directory:
+        environment = dict(os.environ, BASALT_USER_DATA_DIR=directory)
+        environment.pop("BASALT_TEST_CHILD_ACTIONS", None)
+        try:
+            run = subprocess.run([str(tests), "--basalt-child", "crash-dialog", "zenity", "unused", "unused", "off"], env=environment, capture_output=True, text=True, errors="replace", timeout=60)
+        except subprocess.TimeoutExpired:
+            fail("a dialog is waiting while dialogs are off")
+        if run.returncode not in (0, 77):
+            fail(f"dialogs off: exit code {run.returncode}; stderr: {run.stderr}")
+
+
+def compile_apple_script(script, output):
+    compiled = subprocess.run(["osacompile", "-o", str(output), "-e", script], capture_output=True, text=True, timeout=60)
+    if compiled.returncode != 0:
+        fail(f"AppleScript does not compile: {compiled.stderr}\n{script[:500]}")
 
 
 def check_apple_script(tests):
     if sys.platform != "darwin":
         return
     with tempfile.TemporaryDirectory(prefix="BasaltCrash-") as directory:
-        for name, report in (("alert", ""), ("offer", '/tmp/it\'s a "quoted" \\ path.txt')):
-            script = subprocess.run([str(tests), "--basalt-child", "crash-script", 'App "One"', 'Back\\slash and "quotes"', report], capture_output=True, text=True, timeout=60).stdout
-            if ("Open Report" in script) != bool(report):
-                fail(f"AppleScript {name}: {script}")
-            compiled = subprocess.run(["osacompile", "-o", str(pathlib.Path(directory, name + ".scpt")), "-e", script], capture_output=True, text=True, timeout=60)
-            if compiled.returncode != 0:
-                fail(f"AppleScript {name} does not compile: {compiled.stderr}\n{script}")
+        for name, message, report in (("alert", 'Back\\slash and "quotes"', ""), ("offer", 'Back\\slash and "quotes"', '/tmp/it\'s a "quoted" \\ path.txt'), ("lines", "First line.\n\nThird line.", "/tmp/report.txt")):
+            run = subprocess.run([str(tests), "--basalt-child", "crash-script", 'App "One"', message, report], capture_output=True, text=True, timeout=60)
+            if run.returncode != 0 or ("Open Report" in run.stdout) != bool(report):
+                fail(f"AppleScript {name}: exit code {run.returncode}: {run.stdout}")
+            compile_apple_script(run.stdout, pathlib.Path(directory, name + ".scpt"))
     print("AppleScript compiles")
 
 
@@ -243,6 +312,7 @@ def main():
             check_fallback(tests, "fallback (report folder too long)", long_folder)
             if any(long_folder.rglob("crash-*")):
                 fail("long path: a report landed under the user data folder")
+    check_dialogs_off(tests)
     if not WINDOWS:
         check_dialogs(tests)
     check_apple_script(tests)

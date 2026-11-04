@@ -123,6 +123,19 @@ TEST_SUITE("CrashReporter")
 		CHECK(std::string(text->View()).find("\n\n") == std::string::npos);
 	}
 
+	TEST_CASE("The macOS dialog's AppleScript escapes its text and offers a report only with one")
+	{
+		CrashText plain;
+		CrashReporter::FormatAppleScript(plain, "A \"B\"", "C \\ D", "");
+		CHECK(plain.View() == "display alert \"A \\\"B\\\"\" message \"C \\\\ D\" as critical buttons {\"OK\"}");
+
+		CrashText offer;
+		CrashReporter::FormatAppleScript(offer, "A", "B", "/tmp/it's \"here\".txt");
+		CHECK(offer.View().find("buttons {\"Close\", \"Open Report\"}") != std::string_view::npos);
+		CHECK(offer.View().find("if answer is \"Open Report\" then do shell script \"/usr/bin/open \" & quoted form of \"/tmp/it's \\\"here\\\".txt\"") != std::string_view::npos);
+		CHECK_FALSE(offer.Truncated());
+	}
+
 	TEST_CASE("Application names become one safe folder name")
 	{
 		CHECK(CrashReporter::SanitizeApplicationName("FeatureTest") == "FeatureTest");

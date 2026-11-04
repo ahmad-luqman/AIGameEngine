@@ -910,24 +910,52 @@ TEST_SUITE("Archive")
 		}
 	}
 
+#if !defined(_WIN32)
+	TEST_CASE("A stored read of a file cut short reports it")
+	{
+		BasaltTest::TempDirectory directory("ArchiveStoredCut");
+		const std::filesystem::path file = directory.GetPath() / "Cut.bpak";
+		const std::vector<uint8_t> noise = Noise(1 << 20);
+		BuildArchive({ { "Assets/Noise.bin", noise, 0 } }, file);
+		std::string error;
+		const Ref<PackArchive> archive = PackArchive::Open(file, error);
+		REQUIRE_MESSAGE(archive, error);
+		std::error_code cutError;
+		std::filesystem::resize_file(file, 1000, cutError);
+		REQUIRE_FALSE(cutError);
+		// Past what the stream has buffered.
+		std::vector<uint8_t> part(100);
+		error.clear();
+		CHECK_FALSE(archive->ReadStored(RequireEntry(*archive, "Assets/Noise.bin"), 900000, part.data(), part.size(), error));
+		CHECK(error.find("cannot read") != std::string::npos);
+	}
+#endif
+
 	TEST_CASE("Stored clips stream from the archive, unlike whole reads that check their hash")
 	{
 		BasaltTest::TempProject temp("ArchiveStreamedAudio");
 		REQUIRE(temp.IsValid());
-		// Noise for samples, which zstd cannot shrink, behind the 44 bytes of a WAV header.
-		std::string wav = BasaltTest::MakeWav(0.5f);
-		const std::vector<uint8_t> noise = Noise(wav.size() - 44);
-		std::copy(noise.begin(), noise.end(), wav.begin() + 44);
+		// Noise for samples, which zstd cannot shrink, behind the 44 bytes of a WAV header. One clip is long enough to stream.
+		const auto noiseWav = [](float seconds) {
+			std::string wav = BasaltTest::MakeWav(seconds);
+			const std::vector<uint8_t> noise = Noise(wav.size() - 44);
+			std::copy(noise.begin(), noise.end(), wav.begin() + 44);
+			return wav;
+		};
 		const std::filesystem::path file = temp.GetDirectory() / Project::ArchiveFileName;
-		std::vector<uint8_t> bytes = BuildArchive({ { "Assets/Audio/Noise.wav", Bytes(wav), 0 } }, file);
+		std::vector<uint8_t> bytes = BuildArchive({ { "Assets/Audio/Noise.wav", Bytes(noiseWav(60.0f)), 0 }, { "Assets/Audio/Short.wav", Bytes(noiseWav(0.5f)), 0 } }, file);
 		std::string error;
 		Ref<PackArchive> archive = PackArchive::Open(file, error);
 		REQUIRE_MESSAGE(archive, error);
 		const PackArchive::Entry stored = RequireEntry(*archive, "Assets/Audio/Noise.wav");
+		const PackArchive::Entry shortClip = RequireEntry(*archive, "Assets/Audio/Short.wav");
 		REQUIRE(stored.Compression == PackArchive::Method::Store);
+		REQUIRE(shortClip.Compression == PackArchive::Method::Store);
 
-		// A flipped sample fails every whole read: playing anyway shows the clip was never read whole.
+		// A flipped sample fails every whole read: the long clip playing anyway shows it was never read whole, and the short
+		// one, which is, must not play.
 		bytes[static_cast<size_t>(stored.Offset + stored.Size - 1)] ^= 0xFF;
+		bytes[static_cast<size_t>(shortClip.Offset + shortClip.Size - 1)] ^= 0xFF;
 		archive = nullptr;
 		REQUIRE(FileSystem::WriteBinaryFile(file, bytes.data(), bytes.size()));
 		archive = PackArchive::Open(file, error);
@@ -946,6 +974,9 @@ TEST_SUITE("Archive")
 		streamed.Stream = true;
 		// Seeks back to the entry's start, not the archive's.
 		streamed.Loop = true;
+		auto& damaged = scene->CreateEntity("Damaged").AddComponent<AudioSourceComponent>();
+		damaged.Clip = "Assets/Audio/Short.wav";
+		damaged.PlayOnStart = true;
 		scene->CreateEntity("Listener").AddComponent<AudioListenerComponent>();
 		const BasaltTest::HeadlessAudio audio;
 		scene->OnRuntimeStart();
@@ -953,6 +984,7 @@ TEST_SUITE("Archive")
 		CHECK(scene->GetAudioSystem()->IsPlaying(scene->FindEntityByName("Decoded")));
 		CHECK(scene->GetAudioSystem()->IsPlaying(scene->FindEntityByName("Streamed")));
 		CHECK(scene->GetAudioSystem()->IsStreaming(scene->FindEntityByName("Streamed")));
+		CHECK_FALSE(scene->GetAudioSystem()->IsPlaying(scene->FindEntityByName("Damaged")));
 		std::vector<float> mix;
 		REQUIRE(AudioEngine::ReadDeviceless(1.0f, mix));
 		REQUIRE_FALSE(mix.empty());
@@ -1005,23 +1037,67 @@ TEST_SUITE("Archive")
 		CHECK(FileSystem::ReadBinaryFile(directory.GetPath() / "Files.bpak") == expected);
 	}
 
-	TEST_CASE("Write reports the first entry in path order that fails, in any batch")
+	TEST_CASE("Batches hold what fits, never fewer than one entry")
+	{
+		const auto ends = [](std::vector<uint64_t> sizes, uint64_t batchBytes) {
+			std::vector<size_t> found;
+			for (size_t begin = 0; begin < sizes.size(); begin = found.back())
+				found.push_back(PackArchiveWriter::FindBatchEnd(sizes, begin, batchBytes));
+			return found;
+		};
+		CHECK(ends({ 100, 100, 100 }, 200) == std::vector<size_t>{ 2, 3 });
+		CHECK(ends({ 100, 100, 100 }, 300) == std::vector<size_t>{ 3 });
+		// A larger entry goes alone, and a batch past its limit takes nothing more.
+		CHECK(ends({ 1, 300, 1 }, 250) == std::vector<size_t>{ 1, 2, 3 });
+		CHECK(ends({ 300, 1, 1 }, 250) == std::vector<size_t>{ 1, 3 });
+		CHECK(ends({ UINT64_MAX, 1 }, 250) == std::vector<size_t>{ 1, 2 });
+		CHECK(ends({ 1, 1 }, 0) == std::vector<size_t>{ 1, 2 });
+		CHECK(ends(std::vector<uint64_t>(PackArchiveWriter::MaxBatchEntries + 1, 0), 10) == std::vector<size_t>{ PackArchiveWriter::MaxBatchEntries, PackArchiveWriter::MaxBatchEntries + 1 });
+	}
+
+	TEST_CASE("Write reports the first entry in path order that fails, in any batch, and can run again")
 	{
 		BasaltTest::TempDirectory directory("ArchiveBatchFailure");
-		const std::filesystem::path file = directory.GetPath() / "Out.bpak";
+		const std::filesystem::path sources = directory.GetPath() / "Sources";
+		const std::filesystem::path output = directory.GetPath() / "Output";
+		REQUIRE(FileSystem::WriteTextFile(sources / "A", std::string(100, 'a')));
+		const std::filesystem::path file = output / "Out.bpak";
 		PackArchiveWriter writer;
 		std::string error;
-		REQUIRE(writer.AddData("Assets/A.bin", Noise(100), 0, error));
-		REQUIRE(writer.AddFile("Assets/C.bin", directory.GetPath() / "MissingC", 0, error));
-		REQUIRE(writer.AddFile("Assets/B.bin", directory.GetPath() / "MissingB", 0, error));
-		for (const uint64_t batchBytes : { uint64_t{ 1 }, PackArchiveWriter::DefaultBatchBytes })
+		REQUIRE(writer.AddFile("Assets/A.bin", sources / "A", 0, error));
+		REQUIRE(writer.AddFile("Assets/C.bin", sources / "C", 0, error));
+		REQUIRE(writer.AddFile("Assets/B.bin", sources / "B", 0, error));
+		// 0 bytes puts each in a batch of its own, so A has been written when B fails.
+		for (const uint64_t batchBytes : { uint64_t{ 0 }, PackArchiveWriter::DefaultBatchBytes })
 		{
 			error.clear();
 			CHECK_FALSE(writer.Write(file, error, 9, batchBytes));
-			CHECK_MESSAGE(error.find("MissingB") != std::string::npos, error);
+			CHECK_MESSAGE(error.find(FileSystem::PathToUtf8(sources / "B")) != std::string::npos, error);
 			// Neither the archive nor its temporary file stays behind.
-			CHECK(std::filesystem::is_empty(directory.GetPath()));
+			CHECK(std::filesystem::is_empty(output));
 		}
+		REQUIRE(FileSystem::WriteTextFile(sources / "B", "b"));
+		REQUIRE(FileSystem::WriteTextFile(sources / "C", "c"));
+		REQUIRE_MESSAGE(writer.Write(file, error), error);
+		const std::vector<uint8_t> expected = BuildArchive({ { "Assets/A.bin", Bytes(std::string(100, 'a')), 0 }, { "Assets/B.bin", Bytes("b"), 0 }, { "Assets/C.bin", Bytes("c"), 0 } }, directory.GetPath() / "Clean.bpak");
+		CHECK(FileSystem::ReadBinaryFile(file) == expected);
+	}
+
+	TEST_CASE("A file told to stay uncompressed is stored, however well it compresses")
+	{
+		BasaltTest::TempDirectory directory("ArchiveStoreUncompressed");
+		const std::vector<uint8_t> text = Repetitive(5000);
+		REQUIRE(FileSystem::WriteBinaryFile(directory.GetPath() / "Source", text.data(), text.size()));
+		PackArchiveWriter writer;
+		std::string error;
+		REQUIRE(writer.AddFile("Assets/Stored.bin", directory.GetPath() / "Source", 0, error, true));
+		REQUIRE(writer.AddFile("Assets/Zipped.bin", directory.GetPath() / "Source", 0, error));
+		REQUIRE_MESSAGE(writer.Write(directory.GetPath() / "Out.bpak", error), error);
+		const Ref<PackArchive> archive = PackArchive::Open(directory.GetPath() / "Out.bpak", error);
+		REQUIRE_MESSAGE(archive, error);
+		CHECK(RequireEntry(*archive, "Assets/Stored.bin").Compression == PackArchive::Method::Store);
+		CHECK(RequireEntry(*archive, "Assets/Zipped.bin").Compression == PackArchive::Method::Zstd);
+		CHECK(archive->Read(RequireEntry(*archive, "Assets/Stored.bin"), error) == text);
 	}
 
 	TEST_CASE("Archived exports leave out originals only their compressed replacement stands for")
@@ -1036,13 +1112,56 @@ TEST_SUITE("Archive")
 			temp.WriteFile(std::string("Assets/Textures/") + name + ".png", "original");
 			temp.WriteFile(std::string("Assets/Textures/") + name + ".ktx2", "replacement");
 		}
-		// A replacement elsewhere is not recognized, and an image without one is never touched.
+		// A replacement elsewhere, or in another case (archive paths match exactly), is not recognized, and an image without
+		// one is never touched.
 		temp.WriteFile("Assets/Textures/Moved.png", "original");
 		temp.WriteFile("Assets/Compressed/Moved.ktx2", "replacement");
 		temp.WriteFile("Assets/Textures/Lonely.png", "original");
-		// Mentions a walk over declared asset fields would miss.
+		temp.WriteFile("Assets/Textures/Upper.png", "original");
+		temp.WriteFile("Assets/Textures/Upper.KTX2", "replacement");
+		// Every image type counts, and what is left out comes back sorted, whatever order the folder lists.
+		for (const char* name : { "Edge.bmp", "Flat.PNG", "Brick.jpg", "Dirt.tga", "Clay.jpeg", "Not\xC3\xA9.png" })
+		{
+			const std::string path = std::string("Assets/Textures/") + name;
+			temp.WriteFile(path, "original");
+			temp.WriteFile(path.substr(0, path.rfind('.')) + ".ktx2", "replacement");
+		}
+		// Mentions a walk over declared asset fields would miss, and escapes of every kind the readers undo.
+		const std::pair<const char*, const char*> mentioned[] = {
+			{ "Spaced Out.png", "Assets/Models/Ship.gltf" },
+			{ "Caf\xC3\xA9.png", "Assets/Models/Lower.gltf" },
+			{ "Wall (1).png", "Assets/Models/Partly.gltf" },
+			{ "Json\xC3\xA9.png", "Assets/Materials/Json.bmaterial" },
+			{ "Emoji\xF0\x9F\x98\x80.png", "Assets/Materials/Emoji.bmaterial" },
+			{ "Lua\xC3\xA9.png", "Assets/Scripts/Decimal.lua" },
+			{ "Hex\xC3\xA9.png", "Assets/Scripts/Hex.lua" },
+			{ "Brace\xC3\xA9.png", "Assets/Scripts/Brace.lua" },
+			// A name that looks escaped itself, written as it is.
+			{ "Sale%41.png", "Assets/Scripts/Literal.lua" },
+		};
+		for (const auto& [image, mentionedBy] : mentioned)
+		{
+			const std::string path = std::string("Assets/Textures/") + image;
+			temp.WriteFile(path, "original");
+			temp.WriteFile(path.substr(0, path.rfind('.')) + ".ktx2", "replacement");
+		}
 		temp.WriteFile("Assets/Scripts/Sky.lua", "local texture = 'Textures/Named.png'");
 		temp.WriteFile("Assets/Models/Ship.gltf", R"({"images":[{"uri":"../Textures/Spaced%20Out.png"}]})");
+		temp.WriteFile("Assets/Models/Lower.gltf", R"({"images":[{"uri":"../Textures/Caf%c3%a9.png"}]})");
+		temp.WriteFile("Assets/Models/Partly.gltf", R"({"images":[{"uri":"../Textures/Wall%20(1).png"}]})");
+		temp.WriteFile("Assets/Materials/Json.bmaterial", R"({"Albedo":"Assets/Textures/Json\u00e9.png"})");
+		temp.WriteFile("Assets/Materials/Emoji.bmaterial", R"({"Albedo":"Assets/Textures/Emoji\ud83d\ude00.png"})");
+		temp.WriteFile("Assets/Scripts/Decimal.lua", R"(return "Lua\195\169.png")");
+		temp.WriteFile("Assets/Scripts/Hex.lua", R"(return "Hex\xC3\xA9.png")");
+		temp.WriteFile("Assets/Scripts/Brace.lua", R"(return "Brace\u{E9}.png")");
+		// An escaped backslash ends the escape: this names no file of the project, so Not\xC3\xA9.png stays unmentioned.
+		temp.WriteFile("Assets/Scripts/Literal.lua", R"(return "Not\\u00e9.png", "Sale%41.png")");
+		// Audio that is compressed already stays streamable, whatever zstd could still save; other audio is compressed.
+		temp.WriteFile("Assets/Audio/Music.ogg", std::string(5000, 'o'));
+		temp.WriteFile("Assets/Audio/Quiet.mp3", std::string(5000, 'm'));
+		temp.WriteFile("Assets/Audio/Lossless.FLAC", std::string(5000, 'f'));
+		temp.WriteFile("Assets/Audio/Voice.opus", std::string(5000, 'v'));
+		temp.WriteFile("Assets/Audio/Raw.wav", std::string(5000, 'w'));
 		const auto id = project->GetAssets().Ensure("Assets/Textures/ByUuid.png", error);
 		REQUIRE_MESSAGE(id, error);
 		temp.WriteFile("Assets/Materials/Old.bmaterial", "{\"Albedo\":{\"UUID\":\"" + std::to_string(static_cast<uint64_t>(*id)) + "\",\"Path\":\"Assets/Textures/Renamed.png\"}}");
@@ -1058,11 +1177,13 @@ TEST_SUITE("Archive")
 		const std::filesystem::path output = temp.GetDirectory().parent_path() / "ArchiveOmittedOriginalsOut";
 		std::error_code removeError;
 		std::filesystem::remove_all(output, removeError);
-		const auto exportedPaths = [&](const ExportOptions& exportOptions, ExportResult& result) {
-			result = Exporter::Export(*project, output, exportOptions);
+		ExportResult result;
+		Ref<PackArchive> archive;
+		const auto exportedPaths = [&]() {
+			result = Exporter::Export(*project, output, options);
 			REQUIRE_MESSAGE(result.Success, result.Error);
 			std::string openError;
-			const Ref<PackArchive> archive = PackArchive::Open(output / Project::ArchiveFileName, openError);
+			archive = PackArchive::Open(output / Project::ArchiveFileName, openError);
 			REQUIRE_MESSAGE(archive, openError);
 			std::vector<std::string> paths;
 			paths.reserve(archive->GetEntries().size());
@@ -1072,20 +1193,38 @@ TEST_SUITE("Archive")
 		};
 		const auto holds = [](const std::vector<std::string>& paths, const std::string& path) { return std::find(paths.begin(), paths.end(), path) != paths.end(); };
 
-		ExportResult result;
-		const std::vector<std::string> paths = exportedPaths(options, result);
-		CHECK(result.ArchiveOmitted == std::vector<std::string>{ "Assets/Textures/Wall.png" });
+		const std::vector<std::string> paths = exportedPaths();
+		const std::vector<std::string> omitted = { "Assets/Textures/Brick.jpg", "Assets/Textures/Clay.jpeg", "Assets/Textures/Dirt.tga", "Assets/Textures/Edge.bmp", "Assets/Textures/Flat.PNG", "Assets/Textures/Not\xC3\xA9.png", "Assets/Textures/Wall.png" };
+		CHECK(result.ArchiveOmitted == omitted);
 		CHECK(result.ArchiveStatistics->Entries == paths.size());
-		CHECK_FALSE(holds(paths, "Assets/Textures/Wall.png"));
+		for (const std::string& path : omitted)
+			CHECK_MESSAGE(!holds(paths, path), path);
 		CHECK(holds(paths, "Assets/Textures/Wall.ktx2"));
-		for (const char* kept : { "Named", "Spaced Out", "ByUuid", "Icon", "Moved", "Lonely" })
-			CHECK_MESSAGE(holds(paths, std::string("Assets/Textures/") + kept + ".png"), kept);
+		for (const char* kept : { "Named.png", "ByUuid.png", "Icon.png", "Moved.png", "Lonely.png", "Upper.png" })
+			CHECK_MESSAGE(holds(paths, std::string("Assets/Textures/") + kept), kept);
+		for (const auto& [image, mentionedBy] : mentioned)
+			CHECK_MESSAGE(holds(paths, std::string("Assets/Textures/") + image), image, " mentioned by ", mentionedBy);
+		// Whoever exports hears what is gone, and where a long list ends.
+		REQUIRE(result.Warnings.size() == 1);
+		CHECK(result.Warnings[0].find("keepOriginals") != std::string::npos);
+		CHECK(result.Warnings[0].find("Assets/Textures/Brick.jpg") != std::string::npos);
+		CHECK(result.Warnings[0].find("and 2 more") != std::string::npos);
+		for (const char* path : { "Assets/Audio/Music.ogg", "Assets/Audio/Quiet.mp3", "Assets/Audio/Lossless.FLAC", "Assets/Audio/Voice.opus" })
+			CHECK_MESSAGE(RequireEntry(*archive, path).Compression == PackArchive::Method::Store, path);
+		CHECK(RequireEntry(*archive, "Assets/Audio/Raw.wav").Compression == PackArchive::Method::Zstd);
 
 		options.KeepOriginals = true;
-		const std::vector<std::string> everything = exportedPaths(options, result);
+		const std::vector<std::string> everything = exportedPaths();
 		CHECK(result.ArchiveOmitted.empty());
+		CHECK(result.Warnings.empty());
 		CHECK(holds(everything, "Assets/Textures/Wall.png"));
-		CHECK(everything.size() == paths.size() + 1);
+		CHECK(everything.size() == paths.size() + omitted.size());
+
+		// Only an archive leaves files out, so asking to keep them without one is a mistake.
+		options.Archive = false;
+		result = Exporter::Export(*project, output, options);
+		CHECK_FALSE(result.Success);
+		CHECK(result.Error.find("keepOriginals needs archive") != std::string::npos);
 		std::filesystem::remove_all(output, removeError);
 	}
 
@@ -1114,6 +1253,13 @@ TEST_SUITE("Archive")
 					const PackArchive::Entry* entry = archive->Find(path);
 					if (!entry || archive->Read(*entry, threadError) != data)
 						mismatches++;
+					// Streaming shares the stream with whole reads.
+					if (entry && entry->Compression == PackArchive::Method::Store)
+					{
+						std::vector<uint8_t> part(1000);
+						if (archive->ReadStored(*entry, 500, part.data(), part.size(), threadError) != part.size() || !std::equal(part.begin(), part.end(), data.begin() + 500))
+							mismatches++;
+					}
 				}
 			});
 		}

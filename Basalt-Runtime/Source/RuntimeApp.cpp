@@ -95,6 +95,12 @@ namespace Basalt {
 			BS_CORE_CRITICAL("{}", error);
 		if (!commandLine.GetErrors().empty())
 			return nullptr;
+		// Fatal: a malformed count would otherwise mean "run forever".
+		if (commandLine.GetValue("frames") && !commandLine.GetInteger("frames"))
+		{
+			BS_CORE_CRITICAL("--frames must be an integer");
+			return nullptr;
+		}
 		// A player sees a message box after a crash or a failed start; automated runs (no window, or a frame count) never
 		// block on one. Decided first: the project and its assets load before the rest of the options are read.
 		CrashReporter::SetDialogEnabled(!commandLine.HasFlag("headless") && !commandLine.HasFlag("offscreen") && commandLine.GetInteger("frames").value_or(0) <= 0);
@@ -114,7 +120,7 @@ namespace Basalt {
 		std::error_code directoryError;
 		const bool isDirectory = std::filesystem::is_directory(projectPath, directoryError);
 		if (directoryError && directoryError != std::errc::no_such_file_or_directory)
-			return fail(fmt::format("Cannot inspect '{}': {}", FileSystem::PathToUtf8(projectPath), directoryError.message()));
+			return fail(fmt::format("Cannot inspect '{}': {}", FileSystem::PathToUtf8(projectPath), FileSystem::DescribeError(directoryError)));
 		const std::filesystem::path projectDirectory = isDirectory ? projectPath : projectPath.parent_path();
 		if (!Exporter::MountExportedArchive(projectDirectory, error))
 			return fail("Cannot open the game's assets: " + error);
@@ -129,12 +135,6 @@ namespace Basalt {
 		CrashReporter::SetContext("Project: " + project->GetConfig().Name + " " + project->GetConfig().Version);
 
 		options.ScenePath = commandLine.GetValue("scene").value_or(project->GetConfig().StartScene);
-		// Fatal: a malformed count would otherwise mean "run forever".
-		if (commandLine.GetValue("frames") && !commandLine.GetInteger("frames"))
-		{
-			BS_CORE_CRITICAL("--frames must be an integer");
-			return nullptr;
-		}
 		options.MaxFrames = static_cast<uint64_t>(std::max<int64_t>(commandLine.GetInteger("frames").value_or(0), 0));
 		options.ScreenshotPath = commandLine.GetValue("screenshot").value_or("");
 		options.RequireValidation = commandLine.HasFlag("require-validation");

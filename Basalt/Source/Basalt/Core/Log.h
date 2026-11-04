@@ -60,6 +60,8 @@ namespace Basalt {
 		std::vector<LogMessage> GetAll() const;
 		uint64_t GetTotalCount() const;
 		size_t GetErrorCount() const;
+		// The text of the newest error or critical message history still holds.
+		std::optional<std::string> GetLastError() const;
 
 	private:
 		mutable std::mutex m_Mutex;

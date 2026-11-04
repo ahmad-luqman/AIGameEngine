@@ -6,7 +6,9 @@
 #include <Basalt/Audio/LowPassNode.h>
 #include <Basalt/Audio/SourceEffectsNode.h>
 #include <Basalt/Scripting/ScriptEngine.h>
+#include <Basalt/Core/FileSystem.h>
 #include <Basalt/Core/Log.h>
+#include <Basalt/Core/PackArchive.h>
 #include <Basalt/Physics/PhysicsWorld.h>
 #include <Basalt/Scene/ComponentRegistry.h>
 #include <Basalt/Scene/Entity.h>
@@ -681,6 +683,99 @@ TEST_SUITE("Audio")
 			CHECK(Rms(Mix(0.1f)) > 0.01f);
 		}
 	}
+
+	TEST_CASE("A clip stored in an archive plays exactly the samples of its file, read as it decodes")
+	{
+		BasaltTest::TempProject project("AudioArchive");
+		// Over the 1 MiB where stored clips stop being read whole, and with enough pages to refill several, at the engine's
+		// rate so nothing resamples.
+		const float seconds = 12.0f;
+		const std::string wav = MakeWav(seconds, 48000);
+		REQUIRE(wav.size() > size_t{ 1024 } * 1024);
+		project.WriteFile("Assets/Audio/Song.wav", wav);
+		project.WriteFile("Assets/Audio/Earlier.bin", std::string(5000, 'x'));
+		HeadlessAudio engine;
+
+		AudioSourceComponent source = Source("Assets/Audio/Song.wav", AudioBus::Music);
+		source.Loop = false;
+		const std::vector<float> file = PlayAlone(source, seconds + 0.5f, false);
+
+		// Behind another entry: the clip must not start at the archive's first byte.
+		const std::filesystem::path archivePath = project.GetDirectory() / "Audio.bpak";
+		PackArchiveWriter writer;
+		std::string error;
+		REQUIRE(writer.AddFile("Assets/Audio/Earlier.bin", project.GetDirectory() / "Assets" / "Audio" / "Earlier.bin", 0, error));
+		REQUIRE(writer.AddFile("Assets/Audio/Song.wav", project.GetDirectory() / "Assets" / "Audio" / "Song.wav", 0, error, true));
+		REQUIRE_MESSAGE(writer.Write(archivePath, error), error);
+		std::filesystem::remove(project.GetDirectory() / "Assets" / "Audio" / "Song.wav");
+		Ref<PackArchive> archive = PackArchive::Open(archivePath, error);
+		REQUIRE_MESSAGE(archive, error);
+		REQUIRE(archive->Find("Assets/Audio/Song.wav")->Compression == PackArchive::Method::Store);
+		FileSystem::Mount(project.GetDirectory(), archive);
+		struct Unmounter
+		{
+			~Unmounter() { FileSystem::Unmount(); }
+		} unmounter;
+
+		CHECK(CountMismatches(file, PlayAlone(source, seconds + 0.5f, false)) == 0);
+		source.Stream = true;
+		CHECK(CountMismatches(file, PlayAlone(source, seconds + 0.5f, true)) == 0);
+
+		// A playing clip keeps the archive open however the mount changes.
+		{
+			AudioScene scene;
+			Entity entity = scene.Add("Clip", source);
+			AudioSystem& audio = scene.Start();
+			REQUIRE(audio.IsPlaying(entity));
+			std::vector<float> mix = MixInFrames(1.0f);
+			FileSystem::Unmount();
+			archive = nullptr;
+			const std::vector<float> rest = MixInFrames(seconds - 0.5f);
+			mix.insert(mix.end(), rest.begin(), rest.end());
+			CHECK(CountMismatches(file, mix) == 0);
+		}
+	}
+
+#if !defined(_WIN32)
+	TEST_CASE("A clip whose archive is cut short ends with an error instead of hanging")
+	{
+		BasaltTest::TempProject project("AudioArchiveCut");
+		const float seconds = 12.0f;
+		project.WriteFile("Assets/Audio/Song.wav", MakeWav(seconds, 48000));
+		const std::filesystem::path archivePath = project.GetDirectory() / "Audio.bpak";
+		PackArchiveWriter writer;
+		std::string error;
+		REQUIRE(writer.AddFile("Assets/Audio/Song.wav", project.GetDirectory() / "Assets" / "Audio" / "Song.wav", 0, error, true));
+		REQUIRE_MESSAGE(writer.Write(archivePath, error), error);
+		std::filesystem::remove(project.GetDirectory() / "Assets" / "Audio" / "Song.wav");
+		const Ref<PackArchive> archive = PackArchive::Open(archivePath, error);
+		REQUIRE_MESSAGE(archive, error);
+		FileSystem::Mount(project.GetDirectory(), archive);
+		struct Unmounter
+		{
+			~Unmounter() { FileSystem::Unmount(); }
+		} unmounter;
+		HeadlessAudio engine;
+
+		AudioSourceComponent source = Source("Assets/Audio/Song.wav", AudioBus::Music);
+		source.Loop = false;
+		source.Stream = true;
+		AudioScene scene;
+		Entity entity = scene.Add("Clip", source);
+		AudioSystem& audio = scene.Start();
+		REQUIRE(audio.IsPlaying(entity));
+		MixInFrames(1.0f);
+		const uint64_t logged = Log::GetHistory().GetTotalCount();
+		std::error_code cutError;
+		std::filesystem::resize_file(archivePath, 300000, cutError);
+		REQUIRE_FALSE(cutError);
+		MixInFrames(seconds);
+		uint64_t next = 0;
+		const std::vector<LogMessage> messages = Log::GetHistory().GetMessagesSince(logged, next);
+		CHECK(std::any_of(messages.begin(), messages.end(), [](const LogMessage& message) { return message.Text.find("cannot read 'Assets/Audio/Song.wav'") != std::string::npos; }));
+		CHECK_FALSE(audio.IsPlaying(entity));
+	}
+#endif
 
 	TEST_CASE("A streamed clip plays exactly the samples of the decoded clip, across its pages")
 	{

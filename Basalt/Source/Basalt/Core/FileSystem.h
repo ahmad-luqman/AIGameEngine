@@ -27,7 +27,7 @@ namespace Basalt {
 		static std::optional<std::vector<uint8_t>> ReadBinaryFile(const std::filesystem::path& path, std::string* outError = nullptr);
 		// The first size bytes of a file (all of it for size 0), from the mounted archive or disk; fails when the file is
 		// shorter. Reads at most size bytes from disk, so a caller's bound on size bounds the read (an archive entry is read
-		// whole: a compressed one cannot be read in part).
+		// whole, which checks its hash; a compressed one cannot be read in part anyway).
 		static std::optional<std::vector<uint8_t>> ReadBinaryFilePrefix(const std::filesystem::path& path, uint64_t size, std::string* outError = nullptr);
 		// The size of a regular file (an archive entry's uncompressed size); nullopt for a missing path or anything else
 		// (outError set when the path could not be inspected).
@@ -36,7 +36,8 @@ namespace Basalt {
 		// A read-only archive over a directory: the runtime mounts an exported game's Assets.bpak over its project folder.
 		// ReadTextFile, ReadBinaryFile, Exists and GetRegularFileSize then answer for the files under root that the archive
 		// holds, and disk answers for the rest. Readers that bypass them look the mount up directly: cgltf's file callbacks,
-		// miniaudio's VFS and font stamps through FindMounted, and AssetRegistry::Refresh through GetMountedArchive (the
+		// miniaudio's VFS (which streams long stored clips, unhashed) and font stamps through FindMounted, and
+		// AssetRegistry::Refresh through GetMountedArchive (the
 		// whole index). Lua's require searcher reads through ReadBinaryFile and asks FindMounted only whether a module
 		// exists. Writes are never redirected: a file written under root that the archive also holds is still read from
 		// the archive. One mount at a time (mounting again replaces it). Thread-safe.
