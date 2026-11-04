@@ -4,6 +4,7 @@
 #include "AutomationTestUtils.h"
 #include "TestUtils.h"
 
+#include <Basalt/Animation/AnimatedModel.h>
 #include <Basalt/Animation/AnimationGraph.h>
 #include <Basalt/Animation/PropertyAnimation.h>
 #include <Basalt/Automation/AutomationSession.h>
@@ -16,6 +17,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <variant>
 
 using namespace Basalt;
 using namespace BasaltTest;
@@ -645,6 +647,8 @@ TEST_SUITE("Animation authoring")
 			{ track("Mesh", "CastShadows", { { "Value", { .5f, 0, 0, 0 } } }), "Value.x must be 0 (false) or 1 (true)" },
 			{ track("Camera", "Projection", { { "Text", "Fisheye" } }), "Text 'Fisheye' is not a valid value (valid: Perspective, Orthographic)" },
 			{ track("Tag", "Tag", { { "Text", std::string(PropertyAnimationKey::MaxTextLength + 1, 'x') } }), "Text holds at most 1024 bytes" },
+			// Text on another field would be ignored, so it is refused.
+			{ track("Mesh", "CastShadows", { { "Text", "true" } }), "Text must be empty: CastShadows is a boolean field (keys use Value)" },
 		};
 		for (const auto& [bad, message] : invalid)
 		{
@@ -652,6 +656,11 @@ TEST_SUITE("Animation authoring")
 			CHECK_MESSAGE(error.find(message) != std::string::npos, error);
 			CHECK(info->Serialize(entity) == baseline);
 		}
+		// Keying the same time again replaces the key's Text too.
+		entity.GetComponent<TagComponent>().Tag = "Dim";
+		REQUIRE(PropertyAnimation::Key(entity, "Tag", "Tag", 0, error));
+		CHECK(entity.GetComponent<PropertyAnimationComponent>().Tracks[2].Keys.size() == 2);
+		CHECK(entity.GetComponent<PropertyAnimationComponent>().Tracks[2].Keys[0].Text == "Dim");
 		// An integer past what a key holds exactly is not captured.
 		entity.GetComponent<MeshComponent>().MeshIndex = PropertyAnimationField::MaxInteger + 1;
 		CHECK_FALSE(PropertyAnimation::Key(entity, "Mesh", "MeshIndex", 1, error));
@@ -672,9 +681,10 @@ TEST_SUITE("Animation authoring")
 		REQUIRE_MESSAGE(weight, error);
 		CHECK(weight->TopField() == "Layers");
 		CHECK(weight->Steps.size() == 1);
-		CHECK(weight->Steps[0].Name == "Upper");
-		REQUIRE(PropertyAnimation::ResolveField("Animator", "Layers[1].Speed"));
-		CHECK(PropertyAnimation::ResolveField("Animator", "Layers[1].Speed")->Steps[0].Index == 1u);
+		CHECK(std::get<std::string>(weight->Steps[0].Selector) == "Upper");
+		const auto speed = PropertyAnimation::ResolveField("Animator", "Layers[1].Speed");
+		REQUIRE(speed);
+		CHECK(std::get<size_t>(speed->Steps[0].Selector) == 1u);
 		// Two levels deep, and a name that is not the element's unique name.
 		CHECK(PropertyAnimation::ResolveField("SpringBone", "Chains[Hair].Colliders[1].Name"));
 		CHECK(PropertyAnimation::ResolveField("Animator", "Layers[Upper].Blend")->Type.Kind == ComponentFieldKind::Enum);
@@ -683,10 +693,13 @@ TEST_SUITE("Animation authoring")
 			{ "Layers[Upper].MaskAsset", "names an asset" },
 			{ "Layers[Upper].Mask", "is a list field" },
 			{ "Layers[16].Weight", "holds at most 16 elements" },
+			// Past size_t: an overflow is no exception, just an element that cannot be there.
+			{ "Layers[123456789012345678901234567890].Weight", "holds at most 16 elements" },
 			{ "Layers[Upper]", "is not a field path" },
 			{ "Layers[Upper]Weight", "is not a field path" },
-			{ "Layers.Weight", "is not a list" },
-			{ "Speed[0].Weight", "is not a list" },
+			{ "Layers.Weight", "Layers is a list: pick an element first, e.g. Layers[0].Weight" },
+			{ "Speed[0].Weight", "Speed is not a list" },
+			{ "Speed.x", "Speed is not a list, so it takes no [element] or .Field" },
 			{ "Layers[Upper].Missing", "has no field 'Missing'" },
 			{ "ClipLibraries[Lib].Mesh", "elements have no names" },
 			{ "", "is not a field path" },
@@ -699,19 +712,25 @@ TEST_SUITE("Animation authoring")
 		}
 
 		// The panel lists nested fields by their element's name.
+		const auto has = [](const std::vector<std::string>& list, const char* value) { return std::ranges::find(list, value) != list.end(); };
 		const auto fields = PropertyAnimation::ListFields(entity, "Animator");
-		CHECK(std::ranges::find(fields, "Speed") != fields.end());
-		CHECK(std::ranges::find(fields, "Layers[Upper].Weight") != fields.end());
-		CHECK(std::ranges::find(fields, "Layers[Breath].Blend") != fields.end());
-		CHECK(std::ranges::find(fields, "Layers[Upper].Name") == fields.end());
-		CHECK(std::ranges::find(fields, "Mesh") == fields.end());
-		const auto springFields = PropertyAnimation::ListFields(entity, "SpringBone");
-		CHECK(std::ranges::find(springFields, "Chains[Hair].Colliders[0].Name") != springFields.end());
+		CHECK(has(fields, "Speed"));
+		CHECK(has(fields, "Layers[Upper].Weight"));
+		CHECK(has(fields, "Layers[Breath].Blend"));
+		CHECK_FALSE(has(fields, "Layers[Upper].Name"));
+		CHECK_FALSE(has(fields, "Mesh"));
+		CHECK(has(PropertyAnimation::ListFields(entity, "SpringBone"), "Chains[Hair].Colliders[0].Name"));
 		CHECK(PropertyAnimation::ListFields(entity, "Camera").empty());
-		// A name that cannot pick its element alone falls back to the index.
-		animator.Layers[1].Name = "7";
-		const auto renamed = PropertyAnimation::ListFields(entity, "Animator");
-		CHECK(std::ranges::find(renamed, "Layers[1].Weight") != renamed.end());
+		// A name that cannot pick its element alone (only digits, empty, with ']', or used twice from C++ past Validate)
+		// falls back to the index.
+		for (const char* name : { "7", "", "Up]per", "Upper" })
+		{
+			CAPTURE(name);
+			animator.Layers[1].Name = name;
+			const auto renamed = PropertyAnimation::ListFields(entity, "Animator");
+			CHECK(has(renamed, "Layers[1].Weight"));
+			CHECK(has(renamed, std::string(name) == "Upper" ? "Layers[0].Weight" : "Layers[Upper].Weight"));
+		}
 		animator.Layers[1].Name = "Breath";
 
 		// Two tracks into one list compose, and the list is patched once.
@@ -747,14 +766,28 @@ TEST_SUITE("Animation authoring")
 		CHECK(springs.Chains[0].Colliders[1].Name == "Chest");
 		scene.GetRegistry().on_update<AnimatorComponent>().disconnect(&updates);
 
-		// A missing element fails the sample with the track's path, and the key capture too.
+		// Capture finds the track by the field it reaches, whichever way the path is written.
+		REQUIRE(PropertyAnimation::Key(entity, "Animator", "Layers[0].Weight", .25f, error));
+		CHECK(animation.Tracks.size() == 3);
+		CHECK(animation.Tracks[0].Keys.size() == 3);
+
+		// A missing element fails the sample with the track's path, and the key capture too; the inspector warns first.
 		animator.Layers[0].Name = "Torso";
+		const auto warnings = GetAnimationWarnings(entity);
+		CHECK(has(warnings, "PropertyAnimation Tracks[0] (Animator.Layers[Upper].Weight): Layers has no element whose Name is 'Upper'"));
+		CHECK(std::ranges::count_if(warnings, [](const std::string& warning) { return warning.starts_with("PropertyAnimation"); }) == 1);
 		CHECK_FALSE(PropertyAnimation::Sample(entity, animation, 0, error));
 		CHECK_MESSAGE(error == "Animator.Layers[Upper].Weight: Layers has no element whose Name is 'Upper'", error);
 		CHECK_FALSE(PropertyAnimation::Key(entity, "Animator", "Layers[Upper].Weight", 0, error));
 		animator.Layers.pop_back();
 		CHECK_FALSE(PropertyAnimation::Key(entity, "Animator", "Layers[1].Speed", 0, error));
 		CHECK_MESSAGE(error.find("Layers has no element 1 (it has 1)") != std::string::npos, error);
+		// A removed component is named as such.
+		entity.RemoveComponent<SpringBoneComponent>();
+		animator.Layers[0].Name = "Upper";
+		animator.Layers.push_back({ .Name = "Breath" });
+		CHECK_FALSE(PropertyAnimation::Sample(entity, animation, 0, error));
+		CHECK_MESSAGE(error == "SpringBone.Chains[Hair].Colliders[1].Name: the entity has no SpringBone", error);
 	}
 	TEST_CASE("Animation authoring commands use dirty tracking and validated asset writes")
 	{

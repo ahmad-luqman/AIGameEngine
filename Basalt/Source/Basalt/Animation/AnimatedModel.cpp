@@ -4,6 +4,7 @@
 #include "Basalt/Animation/InverseKinematics.h"
 #include "Basalt/Animation/AnimationClipSet.h"
 #include "Basalt/Animation/AnimationMask.h"
+#include "Basalt/Animation/PropertyAnimation.h"
 #include "Basalt/Animation/SpringBones.h"
 #include "Basalt/Asset/AssetManager.h"
 #include "Basalt/Core/Assert.h"
@@ -320,7 +321,7 @@ namespace Basalt {
 			{
 				// Chains name colliders by Name, which needs no model.
 				for (const SpringChainCollider& named : chain.Colliders)
-					if (std::ranges::find(springs.Colliders, named.Name, &SpringCollider::Name) == springs.Colliders.end())
+					if (!named.Name.empty() && std::ranges::find(springs.Colliders, named.Name, &SpringCollider::Name) == springs.Colliders.end())
 						warnings.push_back(fmt::format("SpringBone chain '{}': Colliders: no collider is named '{}'", chain.Name, named.Name));
 				if (chain.Joint.empty())
 				{
@@ -362,6 +363,34 @@ namespace Basalt {
 				const SpringCollider& collider = springs.Colliders[i];
 				if (!collider.Joint.empty() && FindNode(*source, collider.Joint) < 0)
 					warnings.push_back(fmt::format("SpringBone Colliders[{}]: joint '{}' not found", i, collider.Joint));
+			}
+		}
+
+		// Tracks whose target is not there now (a component removed, a list element renamed or removed): sampling them
+		// would fail and suspend the timeline.
+		void AddPropertyAnimationWarnings(Entity entity, const PropertyAnimationComponent& timeline, std::vector<std::string>& warnings)
+		{
+			std::map<std::string, nlohmann::json> components;
+			for (size_t i = 0; i < timeline.Tracks.size(); i++)
+			{
+				const PropertyAnimationTrack& track = timeline.Tracks[i];
+				const auto field = PropertyAnimation::ResolveField(track.Component, track.Field);
+				const auto* info = ComponentRegistry::Find(track.Component);
+				// Invalid declarations are the component validator's to reject.
+				if (!field || !info)
+					continue;
+				std::string problem;
+				if (!info->Has(entity))
+					problem = "the entity has no " + track.Component;
+				else
+				{
+					auto [data, inserted] = components.try_emplace(track.Component);
+					if (inserted)
+						data->second = info->Serialize(entity);
+					field->Find(data->second, problem);
+				}
+				if (!problem.empty())
+					warnings.push_back(fmt::format("PropertyAnimation Tracks[{}] ({}.{}): {}", i, track.Component, track.Field, problem));
 			}
 		}
 
@@ -443,6 +472,8 @@ namespace Basalt {
 			AddSpringBoneWarnings(entity, *springs, warnings);
 		if (const auto* ragdoll = entity.TryGetComponent<RagdollComponent>(); ragdoll && ragdoll->MotorStrength > 0 && ragdoll->MotorTorque <= 0)
 			warnings.emplace_back("Ragdoll MotorStrength has no effect: MotorTorque is 0");
+		if (const auto* timeline = entity.TryGetComponent<PropertyAnimationComponent>())
+			AddPropertyAnimationWarnings(entity, *timeline, warnings);
 		return warnings;
 	}
 }

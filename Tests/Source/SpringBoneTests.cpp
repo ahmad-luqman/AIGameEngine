@@ -321,6 +321,19 @@ TEST_SUITE("Animation")
 		for (size_t i = 0; i < 3; i++)
 			CHECK(Near(rigid.Points[i].Position, rigid.Animated[i + 1], 1e-4f));
 
+		// A point straight behind its bone (against the axis, which may lie along either fallback direction) still ends up
+		// MaxAngle from it, finite.
+		for (const glm::vec3 axis : { glm::vec3(0, 1, 0), glm::vec3(1, 0, 0) })
+		{
+			CAPTURE(axis);
+			Strand behind({ 0, 2, 0 }, axis, 1);
+			behind.Points[0].Position = behind.Animated[0] - axis * 0.3f;
+			// One substep: a second would carry the swing's speed further in.
+			behind.Run(1, 1.0f / SpringStepRate, { .Stiffness = 0, .MaxAngle = glm::radians(30.0f) });
+			CHECK(Math::IsFinite(behind.Points[0].Position));
+			CHECK(angle(behind.Points[0].Position - behind.Animated[0], axis) == doctest::Approx(30).epsilon(0.01));
+		}
+
 		// A collider on the rigid strand's line still pushes its point off the line.
 		const SpringCollisionShape sphere{ .A = { 0.3f, 2.02f, 0 }, .B = { 0.3f, 2.02f, 0 }, .Radius = 0.05f };
 		const std::array shapes{ sphere };
@@ -686,12 +699,38 @@ TEST_SUITE("Animation")
 		component.Chains[0].Colliders = { { .Name = "Head" } };
 		RunAnimation(scene, 300);
 		CHECK(hangsStraight());
-		// Naming Belly holds the arm off it, while the unnamed one is still ignored.
+		// Naming Belly holds the arm off it, while the unnamed one is still ignored: the hand swings into it.
 		component.Chains[0].Colliders = { { .Name = "Belly" } };
 		RunAnimation(scene, 300);
 		CHECK_FALSE(hangsStraight());
 		const glm::vec3 elbow = BoneWorld(scene, biped, "RightForeArm");
 		CHECK(glm::length(elbow - (shoulder + glm::vec3(0, -0.3f, 0))) >= 0.1f + component.Chains[0].Radius - 1e-3f);
+		// The unnamed sphere plays no part: without it the arm rests exactly the same.
+		const glm::vec3 held = BoneWorld(scene, biped, "RightHand");
+		const auto named = component.Colliders;
+		component.Colliders.erase(component.Colliders.begin() + 1);
+		RunAnimation(scene, 60);
+		CHECK(Near(BoneWorld(scene, biped, "RightHand"), held, 1e-4f));
+		component.Colliders = named;
+		// A collider that cannot resolve (an unknown joint) drops out without shifting which colliders the names pick.
+		component.Colliders.insert(component.Colliders.begin(), { .Name = "Broken", .Joint = "Nope", .Radius = 0.1f });
+		RunAnimation(scene, 60);
+		CHECK(Near(BoneWorld(scene, biped, "RightHand"), held, 1e-4f));
+		component.Colliders = named;
+		// Entries without a Name are the inspector's unnamed additions: they name nothing (so they pick none of the unnamed
+		// colliders), and a list of only those means every collider, so Belly still holds the arm.
+		component.Chains[0].Colliders = { { .Name = "" } };
+		RunAnimation(scene, 60);
+		CHECK_FALSE(hangsStraight());
+		CHECK(GetAnimationWarnings(biped).empty());
+		// Next to a name, an unnamed entry still picks no unnamed collider: naming only the far Head, the arm hangs
+		// straight, its hand inside the unnamed sphere moved to where the hand hangs.
+		component.Colliders[1].Offset = glm::vec3(model * glm::vec4(hanging, 1));
+		component.Chains[0].Colliders = { { .Name = "" }, { .Name = "Head" } };
+		RunAnimation(scene, 300);
+		CHECK(hangsStraight());
+		component.Colliders = named;
+		component.Chains[0].Colliders = { { .Name = "Belly" } };
 		// Without a list the chain collides with every collider.
 		component.Chains[0].Colliders.clear();
 		RunAnimation(scene, 300);
@@ -715,7 +754,20 @@ TEST_SUITE("Animation")
 	TEST_CASE("Spring chains with CollidePhysics stay outside physics bodies other than their character's")
 	{
 		ClearAssetCache clear;
-		const auto run = [](bool collide, bool ownBodies) {
+		// Who owns the boxes around the arm: nobody (no boxes), the character (a controller on the biped's parent, a box
+		// under that controller and one under the biped), or another entity (the same boxes, unparented).
+		enum class Boxes
+		{
+			None,
+			Character,
+			Foreign
+		};
+		struct Result
+		{
+			glm::vec3 Hand, Elbow, Shoulder;
+			float ShelfTop = 0;
+		};
+		const auto run = [](bool collide, Boxes boxes) {
 			Scene scene;
 			auto chain = RightArm();
 			chain.CollidePhysics = collide;
@@ -724,16 +776,28 @@ TEST_SUITE("Animation")
 			ground.GetTransform().Translation = { 0, -0.5f, 0 };
 			ground.AddComponent<RigidBodyComponent>();
 			ground.AddComponent<BoxColliderComponent>().HalfExtents = { 5, 0.5f, 5 };
-			// The character's own colliders cover the arm's path: they never push it.
-			if (ownBodies)
+			const auto addBox = [&](const char* name, Entity parent, const glm::vec3& center) {
+				auto box = scene.CreateEntity(name);
+				if (parent)
+					scene.SetParent(box, parent, false);
+				box.GetTransform().Translation = center;
+				box.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Kinematic;
+				box.AddComponent<BoxColliderComponent>().HalfExtents = { 0.04f, 0.04f, 0.04f };
+			};
+			if (boxes != Boxes::None)
 			{
-				biped.AddComponent<CharacterControllerComponent>();
-				biped.AddComponent<CapsuleColliderComponent>();
-				auto hitbox = scene.CreateEntity("Hitbox");
-				scene.SetParent(hitbox, biped, false);
-				hitbox.GetTransform().Translation = { -0.25f, 1.1f, 0 };
-				hitbox.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Kinematic;
-				hitbox.AddComponent<BoxColliderComponent>().HalfExtents = { 0.3f, 0.3f, 0.3f };
+				// The character holding the biped, its slim capsule clear of everything (so nothing shoves the character), and
+				// boxes where the elbow and the hand come to rest on the shelf.
+				auto character = scene.CreateEntity("Character");
+				scene.SetParent(biped, character, false);
+				character.AddComponent<CharacterControllerComponent>().GravityFactor = 0;
+				auto& capsule = character.AddComponent<CapsuleColliderComponent>();
+				capsule.Offset = { 0.6f, 1.0f, 0 };
+				capsule.Radius = 0.05f;
+				capsule.HalfHeight = 0.3f;
+				const bool owned = boxes == Boxes::Character;
+				addBox("Sibling", owned ? character : Entity(), { -0.6f, 1.17f, 0 });
+				addBox("Child", owned ? biped : Entity(), { -0.31f, 1.2f, 0 });
 			}
 			scene.OnSimulationStart();
 			scene.OnUpdate(Step);
@@ -745,41 +809,72 @@ TEST_SUITE("Animation")
 			shelf.AddComponent<BoxColliderComponent>().HalfExtents = { 0.5f, 0.05f, 0.5f };
 			auto trigger = scene.CreateEntity("Trigger");
 			trigger.GetTransform().Translation = shoulder + glm::vec3(0, -0.2f, 0);
-			auto& triggerBody = trigger.AddComponent<RigidBodyComponent>();
-			triggerBody.IsTrigger = true;
+			trigger.AddComponent<RigidBodyComponent>().IsTrigger = true;
 			trigger.AddComponent<BoxColliderComponent>().HalfExtents = { 0.5f, 0.05f, 0.5f };
 			for (int i = 0; i < 300; i++)
 				scene.OnUpdate(Step);
-			const glm::vec3 hand = BoneWorld(scene, biped, "RightHand"), elbow = BoneWorld(scene, biped, "RightForeArm");
+			Result result{ BoneWorld(scene, biped, "RightHand"), BoneWorld(scene, biped, "RightForeArm"), BoneWorld(scene, biped, "RightUpperArm"), scene.GetWorldTransform(shelf)[3].y + 0.05f };
 			scene.OnSimulationStop();
-			return std::tuple{ shoulder, elbow, hand };
+			return result;
 		};
 		// Off: the arm hangs straight through the shelf.
-		const auto [shoulder, elbow, hand] = run(false, false);
-		CHECK(Near(hand, shoulder + glm::vec3(0, -0.6f, 0), 5e-3f));
-		// On: the hand rests on the shelf's top (0.35 m below the shoulder, plus the point radius), the trigger aside.
-		for (const bool own : { false, true })
+		const Result off = run(false, Boxes::None);
+		CHECK(Near(off.Hand, off.Shoulder + glm::vec3(0, -0.6f, 0), 5e-3f));
+		// On: the hand comes to rest on the shelf's top (plus the point radius), not on the trigger above it.
+		const Result on = run(true, Boxes::None);
+		CHECK(on.Hand.y == doctest::Approx(on.ShelfTop + 0.02f).epsilon(0.004));
+		CHECK(on.Elbow.y > on.ShelfTop);
+		CHECK(glm::length(on.Hand - on.Elbow) == doctest::Approx(0.3f).epsilon(1e-3));
+		// The character's own bodies (a box under its controller beside the biped, one under the biped) never push the arm:
+		// it rests exactly as without them.
+		const Result owned = run(true, Boxes::Character);
+		CHECK(Near(owned.Hand - owned.Shoulder, on.Hand - on.Shoulder, 2e-3f));
+		CHECK(Near(owned.Elbow - owned.Shoulder, on.Elbow - on.Shoulder, 2e-3f));
+		// The same boxes owned by another entity do.
+		const Result foreign = run(true, Boxes::Foreign);
+		CHECK_FALSE(Near(foreign.Elbow - foreign.Shoulder, on.Elbow - on.Shoulder, 2e-3f));
+	}
+
+	TEST_CASE("Spring chains read the nearest physics bodies and warn once when more are near")
+	{
+		ClearAssetCache clear;
+		Scene scene;
+		auto chain = RightArm();
+		chain.CollidePhysics = true;
+		auto biped = AddBiped(scene, { chain });
+		scene.OnSimulationStart();
+		scene.OnUpdate(Step);
+		const glm::vec3 shoulder = BoneWorld(scene, biped, "RightUpperArm");
+		// More small bodies than a chain reads, within its reach but beside the arm's plane, so none touches it.
+		for (uint32_t i = 0; i < PhysicsShapeSnapshot::MaxShapes + 8; i++)
 		{
-			CAPTURE(own);
-			const auto [collidedShoulder, collidedElbow, collidedHand] = run(true, own);
-			CHECK(collidedHand.y >= collidedShoulder.y - 0.35f + 0.02f - 2e-3f);
-			CHECK(collidedElbow.y >= collidedShoulder.y - 0.35f + 0.02f - 2e-3f);
-			CHECK(glm::length(collidedHand - collidedElbow) == doctest::Approx(0.3f).epsilon(1e-3));
+			auto pebble = scene.CreateEntity("Pebble");
+			const uint32_t column = i % 10, row = i / 10;
+			pebble.GetTransform().Translation = shoulder + glm::vec3(-0.05f * static_cast<float>(column), -0.05f * static_cast<float>(row), 0.3f);
+			pebble.AddComponent<RigidBodyComponent>();
+			pebble.AddComponent<BoxColliderComponent>().HalfExtents = { 0.01f, 0.01f, 0.01f };
 		}
+		const auto since = Log::GetHistory().GetTotalCount();
+		for (int i = 0; i < 300; i++)
+			scene.OnUpdate(Step);
+		CHECK(CountLogMessages(since, "SpringBone 'Biped': chain 'RightArm': more than 32 physics bodies are within its reach; it collides with the nearest 32") == 1);
+		// Out of the way, the arm still hangs straight.
+		CHECK(Near(BoneWorld(scene, biped, "RightHand"), BoneWorld(scene, biped, "RightUpperArm") + glm::vec3(0, -0.6f, 0), 5e-3f));
+		scene.OnSimulationStop();
 	}
 
 	TEST_CASE("Physics shape snapshots gather the nearest bodies and push spheres out of them")
 	{
-		Scene scene;
-		const auto addBox = [&](const std::string& name, const glm::vec3& center, bool trigger = false) {
-			auto box = scene.CreateEntity(name);
+		const auto addBox = [](Scene& owner, const std::string& name, const glm::vec3& center, bool trigger = false) {
+			auto box = owner.CreateEntity(name);
 			box.GetTransform().Translation = center;
 			box.AddComponent<RigidBodyComponent>().IsTrigger = trigger;
 			box.AddComponent<BoxColliderComponent>().HalfExtents = { 1, 1, 1 };
 			return box;
 		};
-		auto floor = addBox("Floor", { 0, -1, 0 });
-		auto sensor = addBox("Sensor", { 0, 3, 0 }, true);
+		Scene scene;
+		auto floor = addBox(scene, "Floor", { 0, -1, 0 });
+		addBox(scene, "Sensor", { 0, 3, 0 }, true);
 		scene.OnSimulationStart();
 		scene.OnUpdate(Step);
 		const PhysicsWorld& physics = *scene.GetPhysicsWorld();
@@ -804,18 +899,12 @@ TEST_SUITE("Animation")
 		CHECK(physics.CollectShapes({ -1, -1, -1 }, { 1, 1, 1 }, -1).Empty());
 		CHECK(PhysicsShapeSnapshot().Empty());
 		CHECK_FALSE(PhysicsShapeSnapshot().PushOut({ 0, 0, 0 }));
-		(void)sensor;
 		scene.OnSimulationStop();
 
 		// Past MaxShapes, the nearest are kept.
 		Scene crowded;
 		for (uint32_t i = 0; i < PhysicsShapeSnapshot::MaxShapes + 4; i++)
-		{
-			auto box = crowded.CreateEntity("Box");
-			box.GetTransform().Translation = { 3.0f * static_cast<float>(i), 0, 0 };
-			box.AddComponent<RigidBodyComponent>();
-			box.AddComponent<BoxColliderComponent>().HalfExtents = { 1, 1, 1 };
-		}
+			addBox(crowded, "Box", { 3.0f * static_cast<float>(i), 0, 0 });
 		crowded.OnSimulationStart();
 		crowded.OnUpdate(Step);
 		// Centered on the first box, so the last four are the farthest.
@@ -846,18 +935,18 @@ TEST_SUITE("Animation")
 		const auto since = Log::GetHistory().GetTotalCount();
 		scene.UpdateAnimationPreview(Step);
 		AnimationSystem& preview = *scene.GetPoseAnimationSystem();
-		const auto handWorld = [&](Entity entity) {
+		const auto handAndShoulder = [&](Entity entity) {
 			glm::mat4 hand, shoulder;
 			std::string error;
 			REQUIRE(preview.GetBoneTransform(entity, "RightHand", hand, error));
 			REQUIRE(preview.GetBoneTransform(entity, "RightUpperArm", shoulder, error));
 			return std::pair{ glm::vec3(scene.GetWorldTransform(entity) * hand[3]), glm::vec3(scene.GetWorldTransform(entity) * shoulder[3]) };
 		};
-		shelf.GetTransform().Translation = handWorld(biped).second + glm::vec3(0, -0.4f, 0);
+		shelf.GetTransform().Translation = handAndShoulder(biped).second + glm::vec3(0, -0.4f, 0);
 		const json before = SceneSerializer::SerializeScene(scene);
 		for (int i = 0; i < 300; i++)
 			scene.UpdateAnimationPreview(Step);
-		const auto [hand, shoulder] = handWorld(biped);
+		const auto [hand, shoulder] = handAndShoulder(biped);
 		CHECK(Near(hand, shoulder + glm::vec3(0, -0.6f, 0), 5e-3f));
 		CHECK(preview.GetPose(still) == nullptr);
 		CHECK(CountLogMessages(since, "SpringBone") == 0);
@@ -865,7 +954,8 @@ TEST_SUITE("Animation")
 		// Moving the entity in the editor swings the chain.
 		biped.GetTransform().Translation.z += 0.2f;
 		scene.UpdateAnimationPreview(Step);
-		CHECK(handWorld(biped).first.z < handWorld(biped).second.z - 0.01f);
+		const auto [movedHand, movedShoulder] = handAndShoulder(biped);
+		CHECK(movedHand.z < movedShoulder.z - 0.01f);
 		scene.ResetAnimationPreview();
 	}
 
@@ -884,6 +974,9 @@ TEST_SUITE("Animation")
 			{ { { "Chains", { { { "GravityFactor", 101 } } } } }, "Chains[0].GravityFactor 101 must be between -100 and 100" },
 			{ { { "Chains", { { { "Radius", -0.5 } } } } }, "Chains[0].Radius -0.5 must be between 0 and 100" },
 			{ { { "Chains", { { { "Weight", 2 } } } } }, "Chains[0].Weight 2 must be between 0 and 1" },
+			{ { { "Chains", { { { "MaxAngle", -1 } } } } }, "Chains[0].MaxAngle -1 must be between 0 and 180" },
+			{ { { "Chains", { { { "MaxAngle", 181 } } } } }, "Chains[0].MaxAngle 181 must be between 0 and 180" },
+			{ { { "Chains", { { { "Colliders", json::array({ { { "Name", 3 } } }) } } } } }, "Name" },
 			{ { { "Colliders", { { { "Radius", -1 } } } } }, "Colliders[0].Radius -1 must be between 0 and 100" },
 			{ { { "Colliders", { { { "HalfHeight", 101 } } } } }, "Colliders[0].HalfHeight 101 must be between 0 and 100" },
 			{ { { "Colliders", { { { "Shape", "Box" } } } } }, "Shape" },
@@ -934,7 +1027,9 @@ TEST_SUITE("Animation")
 		scene.OnRuntimeStart();
 		const glm::vec3 animated = BoneWorld(scene, biped, "RightHand");
 		component.Chains[0].Damping = std::numeric_limits<float>::infinity();
+		component.Chains[0].MaxAngle = std::numeric_limits<float>::infinity();
 		RunAnimation(scene, 30);
+		CHECK(CountLogMessages(since, "MaxAngle must be between 0 and 180; clamping") == 1);
 		CHECK(CountLogMessages(since, "chain 'Missing': joint 'Nope' not found") == 1);
 		CHECK(CountLogMessages(since, "chain 'Leaf': joint 'RightHand' has no child") == 1);
 		CHECK(CountLogMessages(since, "Colliders[0]: joint 'Nowhere' not found") == 1);

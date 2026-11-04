@@ -8,27 +8,31 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <variant>
 #include <vector>
 
 namespace Basalt {
 	class Scene;
 	class Entity;
 	struct PropertyAnimationComponent;
-	// Empty on valid declarations; otherwise the component-level or indexed track/key problem. Does not require target components.
-	std::string ValidatePropertyAnimation(const PropertyAnimationComponent& animation);
+	struct PropertyAnimationField;
+	// Empty on valid declarations; otherwise the component-level or indexed track/key problem. Does not require target
+	// components. Keys are checked against their field's kind (whole integers, 0/1 booleans, valid enum values); the
+	// field's own ranges are the component's to check when a sample patches it. outFields, when given, gets every track's
+	// resolved field, in order (complete only when the result is empty).
+	std::string ValidatePropertyAnimation(const PropertyAnimationComponent& animation, std::vector<PropertyAnimationField>* outFields = nullptr);
 
 	// A track's Field resolved against the registry: the animated field's type and the list elements leading to it.
 	struct PropertyAnimationField
 	{
 		// Integer keys hold whole numbers up to this (every one of them is exact in Value's float lanes).
 		static constexpr uint32_t MaxInteger = 1u << 24;
-		// One list element on the way to the field: the List field holding it, then the element at Index, or the one whose
-		// UniqueField (its schema's) equals Name.
+		// One list element on the way to the field: the List field holding it, then the element at an index, or the one
+		// whose UniqueField (its schema's) equals a name.
 		struct Step
 		{
 			std::string List;
-			std::optional<size_t> Index;
-			std::string Name;
+			std::variant<size_t, std::string> Selector;
 			std::string UniqueField;
 		};
 
@@ -63,10 +67,13 @@ namespace Basalt {
 		// picked by their unique name where it is a usable selector (nonempty, not only digits, without ']', used once),
 		// otherwise by index. Empty when the entity lacks the component.
 		static std::vector<std::string> ListFields(Entity entity, const std::string& component);
-		// Samples normalized time in [0,1]. Missing targets fail; components already applied in name order remain changed.
+		// Samples normalized time in [0,1]. A missing component or list element fails before anything changes; when a
+		// component rejects its patch, components patched before it (in name order) stay changed. Tracks reaching the same
+		// field (also through different spellings) apply in order, so the last nonempty one wins.
 		static bool Sample(Entity entity, const PropertyAnimationComponent& animation, float time, std::string& outError);
-		// Captures a field, adding PropertyAnimation if needed. Inserts/replaces in the last nonempty matching
-		// track, or the last empty match when all are empty; a new track of a discrete field is Stepped.
+		// Captures a field, adding PropertyAnimation if needed. Inserts/replaces in the last nonempty track reaching the same
+		// field (whichever way its path spells it), or the last empty one when all are empty; a new track of a discrete field
+		// is Stepped.
 		static bool Key(Entity entity, const std::string& component, const std::string& field, float time, std::string& outError);
 	};
 

@@ -1,6 +1,7 @@
 #include "Basalt/Animation/Retargeting.h"
 
 #include "Basalt/Animation/AnimationPose.h"
+#include "Basalt/Core/Assert.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Math/Math.h"
 #include "Basalt/Scene/Components.h"
@@ -156,14 +157,16 @@ namespace Basalt {
 			return DecomposedRotation(global).value_or(glm::quat(1, 0, 0, 0));
 		}
 
-		// Model-space rest positions and rotations, the rotations from `reference` (sampled at `time`) when given; false for a
-		// non-finite rest or reference pose. Joints whose transform is not affine get the identity rotation and are listed in
-		// outDegenerate.
-		bool Rest(const MeshSource& source, const AnimationClip* reference, float time, RestPose& out, std::vector<uint32_t>& outDegenerate)
+		// Model-space rest positions and rotations, the rotations from `reference` (sampled at `time`) when given; why not when
+		// the rest or the reference pose is not finite (naming which). Joints whose transform is not affine get the identity
+		// rotation and are listed in outDegenerate.
+		std::string Rest(const MeshSource& source, const AnimationClip* reference, float time, RestPose& out, std::vector<uint32_t>& outDegenerate)
 		{
 			std::vector<glm::mat4> globals, oriented;
-			if (!EvaluateAnimation(source, nullptr, 0, globals) || (reference && !EvaluateAnimation(source, reference, time, oriented)))
-				return false;
+			if (!EvaluateAnimation(source, nullptr, 0, globals))
+				return fmt::format("the rest pose of '{}' is not finite", source.Key);
+			if (reference && !EvaluateAnimation(source, reference, time, oriented))
+				return fmt::format("the pose of reference clip '{}' at {} s of '{}' is not finite", reference->Name, time, source.Key);
 			const std::vector<glm::mat4>& rotations = reference ? oriented : globals;
 			out.Positions.resize(globals.size());
 			out.Rotations.resize(globals.size());
@@ -175,7 +178,7 @@ namespace Basalt {
 				if (!rotation)
 					outDegenerate.push_back(static_cast<uint32_t>(i));
 			}
-			return true;
+			return {};
 		}
 
 		// The root's rest height above the lowest of `mapped`, in model space (glTF is Y-up).
@@ -329,6 +332,9 @@ namespace Basalt {
 
 		RetargetMap BuildMap(const MeshSource& target, const MeshSource& source, const std::vector<AnimationRetargetJoint>& joints, std::vector<std::string>& outWarnings, const RetargetReferences& references)
 		{
+			// Sampling another model's clip would index past this model's nodes.
+			const auto owns = [](const MeshSource& model, const AnimationClip* clip) { return !clip || (clip >= model.Animations.data() && clip < model.Animations.data() + model.Animations.size()); };
+			BS_CORE_ASSERT(owns(target, references.Target) && owns(source, references.Source), "reference clips belong to the models they stand for");
 			RetargetMap map;
 			map.SourceOf.assign(target.Nodes.size(), -1);
 			map.Matches.assign(target.Nodes.size(), RetargetMatch::None);
@@ -396,25 +402,29 @@ namespace Basalt {
 			if (map.TargetRoot >= 0)
 				map.SourceRoot = map.SourceOf[map.TargetRoot];
 
+			// Both skeletons are evaluated, so each problem is reported at once rather than one per fix.
 			std::vector<uint32_t> targetDegenerate, sourceDegenerate;
-			const bool targetFinite = Rest(target, references.Target, references.TargetTime, map.TargetRest, targetDegenerate);
-			if (!targetFinite || !Rest(source, references.Source, references.SourceTime, map.SourceRest, sourceDegenerate))
+			const std::string targetProblem = Rest(target, references.Target, references.TargetTime, map.TargetRest, targetDegenerate);
+			const std::string sourceProblem = Rest(source, references.Source, references.SourceTime, map.SourceRest, sourceDegenerate);
+			if (!targetProblem.empty() || !sourceProblem.empty())
 			{
-				const bool reference = targetFinite ? references.Source != nullptr : references.Target != nullptr;
-				outWarnings.push_back(fmt::format("the rest {}pose of '{}' is not finite, so no clip can be retargeted", reference ? "or reference " : "", targetFinite ? source.Key : target.Key));
+				for (const std::string* problem : { &targetProblem, &sourceProblem })
+					if (!problem->empty())
+						outWarnings.push_back(*problem + ", so no clip can be retargeted");
 				map.TargetRest = {};
 				map.SourceRest = {};
 				return map;
 			}
 			// A joint without a rest rotation has no orientation to correct from; its children still pose, but it turns from
 			// identity.
-			const auto describe = [](const AnimationClip* reference) { return reference ? fmt::format("transform in reference clip '{}'", reference->Name) : std::string("rest transform"); };
-			for (uint32_t node : targetDegenerate)
-				if (map.SourceOf[node] >= 0)
-					outWarnings.push_back(fmt::format("joint '{}' of '{}' has a {} that is not affine; its rest orientation counts as identity", target.Nodes[node].Name, target.Key, describe(references.Target)));
-			for (uint32_t node : sourceDegenerate)
-				if (used[node])
-					outWarnings.push_back(fmt::format("joint '{}' of '{}' has a {} that is not affine; its rest orientation counts as identity", source.Nodes[node].Name, source.Key, describe(references.Source)));
+			const auto warnDegenerate = [&](const MeshSource& mesh, const std::vector<uint32_t>& nodes, const AnimationClip* reference, const auto& paired) {
+				const std::string transform = reference ? fmt::format("transform in reference clip '{}'", reference->Name) : std::string("rest transform");
+				for (uint32_t node : nodes)
+					if (paired(node))
+						outWarnings.push_back(fmt::format("joint '{}' of '{}' has a {} that is not affine; its rest orientation counts as identity", mesh.Nodes[node].Name, mesh.Key, transform));
+			};
+			warnDegenerate(target, targetDegenerate, references.Target, [&](uint32_t node) { return map.SourceOf[node] >= 0; });
+			warnDegenerate(source, sourceDegenerate, references.Source, [&](uint32_t node) { return used[node]; });
 			if (map.TargetRoot < 0)
 				return map;
 			std::vector<int32_t> targetMapped, sourceMapped;
@@ -523,14 +533,28 @@ namespace Basalt {
 			const auto varies = [](const std::vector<glm::vec4>& values) {
 				return std::ranges::any_of(values, [&](const glm::vec4& value) { return glm::any(glm::greaterThan(glm::abs(value - values.front()), glm::vec4(1e-6f))); });
 			};
+			// A constant value away from the node's own (a reference pose's correction of a joint the clip leaves alone) is kept
+			// too: dropped, playback would fall back to the node's uncorrected rest. The tolerance stays above float error,
+			// so unreferenced bakes, whose constant values are the node's own, add no tracks.
+			const auto differs = [](const std::vector<glm::vec4>& values, const glm::vec4& own, bool rotation) {
+				const auto away = [&](const glm::vec4& reference) { return glm::any(glm::greaterThan(glm::abs(values.front() - reference), glm::vec4(1e-5f))); };
+				// q and -q are the same rotation.
+				return away(own) && (!rotation || away(-own));
+			};
 			for (size_t node = 0; node < target.Nodes.size(); node++)
 			{
 				const int32_t sourceNode = map.SourceOf[node];
 				if (sourceNode < 0 || target.Nodes[node].HasMatrix)
 					continue;
 				const uint8_t animated = channels[sourceNode];
+				const MeshNode& targetNode = target.Nodes[node];
+				const glm::vec4 ownTranslation(targetNode.Translation, 0.0f), ownRotation(targetNode.Rotation.x, targetNode.Rotation.y, targetNode.Rotation.z, targetNode.Rotation.w), ownScale(targetNode.Scale, 0.0f);
 				const auto add = [&](std::vector<glm::vec4>& values, AnimationPath path, bool keep) {
-					if (values.empty() || !(keep || varies(values)))
+					if (values.empty())
+						return;
+					const glm::vec4& own = path == AnimationPath::Translation ? ownTranslation : path == AnimationPath::Rotation ? ownRotation
+																																 : ownScale;
+					if (!(keep || varies(values) || differs(values, own, path == AnimationPath::Rotation)))
 						return;
 					outClip.Tracks.push_back({ .Node = static_cast<uint32_t>(node), .Path = path, .Interpolation = stepped ? AnimationInterpolation::Step : AnimationInterpolation::Linear, .Times = keyTimes, .Values = std::move(values) });
 				};

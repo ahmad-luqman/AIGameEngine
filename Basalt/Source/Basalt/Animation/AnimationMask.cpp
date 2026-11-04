@@ -11,38 +11,21 @@ namespace Basalt {
 
 	std::optional<AnimationMask> AnimationMask::FromJson(const nlohmann::json& data, std::string& outError)
 	{
-		outError.clear();
-		if (!data.is_object() || !RejectUnknownKeys(data, { "Joints" }, "animation mask", outError))
-		{
-			if (outError.empty())
-				outError = "an animation mask must be an object";
+		const nlohmann::json* joints = ReadEntryArray(data, "Joints", "animation mask", "an animation mask must be an object", AnimationLayer::MaxMaskJoints, outError);
+		if (!joints)
 			return std::nullopt;
-		}
-		// contains/at rather than find: GCC cannot see that a found iterator is not null.
-		if (!data.contains("Joints") || !data.at("Joints").is_array() || data.at("Joints").size() > AnimationLayer::MaxMaskJoints)
-		{
-			outError = fmt::format("Joints must be an array with at most {} entries", AnimationLayer::MaxMaskJoints);
-			return std::nullopt;
-		}
 		AnimationMask mask;
 		std::unordered_set<std::string> names;
-		const nlohmann::json& joints = data.at("Joints");
-		for (size_t i = 0; i < joints.size(); i++)
+		for (size_t i = 0; i < joints->size(); i++)
 		{
-			const nlohmann::json& entry = joints[i];
+			const nlohmann::json& entry = (*joints)[i];
 			const std::string location = fmt::format("Joints[{}]", i);
-			if (!entry.is_object() || !RejectUnknownKeys(entry, { "Joint", "Weight" }, location, outError))
-			{
-				if (outError.empty())
-					outError = location + " must be an object";
+			if (!RequireEntryObject(entry, { "Joint", "Weight" }, location, outError))
 				return std::nullopt;
-			}
-			if (!entry.contains("Joint") || !entry.at("Joint").is_string() || entry.at("Joint").get_ref<const std::string&>().empty())
-			{
-				outError = location + ".Joint must be a nonempty string";
+			const std::string* joint = ReadNonemptyString(entry, "Joint", location, outError);
+			if (!joint)
 				return std::nullopt;
-			}
-			AnimationMaskJoint parsed{ .Joint = entry.at("Joint").get<std::string>() };
+			AnimationMaskJoint parsed{ .Joint = *joint };
 			if (!names.insert(parsed.Joint).second)
 			{
 				outError = fmt::format("{}.Joint '{}' is listed twice", location, parsed.Joint);

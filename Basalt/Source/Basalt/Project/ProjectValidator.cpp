@@ -90,21 +90,20 @@ namespace Basalt {
 				CheckInputFile();
 				CheckStartScene();
 				CheckIcon();
-				std::vector<std::filesystem::path> scenes, prefabs, scripts, graphs, masks, jointMaps, materials;
-				ListAssets(scenes, prefabs, scripts, graphs, masks, jointMaps, materials);
-				for (const auto& path : scenes)
+				const AssetLists files = ListAssets();
+				for (const auto& path : files.Scenes)
 					CheckScene(path);
-				for (const auto& path : prefabs)
+				for (const auto& path : files.Prefabs)
 					CheckPrefab(path);
-				for (const auto& path : scripts)
+				for (const auto& path : files.Scripts)
 					CheckScriptSyntax(path);
-				for (const auto& path : graphs)
+				for (const auto& path : files.Graphs)
 					CheckJsonAsset<AnimationGraph>(path, "graph");
-				for (const auto& path : masks)
+				for (const auto& path : files.Masks)
 					CheckJsonAsset<AnimationMask>(path, "mask");
-				for (const auto& path : jointMaps)
+				for (const auto& path : files.JointMaps)
 					CheckJsonAsset<AnimationJointMap>(path, "joint map");
-				for (const auto& path : materials)
+				for (const auto& path : files.Materials)
 					CheckMaterial(path);
 				for (const auto& [script, file] : m_ReferencedScripts)
 					CheckScriptClass(script, file);
@@ -206,14 +205,21 @@ namespace Basalt {
 					m_Report.Add(ValidationSeverity::Warning, Project::FileName, fmt::format("the Icon '{}' is {} x {} pixels; packaged icons look blurry below {} pixels (512 or more is best)", icon, image->Width, image->Height, RecommendedIconSize));
 			}
 
-			void ListAssets(std::vector<std::filesystem::path>& scenes, std::vector<std::filesystem::path>& prefabs, std::vector<std::filesystem::path>& scripts, std::vector<std::filesystem::path>& graphs, std::vector<std::filesystem::path>& masks, std::vector<std::filesystem::path>& jointMaps, std::vector<std::filesystem::path>& materials)
+			// The files the validator parses, by type, each list sorted.
+			struct AssetLists
 			{
+				std::vector<std::filesystem::path> Scenes, Prefabs, Scripts, Graphs, Masks, JointMaps, Materials;
+			};
+
+			AssetLists ListAssets()
+			{
+				AssetLists lists;
 				std::error_code error;
 				const std::filesystem::path assets = m_Project.GetAssetDirectory();
 				if (!std::filesystem::is_directory(assets, error))
 				{
 					m_Report.Add(ValidationSeverity::Error, Project::AssetDirectoryName, "the Assets directory is missing");
-					return;
+					return lists;
 				}
 				for (auto it = std::filesystem::recursive_directory_iterator(assets, error); !error && it != std::filesystem::recursive_directory_iterator(); it.increment(error))
 				{
@@ -229,25 +235,26 @@ namespace Basalt {
 						continue;
 					const std::string extension = FileSystem::GetLowercaseExtension(it->path());
 					if (extension == ".bscene")
-						scenes.push_back(it->path());
+						lists.Scenes.push_back(it->path());
 					else if (extension == ".bprefab")
-						prefabs.push_back(it->path());
+						lists.Prefabs.push_back(it->path());
 					else if (extension == AnimationGraph::Extension)
-						graphs.push_back(it->path());
+						lists.Graphs.push_back(it->path());
 					else if (extension == AnimationMask::Extension)
-						masks.push_back(it->path());
+						lists.Masks.push_back(it->path());
 					else if (extension == AnimationJointMap::Extension)
-						jointMaps.push_back(it->path());
+						lists.JointMaps.push_back(it->path());
 					else if (extension == MaterialAsset::Extension)
-						materials.push_back(it->path());
+						lists.Materials.push_back(it->path());
 					else if (extension == ".lua")
-						scripts.push_back(it->path());
+						lists.Scripts.push_back(it->path());
 				}
 				if (error)
 					m_Report.Add(ValidationSeverity::Error, Project::AssetDirectoryName, "cannot list all the assets (the walk stopped with: " + error.message() + "); the remaining files were not checked");
 				// Directory order differs between platforms; reports should not.
-				for (auto* list : { &scenes, &prefabs, &scripts, &graphs, &masks, &jointMaps, &materials })
+				for (auto* list : { &lists.Scenes, &lists.Prefabs, &lists.Scripts, &lists.Graphs, &lists.Masks, &lists.JointMaps, &lists.Materials })
 					std::sort(list->begin(), list->end());
+				return lists;
 			}
 
 			void CheckScene(const std::filesystem::path& path)

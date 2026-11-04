@@ -29,6 +29,7 @@ namespace Basalt {
 	class Scene;
 	struct AnimationJointMap;
 	struct AnimationMask;
+	class PhysicsWorld;
 
 	// An AnimationEvent marker that playback crossed, waiting to be delivered.
 	struct AnimationEventRecord
@@ -498,6 +499,8 @@ namespace Basalt {
 			// after is not logged again.
 			std::string Problem;
 			bool HoldProblem = false;
+			// Whether "more physics bodies near than read" was logged for this chain (once).
+			bool TruncationWarned = false;
 		};
 		// The spring bone runtime state of one entity. It survives playback resets (the points are where the chains hang
 		// in the world) and ends with the component.
@@ -601,6 +604,9 @@ namespace Basalt {
 		static glm::vec3 UpdateFootLock(IKChainState::FootLockState& lock, const glm::vec3& current, float height, const glm::vec3& up, bool airborne, float seconds, float blend, const LockSettings& settings);
 		void SolveEntityIK(Entity entity, Playback& playback, const InverseKinematicsComponent& component, IKState& state, float seconds);
 		IKState& SyncIK(Entity entity, const InverseKinematicsComponent& component);
+		// The entity holding the character controller `entity` belongs to: itself or its nearest ancestor with a live
+		// character; nullopt when none.
+		static std::optional<Entity> FindCharacter(Entity entity, const PhysicsWorld& physics);
 		void SolveSprings(float seconds);
 		void SolveEntitySprings(Entity entity, Playback& playback, const SpringBoneComponent& component, SpringState& state, float seconds);
 		SpringState& SyncSprings(Entity entity, const SpringBoneComponent& component);

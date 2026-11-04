@@ -4,9 +4,10 @@
 #include "Basalt/Asset/AssetManager.h"
 #include "Basalt/Core/Log.h"
 
+#include <spdlog/fmt/ranges.h>
+
 #include <algorithm>
 #include <set>
-#include <tuple>
 
 namespace Basalt {
 
@@ -20,20 +21,23 @@ namespace Basalt {
 		}
 	}
 
+	namespace {
+		// An AssetManager getter as a resolver function: the asset, or null with AssetManager's reason.
+		template<typename Load>
+		auto ReportingLoad(Load load)
+		{
+			return [load](const std::string& key, std::string& outError) {
+				auto asset = load(key);
+				if (!asset)
+					outError = AssetManager::GetError(key);
+				return asset;
+			};
+		}
+	}
+
 	AnimationClipSet::Resolver AnimationClipSet::AssetResolver()
 	{
-		return {
-			.Mesh = [](const std::string& key, std::string& outError) {
-				Ref<MeshSource> source = AssetManager::GetMesh(key);
-				if (!source)
-					outError = AssetManager::GetError(key);
-				return source; },
-			.JointMap = [](const std::string& key, std::string& outError) {
-				Ref<const AnimationJointMap> map = AssetManager::GetAnimationJointMap(key);
-				if (!map)
-					outError = AssetManager::GetError(key);
-				return map; },
-		};
+		return { .Mesh = ReportingLoad(&AssetManager::GetMesh), .JointMap = ReportingLoad(&AssetManager::GetAnimationJointMap) };
 	}
 
 	std::vector<AnimationClipSet::Library> AnimationClipSet::Load(const AnimatorComponent& animator)
@@ -43,6 +47,7 @@ namespace Basalt {
 
 	std::vector<AnimationClipSet::Library> AnimationClipSet::Load(const AnimatorComponent& animator, const Resolver& resolve)
 	{
+		BS_CORE_ASSERT(resolve.Mesh && resolve.JointMap, "a Resolver loads both models and joint maps");
 		std::vector<Library> libraries;
 		for (size_t i = 0; i < animator.ClipLibraries.size(); i++)
 		{
@@ -52,35 +57,35 @@ namespace Basalt {
 				continue;
 			std::string error;
 			Library& library = libraries.emplace_back(Library{ .Index = i, .Entry = entry, .Source = resolve.Mesh(entry.Mesh, error) });
+			std::vector<std::string> problems;
 			if (!library.Source)
-				library.Error = "cannot load: " + error;
+				problems.push_back("cannot load: " + error);
 			if (!entry.JointMap.empty())
 			{
 				std::string mapError;
 				library.JointMap = resolve.JointMap(entry.JointMap, mapError);
 				// A map that does not load adds no clips, rather than pairing joints by name alone and posing them wrongly.
 				if (!library.JointMap)
-					library.JointMapError = fmt::format("cannot load joint map '{}': {}", entry.JointMap, mapError);
+					problems.push_back(fmt::format("cannot load joint map '{}': {}", entry.JointMap, mapError));
 			}
+			library.LoadError = fmt::format("{}", fmt::join(problems, "; "));
+			library.Error = library.LoadError;
 		}
 		return libraries;
 	}
 
 	void AnimationClipSet::Match(const MeshSource& model, Library& library)
 	{
-		// Planning again starts over (a load failure stays).
+		// Planning again starts over, from what loading found.
 		library.Map = {};
 		library.Warnings.clear();
 		library.Clips.clear();
 		library.Shadowed.clear();
-		if (!library.Source)
+		library.Error = library.LoadError;
+		if (!library.Source && library.Error.empty())
+			library.Error = "cannot load: no model";
+		if (!library.Error.empty())
 			return;
-		library.Error.clear();
-		if (!library.JointMapError.empty())
-		{
-			library.Error = library.JointMapError;
-			return;
-		}
 		// A reference pose that is not there adds no clips, rather than retargeting from the wrong rest style.
 		RetargetReferences references{ .TargetTime = library.Entry.ModelReferenceTime, .SourceTime = library.Entry.ReferenceTime };
 		const auto findReference = [&](const MeshSource& owner, const std::string& name, const char* field, const AnimationClip*& out) {
@@ -97,14 +102,20 @@ namespace Basalt {
 		};
 		if (!findReference(*library.Source, library.Entry.ReferenceClip, "ReferenceClip", references.Source) || !findReference(model, library.Entry.ModelReferenceClip, "ModelReferenceClip", references.Target))
 			return;
-		for (const auto& [clip, time, field] : { std::tuple{ references.Source, references.SourceTime, "ReferenceTime" }, std::tuple{ references.Target, references.TargetTime, "ModelReferenceTime" } })
+		// Times that do nothing are most likely a half-done setup.
+		const auto checkTime = [&](const AnimationClip* clip, float time, const char* field, const char* clipField) {
 			if (clip && time > clip->Duration)
 				library.Warnings.push_back(fmt::format("{} {} is past the end of clip '{}' ({} s), so its last pose is the reference", field, time, clip->Name, clip->Duration));
+			else if (!clip && time != 0)
+				library.Warnings.push_back(fmt::format("{} {} has no {}, so the rest pose is used", field, time, clipField));
+		};
+		checkTime(references.Source, references.SourceTime, "ReferenceTime", "ReferenceClip");
+		checkTime(references.Target, references.TargetTime, "ModelReferenceTime", "ModelReferenceClip");
 		library.Map = Retargeting::BuildMap(model, *library.Source, CombineJointPairs(library.Entry, library.JointMap.get()), library.Warnings, references);
 		if (library.Source->Animations.empty())
 			library.Error = fmt::format("'{}' has no animation clips", library.Source->Key);
 		else if (library.Map.MappedCount() == 0)
-			library.Error = "no joint matches the model's skeleton (pair them in the library's Joints)";
+			library.Error = "no joint matches the model's skeleton (pair them in the library's Joints or JointMap)";
 		else if (library.Map.TargetRest.Rotations.empty())
 			library.Error = references.Source || references.Target ? "a rest or reference pose is not finite" : "a rest pose is not finite";
 	}
@@ -215,6 +226,7 @@ namespace Basalt {
 
 	bool AnimationClipSet::Matches(const Ref<MeshSource>& model, const AnimatorComponent& animator, const Resolver& resolve) const
 	{
+		BS_CORE_ASSERT(resolve.Mesh && resolve.JointMap, "a Resolver loads both models and joint maps");
 		if (model != m_Model)
 			return false;
 		size_t next = 0;
