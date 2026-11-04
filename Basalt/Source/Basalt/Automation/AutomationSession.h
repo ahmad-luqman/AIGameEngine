@@ -270,7 +270,7 @@ namespace Basalt {
 		};
 		std::optional<PrefabEditing> m_PrefabEditing;
 
-		// Merges a prefab file into the instances of the edit scene and of the scene waiting for prefab editing;
+		// Merges a prefab file (or with an empty path every prefab) into the instances of the edit scene and of the scene waiting for prefab editing;
 		// outdatedOnly skips untracked instances.
 		void MergePrefabInstances(const std::string& path, bool outdatedOnly, AssetReloadReport& report);
 

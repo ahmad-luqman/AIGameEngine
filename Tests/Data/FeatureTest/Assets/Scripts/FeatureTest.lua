@@ -862,6 +862,16 @@ function Driver:OnUpdate(dt)
 		Check("Prefab script properties", projectile:GetScript().Lifetime == 1.0)
 		ExpectError("Instantiate missing prefab", function() Scene.Instantiate("Assets/Prefabs/Missing.bprefab") end, "Missing.bprefab")
 
+		-- A prefab holding two instances of another, and one inheriting it: overrides on top of what they read.
+		local pair = Scene.Instantiate("Assets/Prefabs/LampPair.bprefab", Vec3(0, 0, 0))
+		local left, right = pair:FindChild("Left"), pair:FindChild("Right")
+		Check("Nested prefab instances", left ~= nil and right ~= nil and left:GetComponent("Prefab").Prefab == "Assets/Prefabs/Lamp.bprefab")
+		Check("Nested prefab overrides", left:GetComponent("PointLight").Intensity == 1 and right:GetComponent("PointLight").Intensity == 2 and right:GetComponent("PointLight").Radius == 3)
+		pair:Destroy()
+		local variant = Scene.Instantiate("Assets/Prefabs/LampVariant.bprefab", Vec3(0, 0, 0))
+		Check("Prefab variant", variant.Name == "BrightLamp" and variant:GetComponent("PointLight").Intensity == 9 and variant:GetComponent("PointLight").Radius == 3 and variant:GetComponent("Prefab").Prefab == "Assets/Prefabs/LampVariant.bprefab")
+		variant:Destroy()
+
 		-- Physics API on the crate (gravity disabled in the scene).
 		local crate = Scene.FindEntityByName("Crate")
 		crate:SetLinearVelocity(Vec3(1, 0, 0))

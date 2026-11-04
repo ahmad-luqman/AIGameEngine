@@ -72,6 +72,41 @@ def check_prefabs(call, require, output=None):
     call("assert.entity_exists", {"entity": "Discarded", "count": 0})
 
 
+def check_nesting(call, require):
+    """An inner prefab's edit reaches the instances of the prefabs nesting and inheriting it, across a save and reload."""
+    call("scene.new", {"empty": True})
+    inner, outer, variant = (f"Assets/Prefabs/{name}.bprefab" for name in ("Inner", "Outer", "InnerVariant"))
+    root = call("entity.create", {"name": "Inner", "components": {"PointLight": {"Radius": 2}}})["id"]
+    call("prefab.create", {"entity": root, "path": inner})
+    holder = call("entity.create", {"name": "Holder"})["id"]
+    call("prefab.instantiate", {"path": inner, "parent": holder})
+    saved = call("prefab.create", {"entity": holder, "path": outer})
+    require(saved["linked"] and not saved["warnings"], f"prefab.create did not keep the nested instance: {saved}")
+    call("prefab.variant", {"base": inner, "path": variant})
+    info = call("prefab.info", {"path": variant})
+    require(info["base"] == inner and info["entities"] == 1, f"prefab.info of a variant: {info}")
+    nesting = call("prefab.instantiate", {"path": outer})["id"]
+    inheriting = call("prefab.instantiate", {"path": variant})["id"]
+    members = call("prefab.overrides", {"entity": nesting})["members"]
+    nested = next(value for value in members.values() if value != nesting)
+    call("component.set", {"entity": root, "component": "PointLight", "data": {"Radius": 11}})
+    call("prefab.apply", {"entity": root})
+    for entity in (nested, inheriting):
+        call("assert.component", {"entity": entity, "component": "PointLight", "fields": {"Radius": 11}})
+    require(not call("prefab.overrides", {"entity": nesting})["overrides"], "An inner edit read as an outer override")
+    call("scene.save", {"path": "Assets/Scenes/PrefabNesting.bscene"})
+    # The prefab changes behind the scene's back, as a pull would: opening merges it through the outer prefab.
+    call("scene.new", {"empty": True})
+    call("prefab.open", {"path": inner})
+    call("component.set", {"entity": "Inner", "component": "PointLight", "data": {"Radius": 12}})
+    call("prefab.save")
+    call("prefab.close")
+    opened = call("scene.open", {"path": "Assets/Scenes/PrefabNesting.bscene"})
+    require(opened.get("prefabInstances", 0) >= 3, f"Opening did not merge the outdated instances: {opened}")
+    call("assert.component", {"entity": nested, "component": "PointLight", "fields": {"Radius": 12}})
+    require(call("prefab.overrides", {"entity": nested})["enclosing"] == nesting, "The nested root lost its instance")
+
+
 def main():
     cli = str(Path(sys.argv[1]).resolve())
     source = Path(sys.argv[2]).resolve()
@@ -92,6 +127,7 @@ def main():
                 return response["result"]
             try:
                 check_prefabs(call, require)
+                check_nesting(call, require)
                 process.stdin.close()
                 require(process.wait(timeout=10) == 0, "CLI failed on exit")
             finally:

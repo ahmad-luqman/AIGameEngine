@@ -1,0 +1,9 @@
+{
+	"Format": "BasaltPrefab",
+	"Version": 4,
+	"Entities": [
+		{ "ID": 1, "Name": "LampPair", "Parent": 0, "Components": {} },
+		{ "ID": 2, "Parent": 1, "Components": { "Prefab": { "Prefab": "Assets/Prefabs/Lamp.bprefab", "Overrides": { "2": { "Name": "Left" } } } } },
+		{ "ID": 3, "Parent": 1, "Components": { "Prefab": { "Prefab": "Assets/Prefabs/Lamp.bprefab", "Overrides": { "3": { "Name": "Right", "Components": { "PointLight": { "Intensity": 2 } } } } } } }
+	]
+}

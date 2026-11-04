@@ -1,0 +1,7 @@
+{
+	"Format": "BasaltPrefab",
+	"Version": 4,
+	"Entities": [
+		{ "ID": 1, "Name": "Lamp", "Parent": 0, "Components": { "PointLight": { "Intensity": 1, "Radius": 3 } } }
+	]
+}

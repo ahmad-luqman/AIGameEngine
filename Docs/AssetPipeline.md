@@ -8,7 +8,7 @@ files. Duplicate UUIDs and corrupt metadata are reported by project validation a
 unrelated assets remain usable. Neither copy wins an ambiguous identity. Repair the affected sidecars
 explicitly rather than silently assigning new identities. Copying an asset as a new independent asset requires a new sidecar.
 
-Scene format 3 and prefab files store declared asset fields as `{"UUID":"123456789","Path":"Assets/Models/Ship.glb"}`.
+Scene formats 3 and later and prefab files store declared asset fields as `{"UUID":"123456789","Path":"Assets/Models/Ship.glb"}`.
 The UUID is authoritative; the path is a diagnostic hint. Sub-assets (`#image/N` embedded images, `#material/N`
 imported materials) retain their fragment in the hint and share the model's UUID. A missing or ambiguous component UUID becomes an opaque `asset-uuid://` key in memory, so the scene
 or prefab stays editable and renders missing assets with its normal fallback. Saving preserves the exact
@@ -18,6 +18,10 @@ Prefab instance baselines (`Prefab.Baseline`, the source as last merged) store t
 migrate with moves, so a move never reads as an instance override. A missing baseline identity becomes the same opaque
 `asset-uuid://` key as the component's, so it never reads as an override either; a malformed reference, or a UUID
 reference while no project is open, fails the load with its record and field named.
+
+A prefab's nested records (format 4) name their prefab the same way, and their `Overrides` store asset fields the same
+way too. A nested or base prefab that is missing fails the read with its identity or path named; instances keep their
+state and report it, and `project.validate` lists the prefab holding it as not loading.
 Legacy string paths remain readable; missing references and paths outside Assets/ remain editable
 strings on save. All component readers accept both strings and UUID/path objects.
 Components, Lua, automation snapshots and replay hashes continue to expose paths. An unresolved

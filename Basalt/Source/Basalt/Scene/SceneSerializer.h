@@ -21,15 +21,17 @@ namespace Basalt {
 	//     "Renderer": { ...RendererSettings... }, "Physics": { "Gravity": [x,y,z], ... },
 	//     "Entities": [ { "ID": 123, "Name": "Player", "Parent": 0, "Components": { "Transform": {...}, ... } } ] }
 	// Entities are written parents-first in hierarchy order; "Parent" is 0 for roots.
-	// A prefab has the same "Entities" array; the first entity is the prefab root.
+	// A prefab has the same "Entities" array; the first entity is the prefab root. In a prefab, a record whose Prefab
+	// component holds { "Prefab": <file>, "Overrides": { "<ID>": <merge patch> } } stands for that file's tree (Scene/Prefab).
 	//
-	// Versions: 3 writes declared asset fields as {UUID, Path} objects on disk; legacy strings remain readable.
+	// Versions: 4 adds those records, and the marker of a nested instance in Prefab.Baseline records.
+	// Version 3 writes declared asset fields as {UUID, Path} objects on disk; legacy strings remain readable.
 	// Version 2 writes Physics.FixedTimestep only as a scene override of the project's step. Version 1 always
 	// wrote it, so a version-1 file holding the old default (1/60 s) is read as "no override".
 	class SceneSerializer
 	{
 	public:
-		static constexpr int FormatVersion = 3;
+		static constexpr int FormatVersion = 4;
 		// Encodes declared asset fields for disk persistence, creating sidecars when needed. Missing and
 		// non-project references stay strings. onlyPath limits migration to that asset and its embedded images.
 		// Uses the project's current index; batch writers refresh before calling. No-op without a project.
@@ -58,8 +60,9 @@ namespace Basalt {
 		static bool SavePrefab(Entity root, const std::filesystem::path& path, std::string& outError);
 		// A current-format scene document holding entity records, for DeserializeScene into a scratch scene.
 		static nlohmann::json SceneDocument(nlohmann::json entities);
-		// Saves entity records (as SerializeEntityTree writes them, the root first) as a prefab file.
-		static bool SavePrefabEntities(nlohmann::json entities, const std::filesystem::path& path, std::string& outError);
+		// Saves entity records (as SerializeEntityTree writes them, the root first, with the file's IDs) as a prefab file,
+		// through Prefab::ToFileEntities. With variant the root stays an instance of the prefab its link names.
+		static bool SavePrefabEntities(nlohmann::json entities, const std::filesystem::path& path, std::string& outError, bool variant = false);
 		// Instantiates a prefab file into the scene after checking its structure (Prefab::ReadFile); on failure nothing is
 		// left in the scene. The new root's PrefabComponent names prefabPath (normalized) and tracks its entities
 		// (Prefab::Link).

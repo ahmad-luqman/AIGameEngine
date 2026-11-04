@@ -303,6 +303,19 @@ return %s
 					m_Context.SetStatus(fmt::format("Extracted {} material(s) from {}{}", (*result)["materials"].size(), relative, warnings.empty() ? "" : " with warnings: see Console"), !warnings.empty());
 				}
 			}
+			if (FileSystem::GetLowercaseExtension(entry.path()) == ".bprefab" && ImGui::MenuItem("Create Variant"))
+			{
+				// Beside the prefab, numbered when that name is taken.
+				const std::filesystem::path folder = entry.path().parent_path();
+				const std::string stem = FileSystem::PathToUtf8(entry.path().stem()) + " Variant";
+				std::filesystem::path target = folder / FileSystem::PathFromUtf8(stem + ".bprefab");
+				std::error_code ignored;
+				for (int number = 2; std::filesystem::exists(target, ignored); ++number)
+					target = folder / FileSystem::PathFromUtf8(fmt::format("{} {}.bprefab", stem, number));
+				const std::string path = Project::MakeRelative(target);
+				if (m_Context.Execute("prefab.variant", { { "base", relative }, { "path", path } }))
+					m_Context.SetStatus("Created " + path, false);
+			}
 			if (ImGui::MenuItem("Delete"))
 				m_PendingDelete = entry.path();
 			ImGui::EndPopup();

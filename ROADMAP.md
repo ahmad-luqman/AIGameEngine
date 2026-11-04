@@ -96,11 +96,7 @@ smoke test and material assets (`.bmaterial` files with lossless thumbnails and 
 
 ### Editor workflow
 
-Native file dialogs and prefab editing with per-instance overrides have shipped.
-
-- **Nested prefabs and variants — M.** Prefabs whose entities are instances of other prefabs (today they are saved
-  unpacked), and variants that inherit a base prefab and store only their differences, merging through the same
-  three-way path.
+Native file dialogs, prefab editing with per-instance overrides, nested prefabs and variants have shipped.
 
 
 ---

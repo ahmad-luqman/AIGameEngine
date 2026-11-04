@@ -308,6 +308,12 @@ namespace Basalt {
 					return;
 				}
 				CheckEntities(scene, Relative(path));
+				// Overrides of entities a nested prefab dropped do nothing, silently: only a read notices.
+				nlohmann::json entities;
+				Prefab::ReadReport report;
+				if (Prefab::ReadFile(path, entities, error, &report))
+					for (const std::string& warning : report.Warnings)
+						m_Report.Add(ValidationSeverity::Warning, Relative(path), warning);
 			}
 
 			void CheckEntities(Scene& scene, const std::string& file)

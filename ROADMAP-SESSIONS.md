@@ -3,7 +3,7 @@
 The `ROADMAP.md` items grouped into single-session milestones, sorted in order of implementation, with completed
 sessions retained for reference. The order follows the roadmap's priorities (P1 → P2 → P3) and is adjusted so that
 work a later session depends on comes first.
-Updated in November 2026 through Character animation II (session 18), the last numbered session.
+Updated in November 2026 through Prefabs II (session 19), the last numbered session.
 
 Size estimates: **S** = a day or less, **M** = a few days, **L** = a week or more.
 
@@ -27,6 +27,7 @@ Size estimates: **S** = a day or less, **M** = a few days, **L** = a week or mor
 | 16 | **Shipping II** ✅ | Packed `.bpak` archive (M); crash reporting (M) | Shipped in [PR #53](https://github.com/ahmad-luqman/AIGameEngine/pull/53): `project.export {"archive": true}` packs Assets into a zstd `Assets.bpak` whose index carries the asset UUIDs (sessions 7 and 8), mounted by the runtime under every runtime asset reader; crash reports with stack traces, the last log lines and Windows minidumps in the user data directory, plus a message box in the windowed runtime. |
 | 17 | **Character animation I** ✅ | Powered ragdolls that follow the animated pose with motors (M); IK and layer follow-ups: multi-joint chains, edit-mode preview, reusable masks, state-driven layers, foot locking (S) | Shipped in [PR #66](https://github.com/ahmad-luqman/AIGameEngine/pull/66): ragdoll motor strength, frequency, damping and torque with scripted fades; Fabrik chains, FollowTarget targets and FootLock; `.banimmask` mask assets; StateMachine layers sharing the Animator's parameters; and an edit-mode Animator preview. |
 | 18 | **Character animation II** ✅ | Spring bone follow-ups: collisions, per-chain colliders, angle limits, preview (S); retargeting follow-ups: rest-pose matching, shared joint maps (S); property animation follow-ups: stepped and nested tracks (S) | Shipped in [PR #67](https://github.com/ahmad-luqman/AIGameEngine/pull/67): spring chain `MaxAngle`, named per-chain colliders, `CollidePhysics` against physics bodies and spring bones in the edit preview; `.bjointmap` joint maps shared by clip libraries and reference clips for skeletons in other rest styles; integer, boolean, string and enum property tracks that always step, and track paths into list elements (`Layers[Upper].Weight`). |
+| 19 | **Prefabs II** ✅ | Nested prefabs and variants (M) | Shipped: prefab files hold nested instances and variants as records with only their overrides, expanded on read into the flat records that the three-way merge from session 14 already handles, so an inner prefab's edit reaches every instance holding it without rewriting files. `prefab.variant`, `prefab.info`, `prefab.create {"variant": true}`, tracked nested instances in `prefab.open`, cycle and size limits, and a `FuzzPrefab` target. |
 
 ## Later (L, one session each)
 

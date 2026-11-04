@@ -226,6 +226,10 @@ belongs to edit-time prefab merging (the `prefab.*` automation commands and the 
 Play have an empty one: existing instances in a running game never merge prefab edits, while instances created later
 read the file as it is then. Prefab files need unique nonzero entity IDs and a single root listed first.
 
+A prefab may hold instances of other prefabs, and a variant inherits one (`prefab.variant`). Spawning reads each file
+they name, so a spawn costs what the whole tree costs. The instance is flat: the root's `Members` lists every entity,
+and a nested instance's root carries a `Prefab` component with `Prefab` alone, which says what it is an instance of.
+
 ### Switching scenes
 
 `Scene.Load(path)` replaces the playing scene with the scene file `path` (a project-relative `.bscene`

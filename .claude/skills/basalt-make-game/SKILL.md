@@ -34,6 +34,10 @@ broken version leaves the old one running). Typical patterns:
   `prefab.overrides` lists them, `prefab.revert` drops one or all, and `prefab.apply` writes an instance's overrides
   into the prefab. `prefab.create` links the saved tree as an instance, so deleting it afterwards is optional. Close a
   prefab before the session ends: the CLI refuses to drop unsaved edits behind an open prefab.
+- Reuse prefabs instead of copying them: an instance inside a tree stays nested when you `prefab.create` that tree (or
+  `prefab.instantiate` it into an open prefab), and `prefab.variant {"base": ..., "path": ...}` makes one that inherits
+  everything until `prefab.open` changes it. Editing the inner prefab or base then reaches them all. Their overrides
+  belong to the outermost instance: run `prefab.overrides/apply/revert` on its root, not on a nested root.
 - Prefer input actions over raw keys: declare them with `project.set {"inputActions": {"Actions": [{"Name":
   "MoveX", "Type": "Axis", "Bindings": [{"Key": "D"}, {"Key": "A", "Scale": -1}, {"GamepadAxis": "LeftX"}]}]}}`
   and read `Input.GetAction("MoveX")` / `Input.IsActionPressed("Jump")`, so keys, gamepads and the mouse work

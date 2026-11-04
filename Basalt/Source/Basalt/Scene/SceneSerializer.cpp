@@ -509,6 +509,25 @@ namespace Basalt {
 					for (size_t i = 0; i < keys.size(); ++i)
 						component["Baseline"][keys[i]] = std::move(baseline["Entities"][i]);
 				}
+				// A prefab file's nested instances hold sparse records of the same shape.
+				if (name == "Prefab" && component.contains("Overrides") && component["Overrides"].is_object())
+				{
+					json sparse = { { "Entities", json::array() } };
+					std::vector<std::string> keys;
+					for (const auto& [key, record] : component["Overrides"].items())
+						if (record.is_object())
+						{
+							keys.push_back(key);
+							sparse["Entities"].push_back(record);
+						}
+					if (!EncodeAssetReferences(sparse, outError, onlyPath))
+					{
+						outError = fmt::format("entity {}: Prefab.Overrides: {}", entity.value("Name", std::string("<unnamed>")), outError);
+						return false;
+					}
+					for (size_t i = 0; i < keys.size(); ++i)
+						component["Overrides"][keys[i]] = std::move(sparse["Entities"][i]);
+				}
 				for (const auto& field : info->AssetFields)
 				{
 					bool failed = false;
@@ -636,19 +655,17 @@ namespace Basalt {
 
 	bool SceneSerializer::SavePrefab(Entity root, const std::filesystem::path& path, std::string& outError)
 	{
-		return SavePrefabEntities(SerializeEntityTree(root), path, outError);
+		std::vector<std::string> warnings;
+		return Prefab::SaveTree(root, path, false, warnings, outError);
 	}
 
-	bool SceneSerializer::SavePrefabEntities(json entities, const std::filesystem::path& path, std::string& outError)
+	bool SceneSerializer::SavePrefabEntities(json entities, const std::filesystem::path& path, std::string& outError, bool variant)
 	{
 		json data;
 		data["Format"] = "BasaltPrefab";
 		data["Version"] = FormatVersion;
-		data["Entities"] = std::move(entities);
-		// Prefab links are not part of a prefab: neither the instance's own nor those of nested instances, which
-		// are saved unpacked (instances track only their own prefab).
-		for (auto& entity : data["Entities"])
-			entity["Components"].erase("Prefab");
+		if (!Prefab::ToFileEntities(std::move(entities), path, variant, data["Entities"], outError))
+			return false;
 		if (Project::GetActive() && !Project::GetActive()->GetAssets().Refresh(outError))
 			return false;
 		if (!EncodeAssetReferences(data, outError))
