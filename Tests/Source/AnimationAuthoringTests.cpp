@@ -14,6 +14,7 @@
 #include <Basalt/Math/Math.h>
 #include <Basalt/Physics/PhysicsWorld.h>
 
+#include <algorithm>
 #include <limits>
 
 using namespace Basalt;
@@ -45,7 +46,7 @@ TEST_SUITE("Animation authoring")
 		REQUIRE(PropertyAnimation::Sample(entity, animation, 1, error));
 		CHECK(entity.GetTransform().Translation == glm::vec3(10, 20, 30));
 		CHECK_FALSE(PropertyAnimation::Key(entity, "Transform", "NoField", 0, error));
-		CHECK_FALSE(PropertyAnimation::Key(entity, "Tag", "Tag", 0, error));
+		CHECK_FALSE(PropertyAnimation::Key(entity, "Transform", "Translation[0].X", 0, error));
 		CHECK_FALSE(PropertyAnimation::Key(entity, "PropertyAnimation", "Speed", 0, error));
 		CHECK_FALSE(PropertyAnimation::Sample(entity, animation, std::numeric_limits<float>::quiet_NaN(), error));
 	}
@@ -95,7 +96,7 @@ TEST_SUITE("Animation authoring")
 			std::string error;
 			if (component == "BoneAttachment")
 				entity.AddComponent<BoneAttachmentComponent>();
-			REQUIRE(PropertyAnimation::FindField(component, "Rotation")->QuaternionRotation);
+			REQUIRE(PropertyAnimation::ResolveField(component, "Rotation")->Type.QuaternionRotation);
 			struct RotationCase
 			{
 				glm::vec3 From, To, Midpoint;
@@ -137,7 +138,7 @@ TEST_SUITE("Animation authoring")
 		for (const auto& info : ComponentRegistry::GetAll())
 			if (!info.SupportsPropertyAnimation)
 				for (const auto& field : info.Fields)
-					CHECK(PropertyAnimation::FindField(info.Name, field) == nullptr);
+					CHECK_FALSE(PropertyAnimation::ResolveField(info.Name, field));
 		entity.AddComponent<BoxColliderComponent>();
 		CHECK_FALSE(PropertyAnimation::Key(entity, "BoxCollider", "HalfExtents", 0, error));
 		CHECK_FALSE(ComponentRegistry::AddOrPatch(entity, "PropertyAnimation", { { "Tracks", json::array({ { { "Component", "RigidBody" }, { "Field", "Mass" } } }) } }, error));
@@ -265,7 +266,7 @@ TEST_SUITE("Animation authoring")
 		const auto* info = ComponentRegistry::Find("PropertyAnimation");
 		const auto baseline = info->Serialize(entity);
 		const json track = { { "Component", "Transform" }, { "Field", "Translation" } };
-		std::vector<json> invalid = { { { "Duration", 86401 } }, { { "Speed", 1001 } }, { { "Tracks", json::array({ { { "Component", "PropertyAnimation" }, { "Field", "Duration" } } }) } }, { { "Tracks", json::array({ { { "Component", "Mesh" }, { "Field", "MeshIndex" } } }) } }, { { "Tracks", json::array({ { { "Component", "Mesh" }, { "Field", "CastShadows" } } }) } }, { { "Tracks", json::array({ { { "Component", "Material" }, { "Field", "AlphaMode" } } }) } } };
+		std::vector<json> invalid = { { { "Duration", 86401 } }, { { "Speed", 1001 } }, { { "Tracks", json::array({ { { "Component", "PropertyAnimation" }, { "Field", "Duration" } } }) } }, { { "Tracks", json::array({ { { "Component", "Animator" }, { "Field", "Mesh" } } }) } }, { { "Tracks", json::array({ { { "Component", "BoneAttachment" }, { "Field", "Target" } } }) } }, { { "Tracks", json::array({ { { "Component", "Animator" }, { "Field", "Layers" } } }) } } };
 		for (const auto times : std::vector<glm::vec2>{ { .8f, .2f }, { -.1f, .2f }, { 0, 1.1f } })
 		{
 			auto bad = track;
@@ -383,11 +384,11 @@ TEST_SUITE("Animation authoring")
 			REQUIRE(info);
 			CHECK_FALSE(info->SupportsPropertyAnimation);
 			for (const auto& field : info->Fields)
-				CHECK(PropertyAnimation::FindField(name, field) == nullptr);
+				CHECK_FALSE(PropertyAnimation::ResolveField(name, field));
 		}
-		CHECK(PropertyAnimation::FindField("Transform", "Translation"));
-		CHECK(PropertyAnimation::FindField("PointLight", "Intensity"));
-		CHECK(PropertyAnimation::FindField("Camera", "FOV"));
+		CHECK(PropertyAnimation::ResolveField("Transform", "Translation"));
+		CHECK(PropertyAnimation::ResolveField("PointLight", "Intensity"));
+		CHECK(PropertyAnimation::ResolveField("Camera", "FOV"));
 	}
 	TEST_CASE("Clocks reset when ID destruction precedes timeline destruction")
 	{
@@ -593,6 +594,167 @@ TEST_SUITE("Animation authoring")
 		CHECK(draft.ExternalChange);
 		CHECK(draft.Data["States"][0]["Clip"] == "Bend");
 	}
+	TEST_CASE("Integer, boolean, string and enum tracks capture their values and always step")
+	{
+		Scene scene;
+		auto entity = scene.CreateEntity("Sign");
+		entity.AddComponent<MeshComponent>().MeshIndex = 2;
+		entity.AddComponent<CameraComponent>();
+		std::string error;
+		const std::vector<std::pair<std::string, std::string>> targets = { { "Mesh", "MeshIndex" }, { "Mesh", "CastShadows" }, { "Tag", "Tag" }, { "Camera", "Projection" } };
+		for (const auto& [component, field] : targets)
+			REQUIRE_MESSAGE(PropertyAnimation::Key(entity, component, field, 0, error), error);
+		entity.GetComponent<MeshComponent>().MeshIndex = 7;
+		entity.GetComponent<MeshComponent>().CastShadows = false;
+		entity.GetComponent<TagComponent>().Tag = "Lit";
+		REQUIRE(ComponentRegistry::AddOrPatch(entity, "Camera", { { "Projection", "Orthographic" } }, error));
+		for (const auto& [component, field] : targets)
+			REQUIRE_MESSAGE(PropertyAnimation::Key(entity, component, field, .5f, error), error);
+		auto& animation = entity.GetComponent<PropertyAnimationComponent>();
+		REQUIRE(animation.Tracks.size() == 4);
+		// New discrete tracks say they step; integers and booleans use Value.x, strings and enums Text.
+		for (const auto& track : animation.Tracks)
+			CHECK(track.Stepped);
+		CHECK(animation.Tracks[0].Keys[1].Value.x == 7);
+		CHECK(animation.Tracks[1].Keys[0].Value.x == 1);
+		CHECK(animation.Tracks[2].Keys[0].Text == "Sign");
+		CHECK(animation.Tracks[3].Keys[1].Text == "Orthographic");
+		// They step even when a track says otherwise: there is nothing between two names.
+		for (auto& track : animation.Tracks)
+			track.Stepped = false;
+		REQUIRE(PropertyAnimation::Sample(entity, animation, .49f, error));
+		CHECK(entity.GetComponent<MeshComponent>().MeshIndex == 2);
+		CHECK(entity.GetComponent<MeshComponent>().CastShadows);
+		CHECK(entity.GetComponent<TagComponent>().Tag == "Sign");
+		const auto projection = [&] { return ComponentRegistry::Find("Camera")->Serialize(entity)["Projection"]; };
+		CHECK(projection() == "Perspective");
+		REQUIRE(PropertyAnimation::Sample(entity, animation, .5f, error));
+		CHECK(entity.GetComponent<MeshComponent>().MeshIndex == 7);
+		CHECK_FALSE(entity.GetComponent<MeshComponent>().CastShadows);
+		CHECK(entity.GetComponent<TagComponent>().Tag == "Lit");
+		CHECK(projection() == "Orthographic");
+
+		// Keys must fit their field.
+		const auto* info = ComponentRegistry::Find("PropertyAnimation");
+		const auto baseline = info->Serialize(entity);
+		const auto track = [](const char* component, const char* field, const json& key) { return json{ { "Tracks", json::array({ { { "Component", component }, { "Field", field }, { "Keys", json::array({ key }) } } }) } }; };
+		const std::vector<std::pair<json, std::string>> invalid = {
+			{ track("Mesh", "MeshIndex", { { "Value", { 1.5f, 0, 0, 0 } } }), "Value.x must be a whole number" },
+			{ track("Mesh", "MeshIndex", { { "Value", { -1, 0, 0, 0 } } }), "Value.x must be a whole number" },
+			{ track("Mesh", "MeshIndex", { { "Value", { 16777218.0, 0, 0, 0 } } }), "between 0 and 16777216" },
+			{ track("Mesh", "CastShadows", { { "Value", { .5f, 0, 0, 0 } } }), "Value.x must be 0 (false) or 1 (true)" },
+			{ track("Camera", "Projection", { { "Text", "Fisheye" } }), "Text 'Fisheye' is not a valid value (valid: Perspective, Orthographic)" },
+			{ track("Tag", "Tag", { { "Text", std::string(PropertyAnimationKey::MaxTextLength + 1, 'x') } }), "Text holds at most 1024 bytes" },
+		};
+		for (const auto& [bad, message] : invalid)
+		{
+			CHECK_FALSE(ComponentRegistry::AddOrPatch(entity, "PropertyAnimation", bad, error));
+			CHECK_MESSAGE(error.find(message) != std::string::npos, error);
+			CHECK(info->Serialize(entity) == baseline);
+		}
+		// An integer past what a key holds exactly is not captured.
+		entity.GetComponent<MeshComponent>().MeshIndex = PropertyAnimationField::MaxInteger + 1;
+		CHECK_FALSE(PropertyAnimation::Key(entity, "Mesh", "MeshIndex", 1, error));
+		CHECK(error.find("past 16777216") != std::string::npos);
+	}
+	TEST_CASE("Nested tracks reach list elements by name or index and patch each list once")
+	{
+		Scene scene;
+		auto entity = scene.CreateEntity("Hero");
+		auto& animator = entity.AddComponent<AnimatorComponent>();
+		animator.Layers = { { .Name = "Upper", .Weight = .2f }, { .Name = "Breath", .Weight = 1 } };
+		auto& springs = entity.AddComponent<SpringBoneComponent>();
+		springs.Chains = { { .Name = "Hair", .Colliders = { { .Name = "Head" }, { .Name = "Neck" } } } };
+		std::string error;
+
+		// Paths resolve through the element schemas.
+		const auto weight = PropertyAnimation::ResolveField("Animator", "Layers[Upper].Weight", &error);
+		REQUIRE_MESSAGE(weight, error);
+		CHECK(weight->TopField() == "Layers");
+		CHECK(weight->Steps.size() == 1);
+		CHECK(weight->Steps[0].Name == "Upper");
+		REQUIRE(PropertyAnimation::ResolveField("Animator", "Layers[1].Speed"));
+		CHECK(PropertyAnimation::ResolveField("Animator", "Layers[1].Speed")->Steps[0].Index == 1u);
+		// Two levels deep, and a name that is not the element's unique name.
+		CHECK(PropertyAnimation::ResolveField("SpringBone", "Chains[Hair].Colliders[1].Name"));
+		CHECK(PropertyAnimation::ResolveField("Animator", "Layers[Upper].Blend")->Type.Kind == ComponentFieldKind::Enum);
+		const std::vector<std::pair<std::string, std::string>> rejected = {
+			{ "Layers[Upper].Name", "names its list element" },
+			{ "Layers[Upper].MaskAsset", "names an asset" },
+			{ "Layers[Upper].Mask", "is a list field" },
+			{ "Layers[16].Weight", "holds at most 16 elements" },
+			{ "Layers[Upper]", "is not a field path" },
+			{ "Layers[Upper]Weight", "is not a field path" },
+			{ "Layers.Weight", "is not a list" },
+			{ "Speed[0].Weight", "is not a list" },
+			{ "Layers[Upper].Missing", "has no field 'Missing'" },
+			{ "ClipLibraries[Lib].Mesh", "elements have no names" },
+			{ "", "is not a field path" },
+		};
+		for (const auto& [path, message] : rejected)
+		{
+			CHECK_FALSE(PropertyAnimation::ResolveField("Animator", path, &error));
+			CHECK_MESSAGE(error.find(message) != std::string::npos, (path + ": " + error));
+		}
+
+		// The panel lists nested fields by their element's name.
+		const auto fields = PropertyAnimation::ListFields(entity, "Animator");
+		CHECK(std::ranges::find(fields, "Speed") != fields.end());
+		CHECK(std::ranges::find(fields, "Layers[Upper].Weight") != fields.end());
+		CHECK(std::ranges::find(fields, "Layers[Breath].Blend") != fields.end());
+		CHECK(std::ranges::find(fields, "Layers[Upper].Name") == fields.end());
+		CHECK(std::ranges::find(fields, "Mesh") == fields.end());
+		const auto springFields = PropertyAnimation::ListFields(entity, "SpringBone");
+		CHECK(std::ranges::find(springFields, "Chains[Hair].Colliders[0].Name") != springFields.end());
+		CHECK(PropertyAnimation::ListFields(entity, "Camera").empty());
+		// A name that cannot pick its element alone falls back to the index.
+		animator.Layers[1].Name = "7";
+		const auto renamed = PropertyAnimation::ListFields(entity, "Animator");
+		CHECK(std::ranges::find(renamed, "Layers[1].Weight") != renamed.end());
+		animator.Layers[1].Name = "Breath";
+
+		// Two tracks into one list compose, and the list is patched once.
+		REQUIRE(PropertyAnimation::Key(entity, "Animator", "Layers[Upper].Weight", 0, error));
+		REQUIRE(PropertyAnimation::Key(entity, "Animator", "Layers[1].Speed", 0, error));
+		REQUIRE(PropertyAnimation::Key(entity, "SpringBone", "Chains[Hair].Colliders[1].Name", 0, error));
+		animator.Layers[0].Weight = .8f;
+		animator.Layers[1].Speed = 3;
+		springs.Chains[0].Colliders[1].Name = "Chest";
+		REQUIRE(PropertyAnimation::Key(entity, "Animator", "Layers[Upper].Weight", 1, error));
+		REQUIRE(PropertyAnimation::Key(entity, "Animator", "Layers[1].Speed", 1, error));
+		REQUIRE(PropertyAnimation::Key(entity, "SpringBone", "Chains[Hair].Colliders[1].Name", 1, error));
+		const auto& animation = entity.GetComponent<PropertyAnimationComponent>();
+		CHECK_FALSE(animation.Tracks[0].Stepped);
+		CHECK(animation.Tracks[2].Stepped);
+		struct Updates
+		{
+			int Count = 0;
+			void OnUpdate(entt::registry&, entt::entity) { Count++; }
+		} updates;
+		scene.GetRegistry().on_update<AnimatorComponent>().connect<&Updates::OnUpdate>(updates);
+		REQUIRE_MESSAGE(PropertyAnimation::Sample(entity, animation, .5f, error), error);
+		CHECK(updates.Count == 1);
+		CHECK(animator.Layers[0].Weight == doctest::Approx(.5f));
+		CHECK(animator.Layers[1].Speed == doctest::Approx(2));
+		CHECK(animator.Layers[1].Weight == 1);
+		CHECK(springs.Chains[0].Colliders[0].Name == "Head");
+		CHECK(springs.Chains[0].Colliders[1].Name == "Neck");
+		// A held sample patches nothing.
+		REQUIRE(PropertyAnimation::Sample(entity, animation, .5f, error));
+		CHECK(updates.Count == 1);
+		REQUIRE(PropertyAnimation::Sample(entity, animation, 1, error));
+		CHECK(springs.Chains[0].Colliders[1].Name == "Chest");
+		scene.GetRegistry().on_update<AnimatorComponent>().disconnect(&updates);
+
+		// A missing element fails the sample with the track's path, and the key capture too.
+		animator.Layers[0].Name = "Torso";
+		CHECK_FALSE(PropertyAnimation::Sample(entity, animation, 0, error));
+		CHECK_MESSAGE(error == "Animator.Layers[Upper].Weight: Layers has no element whose Name is 'Upper'", error);
+		CHECK_FALSE(PropertyAnimation::Key(entity, "Animator", "Layers[Upper].Weight", 0, error));
+		animator.Layers.pop_back();
+		CHECK_FALSE(PropertyAnimation::Key(entity, "Animator", "Layers[1].Speed", 0, error));
+		CHECK_MESSAGE(error.find("Layers has no element 1 (it has 1)") != std::string::npos, error);
+	}
 	TEST_CASE("Animation authoring commands use dirty tracking and validated asset writes")
 	{
 		TempProject project("AnimationAuthoring");
@@ -614,7 +776,7 @@ TEST_SUITE("Animation authoring")
 		Run(commands, session, "animation.sample", { { "entity", "Door" }, { "time", .5f } });
 		CHECK(session.GetScene()->FindEntityByName("Door").GetTransform().Translation.x == 4);
 		CHECK(session.IsDirty());
-		RunError(commands, session, "animation.key", { { "entity", "Door" }, { "component", "Tag" }, { "field", "Tag" }, { "time", 0 } });
+		RunError(commands, session, "animation.key", { { "entity", "Door" }, { "component", "Transform" }, { "field", "Missing" }, { "time", 0 } });
 		Run(commands, session, "asset.write", { { "path", "Assets/Test.banimgraph" }, { "content", AnimationGraphDraft::Default().dump() } });
 		AnimationGraphDraft draft;
 		std::string error;

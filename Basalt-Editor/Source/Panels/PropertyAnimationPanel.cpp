@@ -9,6 +9,7 @@
 #include <imgui.h>
 
 #include <algorithm>
+#include <string>
 
 namespace Basalt {
 	void PropertyAnimationPanel::OnImGuiRender()
@@ -23,7 +24,7 @@ namespace Basalt {
 				if (ImGui::BeginCombo("Component", m_Component.c_str()))
 				{
 					for (const auto& info : ComponentRegistry::GetAll())
-						if (info.Has(entity) && std::ranges::any_of(info.Fields, [&](const auto& field) { return PropertyAnimation::FindField(info.Name, field) != nullptr; }) && ImGui::Selectable(info.Name.c_str(), info.Name == m_Component))
+						if (info.Has(entity) && !PropertyAnimation::ListFields(entity, info.Name).empty() && ImGui::Selectable(info.Name.c_str(), info.Name == m_Component))
 						{
 							m_Component = info.Name;
 							m_Field.clear();
@@ -32,10 +33,10 @@ namespace Basalt {
 				}
 				if (ImGui::BeginCombo("Field", m_Field.c_str()))
 				{
-					if (const auto* info = ComponentRegistry::Find(m_Component))
-						for (const auto& field : info->Fields)
-							if (PropertyAnimation::FindField(m_Component, field) && ImGui::Selectable(field.c_str(), field == m_Field))
-								m_Field = field;
+					// Nested fields are listed by their element's name where it has one ("Layers[Upper].Weight").
+					for (const std::string& field : PropertyAnimation::ListFields(entity, m_Component))
+						if (ImGui::Selectable(field.c_str(), field == m_Field))
+							m_Field = field;
 					ImGui::EndCombo();
 				}
 				const auto id = static_cast<uint64_t>(entity.GetUUID());
@@ -73,7 +74,7 @@ namespace Basalt {
 					}
 					const auto* info = ComponentRegistry::Find("PropertyAnimation");
 					auto data = info->Serialize(entity);
-					ImGui::TextWrapped("Capture numeric fields above. Edit duration, interpolation, key times and values below. Values use X for scalars and the first N lanes for vectors. Scrubbing changes the scene and supports Undo.");
+					ImGui::TextWrapped("Capture fields above. Edit duration, interpolation, key times and values below. Values use X for scalars, integers and booleans (0 or 1) and the first N lanes for vectors; strings and enums use Text. Integer, boolean, string and enum tracks always step. Scrubbing changes the scene and supports Undo.");
 					for (const auto& field : info->Fields)
 					{
 						const auto edit = DrawJsonValue(field, data[field], info->FieldTypes.at(field), info->EnumOptions);
