@@ -505,7 +505,7 @@ TEST_SUITE("Retargeting")
 	{
 		// List elements declare their asset fields to every asset-field consumer.
 		const auto& fields = ComponentRegistry::Find("Animator")->AssetFields;
-		CHECK(fields == std::vector<std::string>{ "Mesh", "StateMachine", "Layers[].StateMachine", "Layers[].MaskAsset", "ClipLibraries[].Mesh" });
+		CHECK(fields == std::vector<std::string>{ "Mesh", "StateMachine", "Layers[].StateMachine", "Layers[].MaskAsset", "ClipLibraries[].Mesh", "ClipLibraries[].JointMap" });
 		TempProject project("RetargetReferences");
 		ClearAssetCache cacheGuard;
 		CommandRegistry registry;

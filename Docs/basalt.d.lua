@@ -1976,6 +1976,11 @@ function BasaltScript:StopAllCoroutines() end
 ---@class AnimationClipLibrary
 ---@field Mesh string
 ---@field Joints AnimationRetargetJoint[]
+---@field JointMap string
+---@field ReferenceClip string
+---@field ReferenceTime number
+---@field ModelReferenceClip string
+---@field ModelReferenceTime number
 
 ---An element of a component list field.
 ---@class AnimationRetargetJoint
@@ -1993,6 +1998,7 @@ function BasaltScript:StopAllCoroutines() end
 ---@class PropertyAnimationKey
 ---@field Time number
 ---@field Value number[]
+---@field Text string
 
 ---An element of a component list field.
 ---@class IKChain
@@ -2018,9 +2024,17 @@ function BasaltScript:StopAllCoroutines() end
 ---@field GravityFactor number
 ---@field Radius number
 ---@field Weight number
+---@field MaxAngle number
+---@field Colliders SpringChainCollider[]
+---@field CollidePhysics boolean
+
+---An element of a component list field.
+---@class SpringChainCollider
+---@field Name string
 
 ---An element of a component list field.
 ---@class SpringCollider
+---@field Name string
 ---@field Joint string
 ---@field Offset number[]
 ---@field Radius number

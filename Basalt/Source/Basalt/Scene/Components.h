@@ -195,9 +195,23 @@ namespace Basalt {
 	{
 		static constexpr const char* TypeName = "AnimationClipLibrary";
 		static constexpr uint32_t MaxJoints = 256;
+		// Upper bound of the reference times (seconds), like animation event times.
+		static constexpr float MaxReferenceTime = 86400.0f;
 
 		std::string Mesh;
 		std::vector<AnimationRetargetJoint> Joints;
+		// A project-relative .bjointmap shared between Animators: its pairs follow Joints (an entry of Joints wins over a
+		// map pair that names one of its joints). One that cannot load makes the library add no clips.
+		std::string JointMap;
+		// Rest-pose matching for skeletons authored in different rest styles (an A-pose library on a T-pose model): a clip
+		// of the library whose pose at ReferenceTime seconds stands like the model's rest pose, and a clip of the model
+		// whose pose at ModelReferenceTime stands like the library's rest pose. Either replaces its skeleton's rest
+		// orientations when joints turn (positions, and so limb lengths and the root's scale, keep the rest pose). Empty:
+		// the rest pose. A clip that is not there makes the library add no clips.
+		std::string ReferenceClip;
+		float ReferenceTime = 0.0f;
+		std::string ModelReferenceClip;
+		float ModelReferenceTime = 0.0f;
 
 		bool operator==(const AnimationClipLibrary&) const = default;
 	};
@@ -235,20 +249,27 @@ namespace Basalt {
 		std::string MaskAsset;
 	};
 
-	// One normalized-time sample. Capture zeros unused lanes; sampling ignores unused lanes.
+	// One normalized-time sample. Number, integer and boolean fields use Value's lanes (capture zeros unused lanes; sampling
+	// ignores them); string and enum fields use Text.
 	struct PropertyAnimationKey
 	{
 		static constexpr const char* TypeName = "PropertyAnimationKey";
 		static constexpr const char* NormalizedTimeField = "Time";
+		// Longest Text, in bytes.
+		static constexpr uint32_t MaxTextLength = 1024;
 		float Time = 0;
 		glm::vec4 Value{ 0.0f };
+		std::string Text;
 	};
-	// A numeric field on this entity, addressed through ComponentRegistry rather than a memory offset.
+	// A field on this entity, addressed through ComponentRegistry rather than a memory offset. Field is a top-level field
+	// ("Translation") or a path into list elements ("Layers[Upper].Weight", "Chains[0].Stiffness"; see
+	// PropertyAnimation::ResolveField).
 	struct PropertyAnimationTrack
 	{
 		static constexpr const char* TypeName = "PropertyAnimationTrack";
 		std::string Component = "Transform";
 		std::string Field = "Translation";
+		// Holds each key until the next one. Integer, boolean, string and enum fields always step.
 		bool Stepped = false;
 		std::vector<PropertyAnimationKey> Keys;
 	};
@@ -300,12 +321,12 @@ namespace Basalt {
 		// Models whose clips this Animator also plays (at most MaxClipLibraries), such as a shared Mixamo library,
 		// retargeted onto Mesh's skeleton. Clip names (Clip, blend space samples, layers, events, graph states) resolve in
 		// Mesh first, then in each library in order. Joints match by the library's Joints, then by name (ignoring
-		// "prefix:" and "prefix|"), then as humanoid bones; both skeletons must share a rest pose style (both T-pose or
-		// both A-pose).
+		// "prefix:" and "prefix|"), then as humanoid bones; skeletons in different rest pose styles (T-pose and A-pose)
+		// need a reference pose (AnimationClipLibrary::ReferenceClip).
 		std::vector<AnimationClipLibrary> ClipLibraries;
-		// Edit mode only: plays the Animator in the scene view (its clip or state machine, layers and inverse kinematics),
-		// regardless of PlayOnStart, without moving the entity. Events, root-motion displacement, spring bones, ragdolls and
-		// attachments wait for Play.
+		// Edit mode only: plays the Animator in the scene view (its clip or state machine, layers, inverse kinematics and
+		// spring bones), regardless of PlayOnStart, without moving the entity. Events, root-motion displacement, spring
+		// bone collisions with physics bodies, ragdolls and attachments wait for Play.
 		bool Preview = false;
 	};
 
@@ -408,6 +429,14 @@ namespace Basalt {
 		float LockDistance = 0.3f;
 	};
 
+	// Names the colliders (SpringCollider::Name) a spring chain collides with.
+	struct SpringChainCollider
+	{
+		static constexpr const char* TypeName = "SpringChainCollider";
+
+		std::string Name;
+	};
+
 	// One chain of a SpringBone component: Joint and the joints below it swing behind the animated pose. Each turned
 	// joint aims at its child, which is simulated as a point mass, so the last turned joint needs a child (the tip).
 	struct SpringChain
@@ -422,6 +451,7 @@ namespace Basalt {
 		static constexpr float MaxDamping = 1000.0f;
 		static constexpr float MaxGravityFactor = 100.0f;
 		static constexpr float MaxRadius = 100.0f;
+		static constexpr float MaxAngleLimit = 180.0f;
 
 		std::string Name = "Chain";
 		// The first joint that swings (hair root, cape top, tail base); its parent follows the animation.
@@ -440,16 +470,28 @@ namespace Basalt {
 		float Radius = 0.02f;
 		// 0..1. Blend between the animated pose (0) and the simulation (1); the simulation keeps running at 0.
 		float Weight = 1.0f;
+		// Degrees (0..MaxAngleLimit): how far each bone may swing away from where the animated shape (turned with the
+		// swung bones before it) points it; MaxAngleLimit leaves it free, 0 keeps the animated shape. Colliders win over
+		// the limit.
+		float MaxAngle = MaxAngleLimit;
+		// The component's colliders this chain stays outside: every collider (empty), or only those whose Name is listed
+		// (at most SpringBoneComponent::MaxColliders entries).
+		std::vector<SpringChainCollider> Colliders;
+		// Play and Simulate only: also stays outside physics bodies (not triggers, nor the entity, its descendants or its
+		// character controller's entity and descendants). One way: the points never push the bodies.
+		bool CollidePhysics = false;
 	};
 
-	// A sphere or capsule attached to a joint that keeps every chain of its SpringBone component outside it (a head
-	// under hair, legs in front of a cape). It follows the pose before any chain swings, so a collider on a swinging
-	// joint does not move with the swing.
+	// A sphere or capsule attached to a joint that keeps the chains of its SpringBone component outside it (a head under
+	// hair, legs in front of a cape): every chain without a Colliders list, and those that list its Name. It follows the
+	// pose before any chain swings, so a collider on a swinging joint does not move with the swing.
 	struct SpringCollider
 	{
 		static constexpr const char* TypeName = "SpringCollider";
 		static constexpr float MaxSize = 100.0f;
 
+		// Chains name it in their Colliders; several colliders may share a name, which then names them all.
+		std::string Name;
 		// The joint the collider moves with; empty: the entity itself.
 		std::string Joint;
 		// Center in the joint's (or the entity's) space.

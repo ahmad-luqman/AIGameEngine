@@ -1,6 +1,7 @@
 #include "Basalt/Scene/ComponentRegistry.h"
 
 #include "Basalt/Animation/AnimationGraph.h"
+#include "Basalt/Animation/AnimationJointMap.h"
 #include "Basalt/Animation/AnimationMask.h"
 #include "Basalt/Animation/PropertyAnimation.h"
 #include "Basalt/Asset/MaterialAsset.h"
@@ -379,8 +380,10 @@ namespace Basalt {
 		void Fields(FieldReader& r, RagdollBone& c);
 		json Write(const RagdollBone& c);
 		void Fields(FieldReader& r, SpringChain& c);
+		void Fields(FieldReader& r, SpringChainCollider& c);
 		void Fields(FieldReader& r, SpringCollider& c);
 		json Write(const SpringChain& c);
+		json Write(const SpringChainCollider& c);
 		json Write(const SpringCollider& c);
 
 		// The shape of a list element, built once per element type from its field list.
@@ -575,6 +578,7 @@ namespace Basalt {
 		{
 			r.Field("Time", c.Time);
 			r.Field("Value", c.Value);
+			r.Field("Text", c.Text);
 		}
 		void Fields(FieldReader& r, PropertyAnimationTrack& c)
 		{
@@ -638,6 +642,11 @@ namespace Basalt {
 		{
 			r.AssetField("Mesh", c.Mesh);
 			r.ListField("Joints", c.Joints, AnimationClipLibrary::MaxJoints);
+			r.AssetField("JointMap", c.JointMap);
+			r.Field("ReferenceClip", c.ReferenceClip);
+			r.Field("ReferenceTime", c.ReferenceTime);
+			r.Field("ModelReferenceClip", c.ModelReferenceClip);
+			r.Field("ModelReferenceTime", c.ModelReferenceTime);
 		}
 
 		void Fields(FieldReader& r, AnimationRetargetJoint& c)
@@ -714,10 +723,19 @@ namespace Basalt {
 			r.Field("GravityFactor", c.GravityFactor);
 			r.Field("Radius", c.Radius);
 			r.Field("Weight", c.Weight);
+			r.Field("MaxAngle", c.MaxAngle);
+			r.ListField("Colliders", c.Colliders, SpringBoneComponent::MaxColliders);
+			r.Field("CollidePhysics", c.CollidePhysics);
+		}
+
+		void Fields(FieldReader& r, SpringChainCollider& c)
+		{
+			r.Field("Name", c.Name);
 		}
 
 		void Fields(FieldReader& r, SpringCollider& c)
 		{
+			r.Field("Name", c.Name);
 			r.Field("Joint", c.Joint);
 			r.Field("Offset", c.Offset);
 			r.Field("Radius", c.Radius);
@@ -1241,7 +1259,7 @@ namespace Basalt {
 
 		json Write(const PropertyAnimationKey& c)
 		{
-			return { { "Time", c.Time }, { "Value", { c.Value.x, c.Value.y, c.Value.z, c.Value.w } } };
+			return { { "Time", c.Time }, { "Value", { c.Value.x, c.Value.y, c.Value.z, c.Value.w } }, { "Text", c.Text } };
 		}
 		json Write(const PropertyAnimationTrack& c)
 		{
@@ -1291,7 +1309,7 @@ namespace Basalt {
 
 		json Write(const AnimationClipLibrary& c)
 		{
-			return { { "Mesh", c.Mesh }, { "Joints", ListToJson(c.Joints) } };
+			return { { "Mesh", c.Mesh }, { "Joints", ListToJson(c.Joints) }, { "JointMap", c.JointMap }, { "ReferenceClip", c.ReferenceClip }, { "ReferenceTime", c.ReferenceTime }, { "ModelReferenceClip", c.ModelReferenceClip }, { "ModelReferenceTime", c.ModelReferenceTime } };
 		}
 
 		json Write(const AnimationRetargetJoint& c)
@@ -1364,12 +1382,20 @@ namespace Basalt {
 				{ "GravityFactor", c.GravityFactor },
 				{ "Radius", c.Radius },
 				{ "Weight", c.Weight },
+				{ "MaxAngle", c.MaxAngle },
+				{ "Colliders", ListToJson(c.Colliders) },
+				{ "CollidePhysics", c.CollidePhysics },
 			};
+		}
+
+		json Write(const SpringChainCollider& c)
+		{
+			return { { "Name", c.Name } };
 		}
 
 		json Write(const SpringCollider& c)
 		{
-			return { { "Joint", c.Joint }, { "Offset", ToJson(c.Offset) }, { "Radius", c.Radius }, { "HalfHeight", c.HalfHeight } };
+			return { { "Name", c.Name }, { "Joint", c.Joint }, { "Offset", ToJson(c.Offset) }, { "Radius", c.Radius }, { "HalfHeight", c.HalfHeight } };
 		}
 
 		json Write(const SpringBoneComponent& c)
@@ -1902,9 +1928,15 @@ namespace Basalt {
 				return fmt::format("Animator holds at most {} clip libraries", AnimatorComponent::MaxClipLibraries);
 			for (size_t i = 0; i < c.ClipLibraries.size(); i++)
 			{
-				const auto& joints = c.ClipLibraries[i].Joints;
+				const AnimationClipLibrary& library = c.ClipLibraries[i];
+				const auto& joints = library.Joints;
 				if (joints.size() > AnimationClipLibrary::MaxJoints)
 					return fmt::format("ClipLibraries[{}] holds at most {} joints", i, AnimationClipLibrary::MaxJoints);
+				if (!NamesFileOf(library.JointMap, AnimationJointMap::Extension))
+					return fmt::format("ClipLibraries[{}].JointMap '{}' must be a {} file", i, library.JointMap, AnimationJointMap::Extension);
+				for (const auto& [field, time] : { std::pair{ "ReferenceTime", library.ReferenceTime }, std::pair{ "ModelReferenceTime", library.ModelReferenceTime } })
+					if (!std::isfinite(time) || time < 0.0f || time > AnimationClipLibrary::MaxReferenceTime)
+						return fmt::format("ClipLibraries[{}].{} {} must be between 0 and {}", i, field, time, AnimationClipLibrary::MaxReferenceTime);
 				// One source drives one target. Empty names are the inspector's unnamed additions.
 				std::unordered_map<std::string_view, size_t> targets, sources;
 				for (size_t j = 0; j < joints.size(); j++)
@@ -2055,6 +2087,10 @@ namespace Basalt {
 					return fmt::format("Chains[{}].Radius {} must be between 0 and {}", i, chain.Radius, SpringChain::MaxRadius);
 				if (!inRange(chain.Weight, 0.0f, 1.0f))
 					return fmt::format("Chains[{}].Weight {} must be between 0 and 1", i, chain.Weight);
+				if (!inRange(chain.MaxAngle, 0.0f, SpringChain::MaxAngleLimit))
+					return fmt::format("Chains[{}].MaxAngle {} must be between 0 and {}", i, chain.MaxAngle, SpringChain::MaxAngleLimit);
+				if (chain.Colliders.size() > SpringBoneComponent::MaxColliders)
+					return fmt::format("Chains[{}] names at most {} colliders", i, SpringBoneComponent::MaxColliders);
 			}
 			for (size_t i = 0; i < c.Colliders.size(); i++)
 			{
