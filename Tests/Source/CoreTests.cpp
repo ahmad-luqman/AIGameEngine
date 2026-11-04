@@ -1236,14 +1236,15 @@ TEST_SUITE("Core")
 #endif
 	}
 
-	// Lua strings and percent-decoded URIs need not be UTF-8: converting them must not throw (MSVC's std::filesystem
-	// does), and on Windows they then name no file.
 	TEST_CASE("System error text comes through DescribeError")
 	{
 		// No test can tell the two apart off Windows, or on a runner in an English locale, where the ANSI text is ASCII.
 		const std::filesystem::path source = BASALT_SOURCE_DIR;
-		const std::string rawMessage = std::string(".message") + "()";
-		const std::string rawSystemMessage = std::string("system_category().message") + "(";
+		// Split so that this test does not match itself.
+		constexpr std::string_view RawMessage = ".message"
+												"()";
+		constexpr std::string_view RawSystemMessage = "system_category().message"
+													  "(";
 		std::string offenders;
 		size_t scanned = 0;
 		for (const char* tree : { "Basalt/Source", "Basalt-Editor/Source", "Basalt-Runtime/Source", "Basalt-CLI/Source", "Tests/Source" })
@@ -1255,18 +1256,20 @@ TEST_SUITE("Core")
 				const std::optional<std::string> text = FileSystem::ReadTextFile(entry.path());
 				REQUIRE(text);
 				scanned++;
-				// DescribeError's own fallback, for error categories that are not the system's.
+				// DescribeError's own call, the one place it may appear.
 				const size_t allowed = entry.path().filename() == "FileSystem.cpp" ? 1 : 0;
 				size_t count = 0;
-				for (size_t at = text->find(rawMessage); at != std::string::npos; at = text->find(rawMessage, at + 1))
+				for (size_t at = text->find(RawMessage); at != std::string::npos; at = text->find(RawMessage, at + 1))
 					count++;
-				if (count != allowed || text->find(rawSystemMessage) != std::string::npos)
+				if (count != allowed || text->find(RawSystemMessage) != std::string::npos)
 					offenders += " " + FileSystem::PathToUtf8(entry.path().lexically_relative(source));
 			}
 		CHECK(scanned > 100);
 		CHECK_MESSAGE(offenders.empty(), "system error text bypasses FileSystem::DescribeError in:", offenders);
 	}
 
+	// Lua strings and percent-decoded URIs need not be UTF-8: converting them must not throw (MSVC's std::filesystem
+	// does), and on Windows they then name no file.
 	TEST_CASE("Paths convert to and from UTF-8 without throwing, whatever the text")
 	{
 		CHECK(FileSystem::PathToUtf8(FileSystem::PathFromUtf8("Assets/資産.png")) == "Assets/資産.png");
@@ -1278,6 +1281,9 @@ TEST_SUITE("Core")
 		CHECK_FALSE(FileSystem::DescribeError(std::make_error_code(std::errc::no_such_file_or_directory)).empty());
 #if defined(_WIN32)
 		CHECK(FileSystem::DescribeError(std::error_code(2, std::system_category())) == Platform::GetErrorMessage(2));
+		// Winsock's codes are system codes too, and a code the system has no text for still says something.
+		CHECK_FALSE(FileSystem::DescribeError(std::error_code(10060 /* WSAETIMEDOUT */, std::system_category())).empty());
+		CHECK_FALSE(FileSystem::DescribeError(std::error_code(0x7FFFFFFF, std::system_category())).empty());
 		// Invalid sequences and unpaired surrogates (NTFS names may hold them) become U+FFFD.
 		const std::string replacement = "\xEF\xBF\xBD";
 		CHECK(invalid.native() == std::wstring(L"Caf\uFFFD.lua"));

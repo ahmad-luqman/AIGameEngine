@@ -104,11 +104,11 @@ compressed), size (uncompressed bytes), archiveSize (bytes on disk), omitted (or
 basalt archive.inspect '{"path": "Dist/MyGame/Assets.bpak", "verify": true}'
 ```
 
-- **Contents.** Every file under `Assets/` except the `.meta` sidecars and the compressed texture originals below. Each entry carries its asset's UUID in the
+- **Contents.** Every file under `Assets/` except the `.meta` sidecars and the two groups below (compressed texture originals, names no key can hold). Each entry carries its asset's UUID in the
   index instead, so references stored as UUIDs (scenes, prefabs, materials, the start scene, the icon) resolve exactly
   as they do in the project. An asset whose sidecar is broken goes in without its UUID, and the export warns
   (`project.validate`, which runs first unless `validate: false`, reports it as an error). A linked folder or a broken
-  link inside `Assets/`, or a path an archive cannot hold (a `:` or `\` in a name, or over 1024 bytes), stops the
+  link inside `Assets/` (unless its own name is one no key can hold, below), or a path an archive cannot hold (a `:` or `\` in a name, or over 1024 bytes), stops the
   export. An archive holds at most 2^20 files of at most 4 GiB each.
 - **Compressed texture originals.** A PNG, JPEG, TGA or BMP stays out when a `.ktx2` (in lower case) of the same name
   sits beside it (`Wall.ktx2` next to `Wall.png`) and neither the project file nor any asset other than images, `.hdr` and
@@ -121,8 +121,10 @@ basalt archive.inspect '{"path": "Dist/MyGame/Assets.bpak", "verify": true}'
   time would no longer find the file: pass `"keepOriginals": true` with `archive` (a checkbox in the editor's export
   prompt) to keep every original. Folder exports copy every file.
 - **Names no key can hold.** A file or folder whose name has no UTF-8 form stays out, with a warning for each
-  (`Docs/AssetPipeline.md`): nothing in a game can name it, so the game does not change. Folder exports copy these
-  byte for byte, and their `validation` warns instead.
+  (`Docs/AssetPipeline.md`): no scene, prefab or material can name it. On Linux a Lua string with raw bytes or a
+  percent-escaped glTF URI can, which works in a folder export and finds nothing in an archive, so read these warnings.
+  Folder exports copy such files byte for byte and add no warnings of their own; `validation`, when it runs, reports them
+  for both forms.
 - **Compression.** Each file except MP3 and FLAC audio is compressed with zstd (level 9) on the job system, up to 256 files
   or 256 MiB of them at a time (a larger file goes alone), and kept compressed only when that makes it smaller. Files are
   written in path order, so the same files and Basalt build give the same bytes however many cores the machine has.

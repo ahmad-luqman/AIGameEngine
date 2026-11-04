@@ -1,6 +1,7 @@
 #include "Panels/ProjectSettingsPanel.h"
 
 #include "EditorColors.h"
+#include "Panels/SkippedEntriesNote.h"
 
 #include "Basalt/Asset/AssetManager.h"
 #include "Basalt/Automation/EditorCommandSchemas.h"
@@ -153,12 +154,14 @@ namespace Basalt {
 		DrawTextSetting("Company", "company", config.Company, m_CompanyEdit);
 		HelpMarker("The publisher: the Windows version resource, the macOS copyright and the macOS bundle identifier\n(com.<company>.<name>).");
 
-		// The asset list for a combo, or a line saying why there is none.
+		// The asset list for a combo, with a line saying what it lacks and why.
 		const auto listAssets = [](const std::vector<std::string>& extensions) {
 			std::string error;
-			std::vector<std::string> assets = AssetManager::ListAssets(extensions, &error);
+			std::set<std::string> skipped;
+			std::vector<std::string> assets = AssetManager::ListAssets(extensions, &error, &skipped);
 			if (!error.empty())
 				ImGui::TextColored(EditorColors::Warning(), "%s", error.c_str());
+			DrawSkippedEntriesNote(skipped);
 			return assets;
 		};
 		// An icon whose file is gone is an asset-uuid: key, which means nothing to read.

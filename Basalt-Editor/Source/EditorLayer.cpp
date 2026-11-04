@@ -1786,7 +1786,7 @@ namespace Basalt {
 			if (ImGui::MenuItem("Reload Changed Files Automatically", nullptr, m_Preferences.GetAutoReload()))
 				m_Context.Execute("editor.preferences", { { "autoReload", !m_Preferences.GetAutoReload() } });
 			if (ImGui::MenuItem("Reload Changed Files Now", nullptr, false, static_cast<bool>(Project::GetActive())))
-				m_Context.Execute("asset.refresh");
+				ExecuteAndWarn("asset.refresh");
 			if (ImGui::BeginMenu("Debug View"))
 			{
 				const char* names[] = { "None", "SSAO", "Normals", "Depth" };

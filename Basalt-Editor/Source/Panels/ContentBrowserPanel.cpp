@@ -2,6 +2,7 @@
 
 #include "EditorColors.h"
 #include "Panels/PreviewImage.h"
+#include "Panels/SkippedEntriesNote.h"
 #include "ThumbnailManager.h"
 
 #include "Basalt/Automation/EditorCommandSchemas.h"
@@ -120,25 +121,11 @@ return %s
 		ImGui::SliderFloat("##IconSize", &m_IconSize, 16.0f, 96.0f, "Icons %.0f px");
 		ImGui::Separator();
 
-		std::vector<std::filesystem::directory_entry> entries;
-		std::vector<std::string> skipped;
-		for (auto it = std::filesystem::directory_iterator(m_CurrentDirectory, error); !error && it != std::filesystem::directory_iterator(); it.increment(error))
-			if (!FileSystem::SkipNonUtf8Entry(*it, root, skipped) && FileSystem::GetLowercaseExtension(it->path()) != ".meta")
-				entries.push_back(*it);
-		if (!skipped.empty())
-		{
-			std::sort(skipped.begin(), skipped.end());
-			std::string details = FileSystem::NonUtf8NameProblem;
-			for (const std::string& entry : skipped)
-				details.append("\n").append(entry);
-			ImGui::TextColored(EditorColors::Warning(), "%zu hidden: names that are not valid Unicode", skipped.size());
-			ImGui::SetItemTooltip("%s", details.c_str());
-		}
-		std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) {
-			if (a.is_directory() != b.is_directory())
-				return a.is_directory();
-			return a.path().filename() < b.path().filename();
-		});
+		const AssetManager::FolderListing listing = AssetManager::ListFolder(m_CurrentDirectory);
+		if (!listing.Error.empty())
+			ImGui::TextColored(EditorColors::Warning(), "%s", listing.Error.c_str());
+		DrawSkippedEntriesNote(listing.Skipped);
+		const std::vector<std::filesystem::directory_entry>& entries = listing.Entries;
 
 		const float rowHeight = std::max(m_IconSize, ImGui::GetTextLineHeight());
 		// Only rows on screen ask for previews: a folder with more files than the preview cache holds must not

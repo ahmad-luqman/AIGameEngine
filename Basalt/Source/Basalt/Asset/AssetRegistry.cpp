@@ -142,25 +142,26 @@ namespace Basalt {
 			for (const PackArchive::Entry& entry : archive->GetEntries())
 				if (entry.AssetID != 0 && entry.Path.starts_with("Assets/"))
 					paths.emplace(entry.AssetID, entry.Path);
-			SetIndex(std::move(paths), {}, {}, {});
+			SetIndex(std::move(paths));
 			return true;
 		}
 		std::map<uint64_t, std::string> paths, owners;
 		std::map<std::string, std::string> problems;
-		std::vector<std::string> orphans, skipped;
+		std::vector<std::string> orphans;
+		std::set<std::string> skipped;
 		std::error_code error;
 		const auto assets = m_Root / "Assets";
 		if (!std::filesystem::exists(assets, error) && !error)
 		{
-			SetIndex({}, {}, {}, {});
+			SetIndex({});
 			return true;
 		}
 		auto scanPath = assets;
 		for (auto it = std::filesystem::recursive_directory_iterator(assets, error); !error && it != std::filesystem::recursive_directory_iterator(); it.increment(error))
 		{
-			scanPath = it->path();
 			if (FileSystem::SkipNonUtf8Entry(it, m_Root, skipped))
 				continue;
+			scanPath = it->path();
 			if (it->is_symlink(error))
 			{
 				if (FileSystem::GetLowercaseExtension(it->path()) == ".meta")
@@ -216,12 +217,11 @@ namespace Basalt {
 			outError = "cannot scan asset metadata at '" + FileSystem::PathToUtf8(scanPath) + "': " + FileSystem::DescribeError(error);
 			return false;
 		}
-		std::sort(skipped.begin(), skipped.end());
 		SetIndex(std::move(paths), std::move(problems), std::move(orphans), std::move(skipped));
 		return true;
 	}
 
-	void AssetRegistry::SetIndex(std::map<uint64_t, std::string> paths, std::map<std::string, std::string> problems, std::vector<std::string> orphans, std::vector<std::string> skipped)
+	void AssetRegistry::SetIndex(std::map<uint64_t, std::string> paths, std::map<std::string, std::string> problems, std::vector<std::string> orphans, std::set<std::string> skipped)
 	{
 		m_Paths = std::move(paths);
 		m_IDs.clear();

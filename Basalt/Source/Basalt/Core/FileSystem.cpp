@@ -225,7 +225,7 @@ namespace Basalt {
 		std::error_code error;
 		const std::optional<uint64_t> available = GetRegularFileSize(path, error);
 		if (error)
-			return fail(FileSystem::DescribeError(error));
+			return fail(DescribeError(error));
 		if (!available)
 			return fail("no such file");
 		if (*available < size)
@@ -269,7 +269,7 @@ namespace Basalt {
 			std::filesystem::create_directories(path.parent_path(), error);
 			if (error)
 			{
-				outError = "cannot create the folder '" + PathToUtf8(path.parent_path()) + "': " + FileSystem::DescribeError(error);
+				outError = "cannot create the folder '" + PathToUtf8(path.parent_path()) + "': " + DescribeError(error);
 				return false;
 			}
 		}
@@ -327,7 +327,7 @@ namespace Basalt {
 #endif
 		if (error)
 		{
-			outError = "cannot replace '" + PathToUtf8(target) + "': " + FileSystem::DescribeError(error);
+			outError = "cannot replace '" + PathToUtf8(target) + "': " + DescribeError(error);
 			std::filesystem::remove(source, error);
 			return false;
 		}
@@ -352,7 +352,7 @@ namespace Basalt {
 			std::filesystem::copy_file(source, target, std::filesystem::copy_options::overwrite_existing, outError);
 		}
 		if (locked())
-			BS_CORE_WARN("FileSystem: '{}' stayed locked through {} copy attempts: {}", PathToUtf8(target), attempts, FileSystem::DescribeError(outError));
+			BS_CORE_WARN("FileSystem: '{}' stayed locked through {} copy attempts: {}", PathToUtf8(target), attempts, DescribeError(outError));
 #else
 		(void)waitBeforeRetry;
 #endif
@@ -388,36 +388,38 @@ namespace Basalt {
 #endif
 	}
 
-	bool FileSystem::IsUtf8Path(const std::filesystem::path& path)
+	bool FileSystem::HasUtf8Form(const std::filesystem::path& path)
 	{
 #if defined(BS_PLATFORM_WINDOWS)
-		return TextEncoding::IsValidUtf16(std::wstring_view(path.native()));
+		return TextEncoding::IsValidUtf16(path.native());
 #else
 		return TextEncoding::IsValidUtf8(path.native());
 #endif
 	}
 
-	std::string FileSystem::PathToEscapedUtf8(const std::filesystem::path& path)
+	std::string FileSystem::DescribePath(const std::filesystem::path& path)
 	{
 #if defined(BS_PLATFORM_WINDOWS)
-		const std::wstring generic = path.generic_wstring();
-		return Platform::WideToUtf8(TextEncoding::EscapeUnpairedSurrogates(std::wstring_view(generic)));
+		return Platform::WideToUtf8(TextEncoding::EscapeUnpairedSurrogates(path.generic_wstring()));
 #else
 		return TextEncoding::EscapeInvalidUtf8(PathToGenericUtf8(path));
 #endif
 	}
 
-	bool FileSystem::SkipNonUtf8Entry(const std::filesystem::directory_entry& entry, const std::filesystem::path& root, std::vector<std::string>& outSkipped)
+	bool FileSystem::RecordNonUtf8Entry(const std::filesystem::directory_entry& entry, const std::filesystem::path& root, std::set<std::string>& outSkipped)
 	{
-		if (IsUtf8Path(entry.path().filename()))
+		if (HasUtf8Form(entry.path().filename()))
 			return false;
-		outSkipped.push_back(PathToEscapedUtf8(entry.path().lexically_relative(root)));
+		std::filesystem::path relative = entry.path().lexically_relative(root);
+		if (GetLowercaseExtension(relative) == ".meta")
+			relative.replace_extension();
+		outSkipped.insert(DescribePath(relative));
 		return true;
 	}
 
-	bool FileSystem::SkipNonUtf8Entry(std::filesystem::recursive_directory_iterator& it, const std::filesystem::path& root, std::vector<std::string>& outSkipped)
+	bool FileSystem::SkipNonUtf8Entry(std::filesystem::recursive_directory_iterator& it, const std::filesystem::path& root, std::set<std::string>& outSkipped)
 	{
-		if (!SkipNonUtf8Entry(*it, root, outSkipped))
+		if (!RecordNonUtf8Entry(*it, root, outSkipped))
 			return false;
 		it.disable_recursion_pending();
 		return true;
@@ -460,12 +462,13 @@ namespace Basalt {
 		{
 			std::error_code error;
 			for (auto entry = std::filesystem::directory_iterator(directory, error); !error && entry != std::filesystem::directory_iterator(); entry.increment(error))
-				// A name with no UTF-8 form could only match a key by its U+FFFD, and that key would not lead back to the file.
-				if (const std::filesystem::path name = entry->path().filename(); IsUtf8Path(name))
+				// On Windows such a name could only match a key by its U+FFFD, which would not lead back to the file; elsewhere a
+				// key from JSON never has its bytes.
+				if (const std::filesystem::path name = entry->path().filename(); HasUtf8Form(name))
 					it->second.Names.push_back(PathToUtf8(name));
 			// A missing directory means a missing file, not an unreadable one.
 			if (error && error != std::errc::no_such_file_or_directory && error != std::errc::not_a_directory)
-				it->second.Error = FileSystem::DescribeError(error);
+				it->second.Error = DescribeError(error);
 		}
 		outError = it->second.Error;
 		return outError.empty() ? &it->second.Names : nullptr;
@@ -504,7 +507,7 @@ namespace Basalt {
 		const bool regular = std::filesystem::is_regular_file(current, error);
 		if (error || !regular)
 		{
-			outProblem = error ? FileSystem::DescribeError(error) : "it is not a file";
+			outProblem = error ? DescribeError(error) : "it is not a file";
 			return PathMatch::Unreadable;
 		}
 		outActual = PathToGenericUtf8(actual);

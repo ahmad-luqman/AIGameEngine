@@ -386,14 +386,10 @@ namespace Basalt {
 			}
 		}
 
-		// What asset.list and asset.refresh say about entries a scan could not give a key.
-		std::vector<std::string> SkippedEntryWarnings(const std::vector<std::string>& entries)
+		void AddSkippedEntryWarnings(const std::set<std::string>& entries, json& warnings)
 		{
-			std::vector<std::string> warnings;
-			warnings.reserve(entries.size());
 			for (const std::string& entry : entries)
 				warnings.push_back(fmt::format("'{}': {}", entry, FileSystem::NonUtf8NameProblem));
-			return warnings;
 		}
 
 		// Adds the problems a material's texture references will have when it renders, as project.validate reports them
@@ -955,7 +951,7 @@ namespace Basalt {
 				return result;
 			});
 
-			Add(registry, "project.validate", "Checks that the project would export and start: settings, start scene, every scene and prefab (loads; referenced asset files exist inside Assets/ with the exact letter case; a model's #image/N or #material/N exists in its glTF; path fields must name files inside Assets/ with forward slashes; other component text naming a missing Assets/ file is a warning), every animation graph and material file (parses; a material's maps are textures that exist), every Lua script (compiles) and the scripts Script components use (load as script classes). Returns {valid, errors, warnings, omitted, issues: [{severity, file, message}]}.", Schema::Object({ { "assertValid", Schema::Nullable(Schema::Boolean("bool: fail the command when there is an error-severity issue")) } }), [](AutomationSession&, const json& params) {
+			Add(registry, "project.validate", "Checks that the project would export and start: settings, start scene, every scene and prefab (loads; referenced asset files exist inside Assets/ with the exact letter case; a model's #image/N or #material/N exists in its glTF; path fields must name files inside Assets/ with forward slashes; other component text naming a missing Assets/ file is a warning), every animation graph and material file (parses; a material's maps are textures that exist), every Lua script (compiles) and the scripts Script components use (load as script classes). An entry of Assets/ whose name is not valid Unicode is a warning and is not checked. Returns {valid, errors, warnings, omitted, issues: [{severity, file, message}]}.", Schema::Object({ { "assertValid", Schema::Nullable(Schema::Boolean("bool: fail the command when there is an error-severity issue")) } }), [](AutomationSession&, const json& params) {
 				const ValidationReport report = ValidateProject(*RequireProject());
 				if (OptionalBool(params, "assertValid", false) && !report.IsValid())
 					throw CommandError(DescribeValidationErrors(report));
@@ -1562,13 +1558,15 @@ namespace Basalt {
 			};
 			std::vector<Migration> migrations;
 			// Scenes, prefabs and material files (textures, models' embedded images) hold references.
-			std::vector<std::string> unnamed;
-			const auto documents = AssetManager::ListAssets({ ".bscene", ".bprefab", std::string(MaterialAsset::Extension) }, &error, &unnamed);
+			std::set<std::string> unnamedEntries;
+			const auto documents = AssetManager::ListAssets({ ".bscene", ".bprefab", std::string(MaterialAsset::Extension) }, &error, &unnamedEntries);
 			std::vector<std::string> skipped;
 			if (!error.empty())
 				throw CommandError(error);
-			// No key can open these, nor can anything load them, so they must not block the move; what they say stays as it is.
-			for (const std::string& entry : unnamed)
+			// No key can open these and no JSON reference can name them, so they must not block the move; any references they
+			// hold stay as they are.
+			skipped.reserve(unnamedEntries.size());
+			for (const std::string& entry : unnamedEntries)
 				skipped.push_back(fmt::format("'{}' was not checked for references to this asset: {}", entry, FileSystem::NonUtf8NameProblem));
 			for (const auto& path : documents)
 			{
@@ -1821,7 +1819,7 @@ namespace Basalt {
 				}
 			};
 			for (const auto* command : { "asset.move", "asset.rename" })
-				Add(registry, command, "Moves one asset file and its .meta sidecar within Assets/. 'to' is the complete destination path. Creates metadata if needed, migrates scene, prefab and material-file references to this asset to UUIDs and updates the open edit scene and the project's start scene and icon. A scene or prefab that cannot be read stops the move (it might reference the asset); a material file that is not valid JSON, and a document whose name is not valid Unicode, are skipped with a warning. Does not rewrite paths inside scripts or glTF files. Stop Play or Simulate first.", Schema::Object({ { "from", Schema::String("source path", true) }, { "to", Schema::String("destination path", true) } }, { "from", "to" }), move, CommandPolicy::EditBoundary);
+				Add(registry, command, "Moves one asset file and its .meta sidecar within Assets/. 'to' is the complete destination path. Creates metadata if needed, migrates scene, prefab and material-file references to this asset to UUIDs and updates the open edit scene and the project's start scene and icon. A scene or prefab that cannot be read stops the move (it might reference the asset); a material file that is not valid JSON, and a document or folder whose name is not valid Unicode, are skipped with a warning. Does not rewrite paths inside scripts or glTF files. Stop Play or Simulate first.", Schema::Object({ { "from", Schema::String("source path", true) }, { "to", Schema::String("destination path", true) } }, { "from", "to" }), move, CommandPolicy::EditBoundary);
 
 			Add(registry, "asset.delete", "Deletes one asset file and its .meta identity. Existing UUID references become unresolved; deleting the project's start scene or icon is reported in warnings. Stop Play or Simulate first.", Schema::Object({ { "path", Schema::String("asset path", true) } }, { "path" }), [](AutomationSession& session, const json& params) {
 				auto project = RequireProject();
@@ -1848,16 +1846,21 @@ namespace Basalt {
 					result["warnings"] = std::move(warnings);
 				return result; }, CommandPolicy::EditBoundary);
 
-			Add(registry, "asset.list", "Lists project asset files, optionally filtered by extensions (e.g. ['.lua']). Entries with names that are not valid Unicode have no key: they are left out and listed in 'warnings' (a folder with everything in it).", Schema::Object({ { "extensions", Schema::Array("array of strings", Schema::String()) } }), [](AutomationSession&, const json& params) {
+			Add(registry, "asset.list", "Lists project asset files, optionally filtered by extensions (e.g. ['.lua']). An incomplete scan lists what it found, with the reason in 'warnings'. Entries with names that are not valid Unicode have no key: they are left out and listed in 'warnings' (files of the requested types, and every such folder, since it may hold any type).", Schema::Object({ { "extensions", Schema::Array("array of strings", Schema::String()) } }), [](AutomationSession&, const json& params) {
 				RequireProject();
 				// The schema has checked the types.
 				std::vector<std::string> extensions;
 				if (auto it = params.find("extensions"); it != params.end())
 					extensions = it->get<std::vector<std::string>>();
-				std::vector<std::string> skipped;
-				json result = { { "assets", AssetManager::ListAssets(extensions, nullptr, &skipped) } };
-				if (!skipped.empty())
-					result["warnings"] = SkippedEntryWarnings(skipped);
+				std::string error;
+				std::set<std::string> skipped;
+				json result = { { "assets", AssetManager::ListAssets(extensions, &error, &skipped) } };
+				json warnings = json::array();
+				if (!error.empty())
+					warnings.push_back(error);
+				AddSkippedEntryWarnings(skipped, warnings);
+				if (!warnings.empty())
+					result["warnings"] = std::move(warnings);
 				return result;
 			});
 
@@ -1994,8 +1997,7 @@ namespace Basalt {
 						throw CommandError(error);
 					if (!warning.empty())
 						warnings.push_back(warning);
-					for (const std::string& skipped : SkippedEntryWarnings(session.GetSkippedFiles()))
-						warnings.push_back(skipped);
+					AddSkippedEntryWarnings(session.GetSkippedEntries(), warnings);
 				}
 				const AssetReloadReport report = session.ReloadAssets(changes);
 				json changed = json::array();

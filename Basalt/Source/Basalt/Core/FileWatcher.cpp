@@ -86,14 +86,14 @@ namespace Basalt {
 		// A missing folder, or a file where it should be: nothing is watched.
 		if (!std::filesystem::is_directory(status))
 			return result;
-		// Unreadable folders are errors, not skipped: their files would look removed. An increment that fails was
+		// Unreadable folders are errors, unlike names no key can hold: their files would look removed. An increment that fails was
 		// entering the last entry listed (a folder).
 		std::filesystem::path last = folder;
 		for (auto it = std::filesystem::recursive_directory_iterator(folder, error); !error && it != std::filesystem::recursive_directory_iterator(); it.increment(error))
 		{
-			last = it->path();
 			if (FileSystem::SkipNonUtf8Entry(it, root, result.Skipped))
 				continue;
+			last = it->path();
 			std::error_code entryError;
 			const bool regular = it->is_regular_file(entryError);
 			Stamp stamp;
@@ -116,7 +116,6 @@ namespace Basalt {
 		}
 		if (error)
 			result.Error = describe(last, error);
-		std::sort(result.Skipped.begin(), result.Skipped.end());
 		return result;
 	}
 
@@ -255,7 +254,7 @@ namespace Basalt {
 			m_LastError.clear();
 		}
 		for (const std::string& entry : scan.Skipped)
-			if (!std::binary_search(m_Skipped.begin(), m_Skipped.end(), entry))
+			if (!m_Skipped.contains(entry))
 				BS_CORE_WARN("FileWatcher: '{}': {}", entry, FileSystem::NonUtf8NameProblem);
 		m_Skipped = scan.Skipped;
 		std::erase_if(m_Acknowledged, [sequence](const auto& entry) { return entry.second <= sequence; });
@@ -402,7 +401,7 @@ namespace Basalt {
 			}
 			catch (const std::exception& e)
 			{
-				scan = Scan{ {}, "cannot scan '" + FileSystem::PathToUtf8(root / FileSystem::PathFromUtf8(subdirectory)) + "': " + e.what(), {} };
+				scan.Error = "cannot scan '" + FileSystem::PathToUtf8(root / FileSystem::PathFromUtf8(subdirectory)) + "': " + e.what();
 			}
 			lock.lock();
 			// An unread older scan is replaced: the newest one knows every file it did (a change it settled on may then be
