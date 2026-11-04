@@ -116,8 +116,8 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   rig. `EndContacts` takes the bodies an entity lost, so a rig and the body it keeps end only their own contacts.
   Balance (`BalanceRagdoll`, each fixed step, since Jolt clears forces) is rigid-body forces, not a joint: tilt correction
   about the center of mass, a capped upward push toward the animated `StandHeight`, and a brake, relative to the supporting
-  body, for the grip the lift took off the feet, gated on `FindRagdollSupport` (contact normals are kept for it: a wall is no
-  support) and `BalanceMaxTilt`. It uses no angles, so it needs no libm: only Jolt's math and `DecomposeRagdollTransform`, as
+  body, for the grip the lift took off the feet, gated on `FindRagdollSupport` (a rig's parts report their contact normals every step,
+  `BodyMaterial::TracksContacts`: a wall is no support, nor ground that tilted past 60 degrees) and `BalanceMaxTilt`. It uses no angles, so it needs no libm: only Jolt's math and `DecomposeRagdollTransform`, as
   its forces reach the determinism hashes. Recovery
   removes the bodies, optionally starts a get-up clip, and blends local transforms from the frozen pose; gameplay
   supplies the height when recovering onto a different ground level, and a `KinematicRoot` entity stays where it is. Positive uniform transforms are required.

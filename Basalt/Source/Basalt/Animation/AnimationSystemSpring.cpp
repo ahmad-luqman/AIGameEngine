@@ -183,9 +183,8 @@ namespace Basalt {
 		// Physics bodies: the entity's own bodies are not obstacles, nor those of the character controller it belongs to (on
 		// it or an ancestor) and that controller's descendants, as for IK ground rays. A preview has no physics world, so
 		// it reads the scene's static bodies and any controller above the entity.
-		const PhysicsWorld* bodies = m_Preview ? nullptr : physics;
 		// The entity or an ancestor of it, so the entity and its descendants are below it.
-		const Entity body = FindCharacter(entity, bodies).value_or(entity);
+		const Entity body = FindCharacter(entity, physics).value_or(entity);
 		const auto obstacle = [&](UUID id) {
 			const Entity hit = m_Scene.GetEntityByUUID(id);
 			return !hit || !(hit == body || m_Scene.IsDescendantOf(hit, body));
@@ -238,15 +237,6 @@ namespace Basalt {
 				acceleration = glm::vec3(0);
 			}
 			const std::vector<uint32_t>& joints = chain.Resolved.Joints;
-			// A partial ragdoll's joints below its root are its own, and the chain restarts on them when it lets go. The tip
-			// is only aimed at.
-			const auto simulatedByRig = [&](uint32_t joint) { return std::ranges::find(playback.RagdollOverlay, joint, &OverlayEntry::Node) != playback.RagdollOverlay.end(); };
-			if (std::ranges::any_of(std::span(joints).first(joints.size() - 1), simulatedByRig))
-			{
-				chain.Sim.reset();
-				reportChain();
-				continue;
-			}
 			animated.clear();
 			for (uint32_t joint : joints)
 				animated.emplace_back(world * globals[joint][3]);
@@ -268,15 +258,26 @@ namespace Basalt {
 			}
 			// Bodies are seen through the collision matrix; a name it does not know is Default, as for a body.
 			const StaticPhysicsShapes* staticBodies = m_Preview && config.CollidePhysics ? &GetStaticShapes() : nullptr;
-			const bool meetsBodies = config.CollidePhysics && (bodies || staticBodies);
+			const bool meetsBodies = config.CollidePhysics && (physics || staticBodies);
 			PhysicsQueryFilter filter;
 			if (meetsBodies && !config.Layer.empty())
 			{
-				const PhysicsLayers& layers = bodies ? bodies->GetLayers() : staticBodies->GetLayers();
+				const PhysicsLayers& layers = physics ? physics->GetLayers() : staticBodies->GetLayers();
 				const auto layer = layers.Find(config.Layer);
 				if (!layer)
 					chainProblems.push_back(fmt::format("the physics layer '{}' is not defined; it counts as Default", config.Layer));
 				filter.LayerMask = layers.GetCollisionMask(layer.value_or(0));
+				if (filter.LayerMask == 0)
+					chainProblems.push_back(fmt::format("the physics layer '{}' collides with no layer", config.Layer));
+			}
+			// A partial ragdoll's joints below its root are its own, and the chain restarts on them when it lets go. The tip
+			// is only aimed at.
+			const auto simulatedByRig = [&](uint32_t joint) { return std::ranges::find(playback.RagdollOverlay, joint, &OverlayEntry::Node) != playback.RagdollOverlay.end(); };
+			if (std::ranges::any_of(std::span(joints).first(joints.size() - 1), simulatedByRig))
+			{
+				chain.Sim.reset();
+				reportChain();
+				continue;
 			}
 			if (!chain.Sim)
 			{
@@ -298,7 +299,7 @@ namespace Basalt {
 						reach += glm::length(animated[i] - animated[i - 1]);
 					const glm::vec3 low = glm::min(animated.front(), chain.Sim->Animated.front()) - glm::vec3(reach);
 					const glm::vec3 high = glm::max(animated.front(), chain.Sim->Animated.front()) + glm::vec3(reach);
-					nearby = bodies ? bodies->CollectShapes(low, high, request.Radius, filter, obstacle) : staticBodies->CollectShapes(low, high, request.Radius, filter, obstacle);
+					nearby = physics ? physics->CollectShapes(low, high, request.Radius, filter, obstacle) : staticBodies->CollectShapes(low, high, request.Radius, filter, obstacle);
 					// Warned once per chain, outside its problem list: the count rises and falls as the character moves.
 					if (nearby.Truncated() && !chain.TruncationWarned)
 					{

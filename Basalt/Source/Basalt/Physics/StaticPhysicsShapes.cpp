@@ -36,7 +36,9 @@ namespace Basalt {
 			// The mesh's asset: a reloaded one cooks a new shape, and one that went away fails to.
 			std::weak_ptr<MeshSource> MeshAsset;
 			bool HasMeshAsset = false;
+			// The layer's name, and what the project's layers make of it.
 			std::string Layer;
+			std::optional<uint32_t> LayerIndex;
 			glm::vec3 Scale = glm::vec3(1);
 		};
 
@@ -110,38 +112,40 @@ namespace Basalt {
 			const auto& rigidBody = entity.GetComponent<RigidBodyComponent>();
 			if (rigidBody.Type != RigidBodyType::Static || rigidBody.IsTrigger || entity.HasComponent<CharacterControllerComponent>())
 				continue;
-			Impl::Body body;
-			if (auto found = impl.Bodies.find(entity.GetUUID()); found != impl.Bodies.end())
-				body = std::move(found->second);
-			glm::vec3 position, scale;
-			glm::quat rotation;
-			if (!Math::DecomposeTransform(scene.GetWorldTransform(entity), position, rotation, scale))
-			{
-				// Kept, so the warning is not repeated, and rebuilt once it can be placed.
-				body = {};
-				impl.Warnings.Report(entity, { "degenerate transform; the preview leaves its body out" });
-				bodies.emplace(entity.GetUUID(), std::move(body));
-				continue;
-			}
-
 			const auto* box = entity.TryGetComponent<BoxColliderComponent>();
 			const auto* sphere = entity.TryGetComponent<SphereColliderComponent>();
 			const auto* capsule = entity.TryGetComponent<CapsuleColliderComponent>();
 			const auto* mesh = entity.TryGetComponent<MeshColliderComponent>();
+			if (!box && !sphere && !capsule && !mesh)
+				continue;
+			const glm::mat4 world = scene.GetWorldTransform(entity);
+			glm::vec3 position, scale;
+			glm::quat rotation;
+			if (!Math::IsFinite(world) || !Math::DecomposeTransform(world, position, rotation, scale))
+			{
+				// Kept, so the warning is not repeated, and rebuilt once it can be placed.
+				impl.Warnings.Report(entity, { "degenerate transform; the preview leaves its body out" });
+				bodies.emplace(entity.GetUUID(), Impl::Body{});
+				continue;
+			}
+			Impl::Body body;
+			if (auto found = impl.Bodies.find(entity.GetUUID()); found != impl.Bodies.end())
+				body = std::move(found->second);
+
 			std::optional<std::pair<std::string, uint32_t>> borrowed;
 			if (const auto* shown = entity.TryGetComponent<MeshComponent>(); mesh && mesh->Mesh.empty() && shown)
 				borrowed.emplace(shown->Mesh, shown->MeshIndex);
 			const std::string meshKey = borrowed ? borrowed->first : (mesh ? mesh->Mesh : std::string());
 			const Ref<MeshSource> asset = meshKey.empty() ? nullptr : AssetManager::GetMesh(meshKey);
+			const std::optional<uint32_t> layer = impl.Layers.Find(rigidBody.Layer);
 			const BuiltColliders& built = body.Built;
-			const bool current = built.Scale == scale && built.Layer == rigidBody.Layer && Same(built.Box, box) && Same(built.Sphere, sphere) && Same(built.Capsule, capsule) && Same(built.MeshCollider, mesh) && built.BorrowedMesh == borrowed && built.HasMeshAsset == (asset != nullptr) && built.MeshAsset.lock() == asset;
+			const bool current = built.Scale == scale && built.Layer == rigidBody.Layer && built.LayerIndex == layer && Same(built.Box, box) && Same(built.Sphere, sphere) && Same(built.Capsule, capsule) && Same(built.MeshCollider, mesh) && built.BorrowedMesh == borrowed && built.HasMeshAsset == (asset != nullptr) && built.MeshAsset.lock() == asset;
 			if (!current)
 			{
-				body.Built = { .Box = Copy(box), .Sphere = Copy(sphere), .Capsule = Copy(capsule), .MeshCollider = Copy(mesh), .BorrowedMesh = borrowed, .MeshAsset = asset, .HasMeshAsset = asset != nullptr, .Layer = rigidBody.Layer, .Scale = scale };
+				body.Built = { .Box = Copy(box), .Sphere = Copy(sphere), .Capsule = Copy(capsule), .MeshCollider = Copy(mesh), .BorrowedMesh = borrowed, .MeshAsset = asset, .HasMeshAsset = asset != nullptr, .Layer = rigidBody.Layer, .LayerIndex = layer, .Scale = scale };
 				std::vector<std::string> warnings;
 				body.Shape = BuildColliderShape(entity, scale, 1.0f, nullptr, false, true, warnings).Shape;
 				// An unknown layer plays on Default, as a body's does.
-				const auto layer = impl.Layers.Find(rigidBody.Layer);
 				if (!layer)
 					warnings.push_back("unknown physics layer '" + rigidBody.Layer + "', using Default");
 				body.Layer = layer.value_or(0);
@@ -173,7 +177,7 @@ namespace Basalt {
 		{
 			if (!body.Shape || (filter.LayerMask & (1u << body.Layer)) == 0 || uuid == filter.IgnoreEntity || !body.Bounds.Overlaps(region) || (accept && !accept(uuid)))
 				continue;
-			candidates.push_back(PhysicsShapeSnapshot::Candidate::At(uuid, body.Placed, body.Bounds, center));
+			candidates.push_back(PhysicsShapeSnapshot::Candidate::At(uuid, body.Placed, center));
 		}
 		return PhysicsShapeSnapshot::FromCandidates(std::move(candidates), radius);
 	}

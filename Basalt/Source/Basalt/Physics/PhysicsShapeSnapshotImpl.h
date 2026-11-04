@@ -27,9 +27,10 @@ namespace Basalt {
 	struct PhysicsShapeSnapshot::Candidate
 	{
 		// `shape` as seen from a gathered region's `center`.
-		static Candidate At(UUID entity, const JPH::TransformedShape& shape, const JPH::AABox& bounds, const glm::vec3& center)
+		static Candidate At(UUID entity, const JPH::TransformedShape& shape, const glm::vec3& center)
 		{
-			const glm::vec3 closest = glm::clamp(center, PhysicsInternal::FromJolt(JPH::Vec3(bounds.mMin)), PhysicsInternal::FromJolt(JPH::Vec3(bounds.mMax)));
+			const JPH::AABox bounds = shape.GetWorldSpaceBounds();
+			const glm::vec3 closest = glm::clamp(center, PhysicsInternal::FromJolt(bounds.mMin), PhysicsInternal::FromJolt(bounds.mMax));
 			return { .Distance = glm::length(closest - center), .Entity = entity, .Shape = shape };
 		}
 
@@ -39,7 +40,7 @@ namespace Basalt {
 		JPH::TransformedShape Shape;
 	};
 
-	// What CollectShapes gathers nothing from: non-finite or inverted bounds, or a radius that is not finite and nonnegative.
+	// Whether CollectShapes can gather from a region: finite, ordered bounds and a finite, nonnegative radius.
 	inline bool IsValidShapeRegion(const glm::vec3& min, const glm::vec3& max, float radius)
 	{
 		return PhysicsInternal::IsFiniteVec(min) && PhysicsInternal::IsFiniteVec(max) && !glm::any(glm::greaterThan(min, max)) && std::isfinite(radius) && radius >= 0.0f;

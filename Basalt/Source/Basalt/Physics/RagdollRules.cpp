@@ -1,5 +1,6 @@
 #include "Basalt/Physics/RagdollRules.h"
 
+#include "Basalt/Animation/AnimationPose.h"
 #include "Basalt/Math/Math.h"
 #include "Basalt/Physics/JoltUtils.h"
 
@@ -24,6 +25,21 @@ namespace Basalt {
 				return false;
 		}
 		return true;
+	}
+
+	std::set<uint32_t> SelectRagdollJoints(const MeshSource& source, int32_t root)
+	{
+		std::set<uint32_t> selected;
+		for (const auto& skin : source.Skins)
+			for (const auto& joint : skin.Joints)
+				if (root < 0 || joint.Node == static_cast<uint32_t>(root) || IsAncestor(source, static_cast<uint32_t>(root), joint.Node))
+					selected.insert(joint.Node);
+		return selected;
+	}
+
+	uint32_t FindRagdollRoot(const MeshSource& source, const std::set<uint32_t>& selected)
+	{
+		return *std::ranges::find_if(source.NodeOrder, [&](uint32_t node) { return selected.contains(node); });
 	}
 
 	bool RagdollNeedsRebuild(const RagdollComponent& built, const RagdollComponent& current)

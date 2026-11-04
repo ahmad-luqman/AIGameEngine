@@ -95,15 +95,14 @@ namespace Basalt {
 			return;
 		CharacterCollision.Remove(it->second.Character.GetPtr());
 		const JPH::BodyID inner = it->second.Character->GetInnerBodyID();
-		const uint32_t removed = inner.GetIndexAndSequenceNumber();
 		if (!inner.IsInvalid())
 		{
-			BodyToEntity.erase(removed);
+			BodyToEntity.erase(inner.GetIndexAndSequenceNumber());
 			ContactListener.Materials[inner.GetIndex()] = {};
 		}
 		// The character destroys its inner body.
 		Characters.erase(it);
-		EndContacts(uuid, std::span(&removed, 1), false);
+		EndContacts(uuid, std::span(&inner, 1), false);
 	}
 
 	void PhysicsWorld::Impl::OnCharacterChanged(entt::registry& registry, entt::entity entity)

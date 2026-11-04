@@ -33,7 +33,8 @@ namespace Basalt {
 		// Lower entity UUID, its body/sub-shape token, higher entity UUID, its token.
 		// A ragdoll has several bodies for one entity: sub-shape IDs alone would alias its limbs.
 		using ContactKey = std::tuple<uint64_t, uint64_t, uint64_t, uint64_t>;
-		// With the direction that pushes the lower entity out of the higher one, as when they first touched.
+		// With the direction that pushes the lower entity out of the higher one: as of the last step for a ragdoll's parts
+		// (BodyMaterial::TracksContacts), else as when they first touched.
 		std::map<ContactKey, glm::vec3> ActiveContacts;
 		// Number of active body/sub-shape tokens for each entity pair.
 		std::map<EntityPair, int> PairCounts;
@@ -89,7 +90,7 @@ namespace Basalt {
 		// and do collide, so this cannot be an ignored pair.
 		if (a == b && body1.GetCollisionGroup().GetGroupID() != body2.GetCollisionGroup().GetGroupID())
 			return false;
-		return m_Owner.IgnoredPairs.empty() || !m_Owner.IgnoredPairs.contains({ std::min(a, b), std::max(a, b) });
+		return !m_IgnoredPairs.contains({ std::min(a, b), std::max(a, b) });
 	}
 
 	bool PhysicsWorld::Impl::IsTrigger(UUID uuid) const
@@ -98,10 +99,10 @@ namespace Basalt {
 		return body != nullptr && body->IsTrigger;
 	}
 
-	void PhysicsWorld::Impl::EndContacts(UUID uuid, std::span<const uint32_t> bodies, bool trigger, bool defer)
+	void PhysicsWorld::Impl::EndContacts(UUID uuid, std::span<const JPH::BodyID> bodies, bool trigger, bool defer)
 	{
 		const uint64_t id = static_cast<uint64_t>(uuid);
-		const auto lost = [&](uint64_t entity, uint64_t token) { return entity == id && std::ranges::find(bodies, ContactBody(token)) != bodies.end(); };
+		const auto lost = [&](uint64_t entity, uint64_t token) { return entity == id && std::ranges::find(bodies, JPH::BodyID(ContactBody(token))) != bodies.end(); };
 		std::set<EntityPair> ended;
 		for (auto contact = Contacts->ActiveContacts.begin(); contact != Contacts->ActiveContacts.end();)
 		{
@@ -138,14 +139,21 @@ namespace Basalt {
 			const auto& [first, firstToken, second, secondToken] = key;
 			if (first != id && second != id)
 				continue;
+			const bool rigIsFirst = first == id;
+			const UUID other(rigIsFirst ? second : first);
+			const JPH::BodyID part(ContactBody(rigIsFirst ? firstToken : secondToken));
 			// The normal pushes the first entity out; this is what it does to the rig.
-			const float facing = ToJolt(normal).Dot(up) * (first == id ? 1.0f : -1.0f);
-			const JPH::BodyID part(ContactBody(first == id ? firstToken : secondToken));
-			if (facing < MinSupportFacing || IsTrigger(UUID(first == id ? second : first)) || !record.HasPart(part))
+			const float facing = ToJolt(normal).Dot(up) * (rigIsFirst ? 1.0f : -1.0f);
+			if (facing < MinSupportFacing || IsTrigger(other) || !record.HasPart(part))
 				continue;
+			// At the center of mass is below it too: a rig of one part stands on that part.
 			const JPH::RVec3 position = bodies.GetCenterOfMassPosition(part);
-			if (JPH::Vec3(position - center).Dot(up) < 0)
-				return bodies.GetPointVelocity(JPH::BodyID(ContactBody(first == id ? secondToken : firstToken)), position);
+			if (JPH::Vec3(position - center).Dot(up) > 0)
+				continue;
+			const JPH::BodyID support(ContactBody(rigIsFirst ? secondToken : firstToken));
+			// Character inner bodies are teleported and report no velocity.
+			const auto character = Characters.find(other);
+			return character != Characters.end() && character->second.Character->GetInnerBodyID() == support ? ToJolt(character->second.ActualVelocity) : bodies.GetPointVelocity(support, position);
 		}
 		return std::nullopt;
 	}
@@ -268,6 +276,13 @@ namespace Basalt {
 			}
 			const ContactState::ContactKey key(a, subA, b, subB);
 			const Impl::EntityPair pair(a, b);
+
+			if (event.Persisted)
+			{
+				if (const auto active = Contacts->ActiveContacts.find(key); active != Contacts->ActiveContacts.end())
+					active->second = contact.Normal;
+				continue;
+			}
 
 			// A body that falls asleep reports its contacts as removed; it is still touching, so keep them.
 			if (!event.Added && (sleeping(subA) || sleeping(subB)))

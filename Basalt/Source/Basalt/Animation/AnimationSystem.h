@@ -605,8 +605,6 @@ namespace Basalt {
 		static glm::vec3 UpdateFootLock(IKChainState::FootLockState& lock, const glm::vec3& current, float height, const glm::vec3& up, bool airborne, float seconds, float blend, const LockSettings& settings);
 		void SolveEntityIK(Entity entity, Playback& playback, const InverseKinematicsComponent& component, IKState& state, float seconds);
 		IKState& SyncIK(Entity entity, const InverseKinematicsComponent& component);
-		// The entity holding the character controller `entity` belongs to: itself or its nearest ancestor with a live
-		// character; nullopt when none.
 		// The character controller the entity belongs to: on it or the nearest ancestor with one. Without a physics world
 		// (a preview), by component; otherwise it must have been built.
 		static std::optional<Entity> FindCharacter(Entity entity, const PhysicsWorld* physics);

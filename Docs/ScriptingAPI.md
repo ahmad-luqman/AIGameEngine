@@ -1762,16 +1762,16 @@ where physics left them. Each substep, the angle limit applies first, then the c
 `Layer` (like a body's, a name the project does not define counts as Default, warned about) filters them through the
 project's collision matrix, so hair can ignore props the body itself walks into. In the editor's preview, which has no
 physics world, the chain collides with the same components' shapes for the scene's static bodies only: dynamic and kinematic
-bodies move once the game runs. Their shapes are rebuilt when their colliders, scale or mesh change; a moved body rebuilds
-nothing.
+bodies move once the game runs. Their shapes are rebuilt when their colliders, scale, layer or mesh change; a moved body
+rebuilds nothing.
 
 A fast point can cross what is thinner than one substep's move: at 120 substeps a second a point moving 12 m/s crosses
 10 cm between checks. `Continuous` sweeps each point's move after the steps above, against the colliders and the bodies:
 it stops at the first thing it meets and slides along it with the rest of the move, so what starts on one side stays on it.
 A point starting inside something leaves freely. A point an obstacle holds more than half a bone length past its bone
 lets go (it comes through): that happens when the chain's head went past the obstacle, and a point left behind would only
-stretch the bone across it. The sweep costs up to three queries per point and substep, so it stays off unless a chain is
-fast and its obstacles thin.
+stretch the bone across it. The sweep costs up to three rounds of queries per point and substep, so it stays off unless a
+chain is fast and its obstacles thin.
 
 Points simulate in world space in equal substeps of at most 1/120 s, so a moving or turning character swings its
 chains, and every bone keeps its animated length (scaled with the entity). A frame longer than 1/15 s (a hitch)
@@ -1793,7 +1793,8 @@ none when none does), and, once per chain, more physics bodies near a chain than
 32). A chain the animation scales to nothing (hiding it) has nothing to swing,
 quietly. The inspector and `scene.info` show the authoring problems too and warn when two chains turn the same joint
 (the later one wins), when a chain joint has several children (the first is followed), when a `ChainLength` 0 chain
-goes on past 16 joints and when a chain's bones have zero length in the model's rest pose. The simulated points are gameplay state: they survive playback resets and end with the component.
+goes on past 16 joints and when a chain's bones have zero length in the model's rest pose, when `Continuous` has nothing to
+sweep against and when a chain's `Layer` collides with no layer (also logged while it plays). The simulated points are gameplay state: they survive playback resets and end with the component.
 
 ## Graphics settings
 
@@ -2006,7 +2007,8 @@ end
 
 `MotorStrength` on a `Bones` entry (0..1, default 1) scales that joint's torque, live and without a rebuild: a limp arm
 at 0 while the rest of the body holds its pose. It multiplies the rig's strength, and a joint at 0 has its motor off. The
-rig's root has no joint above it, so an entry there does nothing (warned about). Adding or removing a `Bones` entry
+rig's root has no joint above it, so `MotorStrength` on its entry does nothing (warned about); the entry's size and mass
+still apply. Adding or removing a `Bones` entry
 changes the list, which is structural and rebuilds.
 
 **Partial ragdolls.** With `KinematicRoot`, the `RootJoint` body follows the animation instead of falling, and only what
@@ -2021,8 +2023,9 @@ Timer.After(0.8, function() character:RecoverRagdoll("", 0.3) end)
 The rig joins the entity instead of replacing it: its rigid body or character controller stays, with root motion and
 gameplay movement, and `Move` and `IsGrounded` go on working. The root is moved once per physics step to where the entity
 and the animation put it (a frame with several steps divides the animated move among them), and the rest follows through
-the joints, lagging behind as it should. A jump faster than 30 m/s or a turn of more than 90° in one step, from the entity or
-from the animation, carries the whole rig along as it hung, because following it would fling the limbs. The drawn limbs
+the joints, lagging behind as it should. A jump faster than 30 m/s or a turn of more than 90° in one step (after that
+division), from the entity or from the animation, carries the whole rig along as it hung, because following it would fling
+the limbs. The drawn limbs
 hang from the animated root, which stays the animation's. Limbs never collide with the entity's own body or inner character
 (nor with a character controller on an ancestor), and that character ignores them, but they do collide with each other and
 the world, and a total impulse goes to the parts that can move. A rigid body on an ancestor is an ordinary obstacle, as it
@@ -2031,7 +2034,9 @@ is for spring chains and IK rays.
 IK and spring chains run as usual outside the rig. On the rig's joints below its root the rig wins and a spring chain
 restarts when it lets go (the inspector warns); chains on nodes below the rig (not skin joints, or they would be part of it)
 hang from the physical joints. `RecoverRagdoll` leaves the entity where it is. With no motor strength, the limbs hang limp
-from the animated root. The rig needs a skin joint below `RootJoint`: a root with nothing to simulate is rejected. Contacts
+from the animated root. The rig needs a skin joint below `RootJoint`: a root with nothing to simulate is rejected (and warned about in the
+inspector). A root the animation shears holds still and catches up when it can follow again; a limb that shears only turns
+the motors off. Contacts
 of the entity's own body are unaffected by the rig coming or going, and the other way around.
 
 **Active balance.** `BalanceStrength` (0..1, default 0: off) keeps a powered rig on its feet. While the motors run and a
@@ -2048,7 +2053,8 @@ part below the rig's center of mass rests on something:
   is applied as a brake on the rig's horizontal motion relative to what it stands on. A push moves the rig and it stops; it
   does not skate away, and a moving floor carries it.
 
-"Rests on something" means a surface that faces up, within 60° of vertical: a wall brushing a falling leg holds nothing up.
+"Rests on something" means a surface that faces up, within 60° of vertical as it is now: a wall brushing a falling leg holds
+nothing up, and ground that tilts past that stops being ground.
 Past `BalanceMaxTilt` degrees (0..180, default 60) of tilt from the animation's uprightness the rig has lost its balance
 and falls, until something rights it; at 0 it would need to be exactly upright, which it never quite is. The strength is scaled by the motor strength, so fading the motors out with `SetRagdollMotorStrength` drops the rig:
 stumble with a low strength and let it recover, or fade to 0 for a knockdown. `IsRagdollBalanced() -> boolean` reports whether

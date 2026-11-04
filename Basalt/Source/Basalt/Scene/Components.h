@@ -488,7 +488,7 @@ namespace Basalt {
 		// body.
 		std::string Layer;
 		// Each substep also checks the way a point moved, not only where it ended, so a fast point stops at a collider or
-		// body too thin to catch it there. Costs up to three sweeps per point and substep; a point that an obstacle would part
+		// body too thin to catch it there. Costs up to three rounds of sweeps per point and substep; a point that an obstacle would part
 		// from its bone by more than half the bone's length lets go, so a chain whose head went past cannot hang behind.
 		bool Continuous = false;
 	};

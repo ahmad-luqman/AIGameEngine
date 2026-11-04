@@ -30,6 +30,7 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include <limits>
+#include <algorithm>
 #include <map>
 #include <optional>
 #include <set>
@@ -108,7 +109,7 @@ namespace Basalt {
 			glm::mat4 World = glm::mat4(1);
 			float RecoveryLeft = 0;
 			float RecoveryDuration = 0;
-			// For each entry of Settings.Bones, the part it names.
+			// For each entry of Settings.Bones, the part it names. Read against live Bones only where the joint still matches.
 			std::vector<int> BoneParts;
 			// BalanceRagdoll's settings for one frame, in the terms it uses.
 			struct BalanceDrive
@@ -193,7 +194,7 @@ namespace Basalt {
 		bool RagdollReplacesBody(UUID uuid) const;
 		// The character controller a rig on `entity` belongs to: on it or the nearest ancestor with one.
 		UUID FindRagdollCharacter(Entity entity) const;
-		// Whether `body` is a limb of a rig belonging to that character.
+		// Whether `body` is a part of a rig belonging to that character.
 		bool IsRagdollPartOf(const JPH::Body& body, UUID character) const;
 		// Advances motor strengths, turns every active rig's joint motors toward its animated pose (or off at strength 0),
 		// and records the AnimatedRoot and Balance that this frame's fixed steps use (a rig without motors that follows a root
@@ -296,6 +297,7 @@ namespace Basalt {
 		class NonCharacterBodyFilter final : public JPH::BodyFilter
 		{
 		public:
+			// `character`: the one moving, never 0.
 			NonCharacterBodyFilter(const Impl& owner, UUID character)
 				: m_Owner(owner)
 				, m_Character(character)
@@ -313,14 +315,14 @@ namespace Basalt {
 		class BodyPairFilter final : public JPH::SimShapeFilter
 		{
 		public:
-			explicit BodyPairFilter(const Impl& owner)
-				: m_Owner(owner)
+			explicit BodyPairFilter(const std::set<std::pair<uint64_t, uint64_t>>& ignoredPairs)
+				: m_IgnoredPairs(ignoredPairs)
 			{
 			}
 			bool ShouldCollide(const JPH::Body& body1, const JPH::Shape*, const JPH::SubShapeID&, const JPH::Body& body2, const JPH::Shape*, const JPH::SubShapeID&) const override;
 
 		private:
-			const Impl& m_Owner;
+			const std::set<std::pair<uint64_t, uint64_t>>& m_IgnoredPairs;
 		};
 
 		std::unordered_map<UUID, CharacterRecord> Characters;
@@ -358,7 +360,7 @@ namespace Basalt {
 		// deterministic but not the registry order.
 		JPH::CharacterVsCharacterCollisionSimple CharacterCollision;
 		CharacterLayerFilter CharacterLayers{ *this };
-		BodyPairFilter BodyPairs{ *this };
+		BodyPairFilter BodyPairs{ IgnoredPairs };
 		// Entities that got no body or character because their transform could not be decomposed (e.g. spawned
 		// at a zero scale); ApplyScaleChanges builds them once it can. A live body or character whose transform
 		// turns degenerate keeps its record instead (BodyRecord/CharacterRecord::Degenerate).
@@ -475,9 +477,9 @@ namespace Basalt {
 		// Removes a character and its inner body, ending its contacts like RemoveBody.
 		void RemoveCharacter(UUID uuid);
 
-		// Ends the contacts of bodies an entity lost (Jolt's index and sequence numbers; it may keep others) and notifies the
-		// surviving entities of the pairs that no longer touch at all.
-		void EndContacts(UUID uuid, std::span<const uint32_t> bodies, bool trigger, bool defer = false);
+		// Ends the contacts of bodies an entity lost (it may keep others) and notifies the surviving entities of the pairs
+		// that no longer touch at all.
+		void EndContacts(UUID uuid, std::span<const JPH::BodyID> bodies, bool trigger, bool defer = false);
 		// Reports one contact transition to the scene's event listener, then to the scripts.
 		void DispatchContact(ContactEventType type, Entity first, Entity second, const std::optional<ContactInfo>& contact);
 

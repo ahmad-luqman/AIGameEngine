@@ -372,7 +372,7 @@ namespace Basalt {
 			// After the lock is released: `accept` may query the world.
 			if (accept && !accept(entity))
 				continue;
-			candidates.push_back(PhysicsShapeSnapshot::Candidate::At(entity, shape, shape.GetWorldSpaceBounds(), center));
+			candidates.push_back(PhysicsShapeSnapshot::Candidate::At(entity, shape, center));
 		}
 		return PhysicsShapeSnapshot::FromCandidates(std::move(candidates), radius);
 	}
