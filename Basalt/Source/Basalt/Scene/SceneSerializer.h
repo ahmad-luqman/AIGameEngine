@@ -14,15 +14,23 @@ namespace Basalt {
 
 	class Scene;
 
+	// What a prefab file's root is: an ordinary entity, or (Variant) an instance of the prefab its Prefab component names.
+	enum class PrefabFileRoot
+	{
+		Plain,
+		Variant
+	};
+
 	// JSON (de)serialization of scenes (.bscene) and prefabs (.bprefab).
 	//
 	// Scene file layout:
-	//   { "Format": "BasaltScene", "Version": 3, "Name": "...",
+	//   { "Format": "BasaltScene", "Version": 4, "Name": "...",
 	//     "Renderer": { ...RendererSettings... }, "Physics": { "Gravity": [x,y,z], ... },
 	//     "Entities": [ { "ID": 123, "Name": "Player", "Parent": 0, "Components": { "Transform": {...}, ... } } ] }
 	// Entities are written parents-first in hierarchy order; "Parent" is 0 for roots.
 	// A prefab has the same "Entities" array; the first entity is the prefab root. In a prefab, a record whose Prefab
-	// component holds { "Prefab": <file>, "Overrides": { "<ID>": <merge patch> } } stands for that file's tree (Scene/Prefab).
+	// component holds { "Prefab": <file> } and optionally "Overrides": { "<ID>": <merge patch, or null to delete> } stands
+	// for that file's tree (Scene/Prefab).
 	//
 	// Versions: 4 adds those records, and the marker of a nested instance in Prefab.Baseline records.
 	// Version 3 writes declared asset fields as {UUID, Path} objects on disk; legacy strings remain readable.
@@ -61,12 +69,14 @@ namespace Basalt {
 		// A current-format scene document holding entity records, for DeserializeScene into a scratch scene.
 		static nlohmann::json SceneDocument(nlohmann::json entities);
 		// Saves entity records (as SerializeEntityTree writes them, the root first, with the file's IDs) as a prefab file,
-		// through Prefab::ToFileEntities. With variant the root stays an instance of the prefab its link names.
-		static bool SavePrefabEntities(nlohmann::json entities, const std::filesystem::path& path, std::string& outError, bool variant = false);
+		// through Prefab::ToFileEntities. Nothing is written unless the result can be read back: a file that fails to read
+		// breaks every instance. outWarnings says what the write forgets (dead overrides) and what the nested prefabs warn
+		// about; without it they are logged.
+		static bool SavePrefabEntities(nlohmann::json entities, const std::filesystem::path& path, std::string& outError, PrefabFileRoot root = PrefabFileRoot::Plain, std::vector<std::string>* outWarnings = nullptr);
 		// Instantiates a prefab file into the scene after checking its structure (Prefab::ReadFile); on failure nothing is
 		// left in the scene. The new root's PrefabComponent names prefabPath (normalized) and tracks its entities
-		// (Prefab::Link).
-		static Entity InstantiatePrefab(Scene& scene, const std::filesystem::path& absolutePath, const std::string& prefabPath, Entity parent, std::string& outError);
+		// (Prefab::Link). outWarnings gets what reading it found (Prefab::ReadReport::Warnings).
+		static Entity InstantiatePrefab(Scene& scene, const std::filesystem::path& absolutePath, const std::string& prefabPath, Entity parent, std::string& outError, std::vector<std::string>* outWarnings = nullptr);
 
 		static nlohmann::json SerializeEntity(Entity entity);
 

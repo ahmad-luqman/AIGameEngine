@@ -2201,8 +2201,9 @@ namespace Basalt {
 					return "Baseline record '" + key + "' must be a source entity record (ID, Name, Parent, Components) listed in Members";
 				// A nested instance's root names its prefab; everything else about it is this baseline's records.
 				const auto nested = record["Components"].find("Prefab");
-				if (nested != record["Components"].end() && (!nested->is_object() || nested->size() != 1 || !nested->contains("Prefab") || !(*nested)["Prefab"].is_string()))
-					return "Baseline record '" + key + "' may hold a Prefab component with the path alone";
+				const auto isMarker = [&] { return nested->is_object() && nested->size() == 1 && nested->contains("Prefab") && (*nested)["Prefab"].is_string() && !(*nested)["Prefab"].get_ref<const std::string&>().empty(); };
+				if (nested != record["Components"].end() && (record["Parent"] == 0 || !isMarker()))
+					return "Baseline record '" + key + "' may hold a Prefab component with the path alone, unless it is the root";
 				if (const uint64_t parent = record["Parent"].get<uint64_t>(); parent != 0 && !c.Baseline.contains(std::to_string(parent)))
 					return "Baseline record '" + key + "' names a parent that is not in Baseline";
 				if (record["Parent"] == 0)

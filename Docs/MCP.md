@@ -101,16 +101,17 @@ type: Added|Modified|Removed}], reloaded, scripts}`. Without `paths` it fails wh
 reported as removed then), and when `Assets/` could not be read until now its `warnings` say that earlier changes were
 not seen. `asset.refresh {"paths": [...]}` reloads the files named, changed or not; a path that does not exist and was
 not known, or a folder, rejects the whole request (nothing is reloaded or recorded). Files the session writes itself
-(`asset.write`, `scene.save`, `prefab.create`, `prefab.save`, `prefab.apply`, `replay.record_stop`) are never reported as
+(`asset.write`, `scene.save`, `prefab.create`, `prefab.save`, `prefab.apply`, `prefab.variant`, `replay.record_stop`) are never reported as
 changes. A changed `.bprefab` merges into the instances of the edit scene and of a scene waiting for prefab editing
 (during Play too, never into the play copy): `asset.write`/`asset.refresh` results report `prefabInstances`,
 `prefab.create/save/apply` report `instances`, and instances that could not merge are `warnings`. `scene.open` and
 `project.open` merge the tracked instances of prefabs saved since the scene was, reporting `prefabInstances` and
 `warnings` the same way. Prefabs nest and inherit (`prefab.variant`, `prefab.create {"variant": true}`, an instance inside
 a tree or an open prefab): their files hold only overrides of what they read, so a changed `.bprefab` also merges into
-the instances of every prefab nesting or based on it, without rewriting those files (`prefab.info` lists a prefab's
-`dependencies`). A nested instance belongs to the instance holding it: `prefab.overrides` on that instance lists its
-entities, and `prefab.apply/refresh/revert` take that instance's root. In the editor,
+the tracked instances of every prefab nesting or based on it, without rewriting those files (`prefab.info` lists a
+prefab's `dependencies`). A nested instance belongs to the instance holding it: `prefab.overrides` on that instance
+lists its entities, and `prefab.apply/refresh/revert` take that instance's root. Read `warnings` on these commands: an
+override of an entity a nested prefab dropped does nothing, and saving forgets it. In the editor,
 View > Reload Changed Files Automatically (`autoReload`) reloads files once two scans 500 ms apart see them unchanged,
 so a plain file write is enough; such a file is then usually reloaded before your next command and not reported by
 `asset.refresh` (pass `paths` to force it). A replay recorded across a hot reload gets a warning from

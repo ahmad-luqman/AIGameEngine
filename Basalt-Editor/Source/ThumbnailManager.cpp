@@ -5,7 +5,6 @@
 #include "Basalt/Asset/MeshSource.h"
 #include "Basalt/Asset/TextureSource.h"
 #include "Basalt/Core/FileSystem.h"
-#include "Basalt/Core/JsonUtils.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Project/Project.h"
 #include "Basalt/Scene/Prefab.h"

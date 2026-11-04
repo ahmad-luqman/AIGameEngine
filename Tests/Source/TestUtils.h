@@ -6,6 +6,7 @@
 #include <Basalt/Core/Log.h>
 #include <Basalt/Core/Platform.h>
 #include <Basalt/Project/Project.h>
+#include <Basalt/Scene/Entity.h>
 #include <Basalt/Scene/Scene.h>
 #include <Basalt/Scripting/ScriptEngine.h>
 #include <Basalt/UI/GameUI.h>
@@ -155,6 +156,11 @@ namespace BasaltTest {
 	}
 
 	// Creates an empty, active project in a fresh temporary directory; removed and deactivated on scope exit.
+	inline uint64_t IdOf(Basalt::Entity entity)
+	{
+		return static_cast<uint64_t>(entity.GetUUID());
+	}
+
 	class TempProject
 	{
 	public:

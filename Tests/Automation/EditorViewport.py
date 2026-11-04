@@ -20,7 +20,7 @@ from EditorThumbnails import EXPECTED_ERRORS, check_thumbnails
 from EditorUI import check_ui
 from EditorAnimationAuthoring import check_animation_authoring
 from EditorRagdolls import check_ragdolls
-from PrefabEditing import check_prefabs
+from PrefabEditing import check_nesting, check_prefabs
 
 
 def require(value, message):
@@ -252,6 +252,7 @@ def main():
                     check_animation_authoring(call, require, output)
                     check_ragdolls(call, require, output)
                     check_prefabs(call, require, output)
+                    check_nesting(call, require, editor=True)
                     errors = call("log.get", {"errorsOnly": True})
                     unexpected = [m for m in errors["messages"] if not m["text"].startswith(EXPECTED_ERRORS)]
                     require(not unexpected, f"Editor logged errors: {errors}")

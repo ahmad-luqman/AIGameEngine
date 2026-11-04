@@ -20,7 +20,7 @@ changing code. Task-specific procedures live in `.claude/skills/*/SKILL.md`.
 
 Engine modules (`Basalt/Source/Basalt/<Module>/`): `Core` (application, window, input incl. gamepads, log, file
 system, `.bpak` archives and file watching, command line, crash reports), `Events`, `Math`, `Renderer` (device, scene renderer, IBL, debug lines), `ImGui`, `Scene`
-(EnTT scene, components, component registry, serialization, prefab instances and overrides), `Asset` (glTF, images, primitives, material
+(EnTT scene, components, component registry, serialization, prefab instances, overrides, nesting and variants), `Asset` (glTF, images, primitives, material
 files, asset cache), `Physics` (Jolt), `Audio` (miniaudio: buses, per-source low-pass and Doppler, reverb sends into per-bus reverbs), `Particles` (CPU particle simulation), `Animation` (glTF TRS sampling, blends, crossfades, 1D/2D blend spaces with phase sync and velocity matching, animation events, bone transforms and attachments, data-driven state machines and per-state root motion, layers with joint masks, shared mask assets, additive clips and their own state machines, two-bone/look-at/FABRIK IK with foot placement and foot locking, spring bones with angle limits, per-chain colliders and physics-body collisions, morph targets, retargeted clip libraries with shared joint maps and reference poses, per-entity playback), `UI` (game UI: UI
 component layout, widgets and their mouse/keyboard/gamepad interaction, immediate-mode `UI.*`, TrueType fonts;
 drawn through ImGui after the scene), `Scripting` (Lua 5.4 + sol2; timers, coroutines, events), `Project`
@@ -138,26 +138,33 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   scene waiting for prefab editing (also during Play, never into the play copy); `scene.open`/`project.open` merge
   outdated tracked instances, and `project.validate` warns about scenes still holding outdated ones. Instances created
   during Play keep no baseline. `prefab.create` gives files fresh source IDs (kept on rewrites through the instance link,
-  then name matching) and links the saved tree as an instance, unless it belongs to another instance or prefab.
-  Untracked instances are adopted (children matched by name) by `prefab.refresh/revert/apply` or the merge after a
-  prefab write (`scene.open` skips them). `prefab.open` swaps in an isolated scene; the waiting scene keeps its path,
+  then name matching) and links the saved tree as an instance, unless it belongs to another instance or prefab (a
+  variant relinks to itself). Untracked instances are adopted (children matched by name) by `prefab.refresh/revert/apply`
+  or the merge after a write of their own prefab (`scene.open` skips them). `prefab.open` swaps in an isolated scene; the waiting scene keeps its path,
   dirty state, selection and (editor) undo history, and edit boundaries other than `prefab.save/close`, plus
   `project.export`, are rejected until `prefab.close`.
 - **Nested prefabs and variants.** In a `.bprefab`, a record whose `Prefab` component names another file stands for that
   file's tree, and its `Overrides` (a JSON merge patch keyed by entity IDs in the holding file, whose asset fields are
-  encoded like a baseline's) hold only what differs; a variant is a prefab whose root is such a record, so
-  both share one reader, writer and merge. `Prefab::ReadFile` expands them recursively (cycles, `MaxNestingDepth` and
-  `MaxExpandedEntities` are errors) into flat records whose nested IDs are derived from the nested root's ID, so files
-  are never rewritten when what they nest changes, and overrides and references stay valid. A prefab write merges into
-  every instance whose source read that file (`ReadReport::Files`). In a scene the outermost instance tracks all flat
-  records, and nested roots keep a marker (`Prefab` alone, also in baseline records, which carries moves and validation
-  through `AssetFields`): `EnclosingInstance` finds their owner, they never merge alone, and instance commands on them
-  are rejected, except `prefab.unpack`, there an override. Unpacking an outer instance adopts its nested instances. Only
-  `prefab.open` tracks the outermost nested instances, so overrides and live merges work there;
-  `Prefab::ToFileEntities` turns flat records back into nested ones on every write. A nested root's position and rotation
-  are the holding prefab's (always in its overrides); a variant's follow the base until changed. An override of an
-  entity the nested prefab dropped does nothing (`prefab.info`, `project.validate`), and that entity's added children
-  move to the root. Format version 4; a `Prefab` component in an older file is ignored.
+  encoded like a baseline's) hold only what differs; a variant is a prefab whose root is such a record, so both share
+  one reader, writer and merge. `Prefab::ReadFile` expands them recursively (cycles, `MaxNestingDepth` and
+  `MaxExpandedEntities` are errors) into flat records whose nested IDs are derived from the nested root's ID, so files are
+  never rewritten when what they nest changes, and overrides and references stay valid. A prefab write merges into its
+  own instances and into the tracked instances whose source read that file (`ReadReport::Files`, keyed by `FileKey`, which
+  ignores case where disks do). In a scene the outermost instance tracks all flat records, and nested roots keep a marker
+  (`Prefab` alone, also in baseline records, which carries moves and validation through `AssetFields`):
+  `EnclosingInstance` finds their owner, they never merge alone (`PrepareMerge` rejects them), `prefab.apply/refresh/revert`
+  on them are rejected, `prefab.overrides` reports `enclosing`, and `prefab.unpack` there is an override. A listed nested
+  root that tracked itself meanwhile (a copy, or moved out and back) is reclaimed on merge. Unpacking an outer instance
+  tracks its nested instances exactly through the former link, since they stop being nested; while still nested, only
+  `prefab.open` tracks them. `Prefab::ToFileEntities` turns flat records back into nested ones on every write, diffing
+  against what the nested prefabs say now, so writers first merge what they missed (`MergeOutdatedNested`), and
+  `SavePrefabEntities` refuses a result it could not read back. A nested root's position and rotation are the holding
+  prefab's (always in its overrides); a variant's root has none of its own and follows its base, like any placement never
+  an override. An override of an entity the nested prefab dropped does nothing and an addition under it moves to the root,
+  which reads report in `ReadReport::Warnings`, shown by every command that reads or writes the file. Format version 4; a
+  `Prefab` component in a prefab file declaring an older version, or none, is ignored, and `asset.move` strips it when it
+  upgrades the file. Limits: a nested tree keeps its prefab's sibling order, and a nested root that holds instances
+  unpacks only in its open prefab, because their IDs derive from it.
 - **Shipping.** `ProjectConfig` holds `Version` (3 or 4 16-bit numbers, `ParseProjectVersion`), `Company` (Name and
   Company are capped at `MaxTextLength`) and `Icon` (a PNG asset reference, encoded and moved like `StartScene`; an
   unresolved one stays an `asset-uuid:` key). `project.export {"package": true}` packages for the host: a `.app`

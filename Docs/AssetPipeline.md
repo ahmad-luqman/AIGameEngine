@@ -18,10 +18,6 @@ Prefab instance baselines (`Prefab.Baseline`, the source as last merged) store t
 migrate with moves, so a move never reads as an instance override. A missing baseline identity becomes the same opaque
 `asset-uuid://` key as the component's, so it never reads as an override either; a malformed reference, or a UUID
 reference while no project is open, fails the load with its record and field named.
-
-A prefab's nested records (format 4) name their prefab the same way, and their `Overrides` store asset fields the same
-way too. A nested or base prefab that is missing fails the read with its identity or path named; instances keep their
-state and report it, and `project.validate` lists the prefab holding it as not loading.
 Legacy string paths remain readable; missing references and paths outside Assets/ remain editable
 strings on save. All component readers accept both strings and UUID/path objects.
 Components, Lua, automation snapshots and replay hashes continue to expose paths. An unresolved
@@ -31,6 +27,10 @@ marked once in ComponentRegistry and shared by persistence and rename; a list el
 `ClipLibraries[].Mesh`) is declared as `List[].Field` and handled the same way in every element. Paths inside arbitrary script
 properties, script source, module imports, animation clip names and external glTF resource URIs are
 not rewritten or assigned IDs by scene persistence.
+
+A prefab's nested records (format 4) name their prefab the same way, and their `Overrides` store asset fields the same
+way too. A nested or base prefab that is missing fails the read with its identity or path named; instances keep their
+state and report it, and `project.validate` lists the prefab holding it as not loading.
 
 Use `asset.resolve {"uuid":"123456789"}` to look up the current path. `asset.move` and `asset.rename`
 both take full project-relative `from` and `to` paths, move one file with its sidecar, upgrade legacy
@@ -88,7 +88,7 @@ Prefab spawning uses the current index without a directory walk. The host's file
 index on changes. Scene reads also refresh it, so external paired moves resolve when reopening a scene.
 
 Legacy version-1 scene migrations retain the original fixed-timestep default semantics before upgrading
-the document to version 3. Move preparation may create a source sidecar; failed moves preserve that ID
+the document to the current version. Move preparation may create a source sidecar; failed moves preserve that ID
 while restoring any scene, prefab and project documents they changed. Diagnostic path hints may name
 an earlier location until the next save; UUID resolution remains authoritative.
 
