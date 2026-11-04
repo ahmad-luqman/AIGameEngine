@@ -90,12 +90,13 @@ namespace Basalt {
 	inline const nlohmann::json* ReadEntryArray(const nlohmann::json& data, std::string_view key, std::string_view context, std::string_view notObject, size_t maxEntries, std::string& outError)
 	{
 		outError.clear();
-		if (!data.is_object() || !RejectUnknownKeys(data, { key }, context, outError))
+		if (!data.is_object())
 		{
-			if (outError.empty())
-				outError = notObject;
+			outError = notObject;
 			return nullptr;
 		}
+		if (!RejectUnknownKeys(data, { key }, context, outError))
+			return nullptr;
 		// contains/at rather than find: GCC cannot see that a found iterator is not null.
 		const std::string name(key);
 		if (!data.contains(name) || !data.at(name).is_array() || data.at(name).size() > maxEntries)
@@ -110,11 +111,12 @@ namespace Basalt {
 	// unknown key) otherwise.
 	inline bool RequireEntryObject(const nlohmann::json& entry, std::initializer_list<std::string_view> allowed, const std::string& location, std::string& outError)
 	{
-		if (entry.is_object() && RejectUnknownKeys(entry, allowed, location, outError))
-			return true;
 		if (!entry.is_object())
+		{
 			outError = location + " must be an object";
-		return false;
+			return false;
+		}
+		return RejectUnknownKeys(entry, allowed, location, outError);
 	}
 
 	// entry[key] as a nonempty string, or null with "<location>.<key> must be a nonempty string".

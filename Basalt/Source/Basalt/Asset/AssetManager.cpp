@@ -164,14 +164,15 @@ namespace Basalt {
 
 		// A JSON asset (an animation graph, mask or joint map: T::FromText), read through FileSystem so a mounted archive serves it.
 		template<typename T>
-		Ref<const T> LoadJsonAsset(const std::string& key, std::string& outError)
+		Ref<const T> LoadJsonAsset(const std::string& key, const char* kind, std::string& outError)
 		{
 			std::string readError;
 			const auto text = FileSystem::ReadTextFile(Project::ResolvePath(key), &readError);
 			if (!text)
 			{
-				// GetJsonAsset's log line names the kind and key.
-				outError = fmt::format("cannot read the file ({})", readError);
+				// GetError's other readers (inspector warnings, Lua errors) show this without the log line's prefix, so it names
+				// the file itself.
+				outError = fmt::format("cannot read animation {} '{}' ({})", kind, key, readError);
 				return nullptr;
 			}
 			auto asset = T::FromText(*text, outError);
@@ -188,7 +189,7 @@ namespace Basalt {
 			if (auto it = cache.find(key); it != cache.end())
 				return it->second.Asset;
 			CacheEntry<const T> entry;
-			entry.Asset = LoadJsonAsset<T>(key, entry.Error);
+			entry.Asset = LoadJsonAsset<T>(key, kind, entry.Error);
 			if (!entry.Asset)
 				BS_CORE_ERROR("Animation {} '{}': {}", kind, key, entry.Error);
 			return cache.emplace(key, std::move(entry)).first->second.Asset;

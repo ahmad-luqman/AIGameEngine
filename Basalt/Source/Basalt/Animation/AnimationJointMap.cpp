@@ -24,7 +24,9 @@ namespace Basalt {
 			if (!RequireEntryObject(entry, { "Source", "Target" }, location, outError))
 				return std::nullopt;
 			const std::string* source = ReadNonemptyString(entry, "Source", location, outError);
-			const std::string* target = source ? ReadNonemptyString(entry, "Target", location, outError) : nullptr;
+			if (!source)
+				return std::nullopt;
+			const std::string* target = ReadNonemptyString(entry, "Target", location, outError);
 			if (!target)
 				return std::nullopt;
 			if (!sources.insert(*source).second)

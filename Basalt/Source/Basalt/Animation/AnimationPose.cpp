@@ -170,6 +170,8 @@ namespace Basalt {
 		std::vector<uint8_t> channels(source.Nodes.size(), 0);
 		for (const auto& track : clip.Tracks)
 		{
+			if (track.RestCorrection)
+				continue;
 			switch (track.Path)
 			{
 				case AnimationPath::Translation:

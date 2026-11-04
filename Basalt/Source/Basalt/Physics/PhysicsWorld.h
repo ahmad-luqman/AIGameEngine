@@ -78,10 +78,11 @@ namespace Basalt {
 		bool Empty() const;
 		// Whether more than MaxShapes bodies were near (the farthest were left out).
 		bool Truncated() const;
-		// The radius PushOut queries with (CollectShapes' radius, at least MinRadius); 0 when empty.
+		// The radius PushOut queries with: CollectShapes' radius, at least MinRadius (also when nothing was gathered); 0 for a
+		// default snapshot or one from invalid input.
 		float GetRadius() const;
-		// The sphere (the radius CollectShapes was given) at `point` pushed out of the gathered shape it penetrates most
-		// deeply, along the shortest way out; nullopt when it touches none. Mesh triangles push from their front faces only.
+		// The sphere (GetRadius) at `point` pushed out of the gathered shape it penetrates most deeply, along the shortest way
+		// out (PushOutDirection); nullopt when it touches none. Mesh triangles push from their front faces only.
 		std::optional<glm::vec3> PushOut(const glm::vec3& point) const;
 
 	private:
@@ -89,6 +90,10 @@ namespace Basalt {
 		struct Impl;
 		Scope<Impl> m_Impl;
 	};
+
+	// Which way a sphere centred at `point` leaves a body it penetrates: against the penetration axis (which moves the body
+	// out), else away from the body's centre of mass, else up, so a penetration always moves the sphere. A unit vector.
+	glm::vec3 PushOutDirection(const glm::vec3& penetrationAxis, const glm::vec3& point, const glm::vec3& bodyCenter);
 
 	enum class ContactEventType
 	{

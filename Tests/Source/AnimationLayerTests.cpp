@@ -701,10 +701,10 @@ TEST_SUITE("Animation")
 		for (uint32_t i = 0; i <= AnimationLayer::MaxMaskJoints; i++)
 			tooMany["Joints"].push_back({ { "Joint", "J" + std::to_string(i) } });
 		const std::pair<json, const char*> invalid[] = {
-			{ json::array(), "must be an object" },
-			{ { { "Joints", json::array() }, { "Extra", 1 } }, "unknown key 'Extra'" },
-			{ json::object(), "Joints must be an array" },
-			{ tooMany, "at most 64 entries" },
+			{ json::array(), "an animation mask must be an object" },
+			{ { { "Joints", json::array() }, { "Extra", 1 } }, "animation mask: unknown key 'Extra'" },
+			{ json::object(), "Joints must be an array with at most 64 entries" },
+			{ tooMany, "Joints must be an array with at most 64 entries" },
 			{ { { "Joints", { { { "Weight", 1 } } } } }, "Joints[0].Joint must be a nonempty string" },
 			{ { { "Joints", { { { "Joint", "" } } } } }, "Joints[0].Joint must be a nonempty string" },
 			{ { { "Joints", { { { "Joint", "A" } }, { { "Joint", "A" } } } } }, "Joints[1].Joint 'A' is listed twice" },
@@ -717,7 +717,8 @@ TEST_SUITE("Animation")
 		{
 			INFO(data.dump());
 			CHECK_FALSE(AnimationMask::FromJson(data, error));
-			CHECK(error.find(message) != std::string::npos);
+			// Whole messages: the parser shares its helpers with joint maps.
+			CHECK(error == message);
 		}
 	}
 

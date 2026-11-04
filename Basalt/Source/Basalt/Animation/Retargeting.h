@@ -87,7 +87,8 @@ namespace Basalt {
 		// Bakes a source clip onto the target's nodes. Each mapped joint turns in model space as its source turns from
 		// the source's rest pose (so differing joint axes and rest orientations cancel); the root also moves by the
 		// source root's displacement times RootScale, and every other joint keeps the target's rest translation (its limb
-		// length). Scale tracks carry the ratio to the source's rest scale. Joint tracks are sampled at the source's key
+		// length). Scale tracks carry the ratio to the source's rest scale. A joint the clip leaves alone that a reference pose
+		// corrects (RetargetMap rests that differ from the target's own) gets a constant RestCorrection track. Joint tracks are sampled at the source's key
 		// times (plus a 30 Hz grid when any track is cubic) and interpolate linearly (stepped when every source track
 		// steps; otherwise stepped tracks also sample the float before each key, keeping their jumps). Weights tracks keep their keys and interpolation and move to the target nodes of the same name
 		// (ignoring namespaces), matched by morph target name; ones that match nothing, or only nodes an earlier track

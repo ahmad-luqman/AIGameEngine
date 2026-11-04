@@ -174,6 +174,11 @@ namespace Basalt {
 		return !name.empty() && std::ranges::find(chain.Colliders, name, &SpringChainCollider::Name) != chain.Colliders.end();
 	}
 
+	bool NamesMissingSpringCollider(const SpringChainCollider& named, std::span<const SpringCollider> colliders)
+	{
+		return !named.Name.empty() && std::ranges::find(colliders, named.Name, &SpringCollider::Name) == colliders.end();
+	}
+
 	int32_t FirstChild(const MeshSource& source, uint32_t node)
 	{
 		const auto found = std::ranges::find(source.Nodes, static_cast<int32_t>(node), &MeshNode::Parent);

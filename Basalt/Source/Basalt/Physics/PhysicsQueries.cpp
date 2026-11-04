@@ -316,15 +316,23 @@ namespace Basalt {
 			shape.CollideShape(m_Impl->Sphere, JPH::Vec3::sOne(), transform, settings, JPH::RVec3::sZero(), collector);
 		if (!collector.HadHit() || !(collector.mHit.mPenetrationDepth > 0.0f))
 			return std::nullopt;
-		// The axis moves the body's shape out, so the sphere goes the other way. Should Jolt report no usable axis, the way
-		// out is away from the body's contact point (a penetration must not read as "clear").
-		glm::vec3 axis = -FromJolt(collector.mHit.mPenetrationAxis);
-		if (!(glm::length(axis) > 1e-12f))
-			axis = point - FromJolt(JPH::Vec3(collector.mHit.mContactPointOn2));
-		const float length = glm::length(axis);
-		if (!std::isfinite(length) || length < 1e-12f)
-			return std::nullopt;
-		return point + axis / length * collector.mHit.mPenetrationDepth;
+		glm::vec3 center = point;
+		for (const JPH::TransformedShape& shape : m_Impl->Shapes)
+			if (shape.mBodyID == collector.mHit.mBodyID2)
+				center = FromJolt(JPH::Vec3(shape.GetCenterOfMassTransform().GetTranslation()));
+		return point + PushOutDirection(FromJolt(collector.mHit.mPenetrationAxis), point, center) * collector.mHit.mPenetrationDepth;
+	}
+
+	glm::vec3 PushOutDirection(const glm::vec3& penetrationAxis, const glm::vec3& point, const glm::vec3& bodyCenter)
+	{
+		// The axis moves the body out, so the sphere goes the other way.
+		for (const glm::vec3 direction : { -penetrationAxis, point - bodyCenter })
+		{
+			const float length = glm::length(direction);
+			if (std::isfinite(length) && length > 1e-12f)
+				return direction / length;
+		}
+		return glm::vec3(0, 1, 0);
 	}
 
 	PhysicsShapeSnapshot PhysicsWorld::CollectShapes(const glm::vec3& min, const glm::vec3& max, float radius, const PhysicsQueryFilter& filter, const std::function<bool(UUID)>& accept) const

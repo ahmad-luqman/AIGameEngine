@@ -23,6 +23,7 @@
 #include <spdlog/fmt/fmt.h>
 
 #include <algorithm>
+#include <array>
 #include <iterator>
 #include <map>
 #include <optional>
@@ -209,6 +210,9 @@ namespace Basalt {
 			struct AssetLists
 			{
 				std::vector<std::filesystem::path> Scenes, Prefabs, Scripts, Graphs, Masks, JointMaps, Materials;
+
+				// Every list, so a new one cannot miss the sort.
+				std::array<std::vector<std::filesystem::path>*, 7> All() { return { &Scenes, &Prefabs, &Scripts, &Graphs, &Masks, &JointMaps, &Materials }; }
 			};
 
 			AssetLists ListAssets()
@@ -252,7 +256,7 @@ namespace Basalt {
 				if (error)
 					m_Report.Add(ValidationSeverity::Error, Project::AssetDirectoryName, "cannot list all the assets (the walk stopped with: " + error.message() + "); the remaining files were not checked");
 				// Directory order differs between platforms; reports should not.
-				for (auto* list : { &lists.Scenes, &lists.Prefabs, &lists.Scripts, &lists.Graphs, &lists.Masks, &lists.JointMaps, &lists.Materials })
+				for (auto* list : lists.All())
 					std::sort(list->begin(), list->end());
 				return lists;
 			}

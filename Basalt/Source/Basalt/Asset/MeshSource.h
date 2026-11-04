@@ -244,6 +244,10 @@ namespace Basalt {
 		// Weights tracks: Width (the node's morph target count) floats per value, in Values' key/tangent order.
 		std::vector<float> Weights;
 		uint32_t Width = 0;
+		// A retargeted track that only holds a reference pose's correction of a joint the source clip leaves alone
+		// (Retargeting::BakeClip): the clip poses it when it plays as the base, but it counts as no animated channel
+		// (AnimatedChannels), so layers leave the joint to the poses below.
+		bool RestCorrection = false;
 	};
 
 	// Named glTF clip. Duration is the last key time, in seconds.

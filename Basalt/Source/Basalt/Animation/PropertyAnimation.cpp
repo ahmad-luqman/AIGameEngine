@@ -351,6 +351,7 @@ namespace Basalt {
 		outError = ValidatePropertyAnimation(animation, &fields);
 		if (!outError.empty())
 			return false;
+		BS_CORE_ASSERT(fields.size() == animation.Tracks.size(), "a valid timeline resolves every track, in order");
 		// Each component's JSON as serialized and as the tracks leave it, so tracks into one list compose and the list is
 		// patched once.
 		struct Working
@@ -455,36 +456,55 @@ namespace Basalt {
 					return fail(fmt::format("its value is longer than {} bytes", PropertyAnimationKey::MaxTextLength));
 				break;
 			default:
-				if (type.Count == 0 ? !value->is_number() : !value->is_array() || value->size() != type.Count)
-					return mismatched();
 				if (type.Count == 0)
+				{
+					if (!value->is_number())
+						return mismatched();
 					lanes[0] = *value;
+				}
 				else
+				{
+					if (!value->is_array() || value->size() != type.Count)
+						return mismatched();
 					for (size_t lane = 0; lane < type.Count; lane++)
 						lanes[lane] = (*value)[lane];
+				}
 				break;
 		}
 		const auto* animationInfo = ComponentRegistry::Find("PropertyAnimation");
 		auto animation = animationInfo->Has(entity) ? animationInfo->Serialize(entity) : nlohmann::json{ { "Tracks", nlohmann::json::array() } };
 		auto& tracks = animation["Tracks"];
-		// Tracks match by the field they reach, so "Layers[0].Weight" keys the track written "Layers[Upper].Weight".
+		// A track spelled the same way, else one reaching the same field another way ("Layers[0].Weight" keys the track
+		// written "Layers[Upper].Weight"). A track of the component that reaches nothing now would fail every sample, so
+		// keying past it is refused rather than reported as done.
+		std::string stale;
 		const auto reaches = [&](const nlohmann::json& existing) {
 			if (existing.at("Component") != component)
 				return false;
-			std::string ignored;
-			const auto other = ResolveField(component, existing.at("Field").get<std::string>());
-			return other && other->Find(data, ignored) == value;
+			const std::string& spelling = existing.at("Field").get_ref<const std::string&>();
+			std::string unreachable;
+			const auto other = ResolveField(component, spelling);
+			const nlohmann::json* reached = other ? other->Find(data, unreachable) : nullptr;
+			if (!reached && other && !existing.at("Keys").empty() && stale.empty())
+				stale = fmt::format("its track {}.{} no longer reaches its field ({}); fix or remove it first", component, spelling, unreachable);
+			return reached == value;
 		};
-		auto track = tracks.end(), fallback = tracks.end();
-		for (auto it = tracks.begin(); it != tracks.end(); ++it)
-			if (reaches(*it))
-			{
-				fallback = it;
-				if (!it->at("Keys").empty())
-					track = it;
-			}
+		const auto pick = [&](bool sameSpelling) {
+			auto track = tracks.end(), fallback = tracks.end();
+			for (auto it = tracks.begin(); it != tracks.end(); ++it)
+				if (reaches(*it) && (!sameSpelling || it->at("Field") == field))
+				{
+					fallback = it;
+					if (!it->at("Keys").empty())
+						track = it;
+				}
+			return track != tracks.end() ? track : fallback;
+		};
+		auto track = pick(true);
 		if (track == tracks.end())
-			track = fallback;
+			track = pick(false);
+		if (!stale.empty())
+			return fail(stale);
 		if (track == tracks.end())
 		{
 			tracks.push_back({ { "Component", component }, { "Field", field }, { "Stepped", resolved->IsDiscrete() }, { "Keys", nlohmann::json::array() } });
