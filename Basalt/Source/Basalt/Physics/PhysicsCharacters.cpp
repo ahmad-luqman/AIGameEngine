@@ -129,7 +129,7 @@ namespace Basalt {
 				RemoveCharacter(entity.GetUUID());
 			}
 		}
-		if (!entity || !entity.HasComponent<CharacterControllerComponent>() || (Ragdolls.contains(entity.GetUUID()) && Ragdolls.at(entity.GetUUID()).Doll))
+		if (!entity || !entity.HasComponent<CharacterControllerComponent>() || RagdollReplacesBody(entity.GetUUID()))
 			return;
 
 		const auto& controller = entity.GetComponent<CharacterControllerComponent>();
@@ -316,7 +316,7 @@ namespace Basalt {
 			const JPH::DefaultBroadPhaseLayerFilter broadPhaseFilter(ObjectVsBroadPhaseLayerFilter, layer);
 			const JPH::DefaultObjectLayerFilter objectLayerFilter(ObjectLayerPairFilter, layer);
 			// Other characters are met through CharacterCollision, not their inner bodies.
-			const JPH::BodyFilter& bodyFilter = CharacterBodyFilter;
+			const NonCharacterBodyFilter bodyFilter(*this, entity.GetUUID());
 			const JPH::ShapeFilter shapeFilter;
 
 			// A script that moved the transform teleports the character (whose old ground no longer holds it);

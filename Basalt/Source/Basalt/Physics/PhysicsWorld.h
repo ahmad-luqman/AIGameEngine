@@ -244,8 +244,8 @@ namespace Basalt {
 		std::optional<glm::vec3> GetCharacterGroundNormal(Entity entity) const;
 		uint32_t GetCharacterCount() const;
 
-		// Enables passive skeleton physics, inheriting body linear/angular and tangential motion (controller: linear),
-		// and distributing a total world impulse. Returns false with a diagnostic for invalid rigs/settings,
+		// Enables skeleton physics, inheriting body linear/angular and tangential motion (controller: linear), and
+		// distributing a total world impulse over the parts it can move (not a KinematicRoot). Returns false with a diagnostic for invalid rigs/settings,
 		// overflowing impulses or cancellation by contact callbacks. Repeated activation adds the impulse.
 		bool ActivateRagdoll(Entity entity, const glm::vec3& impulse = glm::vec3(0));
 		// Freezes the physical pose, removes its bodies, optionally starts a get-up clip, and blends over seconds.
@@ -261,8 +261,14 @@ namespace Basalt {
 		// Construction attempts, including rejections; useful for diagnosing automatic activation retries.
 		uint64_t GetRagdollBuildCount() const;
 		std::vector<RagdollCapsule> GetRagdollCapsules(Entity entity) const;
-		// True during simulation or recovery; animation leaves root motion to the ragdoll during either.
+		// True during simulation or recovery.
 		bool HasRagdollPose(Entity entity) const;
+		// True while the ragdoll carries the whole rig during simulation or recovery, so animation leaves root motion, IK
+		// and springs to it. False for a KinematicRoot rig, whose root follows the animation.
+		bool RagdollOwnsRoot(Entity entity) const;
+		// Whether balance held the rig up in the last physics step: false when it is off, nothing supports the rig or the
+		// rig tilted past BalanceMaxTilt.
+		bool IsRagdollBalanced(Entity entity) const;
 		// Model-space joint transforms and physical weight, with their owning source for identity checks after reload.
 		std::optional<RagdollPose> GetRagdollPose(Entity entity) const;
 		bool GetRagdollPose(Entity entity, const MeshSource& source, std::vector<std::pair<uint32_t, glm::mat4>>& joints, float& weight) const;

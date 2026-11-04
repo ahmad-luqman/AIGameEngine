@@ -75,13 +75,15 @@ namespace Basalt {
 		return body != nullptr && body->IsTrigger;
 	}
 
-	void PhysicsWorld::Impl::EndContacts(UUID uuid, bool trigger, bool defer)
+	void PhysicsWorld::Impl::EndContacts(UUID uuid, bool trigger, bool defer, const std::vector<uint32_t>& bodies)
 	{
 		const uint64_t id = static_cast<uint64_t>(uuid);
 		std::set<EntityPair> ended;
+		// Tokens hold the body in their upper half.
+		const auto goes = [&](uint64_t token) { return bodies.empty() || std::ranges::find(bodies, static_cast<uint32_t>(token >> 32)) != bodies.end(); };
 		for (auto key = Contacts->ActiveContacts.begin(); key != Contacts->ActiveContacts.end();)
 		{
-			if (std::get<0>(*key) != id && std::get<2>(*key) != id)
+			if (!(std::get<0>(*key) == id && goes(std::get<1>(*key))) && !(std::get<2>(*key) == id && goes(std::get<3>(*key))))
 			{
 				++key;
 				continue;
@@ -108,6 +110,22 @@ namespace Basalt {
 		}
 	}
 
+	bool PhysicsWorld::Impl::HasRagdollSupport(UUID uuid, const RagdollRecord& record, JPH::RVec3Arg center, JPH::Vec3Arg up) const
+	{
+		const uint64_t id = static_cast<uint64_t>(uuid);
+		const JPH::BodyInterface& bodies = System->GetBodyInterface();
+		for (const auto& [first, firstToken, second, secondToken] : Contacts->ActiveContacts)
+		{
+			if (first != id && second != id)
+				continue;
+			const JPH::BodyID body(static_cast<uint32_t>((first == id ? firstToken : secondToken) >> 32));
+			const auto& parts = record.Doll->GetBodyIDs();
+			if (!IsTrigger(UUID(first == id ? second : first)) && std::ranges::find(parts, body) != parts.end() && JPH::Vec3(bodies.GetCenterOfMassPosition(body) - center).Dot(up) < 0)
+				return true;
+		}
+		return false;
+	}
+
 	void PhysicsWorld::Impl::DispatchContact(ContactEventType type, Entity first, Entity second, const std::optional<ContactInfo>& contact)
 	{
 		if (SceneEventListener* listener = ScenePtr->GetEventListener())
@@ -123,11 +141,12 @@ namespace Basalt {
 		// every part so separation data comes from the closest pair of limbs, rather than an arbitrary root body.
 		using MovingBody = std::pair<JPH::BodyID, JPH::Vec3>;
 		auto bodiesOf = [&](UUID uuid) -> std::vector<MovingBody> {
-			if (auto* body = FindBody(uuid); body != nullptr)
-				return { { body->ID, bodies.GetLinearVelocity(body->ID) } };
-			if (auto character = Characters.find(uuid); character != Characters.end())
-				return { { character->second.Character->GetInnerBodyID(), ToJolt(character->second.ActualVelocity) } };
+			// A rig that leaves its entity's body in place adds its limbs to it.
 			std::vector<MovingBody> parts;
+			if (auto* body = FindBody(uuid); body != nullptr)
+				parts.emplace_back(body->ID, bodies.GetLinearVelocity(body->ID));
+			else if (auto character = Characters.find(uuid); character != Characters.end())
+				parts.emplace_back(character->second.Character->GetInnerBodyID(), ToJolt(character->second.ActualVelocity));
 			if (auto ragdoll = Ragdolls.find(uuid); ragdoll != Ragdolls.end() && ragdoll->second.Doll)
 				for (auto id : ragdoll->second.Doll->GetBodyIDs())
 					parts.emplace_back(id, bodies.GetLinearVelocity(id));
@@ -198,7 +217,7 @@ namespace Basalt {
 			if (const auto* body = FindBody(owner->second); body && body->ID == id)
 				return body->Type != RigidBodyType::Static;
 			const auto rig = Ragdolls.find(owner->second);
-			return rig != Ragdolls.end() && rig->second.Doll != nullptr;
+			return rig != Ragdolls.end() && rig->second.Doll != nullptr && std::ranges::find(rig->second.Doll->GetBodyIDs(), id) != rig->second.Doll->GetBodyIDs().end();
 		};
 		std::map<Impl::EntityPair, PairChange> touched;
 		for (const RawContactEvent& event : events)

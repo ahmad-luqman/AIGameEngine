@@ -60,8 +60,9 @@ The features most games need, roughly in order of impact.
 Skeletal playback, crossfades, two-clip blends, 1D/2D blend spaces with phase sync and velocity matching,
 animation events, bone attachments, data-driven state machines and per-state root motion, layers with joint masks,
 shared mask assets, additive clips and their own state machines, inverse kinematics (two-bone, look-at and FABRIK chains,
-foot placement and foot locking), spring bones (angle limits, per-chain colliders, physics-body collisions), powered
-ragdolls, morph targets, retargeted clip libraries (shared joint maps, reference poses for other rest styles), property
+foot placement and foot locking), spring bones (angle limits, per-chain colliders, physics-body collisions with layers,
+continuous collision and edit-mode static bodies), powered ragdolls (per-bone strengths, partial rigs on a kinematic root,
+active balance), morph targets, retargeted clip libraries (shared joint maps, reference poses for other rest styles), property
 animation of numeric and discrete fields (nested in lists too) and an edit-mode preview (`AnimationSystem`) are implemented;
 physics provides character controllers (`MoveCharacter`, `IsCharacterGrounded`, ground normal) and raycasts. The items
 below extend character movement, in order of impact.
@@ -69,12 +70,10 @@ below extend character movement, in order of impact.
 - **IK and layer follow-ups II — S each.** Joint limits for FABRIK chains (cones and twist ranges), a mask editor in the
   editor (masks are authored as `.banimmask` JSON through `asset.write` today), layer graph events and per-layer
   parameters that the base graph does not share, and edit-mode ground placement against static colliders.
-- **Spring bone follow-ups II — S.** Physics layer filtering for `CollidePhysics` chains (today they collide with every
-  layer), continuous collision so fast points cannot pass through thin bodies within one substep, and edit-mode
-  collisions against static physics bodies.
-- **Powered ragdoll follow-ups — M.** Partial ragdolls whose root follows the animation kinematically (an upper body
-  reacting to hits while the legs keep walking and the character controller stays), per-bone motor strengths, and
-  active balance that keeps a powered ragdoll upright.
+- **Spring bone follow-ups III — S.** Sweeping whole bones as well as their points, a layer picker for chains in the
+  inspector, and kinematic bodies in the edit preview where they stay at their authored place.
+- **Powered ragdoll follow-ups II — M.** Balance that steps (replanting feet toward the center of mass after a push) and a
+  brake relative to moving ground; several kinematic roots (both legs walking and a free spine between them).
 - **Retargeting follow-ups II — S.** A joint map editor in the editor (`.bjointmap` files are authored as JSON through
   `asset.write` today) and reference poses built from per-joint rotation offsets, for libraries without a frame in the
   model's rest style.

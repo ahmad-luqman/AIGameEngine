@@ -597,6 +597,11 @@ function Entity:RecoverRagdoll(clip, seconds) end
 ---@return boolean
 function Entity:IsRagdollActive() end
 
+---Whether active balance held the rig up in the last physics step: false when it is off, with nothing below the rig's
+---center of mass, or past BalanceMaxTilt.
+---@return boolean
+function Entity:IsRagdollBalanced() end
+
 ---Fades the Ragdoll's motor strength (0..1, scaling MotorTorque; 0 is passive) linearly over seconds (default 0).
 ---False (logged once) for an invalid strength or time. Raises without a Ragdoll component.
 ---@param strength number
@@ -1542,6 +1547,7 @@ function BasaltScript:StopAllCoroutines() end
 ---@class RagdollComponent
 ---@field Enabled boolean
 ---@field RootJoint string
+---@field KinematicRoot boolean
 ---@field Mass number
 ---@field RadiusRatio number
 ---@field Layer string
@@ -1551,6 +1557,10 @@ function BasaltScript:StopAllCoroutines() end
 ---@field MotorFrequency number
 ---@field MotorDamping number
 ---@field MotorTorque number
+---@field BalanceStrength number
+---@field BalanceFrequency number
+---@field BalanceDamping number
+---@field BalanceMaxTilt number
 
 ---Material data as Entity:GetComponent returns it and SetComponent/AddComponent accept it.
 ---@class MaterialComponent
@@ -2051,6 +2061,7 @@ function BasaltScript:StopAllCoroutines() end
 ---@field SwingAngle number
 ---@field TwistMin number
 ---@field TwistMax number
+---@field MotorStrength number
 
 ---An element of a component list field.
 ---@class ParticleSizeKey

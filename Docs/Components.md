@@ -48,7 +48,7 @@ Fields: `Chains` (list of [SpringChain](#springchain), at most 16, unique `Name`
 
 ## Ragdoll
 
-Fields: `Enabled` (boolean), `RootJoint` (string), `Mass` (number), `RadiusRatio` (number), `Layer` (string), `RecoveryTime` (number), `Bones` (list of [RagdollBone](#ragdollbone), at most 128, unique `Joint`), `MotorStrength` (number), `MotorFrequency` (number), `MotorDamping` (number), `MotorTorque` (number)
+Fields: `Enabled` (boolean), `RootJoint` (string), `KinematicRoot` (boolean), `Mass` (number), `RadiusRatio` (number), `Layer` (string), `RecoveryTime` (number), `Bones` (list of [RagdollBone](#ragdollbone), at most 128, unique `Joint`), `MotorStrength` (number), `MotorFrequency` (number), `MotorDamping` (number), `MotorTorque` (number), `BalanceStrength` (number), `BalanceFrequency` (number), `BalanceDamping` (number), `BalanceMaxTilt` (number)
 
 ## Material
 
@@ -230,7 +230,7 @@ Fields: `Name` (string), `Joint` (string), `Offset` (number[3]), `Radius` (numbe
 
 ### RagdollBone
 
-Fields: `Joint` (string), `Radius` (number), `Length` (number), `Mass` (number), `SwingAngle` (number), `TwistMin` (number), `TwistMax` (number)
+Fields: `Joint` (string), `Radius` (number), `Length` (number), `Mass` (number), `SwingAngle` (number), `TwistMin` (number), `TwistMax` (number), `MotorStrength` (number)
 
 ### ParticleSizeKey
 

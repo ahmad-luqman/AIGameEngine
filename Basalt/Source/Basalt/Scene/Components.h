@@ -545,6 +545,9 @@ namespace Basalt {
 		float SwingAngle = 45.0f;
 		float TwistMin = -30.0f;
 		float TwistMax = 30.0f;
+		// 0..1: scales the rig's motor torque for the joint above this bone, so one limb can go limp while the others hold
+		// their pose. Applies live, without rebuilding the rig.
+		float MotorStrength = 1.0f;
 		bool operator==(const RagdollBone&) const = default;
 	};
 
@@ -557,9 +560,15 @@ namespace Basalt {
 		static constexpr float MaxMotorFrequency = 30.0f;
 		static constexpr float MaxMotorDamping = 10.0f;
 		static constexpr float MaxMotorTorque = 1000000.0f;
+		static constexpr float MaxTilt = 180.0f;
 		bool Enabled = false;
 		// Empty selects all skin joints; otherwise selects this skin joint and its descendants.
 		std::string RootJoint;
+		// RootJoint's body follows the animation instead of falling, so only what hangs from it is physical: an upper body
+		// reacting to hits while the legs keep walking. The entity keeps its rigid body or character controller, root
+		// motion and inverse kinematics, and recovery leaves it where it is. The limbs never collide with those bodies (or
+		// those of a character controller on an ancestor).
+		bool KinematicRoot = false;
 		float Mass = 70.0f;
 		// Generated radius as a fraction of the rest bone length (0.01..0.5).
 		float RadiusRatio = 0.15f;
@@ -577,6 +586,17 @@ namespace Basalt {
 		float MotorDamping = 1.0f;
 		// N·m (0..MaxMotorTorque): the largest torque each joint's motor applies at strength 1.
 		float MotorTorque = 500.0f;
+		// 0..1; 0 leaves balance off. While the motors run and part of the rig below its center of mass rests on something,
+		// the whole rig is turned back toward the animated root's uprightness, about its center of mass, so no joint
+		// has to carry it. Scaled by the motor strength, so a fade to 0 lets the rig fall. Has no effect with KinematicRoot.
+		// Balance settings never rebuild the ragdoll.
+		float BalanceStrength = 0.0f;
+		// Hz (0.1..MaxMotorFrequency): how stiffly the rig is turned upright.
+		float BalanceFrequency = 3.0f;
+		// 0..MaxMotorDamping: the damping ratio of that turn (1 settles without overshoot).
+		float BalanceDamping = 1.0f;
+		// Degrees (0..MaxTilt): past this tilt the rig has lost its balance and falls, until something rights it.
+		float BalanceMaxTilt = 60.0f;
 		bool operator==(const RagdollComponent&) const = default;
 	};
 

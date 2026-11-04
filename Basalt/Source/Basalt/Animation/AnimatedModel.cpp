@@ -509,8 +509,15 @@ namespace Basalt {
 			AddInverseKinematicsWarnings(entity, *ik, warnings);
 		if (const auto* springs = entity.TryGetComponent<SpringBoneComponent>())
 			AddSpringBoneWarnings(entity, *springs, warnings);
-		if (const auto* ragdoll = entity.TryGetComponent<RagdollComponent>(); ragdoll && ragdoll->MotorStrength > 0 && ragdoll->MotorTorque <= 0)
-			warnings.emplace_back("Ragdoll MotorStrength has no effect: MotorTorque is 0");
+		if (const auto* ragdoll = entity.TryGetComponent<RagdollComponent>())
+		{
+			if (ragdoll->MotorStrength > 0 && ragdoll->MotorTorque <= 0)
+				warnings.emplace_back("Ragdoll MotorStrength has no effect: MotorTorque is 0");
+			if (ragdoll->BalanceStrength > 0 && ragdoll->KinematicRoot)
+				warnings.emplace_back("Ragdoll BalanceStrength has no effect: a KinematicRoot rig cannot fall");
+			else if (ragdoll->BalanceStrength > 0 && ragdoll->MotorTorque <= 0)
+				warnings.emplace_back("Ragdoll BalanceStrength has no effect: balance needs running motors, and MotorTorque is 0");
+		}
 		if (const auto* timeline = entity.TryGetComponent<PropertyAnimationComponent>())
 			AddPropertyAnimationWarnings(entity, *timeline, warnings);
 		return warnings;
