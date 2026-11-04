@@ -198,7 +198,7 @@ Fields: `Joint` (string), `Weight` (number)
 
 ### AnimationClipLibrary
 
-Fields: `Mesh` (string), `Joints` (list of [AnimationRetargetJoint](#animationretargetjoint), at most 256)
+Fields: `Mesh` (string), `Joints` (list of [AnimationRetargetJoint](#animationretargetjoint), at most 256), `JointMap` (string), `ReferenceClip` (string), `ReferenceTime` (number), `ModelReferenceClip` (string), `ModelReferenceTime` (number)
 
 ### AnimationRetargetJoint
 
@@ -210,7 +210,7 @@ Fields: `Component` (string), `Field` (string), `Stepped` (boolean), `Keys` (lis
 
 ### PropertyAnimationKey
 
-Fields: `Time` (number), `Value` (number[4])
+Fields: `Time` (number), `Value` (number[4]), `Text` (string)
 
 ### IKChain
 
@@ -218,11 +218,15 @@ Fields: `Name` (string), `Type` (enum: TwoBone, LookAt, Fabrik), `Joint` (string
 
 ### SpringChain
 
-Fields: `Name` (string), `Joint` (string), `ChainLength` (integer), `Stiffness` (number), `Damping` (number), `GravityFactor` (number), `Radius` (number), `Weight` (number)
+Fields: `Name` (string), `Joint` (string), `ChainLength` (integer), `Stiffness` (number), `Damping` (number), `GravityFactor` (number), `Radius` (number), `Weight` (number), `MaxAngle` (number), `Colliders` (list of [SpringChainCollider](#springchaincollider), at most 32), `CollidePhysics` (boolean)
+
+### SpringChainCollider
+
+Fields: `Name` (string)
 
 ### SpringCollider
 
-Fields: `Joint` (string), `Offset` (number[3]), `Radius` (number), `HalfHeight` (number)
+Fields: `Name` (string), `Joint` (string), `Offset` (number[3]), `Radius` (number), `HalfHeight` (number)
 
 ### RagdollBone
 

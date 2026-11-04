@@ -894,8 +894,8 @@ TEST_SUITE("Serialization")
 			}
 		}
 		// Animator Events, BlendSpaces (Samples), Layers (Mask), ClipLibraries (Joints); InverseKinematics Chains; SpringBone
-		// Chains, Colliders; Ragdoll Bones; PropertyAnimation Tracks (Keys); ParticleEmitter SizeCurve, ColorCurve.
-		CHECK(lists == 15);
+		// Chains (Colliders), Colliders; Ragdoll Bones; PropertyAnimation Tracks (Keys); ParticleEmitter SizeCurve, ColorCurve.
+		CHECK(lists == 16);
 	}
 
 	TEST_CASE("Entity reference fields are collected from the component definitions")
