@@ -1376,6 +1376,8 @@ A-pose library on a T-pose character) need a reference pose: `ReferenceClip` nam
 not other libraries') whose pose at `ModelReferenceTime` stands like the library's rest pose. Either replaces its
 skeleton's rest orientations as the pose joints turn from; positions keep the rest pose, so limb lengths and the root's
 scale do not change. A single-frame clip of the matching pose is enough (`{ Mesh = "...", ReferenceClip = "TPose" }`).
+A joint the clip leaves alone that a reference corrects still plays corrected when the clip is the base, but a layer
+playing the clip leaves that joint to the poses below, as for any joint the clip does not animate.
 A reference clip that is not there makes the library add no clips; a time past the clip's end takes its last pose, with
 a warning; a nonzero time without its clip is also warned about (the rest pose is used). Paired joints keep the target's rest translation, so limbs keep their length. The hips (or
 the topmost paired node) also move by their source joint's displacement scaled by the ratio of the skeletons' leg lengths
