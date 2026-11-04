@@ -44,8 +44,8 @@ namespace Basalt {
 		const bool trigger = record->IsTrigger;
 		RemoveJointsOfBody(uuid);
 		JPH::BodyInterface& bodies = System->GetBodyInterface();
-		const uint32_t removed = record->ID.GetIndexAndSequenceNumber();
-		BodyToEntity.erase(removed);
+		const JPH::BodyID removed = record->ID;
+		BodyToEntity.erase(removed.GetIndexAndSequenceNumber());
 		// Jolt reuses the index; the next body must not inherit these material modes.
 		ContactListener.Materials[record->ID.GetIndex()] = {};
 		bodies.RemoveBody(record->ID);

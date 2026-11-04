@@ -1395,7 +1395,7 @@ TEST_SUITE("Ragdolls")
 		const auto since = Log::GetHistory().GetTotalCount();
 		bone.MotorStrength = std::numeric_limits<float>::quiet_NaN();
 		Simulate(rig.scene, 90);
-		CHECK(CountLogMessages(since, "Bones MotorStrength must be in 0..1; clamping") == 1);
+		CHECK(CountLogMessages(since, "Bones[0] 'Tip' MotorStrength must be in 0..1; clamping") == 1);
 		CHECK(PhysicalBend(*rig.physics, rig.rig) == doctest::Approx(30.0f).epsilon(0.05));
 	}
 
@@ -1436,9 +1436,10 @@ TEST_SUITE("Ragdolls")
 		// behind it rather than being carried rigidly.
 		const float held = BoneWorld(scene, rig, "LeftHand").x - BoneWorld(scene, rig, "LeftUpperArm").x;
 		physics.MoveCharacter(rig, { 3, 0, 0 });
-		Simulate(scene, 5);
-		CHECK(BoneWorld(scene, rig, "LeftHand").x - BoneWorld(scene, rig, "LeftUpperArm").x < held - 0.02f);
-		Simulate(scene, 55);
+		Simulate(scene, 10);
+		// Half a meter walked: far more than one step's lag, which a rig carried with its entity would show.
+		CHECK(BoneWorld(scene, rig, "LeftHand").x - BoneWorld(scene, rig, "LeftUpperArm").x < held - 0.1f);
+		Simulate(scene, 50);
 		CHECK(scene.GetWorldTransform(rig)[3].x == doctest::Approx(standing.x + 3).epsilon(0.05));
 		CHECK(Near(BoneWorld(scene, rig, "Chest"), animatedChest(), 1e-3f));
 		CHECK(Near(rootBody(), animatedChest(), 1e-3f));
@@ -1462,13 +1463,15 @@ TEST_SUITE("Ragdolls")
 			twoJoints.OnSimulationStart();
 			auto& world = *twoJoints.GetPhysicsWorld();
 			twoJoints.GetAnimationSystem()->Update(0);
+			REQUIRE(world.ActivateRagdoll(entity));
+			const float start = world.GetRagdollCapsules(entity)[1].End.x;
 			REQUIRE(world.ActivateRagdoll(entity, impulse));
-			Simulate(twoJoints, 4);
-			const float moved = BoneWorld(twoJoints, entity, "Tip").x;
+			Simulate(twoJoints, 2);
+			const float moved = world.GetRagdollCapsules(entity)[1].End.x - start;
 			twoJoints.OnSimulationStop();
 			return moved;
 		};
-		CHECK(reach({ 35, 0, 0 }) == doctest::Approx(0.1).epsilon(0.5));
+		CHECK(reach({ 35, 0, 0 }) == doctest::Approx(0.0435542f).scale(0).epsilon(0.005));
 	}
 
 	TEST_CASE("Limbs stay out of the bodies their rig keeps, and collide with everything else")
@@ -1650,12 +1653,16 @@ TEST_SUITE("Ragdolls")
 		CHECK(Near(BoneWorld(scene, rig, "Chest"), glm::vec3(scene.GetWorldTransform(rig)[3]) + glm::vec3(0, 1.4f, 0), 0.02f));
 		Simulate(scene, 30);
 		CHECK(glm::length(BoneWorld(scene, rig, "LeftHand") - BoneWorld(scene, rig, "LeftUpperArm")) < 0.61f);
-		// A half turn in one frame carries them too, turned with it.
+		// A half turn in one frame carries them too, turned with it, and a swing goes on the turned way.
+		REQUIRE(physics.ActivateRagdoll(rig, { 0, 0, 280 }));
+		Simulate(scene, 1);
 		const glm::vec3 side = BoneWorld(scene, rig, "LeftHand") - BoneWorld(scene, rig, "Chest");
 		rig.GetTransform().Rotation = glm::angleAxis(glm::pi<float>(), glm::vec3(0, 1, 0)) * rig.GetTransform().Rotation;
 		Simulate(scene, 1);
 		const glm::vec3 turnedSide = BoneWorld(scene, rig, "LeftHand") - BoneWorld(scene, rig, "Chest");
 		CHECK(turnedSide.x == doctest::Approx(-side.x).epsilon(0.1));
+		Simulate(scene, 1);
+		CHECK((BoneWorld(scene, rig, "LeftHand") - BoneWorld(scene, rig, "Chest")).z < turnedSide.z);
 		scene.OnSimulationStop();
 	}
 
@@ -1841,9 +1848,10 @@ TEST_SUITE("Ragdolls")
 			Contacts listener;
 			rig.scene.SetEventListener(&listener);
 			auto wall = rig.scene.CreateEntity("Wall");
-			wall.GetTransform().Translation = { 0.65f, 5, 0 };
+			// Taller than the fall, with a face only the lower legs reach, as they sit a little forward.
+			wall.GetTransform().Translation = { 0, 5, 1.08f };
 			wall.AddComponent<RigidBodyComponent>();
-			wall.AddComponent<BoxColliderComponent>().HalfExtents = { 0.5f, 5, 2 };
+			wall.AddComponent<BoxColliderComponent>().HalfExtents = { 2, 6, 1 };
 			for (int i = 0; i < 60; i++)
 			{
 				rig.Run(1);
@@ -1867,9 +1875,100 @@ TEST_SUITE("Ragdolls")
 				platform.GetTransform().Translation.x += 1.0f / 60.0f;
 				rig.Run(1);
 			}
-			CHECK(rig.Hips().x - start > 2.0f);
+			CHECK(rig.Hips().x - start == doctest::Approx(2.5f).scale(0).epsilon(0.25));
 		}
-		// It only pushes up: a hop leaves the ground as fast as it would without balance.
+		// Ground that tilts underfoot stops being ground: the contact stays, and what it faces now counts.
+		{
+			BalancingBiped rig(1, 1);
+			auto platform = rig.scene.CreateEntity("Platform");
+			platform.GetTransform().Translation = { 0, 0.5f, 0 };
+			platform.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Kinematic;
+			platform.AddComponent<BoxColliderComponent>().HalfExtents = { 8, 0.5f, 8 };
+			rig.Run(120);
+			REQUIRE(rig.physics->IsRagdollBalanced(rig.rig));
+			for (int i = 1; i <= 70; i++)
+			{
+				platform.GetTransform().Rotation = glm::angleAxis(glm::radians(static_cast<float>(i)), glm::vec3(0, 0, 1));
+				rig.Run(1);
+			}
+			CHECK_FALSE(rig.physics->IsRagdollBalanced(rig.rig));
+		}
+		// How steep a surface still holds a rig up: a ramp of 45 degrees does, one of 70 does not.
+		for (const float degrees : { 45.0f, 70.0f })
+		{
+			CAPTURE(degrees);
+			BalancingBiped rig(1, 3);
+			auto ramp = rig.scene.CreateEntity("Ramp");
+			ramp.GetTransform().Translation = rig.Bone("LeftFoot") + glm::vec3(0, -0.8f, 0);
+			ramp.GetTransform().Rotation = glm::angleAxis(glm::radians(degrees), glm::vec3(0, 0, 1));
+			ramp.AddComponent<RigidBodyComponent>();
+			ramp.AddComponent<BoxColliderComponent>().HalfExtents = { 3, 0.1f, 3 };
+			bool balanced = false;
+			for (int i = 0; i < 40; i++)
+			{
+				rig.Run(1);
+				balanced = balanced || rig.physics->IsRagdollBalanced(rig.rig);
+			}
+			CHECK(balanced == (degrees < 60));
+		}
+		// Whichever entity the contact lists first.
+		for (const UUID floorId : { UUID(100), UUID(300) })
+		{
+			CAPTURE(static_cast<uint64_t>(floorId));
+			Scene scene;
+			Entity floor = scene.CreateEntityWithUUID(floorId, "Floor");
+			floor.GetTransform().Translation.y = -0.5f;
+			floor.AddComponent<RigidBodyComponent>();
+			floor.AddComponent<BoxColliderComponent>().HalfExtents = { 20, 0.5f, 20 };
+			Entity biped = scene.CreateEntityWithUUID(UUID(200), "Biped");
+			auto& animator = biped.AddComponent<AnimatorComponent>();
+			animator.Mesh = BipedPath().string();
+			animator.PlayOnStart = false;
+			auto& ragdoll = biped.AddComponent<RagdollComponent>();
+			ragdoll.MotorStrength = 1;
+			ragdoll.BalanceStrength = 1;
+			scene.OnSimulationStart();
+			scene.GetAnimationSystem()->Update(0);
+			REQUIRE(scene.GetPhysicsWorld()->ActivateRagdoll(biped));
+			Simulate(scene, 60);
+			CHECK(scene.GetPhysicsWorld()->IsRagdollBalanced(biped));
+			scene.OnSimulationStop();
+		}
+		// A fall ends on the feet without a leap: the lift is capped.
+		{
+			BalancingBiped rig(1, 3);
+			float peak = 0;
+			bool landed = false;
+			for (int i = 0; i < 180; i++)
+			{
+				rig.Run(1);
+				landed = landed || rig.physics->IsRagdollBalanced(rig.rig);
+				if (landed)
+					peak = std::max(peak, rig.Hips().y);
+			}
+			CHECK(landed);
+			CHECK(peak < 1.4f);
+		}
+		// One part: nothing to turn it through but its own torque, and it stands on itself.
+		{
+			Scene scene;
+			Floor(scene);
+			Entity tip = Rig(scene);
+			tip.GetTransform().Translation.y = -0.85f;
+			auto& ragdoll = tip.GetComponent<RagdollComponent>();
+			ragdoll.RootJoint = "Tip";
+			ragdoll.MotorStrength = 1;
+			ragdoll.BalanceStrength = 1;
+			scene.OnSimulationStart();
+			scene.GetAnimationSystem()->Update(0);
+			REQUIRE(scene.GetPhysicsWorld()->ActivateRagdoll(tip));
+			Simulate(scene, 240);
+			CHECK(scene.GetPhysicsWorld()->IsRagdollBalanced(tip));
+			const RagdollCapsule capsule = scene.GetPhysicsWorld()->GetRagdollCapsules(tip)[0];
+			CHECK(glm::normalize(capsule.End - capsule.Start).y > 0.95f);
+			scene.OnSimulationStop();
+		}
+		// It only pushes up: a hop leaves the ground.
 		{
 			BalancingBiped rig(1);
 			rig.Run(120);
@@ -1892,7 +1991,7 @@ TEST_SUITE("Ragdolls")
 			CHECK_FALSE(rig.physics->IsRagdollBalanced(rig.rig));
 			CHECK(rig.Hips().y < 0.5f);
 		}
-		// A limit of 180 never gives up, and a rig on its back stays finite under a balance that cannot right it.
+		// A limit of 180 never gives up: a rig thrown into the air and landing anyhow stays finite.
 		{
 			BalancingBiped rig(1);
 			rig.rig.GetComponent<RagdollComponent>().BalanceMaxTilt = 180;
@@ -2019,16 +2118,33 @@ TEST_SUITE("Ragdolls")
 		CHECK(warned("Ragdoll BalanceStrength has no effect while the motor strength is 0: set MotorStrength, or raise it from a script") == 1);
 		ragdoll.MotorStrength = 1;
 		CHECK(warned("Ragdoll BalanceStrength has no effect while the motor strength is 0: set MotorStrength, or raise it from a script") == 0);
+		ragdoll.BalanceMaxTilt = 0;
+		CHECK(warned("Ragdoll BalanceStrength has no effect: BalanceMaxTilt is 0") == 1);
+		ragdoll.BalanceMaxTilt = 60;
 		ragdoll.Bones.push_back({ .Joint = "Chest", .MotorStrength = 0.5f });
 		CHECK(warned("Ragdoll Bones: 'Chest' is the rig's root, with no joint above it for MotorStrength to scale") == 1);
+		// With no RootJoint the root is the skeleton's.
+		ragdoll.RootJoint.clear();
+		CHECK(warned("Ragdoll Bones: 'Chest' is the rig's root, with no joint above it for MotorStrength to scale") == 0);
+		ragdoll.Bones[0].Joint = "Hips";
+		CHECK(warned("Ragdoll Bones: 'Hips' is the rig's root, with no joint above it for MotorStrength to scale") == 1);
+		ragdoll.RootJoint = "Chest";
 		ragdoll.Bones.clear();
+		// A root with nothing below it, in the inspector before any activation fails.
+		ragdoll.KinematicRoot = true;
+		ragdoll.RootJoint = "Head";
+		CHECK(warned("Ragdoll KinematicRoot leaves nothing to simulate: no skin joint hangs from the root") == 1);
+		ragdoll.RootJoint = "Chest";
+		ragdoll.KinematicRoot = false;
 		// A chain on the rig's joints waits for it; one outside it, or on its root, does not.
 		ragdoll.KinematicRoot = true;
 		auto& springs = rig.AddComponent<SpringBoneComponent>();
 		springs.Chains.push_back({ .Name = "Arm", .Joint = "LeftUpperArm" });
 		springs.Chains.push_back({ .Name = "Leg", .Joint = "LeftUpperLeg" });
+		springs.Chains.push_back({ .Name = "Root", .Joint = "Chest", .ChainLength = 1 });
 		CHECK(warned("SpringBone chain 'Arm': its joints belong to the Ragdoll, so it does not swing while the rig is active") == 1);
 		CHECK(warned("SpringBone chain 'Leg': its joints belong to the Ragdoll, so it does not swing while the rig is active") == 0);
+		CHECK(warned("SpringBone chain 'Root': its joints belong to the Ragdoll, so it does not swing while the rig is active") == 0);
 		rig.RemoveComponent<SpringBoneComponent>();
 		ragdoll.KinematicRoot = false;
 
@@ -2095,7 +2211,7 @@ TEST_SUITE("Ragdolls")
 			Simulate(scene, 10);
 			REQUIRE(listener.Begin == 1);
 			// A collider edit rebuilds what the entity keeps, which touched nothing.
-			rig.GetComponent<CapsuleColliderComponent>().Radius = 0.25f;
+			scene.GetRegistry().patch<CapsuleColliderComponent>(rig, [](CapsuleColliderComponent& capsule) { capsule.Radius = 0.25f; });
 			Simulate(scene, 10);
 			CHECK(listener.End == 0);
 			// The hand's real exit is still reported.
@@ -2113,20 +2229,22 @@ TEST_SUITE("Ragdolls")
 		Scene scene;
 		Entity rig = PartialBiped(scene);
 		rig.GetComponent<RagdollComponent>().RootJoint = "Hips";
-		rig.GetTransform().Translation.y = 20;
+		rig.GetTransform().Translation.y = 500;
 		scene.OnSimulationStart();
 		auto& physics = *scene.GetPhysicsWorld();
+		physics.SetGravity({ 0, -2, 0 });
 		scene.GetAnimationSystem()->Update(0);
+		Simulate(scene, 2);
 		REQUIRE(physics.ActivateRagdoll(rig));
-		Simulate(scene, 30);
+		Simulate(scene, 90);
 		// In the air, wanting to jump: a rebuild must not count the limbs under the capsule as ground.
+		const float falling = physics.GetLinearVelocity(rig).y;
+		REQUIRE(falling < -2.5f);
+		scene.GetRegistry().patch<CapsuleColliderComponent>(rig, [](CapsuleColliderComponent& capsule) { capsule.HalfHeight = 0.45f; });
 		physics.MoveCharacter(rig, { 0, 5, 0 });
-		rig.GetComponent<CapsuleColliderComponent>().Radius = 0.45f;
-		const float before = scene.GetWorldTransform(rig)[3].y;
 		Simulate(scene, 1);
 		CHECK_FALSE(physics.IsCharacterGrounded(rig));
-		CHECK(physics.GetLinearVelocity(rig).y < -2.5f);
-		CHECK(scene.GetWorldTransform(rig)[3].y < before);
+		CHECK(physics.GetLinearVelocity(rig).y < falling + 0.1f);
 		scene.OnSimulationStop();
 	}
 
@@ -2228,7 +2346,7 @@ TEST_SUITE("Ragdolls")
 		ClearAssetCache clear;
 		TempDirectory directory("RagdollRootSteps");
 		auto model = ReadJson(FixturePath("TwoJoint.gltf"));
-		const float jump[9] = { 0, 0, 0, 0.6f, 0, 0, 0.6f, 0, 0 };
+		const float jump[9] = { 0, 0, 0, 1.35f, 0, 0, 1.35f, 0, 0 };
 		AddVectorClip(model, "Move", 2, "translation", jump);
 		const auto path = directory.GetPath() / "Move.gltf";
 		REQUIRE(FileSystem::WriteTextFile(path, model.dump()));
@@ -2252,11 +2370,12 @@ TEST_SUITE("Ragdolls")
 			return glm::vec3(pose->Joints[1].second[3]) - glm::vec3(pose->Joints[0].second[3]);
 		};
 		const glm::vec3 straight = reach();
-		// 0.6 m over a three-step frame is 12 m/s for each step. All in the first it would be a jump, carrying the tip rigidly.
+		// 1.35 m over a three-step frame is 27 m/s for each step, under the limit of 30 only when shared evenly. A skewed share
+		// would be a jump, carrying the tip rigidly.
 		REQUIRE(animation.Seek(rig, 1));
 		scene.OnUpdate(3.0f * Step);
 		CHECK(glm::length(reach() - straight) > 0.01f);
-		CHECK(glm::vec3(physics.GetRagdollPose(rig)->Joints[0].second[3]).x == doctest::Approx(0.6f).epsilon(0.01));
+		CHECK(glm::vec3(physics.GetRagdollPose(rig)->Joints[0].second[3]).x == doctest::Approx(1.35f).scale(0).epsilon(0.01));
 		scene.OnSimulationStop();
 
 		// No step at all: the entity moved on and the root body did not, and the limbs still hang from the animated root.
@@ -2310,7 +2429,7 @@ TEST_SUITE("Ragdolls")
 		// A capsule around the limbs changes nothing: they neither hit it nor push it.
 		CHECK(Near(run(true), run(false), 0.02f));
 
-		// Moved under a controller while active, the rig joins it; moved away, it is on its own.
+		// Moved under a controller while active, the rig joins it.
 		Scene scene;
 		Floor(scene);
 		Entity controller = scene.CreateEntity("Controller");
@@ -2335,32 +2454,16 @@ TEST_SUITE("Ragdolls")
 		scene.OnSimulationStop();
 	}
 
-	TEST_CASE("Limbs of a partial rig collide with each other")
-	{
-		ClearAssetCache clear;
-		// Gravity along -X swings the left arm over the head toward the right arm, which it must not pass.
-		Scene scene;
-		scene.GetPhysicsSettings().Gravity = { -20, 6, 0 };
-		Entity rig = PartialBiped(scene, false);
-		auto& ragdoll = rig.GetComponent<RagdollComponent>();
-		ragdoll.Bones.push_back({ .Joint = "LeftUpperArm", .SwingAngle = 175, .TwistMin = -30, .TwistMax = 30 });
-		scene.OnSimulationStart();
-		auto& physics = *scene.GetPhysicsWorld();
-		scene.GetAnimationSystem()->Update(0);
-		REQUIRE(physics.ActivateRagdoll(rig));
-		Simulate(scene, 240);
-		const glm::vec3 hand = BoneWorld(scene, rig, "LeftHand"), shoulder = BoneWorld(scene, rig, "LeftUpperArm");
-		CHECK(hand.y > shoulder.y);
-		scene.OnSimulationStop();
-	}
-
-	TEST_CASE("The sleeping contacts of a character that keeps a rig end as its own do")
+	TEST_CASE("A character that keeps a rig leaves a zone as one entity")
 	{
 		ClearAssetCache clear;
 		Scene scene;
 		Floor(scene);
 		Entity rig = PartialBiped(scene);
-		Entity zone = Zone(scene);
+		auto zone = scene.CreateEntity("Zone");
+		zone.GetTransform().Translation = { 0, 1, 0 };
+		zone.AddComponent<RigidBodyComponent>().IsTrigger = true;
+		zone.AddComponent<BoxColliderComponent>().HalfExtents = { 2, 2, 2 };
 		Contacts listener;
 		scene.SetEventListener(&listener);
 		scene.OnSimulationStart();
@@ -2369,11 +2472,11 @@ TEST_SUITE("Ragdolls")
 		Simulate(scene, 30);
 		REQUIRE(listener.Begin == 1);
 		REQUIRE(physics.ActivateRagdoll(rig));
-		Simulate(scene, 240);
-		// The zone leaves an idle character, whose inner body is not active: that is an exit, not sleep.
-		REQUIRE(physics.RecoverRagdoll(rig, "", 0));
-		zone.GetTransform().Translation.y = 1000;
-		Simulate(scene, 5);
+		Simulate(scene, 10);
+		CHECK(listener.Begin == 1);
+		// Its body and its limbs are one entity in the zone: leaving is one exit, when the last of them has left.
+		physics.MoveCharacter(rig, { 4, 0, 0 });
+		Simulate(scene, 120);
 		CHECK(listener.End == 1);
 		scene.SetEventListener(nullptr);
 		scene.OnSimulationStop();
@@ -2425,7 +2528,7 @@ TEST_SUITE("Ragdolls")
 	{
 		ClearAssetCache clear;
 		TempDirectory directory("RagdollSheared");
-		// A third joint, turned 90 degrees, below a Tip whose clip scales it unevenly: only that joint shears.
+		// A third joint, turned 45 degrees, below a Tip whose clip scales it unevenly: only that joint shears.
 		auto model = ReadJson(FixturePath("TwoJoint.gltf"));
 		const size_t end = model["nodes"].size();
 		model["nodes"].push_back({ { "name", "End" }, { "translation", { 0, 1, 0 } }, { "rotation", { 0, 0, 0.3826834f, 0.9238795f } } });
@@ -2440,7 +2543,6 @@ TEST_SUITE("Ragdolls")
 		Scene scene;
 		scene.GetPhysicsSettings().Gravity = glm::vec3(0);
 		Entity rig = Rig(scene);
-		rig.GetComponent<RagdollComponent>().MotorStrength = 1;
 		auto& animator = rig.GetComponent<AnimatorComponent>();
 		animator.Mesh = path.string();
 		animator.Clip = "Stretch";
@@ -2452,35 +2554,68 @@ TEST_SUITE("Ragdolls")
 		animation.Update(0);
 		REQUIRE(physics.ActivateRagdoll(rig));
 		Simulate(scene, 3);
-		REQUIRE(physics.GetRagdollPose(rig)->Powered);
-		const auto since = Log::GetHistory().GetTotalCount();
+		// The first powered frame already finds the sheared pose: Tip's motor must not stay on with End's unreadable.
 		REQUIRE(animation.Seek(rig, 1));
+		Simulate(scene, 1);
+		const auto since = Log::GetHistory().GetTotalCount();
+		REQUIRE(physics.SetRagdollMotorStrength(rig, 1, 0));
 		Simulate(scene, 5);
 		CHECK(CountLogMessages(since, "the animated joint 'End' cannot be decomposed; motors are off") == 1);
 		CHECK_FALSE(physics.GetRagdollPose(rig)->Powered);
 		scene.OnSimulationStop();
 
-		// Unpowered on a kinematic root at that joint, the root stops and says so.
+		// A rig that follows its root needs only the root: a limb that shears stops no more than the motors.
+		const auto partialRig = [](Scene& into, const std::filesystem::path& mesh, const char* clip) {
+			Entity entity = Rig(into);
+			auto& ragdoll = entity.GetComponent<RagdollComponent>();
+			ragdoll.KinematicRoot = true;
+			ragdoll.RootJoint = "Tip";
+			auto& driven = entity.GetComponent<AnimatorComponent>();
+			driven.Mesh = mesh.string();
+			driven.Clip = clip;
+			driven.PlayOnStart = true;
+			driven.Speed = 0;
+			return entity;
+		};
+		{
+			Scene partial;
+			partial.GetPhysicsSettings().Gravity = glm::vec3(0);
+			Entity kinematic = partialRig(partial, path, "Stretch");
+			partial.OnSimulationStart();
+			partial.GetAnimationSystem()->Update(0);
+			REQUIRE(partial.GetPhysicsWorld()->ActivateRagdoll(kinematic));
+			Simulate(partial, 3);
+			REQUIRE(partial.GetAnimationSystem()->Seek(kinematic, 1));
+			Simulate(partial, 2);
+			const glm::vec3 before = partial.GetPhysicsWorld()->GetRagdollCapsules(kinematic)[0].Start;
+			kinematic.GetTransform().Translation.x += 0.1f;
+			Simulate(partial, 2);
+			CHECK(partial.GetPhysicsWorld()->GetRagdollCapsules(kinematic)[0].Start.x == doctest::Approx(before.x + 0.1f).scale(0).epsilon(1e-3));
+			partial.OnSimulationStop();
+		}
+
+		// A root that shears itself holds still and says so; when it can follow again it catches up, however far that is.
+		model["nodes"][0]["rotation"] = { 0, 0, 0.3826834f, 0.9238795f };
+		AddVectorClip(model, "StretchParent", 2, "scale", scale);
+		const auto parentPath = directory.GetPath() / "ShearedRoot.gltf";
+		REQUIRE(FileSystem::WriteTextFile(parentPath, model.dump()));
 		Scene partial;
 		partial.GetPhysicsSettings().Gravity = glm::vec3(0);
-		Entity kinematic = Rig(partial);
-		auto& ragdoll = kinematic.GetComponent<RagdollComponent>();
-		ragdoll.KinematicRoot = true;
-		ragdoll.RootJoint = "Tip";
-		auto& driven = kinematic.GetComponent<AnimatorComponent>();
-		driven.Mesh = path.string();
-		driven.Clip = "Stretch";
-		driven.PlayOnStart = true;
-		driven.Speed = 0;
+		Entity kinematic = partialRig(partial, parentPath, "StretchParent");
 		partial.OnSimulationStart();
 		partial.GetAnimationSystem()->Update(0);
 		REQUIRE(partial.GetPhysicsWorld()->ActivateRagdoll(kinematic));
 		Simulate(partial, 3);
 		const auto later = Log::GetHistory().GetTotalCount();
+		const glm::vec3 held = partial.GetPhysicsWorld()->GetRagdollCapsules(kinematic)[0].Start;
 		REQUIRE(partial.GetAnimationSystem()->Seek(kinematic, 1));
-		kinematic.GetTransform().Translation.x += 1;
+		kinematic.GetTransform().Translation.x += 5;
 		Simulate(partial, 5);
-		CHECK(CountLogMessages(later, "cannot be decomposed; the root holds still") == 1);
+		CHECK(CountLogMessages(later, "the animated root 'Tip' cannot be decomposed; the root holds still") == 1);
+		CHECK(Near(partial.GetPhysicsWorld()->GetRagdollCapsules(kinematic)[0].Start, held, 1e-4f));
+		REQUIRE(partial.GetAnimationSystem()->Seek(kinematic, 0));
+		Simulate(partial, 2);
+		CHECK(partial.GetPhysicsWorld()->GetRagdollCapsules(kinematic)[0].Start.x == doctest::Approx(held.x + 5).scale(0).epsilon(1e-3));
 		partial.OnSimulationStop();
 	}
 
@@ -2537,16 +2672,39 @@ TEST_SUITE("Ragdolls")
 		auto& physics = *scene.GetPhysicsWorld();
 		scene.GetAnimationSystem()->Update(0);
 		Simulate(scene, 3);
-		const glm::vec3 looking = glm::normalize(glm::vec3(BoneWorldTransform(scene, rig, "Head")[1]));
+		const auto aim = [&] { return glm::normalize(glm::vec3(BoneWorldTransform(scene, rig, "Head")[2])); };
+		const glm::vec3 looking = aim();
+		REQUIRE(glm::length(looking - glm::vec3(0, 0, 1)) > 0.5f);
 		REQUIRE(physics.ActivateRagdoll(rig));
 		Simulate(scene, 30);
 		REQUIRE(physics.RecoverRagdoll(rig, "", 0.2f));
 		Simulate(scene, 10);
 		// The last of the blend is already close to the IK's pose: the end of the blend does not pop.
-		const glm::vec3 blended = glm::normalize(glm::vec3(BoneWorldTransform(scene, rig, "Head")[1]));
-		CHECK(glm::dot(blended, looking) > 0.9f);
+		CHECK(glm::dot(aim(), looking) > 0.9f);
 		Simulate(scene, 10);
-		CHECK(Near(glm::normalize(glm::vec3(BoneWorldTransform(scene, rig, "Head")[1])), looking, 0.02f));
+		CHECK(Near(aim(), looking, 0.02f));
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("A rig that starts enabled keeps its character, and recovery keeps what it was built as")
+	{
+		ClearAssetCache clear;
+		Scene scene;
+		Floor(scene);
+		Entity rig = PartialBiped(scene);
+		auto& ragdoll = rig.GetComponent<RagdollComponent>();
+		ragdoll.Enabled = true;
+		scene.OnSimulationStart();
+		auto& physics = *scene.GetPhysicsWorld();
+		CHECK(physics.IsRagdollActive(rig));
+		CHECK(physics.HasCharacter(rig));
+		Simulate(scene, 5);
+		REQUIRE(physics.RecoverRagdoll(rig, "", 0.25f));
+		// An edit while it blends is for the next rig: this one goes on leaving the entity alone.
+		ragdoll.KinematicRoot = false;
+		Simulate(scene, 2);
+		CHECK_FALSE(physics.RagdollOwnsRoot(rig));
+		CHECK(physics.HasCharacter(rig));
 		scene.OnSimulationStop();
 	}
 

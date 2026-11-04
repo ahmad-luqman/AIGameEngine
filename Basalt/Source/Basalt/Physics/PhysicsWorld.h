@@ -69,12 +69,12 @@ namespace Basalt {
 
 	// Bodies near a region, gathered once (PhysicsWorld::CollectShapes, or StaticPhysicsShapes without a world) for many
 	// sphere queries, such as spring bone points against walls and floors: each body's shape and transform as they were when
-	// gathered, so queries never lock bodies.
+	// gathered, so queries never lock bodies. It must not outlive the last PhysicsWorld or StaticPhysicsShapes: it is meant
+	// for one frame's queries.
 	class PhysicsShapeSnapshot
 	{
 	public:
-		// Bodies kept at most; CollectShapes keeps the ones nearest the region's center. A snapshot must not outlive the last
-		// PhysicsWorld or StaticPhysicsShapes: it is meant for one frame's queries.
+		// Bodies kept at most; CollectShapes keeps the ones nearest the region's center.
 		static constexpr uint32_t MaxShapes = 32;
 		// Spheres smaller than this (meters) query as this size: physics shapes need a radius.
 		static constexpr float MinRadius = 0.001f;

@@ -3,6 +3,10 @@
 #include <Basalt/Math/Math.h>
 #include <Basalt/Math/Random.h>
 
+#include <glm/gtc/quaternion.hpp>
+
+#include <bit>
+#include <cmath>
 #include <cstdint>
 #include <limits>
 
@@ -77,5 +81,25 @@ TEST_SUITE("Math")
 		CHECK(glm::degrees(glm::angle(Math::Slerp(from, -to, 1.0f / 3.0f))) == doctest::Approx(30.0f).epsilon(1e-4));
 		// Unnormalized input comes out unit length.
 		CHECK(glm::length(Math::Slerp(from * 2.0f, to * 3.0f, 0.5f)) == doctest::Approx(1.0f));
+	}
+
+	TEST_CASE("Atan2 and YawRotation round the same everywhere and agree with libm")
+	{
+		// Exact bit patterns: root motion reaches physics through these, so a platform that differs breaks replays.
+		CHECK(std::bit_cast<uint32_t>(Math::Atan2(0.3f, 0.7f)) == 1053773308u);
+		CHECK(std::bit_cast<uint32_t>(Math::Atan2(-0.9f, -0.2f)) == 3219459379u);
+		CHECK(std::bit_cast<uint32_t>(Math::YawRotation(1.1f).y) == 1057345237u);
+		CHECK(std::bit_cast<uint32_t>(Math::YawRotation(1.1f).w) == 1062878988u);
+		for (int i = 0; i < 64; i++)
+		{
+			const float angle = static_cast<float>(i) * 0.1f - 3.1f;
+			const float y = std::sin(angle) * 2.5f, x = std::cos(angle) * 2.5f;
+			CHECK(Math::Atan2(y, x) == doctest::Approx(std::atan2(y, x)).scale(0).epsilon(2e-6));
+			const glm::quat turn = Math::YawRotation(angle);
+			const glm::quat expected = glm::angleAxis(angle, glm::vec3(0, 1, 0));
+			CHECK(glm::length(glm::vec4(turn.x, turn.y, turn.z, turn.w) - glm::vec4(expected.x, expected.y, expected.z, expected.w)) < 2e-6f);
+		}
+		// atan2's convention at the origin, which Jolt's divides into a NaN.
+		CHECK(Math::Atan2(0, 0) == 0);
 	}
 }

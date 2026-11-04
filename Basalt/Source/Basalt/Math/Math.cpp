@@ -95,7 +95,9 @@ namespace Basalt::Math {
 		for (int i = 0; i < 3; i++)
 		{
 			axes[i] = glm::vec3(matrix[i]);
-			const float length = std::hypot(axes[i].x, axes[i].y, axes[i].z);
+			// In double, which cannot overflow and rounds alike everywhere (libm's hypot does not): these lengths reach physics.
+			const double x = axes[i].x, y = axes[i].y, z = axes[i].z;
+			const float length = static_cast<float>(std::sqrt(x * x + y * y + z * z));
 			if (!std::isfinite(length))
 				return false;
 			outScale[i] = length;
@@ -148,7 +150,8 @@ namespace Basalt::Math {
 
 	float Atan2(float y, float x)
 	{
-		return JPH::ATan2(y, x);
+		// Jolt's divides by what would be 0 here, where atan2's convention is 0 too.
+		return x == 0 && y == 0 ? 0.0f : JPH::ATan2(y, x);
 	}
 
 	glm::quat YawRotation(float yaw)

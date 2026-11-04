@@ -16,7 +16,7 @@ namespace Basalt {
 	// a playing chain would collide with without creating a world, which would write runtime records into the edit registry
 	// and react to its components. It only reads the scene (a collider's mesh may load through AssetManager). Shapes are built
 	// from the same components as in Play (PhysicsInternal::BuildColliderShape) and kept until those components, the entity's
-	// scale or a mesh asset change, so a moved body rebuilds nothing. Triggers, dynamic and kinematic bodies and character
+	// scale or layer or a mesh asset change, so a moved body rebuilds nothing. Triggers, dynamic and kinematic bodies and character
 	// controllers are left out: only static bodies stay where the edit scene shows them once the game runs. Filters' triggers
 	// flag is therefore moot. Main thread only.
 	class StaticPhysicsShapes
@@ -28,7 +28,7 @@ namespace Basalt {
 		StaticPhysicsShapes(const StaticPhysicsShapes&) = delete;
 		StaticPhysicsShapes& operator=(const StaticPhysicsShapes&) = delete;
 
-		// Reads the scene again: its layers, every static body's transform, and shapes whose colliders changed.
+		// Reads the scene again: its layers, every static body's transform, and shapes whose inputs changed.
 		void Refresh();
 		// As PhysicsWorld::GetLayers, from the last Refresh.
 		const PhysicsLayers& GetLayers() const;

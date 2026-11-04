@@ -8,12 +8,14 @@
 #include "Basalt/Animation/SpringBones.h"
 #include "Basalt/Asset/AssetManager.h"
 #include "Basalt/Core/Assert.h"
+#include "Basalt/Physics/RagdollRules.h"
 #include "Basalt/Renderer/RenderMath.h"
 #include "Basalt/Scene/Entity.h"
 #include "Basalt/Scene/Scene.h"
 
 #include <algorithm>
 #include <map>
+#include <set>
 #include <span>
 
 namespace Basalt {
@@ -309,20 +311,6 @@ namespace Basalt {
 				}
 		}
 
-		// Whether a KinematicRoot rig simulates this joint: a skin joint below its RootJoint (an empty one: below the first
-		// skin joint).
-		bool IsRagdollLimb(const MeshSource& source, const RagdollComponent& ragdoll, uint32_t joint)
-		{
-			const int32_t root = ragdoll.RootJoint.empty() ? -1 : FindNode(source, ragdoll.RootJoint);
-			for (const auto& skin : source.Skins)
-				if (std::ranges::find(skin.Joints, joint, &SkinJoint::Node) != skin.Joints.end())
-				{
-					const uint32_t first = root >= 0 ? static_cast<uint32_t>(root) : skin.Joints.front().Node;
-					return joint != first && IsAncestor(source, first, joint);
-				}
-			return false;
-		}
-
 		void AddSpringBoneWarnings(Entity entity, const SpringBoneComponent& springs, std::vector<std::string>& warnings)
 		{
 			const auto* animator = entity.TryGetComponent<AnimatorComponent>();
@@ -376,7 +364,10 @@ namespace Basalt {
 				}
 				const auto chainJoints = std::span(joints).first(joints.size() - 1);
 				// Chains on the joints a partial ragdoll simulates wait for it; a whole-body rig stops every chain, as documented.
-				if (const auto* ragdoll = entity.TryGetComponent<RagdollComponent>(); ragdoll && ragdoll->KinematicRoot && std::ranges::any_of(chainJoints, [&](uint32_t joint) { return IsRagdollLimb(*source, *ragdoll, joint); }))
+				if (const auto* ragdoll = entity.TryGetComponent<RagdollComponent>(); ragdoll && ragdoll->KinematicRoot && std::ranges::any_of(chainJoints, [&](uint32_t joint) {
+																						  const std::set<uint32_t> selected = SelectRagdollJoints(*source, ragdoll->RootJoint.empty() ? -1 : FindNode(*source, ragdoll->RootJoint));
+																						  return selected.contains(joint) && joint != FindRagdollRoot(*source, selected);
+																					  }))
 					warnings.push_back(fmt::format("SpringBone chain '{}': its joints belong to the Ragdoll, so it does not swing while the rig is active", chain.Name));
 				// Chains swing in order, so a later one turning the same joint overrides the earlier one.
 				if (const auto other = std::ranges::find_if(chainJoints, [&](uint32_t joint) { return turned.contains(joint); }); other != chainJoints.end())
@@ -517,6 +508,38 @@ namespace Basalt {
 		}
 	}
 
+	namespace {
+		void AddRagdollWarnings(const AnimatorComponent* animator, const RagdollComponent& ragdoll, std::vector<std::string>& warnings)
+		{
+			if (ragdoll.MotorStrength > 0 && ragdoll.MotorTorque <= 0)
+				warnings.emplace_back("Ragdoll MotorStrength has no effect: MotorTorque is 0");
+			if (ragdoll.BalanceStrength > 0)
+			{
+				if (ragdoll.KinematicRoot)
+					warnings.emplace_back("Ragdoll BalanceStrength has no effect: a KinematicRoot rig cannot fall");
+				else if (ragdoll.MotorTorque <= 0)
+					warnings.emplace_back("Ragdoll BalanceStrength has no effect: balance needs running motors, and MotorTorque is 0");
+				else if (ragdoll.MotorStrength <= 0)
+					warnings.emplace_back("Ragdoll BalanceStrength has no effect while the motor strength is 0: set MotorStrength, or raise it from a script");
+				else if (ragdoll.BalanceMaxTilt <= 0)
+					warnings.emplace_back("Ragdoll BalanceStrength has no effect: BalanceMaxTilt is 0");
+			}
+			// AddAnimatorWarnings reports a model that cannot load.
+			const auto source = !animator || animator->Mesh.empty() ? nullptr : AssetManager::GetMesh(animator->Mesh);
+			if (!source)
+				return;
+			const std::set<uint32_t> selected = SelectRagdollJoints(*source, ragdoll.RootJoint.empty() ? -1 : FindNode(*source, ragdoll.RootJoint));
+			if (selected.empty())
+				return;
+			if (ragdoll.KinematicRoot && selected.size() == 1)
+				warnings.emplace_back("Ragdoll KinematicRoot leaves nothing to simulate: no skin joint hangs from the root");
+			const std::string& root = source->Nodes[FindRagdollRoot(*source, selected)].Name;
+			for (const RagdollBone& bone : ragdoll.Bones)
+				if (bone.MotorStrength != 1 && bone.Joint == root)
+					warnings.push_back(fmt::format("Ragdoll Bones: '{}' is the rig's root, with no joint above it for MotorStrength to scale", bone.Joint));
+		}
+	}
+
 	std::vector<std::string> GetAnimationWarnings(Entity entity)
 	{
 		std::vector<std::string> warnings;
@@ -536,19 +559,7 @@ namespace Basalt {
 		if (const auto* springs = entity.TryGetComponent<SpringBoneComponent>())
 			AddSpringBoneWarnings(entity, *springs, warnings);
 		if (const auto* ragdoll = entity.TryGetComponent<RagdollComponent>())
-		{
-			if (ragdoll->MotorStrength > 0 && ragdoll->MotorTorque <= 0)
-				warnings.emplace_back("Ragdoll MotorStrength has no effect: MotorTorque is 0");
-			if (ragdoll->BalanceStrength > 0 && ragdoll->KinematicRoot)
-				warnings.emplace_back("Ragdoll BalanceStrength has no effect: a KinematicRoot rig cannot fall");
-			else if (ragdoll->BalanceStrength > 0 && ragdoll->MotorTorque <= 0)
-				warnings.emplace_back("Ragdoll BalanceStrength has no effect: balance needs running motors, and MotorTorque is 0");
-			else if (ragdoll->BalanceStrength > 0 && ragdoll->MotorStrength <= 0)
-				warnings.emplace_back("Ragdoll BalanceStrength has no effect while the motor strength is 0: set MotorStrength, or raise it from a script");
-			for (const RagdollBone& bone : ragdoll->Bones)
-				if (bone.MotorStrength != 1 && bone.Joint == ragdoll->RootJoint)
-					warnings.push_back(fmt::format("Ragdoll Bones: '{}' is the rig's root, with no joint above it for MotorStrength to scale", bone.Joint));
-		}
+			AddRagdollWarnings(animator, *ragdoll, warnings);
 		if (const auto* timeline = entity.TryGetComponent<PropertyAnimationComponent>())
 			AddPropertyAnimationWarnings(entity, *timeline, warnings);
 		return warnings;

@@ -25,14 +25,16 @@ namespace Basalt::PhysicsInternal {
 	struct RawContactEvent
 	{
 		bool Added = false;
+		// Still touching, with the surface as it is now (only for bodies that track it, see BodyMaterial).
+		bool Persisted = false;
 		uint32_t Body1 = 0;
 		uint32_t SubShape1 = 0;
 		uint32_t Body2 = 0;
 		uint32_t SubShape2 = 0;
-		// Added events only (Impulse stays 0 for sensors); Normal points from body 1 toward body 2.
+		// Added and persisted events (Impulse stays 0 for sensors); Normal points from body 1 toward body 2.
 		ContactInfo Contact;
 
-		auto Tie() const { return std::tie(Added, Body1, SubShape1, Body2, SubShape2); }
+		auto Tie() const { return std::tie(Added, Persisted, Body1, SubShape1, Body2, SubShape2); }
 	};
 
 	// One per Jolt body index, reset with `= {}` when the body goes.
@@ -42,6 +44,8 @@ namespace Basalt::PhysicsInternal {
 		PhysicsCombineMode RestitutionCombine = PhysicsCombineMode::Default;
 		// Only for a body with a collider that has its own material, so the usual slot stays small.
 		Scope<const ColliderMaterials> Colliders;
+		// Reports its touching contacts every step: a ragdoll's parts, whose balance asks which way they face now.
+		bool TracksContacts = false;
 	};
 
 	// Called from Jolt worker threads: only records events, which the main thread dispatches, and
@@ -53,7 +57,7 @@ namespace Basalt::PhysicsInternal {
 		{
 			CombineMaterials(body1, body2, manifold, settings);
 
-			RawContactEvent event{ true, body1.GetID().GetIndexAndSequenceNumber(), manifold.mSubShapeID1.GetValue(), body2.GetID().GetIndexAndSequenceNumber(), manifold.mSubShapeID2.GetValue(), {} };
+			RawContactEvent event{ .Added = true, .Body1 = body1.GetID().GetIndexAndSequenceNumber(), .SubShape1 = manifold.mSubShapeID1.GetValue(), .Body2 = body2.GetID().GetIndexAndSequenceNumber(), .SubShape2 = manifold.mSubShapeID2.GetValue() };
 			if (!manifold.mRelativeContactPointsOn1.empty())
 			{
 				// Midway between the two surfaces, averaged over the manifold's points.
@@ -82,11 +86,17 @@ namespace Basalt::PhysicsInternal {
 		{
 			// Jolt recomputes the combined values for every contact each step.
 			CombineMaterials(body1, body2, manifold, settings);
+			if (Materials[body1.GetID().GetIndex()].TracksContacts || Materials[body2.GetID().GetIndex()].TracksContacts)
+			{
+				RawContactEvent event{ .Persisted = true, .Body1 = body1.GetID().GetIndexAndSequenceNumber(), .SubShape1 = manifold.mSubShapeID1.GetValue(), .Body2 = body2.GetID().GetIndexAndSequenceNumber(), .SubShape2 = manifold.mSubShapeID2.GetValue() };
+				event.Contact.Normal = FromJolt(manifold.mWorldSpaceNormal);
+				RecordEvent(event);
+			}
 		}
 
 		void OnContactRemoved(const JPH::SubShapeIDPair& pair) override
 		{
-			RecordEvent({ false, pair.GetBody1ID().GetIndexAndSequenceNumber(), pair.GetSubShapeID1().GetValue(), pair.GetBody2ID().GetIndexAndSequenceNumber(), pair.GetSubShapeID2().GetValue(), {} });
+			RecordEvent({ .Body1 = pair.GetBody1ID().GetIndexAndSequenceNumber(), .SubShape1 = pair.GetSubShapeID1().GetValue(), .Body2 = pair.GetBody2ID().GetIndexAndSequenceNumber(), .SubShape2 = pair.GetSubShapeID2().GetValue() });
 		}
 
 		std::mutex Mutex;

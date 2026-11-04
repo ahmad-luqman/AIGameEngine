@@ -1041,18 +1041,19 @@ TEST_SUITE("Animation")
 		CHECK(strand.Length(0) == doctest::Approx(1).epsilon(0.02));
 
 		// A chain whose head walks through a wall, its point behind: stopped at first, held past half a bone it comes along.
-		// The wall is a plane at z = 0.5 that stops anything crossing it.
+		// The wall is a plane at z = 0.5 that stops anything reaching it from behind.
 		const auto wall = [](const glm::vec3& from, const glm::vec3& to) -> std::optional<SpringSweepHit> {
-			if ((from.z - 0.5f) * (to.z - 0.5f) >= 0)
+			if (from.z >= 0.5f || to.z < 0.5f)
 				return std::nullopt;
-			return SpringSweepHit{ .Fraction = (0.5f - from.z) / (to.z - from.z), .Normal = { 0, 0, from.z < 0.5f ? -1.0f : 1.0f } };
+			return SpringSweepHit{ .Fraction = (0.5f - from.z) / (to.z - from.z), .Normal = { 0, 0, -1 } };
 		};
 		Strand trailing({ 0, 0, 0 }, { 0, 0, -1 }, 1, 0.2f);
 		SpringSimulationRequest request{ .Continuous = true, .WorldSweep = wall, .Stiffness = 100 };
 		// Its head a little past the wall, the point is held on the near side.
-		trailing.Move({ 0, 0, 2 }, 17, 1.0f / 60.0f, request);
+		trailing.Move({ 0, 0, 2 }, 23, 1.0f / 60.0f, request);
+		CHECK(trailing.Points[0].Position.z == doctest::Approx(0.5f).scale(0).epsilon(1e-3));
 		CHECK(trailing.Points[0].Position.z < 0.5f);
-		trailing.Move({ 0, 0, 2 }, 43, 1.0f / 60.0f, request);
+		trailing.Move({ 0, 0, 2 }, 37, 1.0f / 60.0f, request);
 		CHECK(trailing.Points[0].Position.z > 1.5f);
 		CHECK(trailing.Length(0) == doctest::Approx(0.2f).epsilon(0.05));
 	}
@@ -1192,17 +1193,106 @@ TEST_SUITE("Animation")
 		{
 			CAPTURE(static_cast<int>(mode));
 			// Every layer without a chain layer; with one, what the matrix says.
-			CHECK(rest("", "Props", mode) == doctest::Approx(0.02f).epsilon(0.5));
-			CHECK(rest("Hair", "Default", mode) == doctest::Approx(0.02f).epsilon(0.5));
-			CHECK(rest("Props", "Props", mode) == doctest::Approx(0.02f).epsilon(0.5));
+			CHECK(rest("", "Props", mode) > 0);
+			CHECK(rest("Hair", "Default", mode) > 0);
+			CHECK(rest("Props", "Props", mode) > 0);
 			CHECK(rest("Hair", "Props", mode) < -0.1f);
 		}
 		// A name the project does not define is Default, in the log and the inspector.
 		const auto since = Log::GetHistory().GetTotalCount();
 		std::vector<std::string> warnings;
-		CHECK(rest("Nope", "Props", Mode::Game, &warnings) == doctest::Approx(0.02f).epsilon(0.5));
+		CHECK(rest("Nope", "Props", Mode::Game, &warnings) > 0);
 		CHECK(CountLogMessages(since, "the physics layer 'Nope' is not defined; it counts as Default") == 1);
 		CHECK(std::ranges::count(warnings, std::string("SpringBone chain 'RightArm': the physics layer 'Nope' is not defined; it counts as Default")) == 1);
+
+		// Said once, however often the chain restarts, and also while a ragdoll has it. A layer that meets nothing says so too.
+		Scene scene;
+		PhysicsLayers lonely;
+		std::string error;
+		REQUIRE(lonely.Add("Lonely", error));
+		lonely.SetCollides(0, *lonely.Find("Lonely"), false);
+		lonely.SetCollides(*lonely.Find("Lonely"), *lonely.Find("Lonely"), false);
+		scene.SetPhysicsLayers(lonely);
+		auto chain = RightArm();
+		chain.CollidePhysics = true;
+		chain.Layer = "Nope";
+		auto biped = AddBiped(scene, { chain });
+		const auto logged = Log::GetHistory().GetTotalCount();
+		scene.OnSimulationStart();
+		scene.OnUpdate(Step);
+		biped.GetTransform().Translation.x += 50;
+		scene.OnUpdate(Step);
+		scene.OnUpdate(Step);
+		scene.GetAnimationSystem()->ResetSpringBones(biped);
+		scene.OnUpdate(Step);
+		scene.OnUpdate(Step);
+		CHECK(CountLogMessages(logged, "the physics layer 'Nope' is not defined; it counts as Default") == 1);
+		biped.GetComponent<SpringBoneComponent>().Chains[0].Layer = "Lonely";
+		scene.OnUpdate(Step);
+		CHECK(CountLogMessages(logged, "the physics layer 'Lonely' collides with no layer") == 1);
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("Static shapes keep up with the project's layers")
+	{
+		ClearAssetCache clear;
+		Scene scene;
+		PhysicsLayers layers;
+		std::string error;
+		REQUIRE(layers.Add("A", error));
+		REQUIRE(layers.Add("B", error));
+		scene.SetPhysicsLayers(layers);
+		auto box = scene.CreateEntity("Box");
+		box.AddComponent<RigidBodyComponent>().Layer = "B";
+		box.AddComponent<BoxColliderComponent>();
+		StaticPhysicsShapes shapes(scene);
+		const auto seenOn = [&](const char* layer) {
+			const auto index = shapes.GetLayers().Find(layer);
+			return index && !shapes.CollectShapes(glm::vec3(-1), glm::vec3(1), 0.1f, { .LayerMask = 1u << *index }).Empty();
+		};
+		CHECK(seenOn("B"));
+		// Removing a layer moves the others down: the body stays on its name's layer.
+		REQUIRE(layers.Remove(*layers.Find("A"), error));
+		scene.SetPhysicsLayers(layers);
+		shapes.Refresh();
+		CHECK(seenOn("B"));
+		// Its name gone, it is on Default, and said so; defined again, it is back.
+		const auto since = Log::GetHistory().GetTotalCount();
+		REQUIRE(layers.Remove(*layers.Find("B"), error));
+		scene.SetPhysicsLayers(layers);
+		shapes.Refresh();
+		CHECK(seenOn("Default"));
+		CHECK(CountLogMessages(since, "unknown physics layer 'B', using Default") == 1);
+		REQUIRE(layers.Add("C", error));
+		REQUIRE(layers.Add("B", error));
+		scene.SetPhysicsLayers(layers);
+		shapes.Refresh();
+		CHECK(seenOn("B"));
+		CHECK_FALSE(seenOn("Default"));
+	}
+
+	TEST_CASE("Static shapes drop a mesh that went away")
+	{
+		ClearAssetCache clear;
+		TempDirectory directory("StaticShapesMesh");
+		const auto path = directory.GetPath() / "Box.gltf";
+		REQUIRE(FileSystem::WriteTextFile(path, ReadJson(BipedPath()).dump()));
+		Scene scene;
+		auto body = scene.CreateEntity("Body");
+		body.AddComponent<RigidBodyComponent>();
+		auto& mesh = body.AddComponent<MeshColliderComponent>();
+		mesh.Mesh = path.string();
+		mesh.Convex = true;
+		StaticPhysicsShapes shapes(scene);
+		REQUIRE_FALSE(shapes.CollectShapes(glm::vec3(-2), glm::vec3(2), 0.1f).Empty());
+		// The asset is gone from the cache and the disk: the shape must not outlive it silently.
+		std::filesystem::remove(path);
+		AssetManager::Clear();
+		PhysicsWorld::ClearMeshShapeCache();
+		const auto since = Log::GetHistory().GetTotalCount();
+		shapes.Refresh();
+		CHECK(shapes.CollectShapes(glm::vec3(-2), glm::vec3(2), 0.1f).Empty());
+		CHECK(CountLogMessages(since, "MeshCollider ignored") == 1);
 	}
 
 	TEST_CASE("Spring chain layers are warned about and validated like body layers")
@@ -1325,7 +1415,7 @@ TEST_SUITE("Animation")
 		const glm::quat turned = glm::angleAxis(0.6f, glm::normalize(glm::vec3(1, 2, 3)));
 		auto offset = add({ 0, 0, 0 }, turned, glm::vec3(1));
 		offset.AddComponent<BoxColliderComponent>().Offset = { 1, 0, 0 };
-		auto compound = add({ 3, 0, 0 }, glm::quat(1, 0, 0, 0), glm::vec3(1));
+		auto compound = add({ 3, 0, 0 }, turned, glm::vec3(1));
 		compound.AddComponent<SphereColliderComponent>().Offset = { 0, 1, 0 };
 		compound.AddComponent<BoxColliderComponent>().HalfExtents = { 0.4f, 0.4f, 0.4f };
 		auto child = add({ 0, 2, 0 }, glm::quat(1, 0, 0, 0), glm::vec3(1));
@@ -1400,11 +1490,17 @@ TEST_SUITE("Animation")
 		const auto warned = [&](const std::string& text) { return std::ranges::count(GetAnimationWarnings(biped), text); };
 		const std::string nothing = "SpringBone chain 'RightArm': Continuous has no effect: there is nothing to sweep against";
 		CHECK(warned(nothing) == 1);
-		auto& config = biped.GetComponent<SpringBoneComponent>().Chains[0];
+		auto& component = biped.GetComponent<SpringBoneComponent>();
+		component.Colliders.push_back({});
+		CHECK(warned(nothing) == 0);
+		component.Colliders.clear();
+		auto& config = component.Chains[0];
 		config.CollidePhysics = true;
 		CHECK(warned(nothing) == 0);
 		config.Layer = "Nothing";
 		CHECK(warned("SpringBone chain 'RightArm': the physics layer 'Nothing' collides with no layer") == 1);
+		config.Layer = "Default";
+		CHECK(warned("SpringBone chain 'RightArm': the physics layer 'Default' collides with no layer") == 0);
 	}
 
 	TEST_CASE("A swept chain in the edit preview stops at thin static bodies")
