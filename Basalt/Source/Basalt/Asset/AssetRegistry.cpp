@@ -159,9 +159,9 @@ namespace Basalt {
 		auto scanPath = assets;
 		for (auto it = std::filesystem::recursive_directory_iterator(assets, error); !error && it != std::filesystem::recursive_directory_iterator(); it.increment(error))
 		{
+			scanPath = it->path();
 			if (FileSystem::SkipNonUtf8Entry(it, m_Root, skipped))
 				continue;
-			scanPath = it->path();
 			if (it->is_symlink(error))
 			{
 				if (FileSystem::GetLowercaseExtension(it->path()) == ".meta")
@@ -214,7 +214,7 @@ namespace Basalt {
 		}
 		if (error)
 		{
-			outError = "cannot scan asset metadata at '" + FileSystem::PathToUtf8(scanPath) + "': " + FileSystem::DescribeError(error);
+			outError = "cannot scan asset metadata at '" + FileSystem::DescribePath(scanPath) + "': " + FileSystem::DescribeError(error);
 			return false;
 		}
 		SetIndex(std::move(paths), std::move(problems), std::move(orphans), std::move(skipped));

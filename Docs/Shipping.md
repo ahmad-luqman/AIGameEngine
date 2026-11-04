@@ -121,10 +121,11 @@ basalt archive.inspect '{"path": "Dist/MyGame/Assets.bpak", "verify": true}'
   time would no longer find the file: pass `"keepOriginals": true` with `archive` (a checkbox in the editor's export
   prompt) to keep every original. Folder exports copy every file.
 - **Names no key can hold.** A file or folder whose name has no UTF-8 form stays out, with a warning for each
-  (`Docs/AssetPipeline.md`): no scene, prefab or material can name it. On Linux a Lua string with raw bytes or a
-  percent-escaped glTF URI can, which works in a folder export and finds nothing in an archive, so read these warnings.
-  Folder exports copy such files byte for byte and add no warnings of their own; `validation`, when it runs, reports them
-  for both forms.
+  (`Docs/AssetPipeline.md`): no scene, prefab or material can name it. Off Windows (in practice Linux, as APFS refuses such
+  names) a Lua string with raw bytes or a percent-escaped glTF URI can, which works in a folder export and finds nothing in
+  an archive, so read these warnings.
+  Folder exports copy such files byte for byte (a broken link stops one, whatever its name) and add no warnings of their
+  own; `validation`, when it runs, reports them for both forms.
 - **Compression.** Each file except MP3 and FLAC audio is compressed with zstd (level 9) on the job system, up to 256 files
   or 256 MiB of them at a time (a larger file goes alone), and kept compressed only when that makes it smaller. Files are
   written in path order, so the same files and Basalt build give the same bytes however many cores the machine has.

@@ -25,7 +25,7 @@ namespace Basalt {
 	struct ValidationIssue
 	{
 		ValidationSeverity Severity = ValidationSeverity::Error;
-		// Project-relative file the problem is in ("Project.bproject" for project settings).
+		// Project-relative file the problem is in ("Project.bproject" for project settings, "Assets" for the folder as a whole).
 		std::string File;
 		std::string Message;
 	};

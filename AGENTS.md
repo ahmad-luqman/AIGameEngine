@@ -336,10 +336,10 @@ Other rules:
   names: read through `FileSystem`, or pass `path.c_str()` to the wide variant. Text from a `std::error_code` or a Win32
   code comes from `Platform::GetErrorMessage` or `FileSystem::DescribeError` (`FormatMessageA` and MSVC's
   `std::error_code::message()` are ANSI; a Core test fails on a raw `.message()` call). A directory scan whose entries
-  become text keys calls `FileSystem::SkipNonUtf8Entry` first and reports what it skipped (a picker may leave the list to
-  the log): such a name cannot be an asset key, since on Windows an NTFS name with unpaired surrogates has no text that
-  leads back to the file, and elsewhere a name that is not UTF-8 cannot pass through JSON. Skipping is not a failure: one odd
-  name must not stop a scan, and folder exports still copy such files byte for byte. `FileSystem::DescribePath` text is for
+  become text keys calls `FileSystem::SkipNonUtf8Entry` (a flat scan, `RecordNonUtf8Entry`) first and reports what it
+  skipped: such a name cannot be an asset key, since on Windows an NTFS name with unpaired surrogates has no text that leads
+  back to the file, and elsewhere a name that is not UTF-8 cannot pass through JSON. Skipping is not a failure: one odd name
+  must not stop a scan, and folder exports still copy such files byte for byte. `FileSystem::DescribePath` text is for
   messages: it names no file.
 - Ownership: `Scope<T>` (unique) / `Ref<T>` (shared) from `Basalt/Core/Base.h`; raw pointers are
   non-owning. GPU objects use nvrhi handles (`nvrhi::TextureHandle`, ...).

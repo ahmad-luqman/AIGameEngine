@@ -15,10 +15,10 @@
 #include <chrono>
 #include <map>
 #include <optional>
+#include <set>
 #include <span>
 #include <string_view>
 #include <system_error>
-#include <set>
 #include <unordered_set>
 
 namespace Basalt {
@@ -337,10 +337,9 @@ namespace Basalt {
 					outError = "cannot inspect '" + key + "': " + FileSystem::DescribeError(error);
 					return std::nullopt;
 				};
-				// The iterator does not enter linked folders (a folder export's copy does): unless the link's own name is one no
-				// key can hold (skipped above), refuse rather than ship a game
-				// that silently lacks their files. Linked files are read through, as the folder export copies them, and a
-				// link to nothing is refused rather than left out.
+				// The iterator does not enter linked folders (a folder export's copy does): unless the link's own name is one no key
+				// can hold (skipped above), refuse rather than ship a game that silently lacks their files. Linked files are read
+				// through, as the folder export copies them, and a link to nothing is refused rather than left out.
 				const bool link = it->is_symlink(error);
 				if (error)
 					return inspectFailed();
@@ -383,7 +382,7 @@ namespace Basalt {
 #if !defined(BS_PLATFORM_WINDOWS)
 			// Here raw bytes still open such a file from a folder, so a game could depend on one without any document saying so.
 			if (!skipped.empty())
-				outWarnings.emplace_back("a Lua string or glTF URI that spells such a name in raw bytes works from a folder, but will not find the file in the archive");
+				outWarnings.emplace_back("a Lua string or glTF URI that spells such a name in raw bytes or percent escapes works from a folder, but will not find the file in the archive");
 #endif
 			WrittenArchive written;
 			if (!keepOriginals)

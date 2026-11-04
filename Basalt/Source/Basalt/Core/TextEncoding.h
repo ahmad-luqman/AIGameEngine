@@ -71,11 +71,11 @@ namespace Basalt::TextEncoding {
 	template<typename Char>
 	void AppendHexEscape(std::basic_string<Char>& result, char kind, uint32_t value, int digits)
 	{
-		constexpr std::string_view Digits = "0123456789ABCDEF";
+		constexpr std::string_view HexDigits = "0123456789ABCDEF";
 		result.push_back(static_cast<Char>('\\'));
 		result.push_back(static_cast<Char>(kind));
 		for (int shift = (digits - 1) * 4; shift >= 0; shift -= 4)
-			result.push_back(static_cast<Char>(Digits[(value >> shift) & 0xF]));
+			result.push_back(static_cast<Char>(HexDigits[(value >> shift) & 0xF]));
 	}
 
 	// UTF-8 text with every byte outside a well-formed sequence written as \xFF.
@@ -87,7 +87,7 @@ namespace Basalt::TextEncoding {
 		{
 			if (const size_t length = Utf8SequenceLength(text, i); length != 0)
 			{
-				result.append(text.substr(i, length));
+				result.append(text, i, length);
 				i += length;
 				continue;
 			}

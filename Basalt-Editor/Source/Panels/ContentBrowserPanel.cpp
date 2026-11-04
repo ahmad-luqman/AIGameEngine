@@ -125,16 +125,15 @@ return %s
 		if (!listing.Error.empty())
 			ImGui::TextColored(EditorColors::Warning(), "%s", listing.Error.c_str());
 		DrawSkippedEntriesNote(listing.Skipped);
-		const std::vector<std::filesystem::directory_entry>& entries = listing.Entries;
 
 		const float rowHeight = std::max(m_IconSize, ImGui::GetTextLineHeight());
 		// Only rows on screen ask for previews: a folder with more files than the preview cache holds must not
 		// cycle the cache every frame.
 		ImGuiListClipper clipper;
-		clipper.Begin(static_cast<int>(entries.size()), rowHeight + ImGui::GetStyle().ItemSpacing.y);
+		clipper.Begin(static_cast<int>(listing.Entries.size()), rowHeight + ImGui::GetStyle().ItemSpacing.y);
 		while (clipper.Step())
 			for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; row++)
-				DrawEntry(entries[static_cast<size_t>(row)], rowHeight);
+				DrawEntry(listing.Entries[static_cast<size_t>(row)], rowHeight);
 
 		if (ImGui::BeginPopupContextWindow("ContentContext", ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems))
 		{

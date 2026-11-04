@@ -83,7 +83,8 @@ namespace Basalt {
 		FileWatcher(const FileWatcher&) = delete;
 		FileWatcher& operator=(const FileWatcher&) = delete;
 
-		// Every regular file under root/subdirectory that a key can name (the rest go to Skipped). A missing subdirectory (or a file in its place) is an empty scan,
+		// Every regular file under root/subdirectory that a key can name (entries no key can name go to Skipped). A missing
+		// subdirectory (or a file in its place) is an empty scan,
 		// not an error; one that cannot be read, or holds a file or folder that cannot be read, is an error.
 		static Scan ScanDirectory(const std::filesystem::path& root, const std::string& subdirectory);
 
@@ -106,8 +107,8 @@ namespace Basalt {
 		// Why the newest scan could not read the folder (empty when it could).
 		const std::string& GetLastError() const { return m_LastError; }
 		// What the newest complete scan skipped (Scan::Skipped). Entries that were not skipped before are logged once; those
-		// in the baseline Watch took are not, as nothing else in it is reported either (a late baseline's are: nobody could
-		// have seen them).
+		// in the baseline Watch took are not, as nothing else in it is reported either (a late baseline's are: that scan is the
+		// first the watcher could read).
 		const std::set<std::string>& GetSkipped() const { return m_Skipped; }
 		// True once after the baseline was taken late (Watch could not read the folder): changes made before it were not
 		// seen.

@@ -83,11 +83,12 @@ its ID. `asset.write` warns when creating a source next to an existing orphan si
 A file or folder whose name has no UTF-8 form (an NTFS name with an unpaired surrogate, or elsewhere a name that is not
 UTF-8) cannot have an asset key, since keys travel as UTF-8 JSON: on Windows no text leads back to it, and elsewhere its
 bytes do not survive JSON. Scans leave it out, with everything in such a folder, and say so: a warning in `project.validate`,
-in the log when a project opens or the file appears, in the `warnings` of `asset.list`, `asset.refresh` without `paths`,
-`asset.move`/`asset.rename` (documents and folders only) and archived `project.export`, and a line in the editor's Content
-Browser for the folder on view and its Project Settings pickers. A sidecar is reported as its source. Reports write the odd
-part as `\uD800` or `\xFF`, so you can tell what to rename; rename the source and its `.meta` together, or the source gets a
-new UUID and references to the old one stay broken.
+in the log when a project opens or a watcher scan first finds it, in the `warnings` of `asset.list` (with `extensions`, those
+types and folders), `asset.refresh` without `paths`, `asset.move`/`asset.rename` (documents and folders only) and archived
+`project.export`, and a line in the editor: the Content Browser for the folder on view, and the Project Settings pickers. A
+sidecar beside its source is reported as that source. Reports write the odd part as `\uD800` or `\xFF`, so you can tell what
+to rename. Rename on disk, as no command can name it, and rename the source and its `.meta` together: until the `.meta`
+follows, the file is a new asset and references to its old UUID stay unresolved.
 Cooperating first-time importers use a sibling `.meta.importing` lock directory and atomic file writes;
 manual filesystem writers must not modify the sidecar during import.
 If an importer crashes, remove its stale lock only after confirming the importer has stopped.

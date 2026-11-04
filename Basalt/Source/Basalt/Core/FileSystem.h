@@ -108,13 +108,14 @@ namespace Basalt {
 		// The running executable (links resolved on macOS); <current folder>/Unknown, logged, when it cannot be found.
 		static std::filesystem::path GetExecutablePath();
 		static std::filesystem::path GetExecutableDirectory();
-		// Text and paths convert only through these three (AGENTS.md; DescribePath below is for messages and makes no key): on Windows std::filesystem::path(std::string) reads
-		// the ANSI code page and path::string() throws for names outside it. None of them throws (but std::bad_alloc). On
+		// Text and paths convert only through these three (AGENTS.md; DescribePath below is for messages and makes no key): on
+		// Windows std::filesystem::path(std::string) reads the ANSI code page and path::string() throws for names outside it. None of them throws (but std::bad_alloc). On
 		// Windows, text that is not valid UTF-8 (a Lua string, a percent-decoded URI) becomes a path with U+FFFD, which
 		// reads as missing unless a file really has that name (and a write creates one by that name); a name with unpaired
 		// surrogates (NTFS allows them) becomes text with U+FFFD, which no longer leads back to that file. Automation and
 		// scene JSON is valid UTF-8 already (the parser rejects the rest). Elsewhere the bytes are copied unchecked, so a name
-		// that is not UTF-8 stays that way (JSON then shows U+FFFD). Scans that make keys skip both such names: SkipNonUtf8Entry.
+		// that is not UTF-8 stays that way (JSON then shows U+FFFD). Scans that make keys skip both such names: RecordNonUtf8Entry
+		// and SkipNonUtf8Entry.
 		// The path as UTF-8 text, for messages and keys.
 		static std::string PathToUtf8(const std::filesystem::path& path);
 		// The path as '/'-separated UTF-8 text on every platform: the form of asset keys ("Assets/Models/Ship.gltf").
@@ -126,13 +127,13 @@ namespace Basalt {
 		// Lua string, a percent-decoded URI) still opens the file.
 		static bool HasUtf8Form(const std::filesystem::path& path);
 		// The path as '/'-separated, always valid UTF-8 text for messages, whatever it holds: unpaired surrogates read \uD800
-		// and stray bytes \xFF, so a report says what to look for and names differing only there stay apart. This text names
-		// no file: never parse it or use it as a key.
+		// and stray bytes \xFF, so a report says what to look for. This text names no file: never parse it or use it as a key.
 		static std::string DescribePath(const std::filesystem::path& path);
-		static constexpr const char* NonUtf8NameProblem = "its name is not valid Unicode, so neither it nor anything inside it can have an asset key (rename it together with its .meta)";
-		// For a scan that makes text keys, first thing for each entry. True when the entry's own name lacks a UTF-8 form, with
-		// the entry added to outSkipped as DescribePath text relative to root (a sidecar as its source, which shares the
-		// name's problem and the report). Only the name counts: where root lies is part of no key.
+		// What reports say about a skipped entry. Renaming happens outside the engine, as no command can name it.
+		static constexpr const char* NonUtf8NameProblem = "its name is not valid Unicode, so neither it nor anything inside it can have an asset key (rename it on disk, and a file's .meta with it)";
+		// For a flat scan that makes text keys, first thing for each entry. True when the entry's own name lacks a UTF-8 form,
+		// with the entry added to outSkipped as DescribePath text relative to root (a sidecar beside its source counts as that
+		// source). Only the name counts: where root lies is part of no key.
 		static bool RecordNonUtf8Entry(const std::filesystem::directory_entry& entry, const std::filesystem::path& root, std::set<std::string>& outSkipped);
 		// RecordNonUtf8Entry for a recursive scan: a folder it skips is not entered, as nothing below it could have a key.
 		static bool SkipNonUtf8Entry(std::filesystem::recursive_directory_iterator& it, const std::filesystem::path& root, std::set<std::string>& outSkipped);
@@ -162,7 +163,7 @@ namespace Basalt {
 		class DirectoryListings
 		{
 		public:
-			// The entries of a folder (empty for a missing one), or nullptr with the error.
+			// The names in a folder that have a UTF-8 form (empty for a missing folder), or nullptr with the error.
 			const std::vector<std::string>* Get(const std::filesystem::path& directory, std::string& outError);
 
 		private:

@@ -15,9 +15,9 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
-#include <set>
 #include <unordered_set>
 
 namespace Basalt {
