@@ -124,7 +124,7 @@ namespace Basalt {
 			if (auto found = impl.Bodies.find(entity.GetUUID()); found != impl.Bodies.end())
 				body = std::move(found->second);
 			const bool current = body.Built.Scale == scale && Same(body.Built.Box, box) && Same(body.Built.Sphere, sphere) && Same(body.Built.Capsule, capsule) && Same(body.Built.MeshCollider, mesh) && body.Built.BorrowedMesh == borrowed && body.Built.MeshAsset.lock() == asset;
-			if (!body.Shape || !current)
+			if (!current)
 			{
 				body.Built = { .Box = Copy(box), .Sphere = Copy(sphere), .Capsule = Copy(capsule), .MeshCollider = Copy(mesh), .BorrowedMesh = borrowed, .MeshAsset = asset, .Scale = scale };
 				std::vector<std::string> warnings;

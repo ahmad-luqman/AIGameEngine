@@ -991,6 +991,7 @@ namespace Basalt {
 			const float angular = 2.0f * JPH::JPH_PI * balanceFrequency;
 			RagdollRecord::BalanceDrive drive{ .Strength = balance, .Stiffness = angular * angular, .Damping = 2.0f * balanceDamping * angular, .CosMaxTilt = JPH::Cos(JPH::DegreesToRadians(maxTilt)) };
 			std::vector<float> heights;
+			heights.reserve(positions.size());
 			for (const glm::vec3& joint : positions)
 				heights.push_back(-gravity.Normalized().Dot(ToJolt(joint)));
 			drive.StandHeight = StandingHeight(*record.Doll, heights);
@@ -1050,6 +1051,7 @@ namespace Basalt {
 		JPH::Vec3 momentum = JPH::Vec3::sZero();
 		float mass = 0;
 		std::vector<float> heights;
+		heights.reserve(parts.size());
 		for (size_t i = 0; i < parts.size(); i++)
 		{
 			const JPH::BodyID part = record.Doll->GetBodyID(static_cast<int>(i));
