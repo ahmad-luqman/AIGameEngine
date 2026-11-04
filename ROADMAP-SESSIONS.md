@@ -3,7 +3,7 @@
 The `ROADMAP.md` items grouped into single-session milestones, sorted in order of implementation, with completed
 sessions retained for reference. The order follows the roadmap's priorities (P1 → P2 → P3) and is adjusted so that
 work a later session depends on comes first.
-Updated in November 2026 through Prefabs II (session 19), the last numbered session.
+Updated on 4 November 2026: sessions 1–20 have shipped, and sessions 21–25 are planned.
 
 Size estimates: **S** = a day or less, **M** = a few days, **L** = a week or more.
 
@@ -28,6 +28,25 @@ Size estimates: **S** = a day or less, **M** = a few days, **L** = a week or mor
 | 17 | **Character animation I** ✅ | Powered ragdolls that follow the animated pose with motors (M); IK and layer follow-ups: multi-joint chains, edit-mode preview, reusable masks, state-driven layers, foot locking (S) | Shipped in [PR #66](https://github.com/ahmad-luqman/AIGameEngine/pull/66): ragdoll motor strength, frequency, damping and torque with scripted fades; Fabrik chains, FollowTarget targets and FootLock; `.banimmask` mask assets; StateMachine layers sharing the Animator's parameters; and an edit-mode Animator preview. |
 | 18 | **Character animation II** ✅ | Spring bone follow-ups: collisions, per-chain colliders, angle limits, preview (S); retargeting follow-ups: rest-pose matching, shared joint maps (S); property animation follow-ups: stepped and nested tracks (S) | Shipped in [PR #67](https://github.com/ahmad-luqman/AIGameEngine/pull/67): spring chain `MaxAngle`, named per-chain colliders, `CollidePhysics` against physics bodies and spring bones in the edit preview; `.bjointmap` joint maps shared by clip libraries and reference clips for skeletons in other rest styles; integer, boolean, string and enum property tracks that always step, and track paths into list elements (`Layers[Upper].Weight`). |
 | 19 | **Prefabs II** ✅ | Nested prefabs and variants (M) | Shipped in [PR #68](https://github.com/ahmad-luqman/AIGameEngine/pull/68): prefab files hold nested instances and variants as records with only their overrides, expanded on read into the flat records that the three-way merge from session 14 already handles, so an inner prefab's edit reaches every tracked instance holding it (in other scenes when they open) without rewriting files. `prefab.variant`, `prefab.info`, `prefab.create {"variant": true}`, tracked nested instances in `prefab.open`, cycle and size limits, and a `FuzzPrefab` target. |
+| 20 | **Shipping III** ✅ | Crash report follow-ups: Linux symbolization, alternate stacks for job threads, watchdog minidumps, startup error message boxes, a send/open action in the crash dialog (S); archive follow-ups: stream stored audio from `Assets.bpak`, compress on the job system, leave out originals replaced by `.ktx2` (S) | Shipped in [PR #69](https://github.com/ahmad-luqman/AIGameEngine/pull/69): stored clips of 1 MiB or more stream from `Assets.bpak`; archive entries compress in parallel on the job system with byte-identical output; archived exports leave out images replaced by a `.ktx2` of the same name that nothing mentions (`keepOriginals` keeps them); crash reports gain `addr2line` source lines on Linux, a `ThreadStack` for engine threads, watchdog minidumps on Windows and an Open Report action; and the windowed runtime shows failed starts in a message box. Sending reports was left out because there is nowhere to send them. |
+| 21 | **Unicode follow-ups** | Switch the roughly 75 older `std::error_code::message()` calls to `FileSystem::DescribeError`; skip and report NTFS names with unpaired surrogates in directory scans (asset registry, file watcher, exporter, content browser) (S) | Follows the Windows UTF-8 work in [PR #65](https://github.com/ahmad-luqman/AIGameEngine/pull/65). Was held for session 20, which edited many of the same Core and Project files; it can start now. |
+| 22 | **Character animation III** | Powered ragdoll follow-ups: partial ragdolls whose root follows the animation, per-bone motor strengths, active balance (M); spring bone follow-ups II: physics layer filtering, continuous collision, edit-mode collisions against static bodies (S) | The highest-impact P1 work left. Both items are physics-side follow-ups to sessions 17 and 18, and they need nothing outside the repository. |
+| 23 | **Animation authoring II** | IK and layer follow-ups II: FABRIK joint limits, a mask editor, layer graph events and per-layer parameters, edit-mode ground placement (S each); retargeting follow-ups II: a joint map editor, reference poses from per-joint rotation offsets (S) | Mostly editor UI for the `.banimmask` and `.bjointmap` assets from sessions 17 and 18, plus small solver additions. |
+| 24 | **Property animation III** | Stable Euler serialization at exact gimbal lock, physics configuration tracks that preserve contacts, asset reference tracks (texture flipbooks), tracks on other entities (S) | Can join session 23 if that session turns out light. |
+| 25 | **Signing** | Windows code signing with `signtool` (S); signed and notarized macOS tools and universal (arm64 + x86-64) binaries (S) | Blocked until a Windows certificate and the CI secrets are available. |
+
+## Status (4 November 2026)
+
+- **Shipped outside the sessions:**
+  - The fix for glTF primitives that share index accessors ([PR #64](https://github.com/ahmad-luqman/AIGameEngine/pull/64)).
+  - UTF-8 command-line arguments and paths on Windows ([PR #65](https://github.com/ahmad-luqman/AIGameEngine/pull/65)).
+- **Shipped in sessions:** sessions 17–20 ([PR #66](https://github.com/ahmad-luqman/AIGameEngine/pull/66),
+  [#67](https://github.com/ahmad-luqman/AIGameEngine/pull/67), [#68](https://github.com/ahmad-luqman/AIGameEngine/pull/68),
+  [#69](https://github.com/ahmad-luqman/AIGameEngine/pull/69)). `ROADMAP.md` lists only their follow-ups (sessions 21–24).
+- **Next:** session 22 (Character animation III), the highest-priority work left. Session 21 is unblocked and can run
+  alongside it because the two share no files.
+- **Open checks after #69:** its Windows crash paths (deadline thread, watchdog timeouts, Open Report) are only
+  compile-tested, so they belong with the real-GPU smoke tests on Windows hardware.
 
 ## Later (L, one session each)
 
@@ -44,6 +63,7 @@ Size estimates: **S** = a day or less, **M** = a few days, **L** = a week or mor
   on Windows and native Linux. Run it whenever that hardware is available; an AWS g4ad instance covers AMD. The
   procedure is in `Docs/TestedHardware.md`.
 - **Wayland testing.** This is a manual check on Ubuntu 24.04.
+- **GPU particle simulation (M).** This is conditional: it gets a session only if particle counts start to demand it.
 - **Soft six-DOF rotation limits.** This is blocked until Jolt adds springs to rotation limits.
 
 ## Ordering notes
