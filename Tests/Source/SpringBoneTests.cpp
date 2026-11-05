@@ -1862,3 +1862,24 @@ TEST_SUITE("Animation")
 		scene.OnRuntimeStop();
 	}
 }
+
+TEST_SUITE("Animation")
+{
+	TEST_CASE("An edit ray sees a body only through a mask that holds its layer")
+	{
+		Scene scene;
+		PhysicsLayers layers;
+		std::string error;
+		REQUIRE(layers.Add("A", error));
+		REQUIRE(layers.Add("B", error));
+		scene.SetPhysicsLayers(layers);
+		auto box = scene.CreateEntity("Box");
+		box.AddComponent<RigidBodyComponent>().Layer = "B";
+		box.AddComponent<BoxColliderComponent>();
+		StaticPhysicsShapes shapes(scene);
+		const uint32_t own = 1u << *shapes.GetLayers().Find("B"), other = 1u << *shapes.GetLayers().Find("A");
+		const auto hits = [&](uint32_t mask) { return shapes.RaycastAll(glm::vec3(0, 5, 0), glm::vec3(0, -1, 0), 10, { .LayerMask = mask }).size(); };
+		CHECK(hits(own) == 1);
+		CHECK(hits(other) == 0);
+	}
+}

@@ -693,9 +693,9 @@ namespace Basalt {
 		void Fields(FieldReader& r, IKJointLimit& c)
 		{
 			r.Field("Joint", c.Joint);
-			r.Field("ConeAngle", c.ConeAngle);
-			r.Field("MinTwist", c.MinTwist);
-			r.Field("MaxTwist", c.MaxTwist);
+			r.Field("SwingAngle", c.SwingAngle);
+			r.Field("TwistMin", c.TwistMin);
+			r.Field("TwistMax", c.TwistMax);
 		}
 
 		void Fields(FieldReader& r, IKChain& c)
@@ -711,9 +711,9 @@ namespace Basalt {
 			r.Field("FollowTarget", c.FollowTarget);
 			r.Field("FootLock", c.FootLock);
 			r.Field("Weight", c.Weight);
-			r.Field("ConeAngle", c.ConeAngle);
-			r.Field("MinTwist", c.MinTwist);
-			r.Field("MaxTwist", c.MaxTwist);
+			r.Field("SwingAngle", c.SwingAngle);
+			r.Field("TwistMin", c.TwistMin);
+			r.Field("TwistMax", c.TwistMax);
 			r.ListField("JointLimits", c.JointLimits, IKChain::MaxChainLength);
 		}
 
@@ -1368,7 +1368,7 @@ namespace Basalt {
 
 		json Write(const IKJointLimit& c)
 		{
-			return { { "Joint", c.Joint }, { "ConeAngle", c.ConeAngle }, { "MinTwist", c.MinTwist }, { "MaxTwist", c.MaxTwist } };
+			return { { "Joint", c.Joint }, { "SwingAngle", c.SwingAngle }, { "TwistMin", c.TwistMin }, { "TwistMax", c.TwistMax } };
 		}
 
 		json Write(const IKChain& c)
@@ -1385,9 +1385,9 @@ namespace Basalt {
 				{ "FollowTarget", c.FollowTarget },
 				{ "FootLock", c.FootLock },
 				{ "Weight", c.Weight },
-				{ "ConeAngle", c.ConeAngle },
-				{ "MinTwist", c.MinTwist },
-				{ "MaxTwist", c.MaxTwist },
+				{ "SwingAngle", c.SwingAngle },
+				{ "TwistMin", c.TwistMin },
+				{ "TwistMax", c.TwistMax },
 				{ "JointLimits", ListToJson(c.JointLimits) },
 			};
 		}
@@ -1979,8 +1979,6 @@ namespace Basalt {
 				std::unordered_map<std::string_view, size_t> targets, sources;
 				for (size_t j = 0; j < joints.size(); j++)
 				{
-					if (!Math::IsFinite(joints[j].Offset))
-						return fmt::format("ClipLibraries[{}].Joints[{}].Offset must be finite", i, j);
 					if (!joints[j].Target.empty())
 						if (const auto [entry, added] = targets.try_emplace(joints[j].Target, j); !added)
 							return fmt::format("ClipLibraries[{}].Joints[{}].Target '{}' is already used by Joints[{}]", i, j, joints[j].Target, entry->second);
@@ -2091,23 +2089,21 @@ namespace Basalt {
 				if (chain.FootLock && !IKChainReaches(chain.Type))
 					return fmt::format("Chains[{}]: only TwoBone and Fabrik chains can lock their feet", i);
 				const auto checkLimits = [&](const std::string& where, float cone, float minTwist, float maxTwist) -> std::string {
-					if (!std::isfinite(cone) || cone < 0.0f || cone > IKChain::MaxConeAngle)
-						return fmt::format("{}.ConeAngle {} must be between 0 and {} degrees", where, cone, IKChain::MaxConeAngle);
+					if (!std::isfinite(cone) || cone < 0.0f || cone > IKChain::MaxSwingAngle)
+						return fmt::format("{}.SwingAngle {} must be between 0 and {} degrees", where, cone, IKChain::MaxSwingAngle);
 					for (const float twist : { minTwist, maxTwist })
 						if (!std::isfinite(twist) || std::abs(twist) > IKChain::MaxTwistAngle)
 							return fmt::format("{}: twist {} must be between -{} and {} degrees", where, twist, IKChain::MaxTwistAngle, IKChain::MaxTwistAngle);
 					if (minTwist > maxTwist)
-						return fmt::format("{}.MinTwist {} must not exceed MaxTwist {}", where, minTwist, maxTwist);
+						return fmt::format("{}.TwistMin {} must not exceed TwistMax {}", where, minTwist, maxTwist);
 					return {};
 				};
-				if (std::string problem = checkLimits(fmt::format("Chains[{}]", i), chain.ConeAngle, chain.MinTwist, chain.MaxTwist); !problem.empty())
+				if (std::string problem = checkLimits(fmt::format("Chains[{}]", i), chain.SwingAngle, chain.TwistMin, chain.TwistMax); !problem.empty())
 					return problem;
-				if (chain.JointLimits.size() > IKChain::MaxChainLength)
-					return fmt::format("Chains[{}] holds at most {} joint limits", i, IKChain::MaxChainLength);
 				for (size_t j = 0; j < chain.JointLimits.size(); j++)
 				{
 					const IKJointLimit& limit = chain.JointLimits[j];
-					if (std::string problem = checkLimits(fmt::format("Chains[{}].JointLimits[{}]", i, j), limit.ConeAngle, limit.MinTwist, limit.MaxTwist); !problem.empty())
+					if (std::string problem = checkLimits(fmt::format("Chains[{}].JointLimits[{}]", i, j), limit.SwingAngle, limit.TwistMin, limit.TwistMax); !problem.empty())
 						return problem;
 					for (size_t k = 0; k < j; k++)
 						if (!limit.Joint.empty() && chain.JointLimits[k].Joint == limit.Joint)

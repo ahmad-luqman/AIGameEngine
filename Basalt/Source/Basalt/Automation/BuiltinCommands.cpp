@@ -91,20 +91,19 @@ namespace Basalt {
 		// library that did not load).
 		json DescribeRetargetJoints(const MeshSource& model, const MeshSource* source, const RetargetMap& map)
 		{
-			json joints = json::array(), unmatched = json::array();
+			json joints = json::array();
 			for (size_t node = 0; node < map.SourceOf.size(); node++)
 			{
-				if (map.SourceOf[node] >= 0)
-				{
-					joints.push_back({ { "target", model.Nodes[node].Name }, { "source", source->Nodes[map.SourceOf[node]].Name }, { "match", ToString(map.Matches[node]) } });
-					if (const glm::vec3& offset = map.Offsets[node]; offset != glm::vec3(0))
-						joints.back()["offset"] = { offset.x, offset.y, offset.z };
-				}
-				else if (!Retargeting::HumanoidBone(model.Nodes[node].Name).empty())
-					unmatched.push_back(model.Nodes[node].Name);
+				if (map.SourceOf[node] < 0)
+					continue;
+				joints.push_back({ { "target", model.Nodes[node].Name }, { "source", source->Nodes[map.SourceOf[node]].Name }, { "match", ToString(map.Matches[node]) } });
+				if (const glm::vec3& offset = map.Offsets[node]; offset != glm::vec3(0))
+					joints.back()["offset"] = { offset.x, offset.y, offset.z };
 			}
-			const bool rooted = map.TargetRoot >= 0;
-			return { { "joints", std::move(joints) }, { "unmatchedHumanoidBones", std::move(unmatched) }, { "root", rooted ? json{ { "target", model.Nodes[map.TargetRoot].Name }, { "source", source->Nodes[map.SourceRoot].Name }, { "scale", map.RootScale } } : json() } };
+			json root;
+			if (map.TargetRoot >= 0)
+				root = { { "target", model.Nodes[map.TargetRoot].Name }, { "source", source->Nodes[map.SourceRoot].Name }, { "scale", map.RootScale } };
+			return { { "joints", std::move(joints) }, { "unmatchedHumanoidBones", Retargeting::UnmatchedHumanoidBones(model, map) }, { "root", std::move(root) } };
 		}
 
 		std::string OptionalString(const json& params, const char* name, const std::string& fallback = "")
@@ -1297,27 +1296,25 @@ namespace Basalt {
 				const auto reference = [](const std::string& clip, float time) { return clip.empty() ? json() : json{ { "clip", clip }, { "time", time } }; };
 				for (const AnimationClipSet::Library& library : resolved)
 				{
-					json matched = DescribeRetargetJoints(*model, library.Source.get(), library.Map);
-					libraries.push_back({
+					json entry = DescribeRetargetJoints(*model, library.Source.get(), library.Map);
+					entry.update({
 						{ "index", library.Index },
 						{ "mesh", library.Entry.Mesh },
 						{ "error", library.Error.empty() ? json() : json(library.Error) },
 						{ "jointMap", library.Entry.JointMap.empty() ? json() : json(library.Entry.JointMap) },
 						{ "reference", reference(library.Entry.ReferenceClip, library.Entry.ReferenceTime) },
 						{ "modelReference", reference(library.Entry.ModelReferenceClip, library.Entry.ModelReferenceTime) },
-						{ "joints", std::move(matched["joints"]) },
-						{ "unmatchedHumanoidBones", std::move(matched["unmatchedHumanoidBones"]) },
-						{ "root", std::move(matched["root"]) },
 						{ "clips", library.Clips },
 						{ "hiddenClips", library.Shadowed },
 						{ "warnings", library.Warnings },
 					});
+					libraries.push_back(std::move(entry));
 				}
 				return json{ { "entity", static_cast<uint64_t>(entity.GetUUID()) }, { "mesh", animator->Mesh }, { "libraries", std::move(libraries) } };
 			});
 
-			Add(registry, "animator.match_joints", "How a library model's skeleton maps onto a model's, for authoring a .bjointmap: the same matching as animator.retarget, on two models with no Animator (the pairs of jointMap come first, then equal names and humanoid bones). Returns {joints: [{target, source, match, offset}], unmatchedHumanoidBones, root, warnings}. The automatic matches of joints can go into a joint map as they are. Read-only.", Schema::Object({ { "source", Schema::String("Project-relative model the clips come from") }, { "target", Schema::String("Project-relative model an Animator plays them on") }, { "jointMap", Schema::String("Project-relative .bjointmap, optional") } }, { "source", "target" }), [](AutomationSession& session, const json& params) {
-				RequireScene(session);
+			Add(registry, "animator.match_joints", "How a library model's skeleton maps onto a model's, for authoring a .bjointmap: the same matching as animator.retarget, on two models with no Animator (the pairs of jointMap first, then equal names, then humanoid bones). Returns {joints: [{target, source, match}], unmatchedHumanoidBones, root, warnings}, with offset on a pair that has one. Read-only; needs a project, not a scene.", Schema::Object({ { "source", Schema::String("Project-relative model the clips come from", true) }, { "target", Schema::String("Project-relative model an Animator plays them on", true) }, { "jointMap", Schema::String("Project-relative .bjointmap, optional", true) } }, { "source", "target" }), [](AutomationSession&, const json& params) {
+				RequireProject();
 				const auto load = [](const std::string& path) {
 					const auto model = AssetManager::GetMesh(path);
 					if (!model)
@@ -1336,6 +1333,8 @@ namespace Basalt {
 				}
 				std::vector<std::string> warnings;
 				const RetargetMap map = Retargeting::BuildMap(*target, *source, pairs, warnings);
+				if (map.MappedCount() == 0)
+					warnings.emplace_back("no joint matches the model's skeleton (pair them in a joint map)");
 				json result = DescribeRetargetJoints(*target, source.get(), map);
 				result["warnings"] = std::move(warnings);
 				return result;
@@ -3181,7 +3180,7 @@ namespace Basalt {
 				levels.emplace_back(LogLevelName(static_cast<LogLevel>(level)));
 			json minLevel = Schema::String(fmt::format("string, lowest log level delivered: {} (default info)", fmt::join(levels, ", ")));
 			minLevel["enum"] = levels;
-			Add(registry, "events.subscribe", "Starts collecting events: log lines, script errors, play-state changes (play, simulate, stop; pause and resume from the editor's Pause button), collisions (collisionBegin/End and triggerEnter/Exit, in Play and Simulate) and animation events (Animator Events markers playback crossed: name, clip, entity, frame; in Play and Simulate). On the editor's TCP server a line-protocol connection receives them as {\"event\": ...} lines without 'ok' (and {\"event\": \"dropped\"} when it falls behind); MCP and CLI clients read them with events.poll. A TCP connection's subscriptions end with it. Returns {subscription, types, minLevel, streamed}.", Schema::Object({ { "types", typesSchema }, { "minLevel", Schema::Nullable(minLevel) } }), [](AutomationSession& session, const json& params) {
+			Add(registry, "events.subscribe", "Starts collecting events: log lines, script errors, play-state changes (play, simulate, stop; pause and resume from the editor's Pause button), collisions (collisionBegin/End and triggerEnter/Exit, in Play and Simulate) and animation events (Animator Events markers playback crossed: name, clip, layer (null for the base), entity, frame; in Play and Simulate). On the editor's TCP server a line-protocol connection receives them as {\"event\": ...} lines without 'ok' (and {\"event\": \"dropped\"} when it falls behind); MCP and CLI clients read them with events.poll. A TCP connection's subscriptions end with it. Returns {subscription, types, minLevel, streamed}.", Schema::Object({ { "types", typesSchema }, { "minLevel", Schema::Nullable(minLevel) } }), [](AutomationSession& session, const json& params) {
 				AutomationEventHub::Filter filter;
 				if (auto it = params.find("types"); it != params.end())
 					filter.Types = ParseEventTypes(*it);

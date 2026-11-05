@@ -44,7 +44,7 @@
 				"Chains": [ { "Name": "LeftFoot", "Joint": "LeftFoot", "Ground": true, "FootLock": true }, { "Name": "RightFoot", "Joint": "RightFoot", "Ground": true },
 					{ "Name": "Head", "Type": "LookAt", "Joint": "Head" }, { "Name": "LeftArm", "Joint": "LeftHand" },
 					{ "Name": "Reach", "Type": "Fabrik", "Joint": "RightHand", "ChainLength": 2, "FollowTarget": true, "Weight": 0.5,
-						"ConeAngle": 150, "MinTwist": -60, "MaxTwist": 60, "JointLimits": [ { "Joint": "RightForeArm", "ConeAngle": 120, "MinTwist": -10, "MaxTwist": 10 } ] } ] } } },
+						"SwingAngle": 150, "TwistMin": -60, "TwistMax": 60, "JointLimits": [ { "Joint": "RightForeArm", "SwingAngle": 120, "TwistMin": -10, "TwistMax": 10 } ] } ] } } },
 		{ "ID": 915, "Name": "IKFloor", "Components": {
 			"Transform": { "Translation": [1000, -0.5, 20] },
 			"RigidBody": {}, "BoxCollider": { "HalfExtents": [1, 0.5, 1] } } },

@@ -68,12 +68,13 @@ namespace Basalt {
 	// still left, outermost first, so the aim is exact within MaxAngleRadians.
 	[[nodiscard]] IKSolveResult SolveLookAtIK(const MeshSource& source, AnimationLocalPose& pose, std::vector<glm::mat4>& globals, const LookAtIKRequest& request);
 
-	// How far a joint may turn from its rest rotation (see IKChain::ConeAngle), in radians.
+	// How far a joint may turn from its rest rotation (see IKChain::SwingAngle), in radians; TwistMin <= TwistMax, which
+	// ResolveFabrikLimits guarantees.
 	struct FabrikJointLimit
 	{
-		float ConeAngle = glm::pi<float>();
-		float MinTwist = -glm::pi<float>();
-		float MaxTwist = glm::pi<float>();
+		float SwingAngle = glm::pi<float>();
+		float TwistMin = -glm::pi<float>();
+		float TwistMax = glm::pi<float>();
 	};
 
 	// What SolveFabrikIK solves: a chain of joints and where its last one should go.
@@ -97,11 +98,11 @@ namespace Basalt {
 	inline constexpr float FabrikTolerance = 1e-4f;
 	// Sweeps of a limited chain's joints after the passes.
 	inline constexpr uint32_t FabrikLimitedSweeps = 32;
-	// Bends every joint but the last (FABRIK, Aristidou and Lasenby 2011) so the last one reaches the target, starting
-	// from the animated pose; a target beyond the chain's reach leaves it straight toward the target. With Limits, each
-	// forward pass turns the joints parent first and limits each one, so the chain never leaves them, and sweeps of
-	// single-joint turns (cyclic coordinate descent) follow, ending at the pose that came closest. That can stop short of
-	// a target only the limits' edge can reach, by a few percent of the chain's length at worst.
+	// Bends every joint but the last (FABRIK, Aristidou and Lasenby 2011) so the last one reaches the target, starting from
+	// the animated pose. Without Limits a target beyond the chain's reach leaves it straight toward the target. With them,
+	// both passes respect the limits, sweeps of single-joint turns (cyclic coordinate descent) follow, and the pose that came
+	// closest wins, so the chain ends inside them, typically within a few percent of its length of a target it can only just
+	// reach. Limits apply at full weight: a lower one blends with the animated rotations, which may lie outside them.
 	[[nodiscard]] IKSolveResult SolveFabrikIK(const MeshSource& source, AnimationLocalPose& pose, std::vector<glm::mat4>& globals, const FabrikIKRequest& request);
 
 	// Fills outLimits with what `chain` allows each joint of `joints` but the last (joints as ResolveIKChain fills them for

@@ -1,6 +1,9 @@
 #include "Panels/AnimationJointMapPanel.h"
 
+#include "EditorColors.h"
+
 #include "Basalt/Asset/MeshSource.h"
+#include "Basalt/Automation/AutomationSession.h"
 
 #include <imgui.h>
 #include <misc/cpp/imgui_stdlib.h>
@@ -18,64 +21,40 @@ namespace Basalt {
 		m_Target.Set(models.Target);
 	}
 
-	void AnimationJointMapPanel::OnReset()
-	{
-		m_Source.Set({});
-		m_Target.Set({});
-		m_Report.reset();
-		m_ReportedSource.reset();
-		m_ReportedTarget.reset();
-	}
-
-	void AnimationJointMapPanel::OnFilesChangedInBody(const std::vector<FileChange>& changes)
-	{
-		m_Source.OnFilesChanged(changes);
-		m_Target.OnFilesChanged(changes);
-	}
-
-	void AnimationJointMapPanel::OnAssetMovedInBody(const std::string& from, const std::string& to)
-	{
-		m_Source.OnAssetMoved(from, to);
-		m_Target.OnAssetMoved(from, to);
-	}
-
 	const AnimationJointMapPanel::Report* AnimationJointMapPanel::GetReport() const
 	{
 		const Ref<MeshSource>& source = m_Source.GetSource();
 		const Ref<MeshSource>& target = m_Target.GetSource();
 		if (!source || !target)
+		{
+			m_Report.reset();
 			return nullptr;
+		}
 		const auto& pairs = m_Draft.GetAsset().Joints;
-		if (m_Report && source == m_ReportedSource && target == m_ReportedTarget && pairs == m_ReportedPairs)
+		if (m_Report && source == m_Report->Source && target == m_Report->Target && pairs == m_Report->Pairs)
 			return &*m_Report;
-		Report report;
+		Report report{ .Pairs = pairs, .Source = source, .Target = target };
 		report.Map = Retargeting::BuildMap(*target, *source, pairs, report.Warnings);
-		report.Mapped = report.Map.MappedCount();
-		for (size_t node = 0; node < report.Map.SourceOf.size(); node++)
-			if (report.Map.SourceOf[node] < 0 && !Retargeting::HumanoidBone(target->Nodes[node].Name).empty())
-				report.UnmatchedBones.push_back(target->Nodes[node].Name);
+		report.UnmatchedBones = Retargeting::UnmatchedHumanoidBones(*target, report.Map);
 		m_Report = std::move(report);
-		m_ReportedPairs = pairs;
-		m_ReportedSource = source;
-		m_ReportedTarget = target;
 		return &*m_Report;
 	}
 
-	std::optional<size_t> AnimationJointMapPanel::AutoMatch()
+	std::optional<JointAssetEdit::MatchedPairs> AnimationJointMapPanel::ListMatches()
 	{
-		const Report* report = GetReport();
+		const Report* report = IsOpen() ? GetReport() : nullptr;
 		if (!report)
 			return std::nullopt;
-		const size_t added = JointAssetEdit::AddMatchedPairs(m_Draft.GetAsset(), report->Map, *m_Target.GetSource(), *m_Source.GetSource());
+		const auto matched = JointAssetEdit::AddMatchedPairs(m_Draft.GetAsset(), report->Map, *m_Target.GetSource(), *m_Source.GetSource());
 		m_Draft.Record();
-		return added;
+		return matched;
 	}
 
 	nlohmann::json AnimationJointMapPanel::DescribeBody() const
 	{
 		nlohmann::json state = { { "source", m_Source.GetPath() }, { "target", m_Target.GetPath() }, { "sourceError", m_Source.GetError() }, { "targetError", m_Target.GetError() } };
 		if (const Report* report = GetReport())
-			state.update({ { "mapped", report->Mapped }, { "unmatchedHumanoidBones", report->UnmatchedBones }, { "warnings", report->Warnings } });
+			state.update({ { "mapped", report->Map.MappedCount() }, { "unmatchedHumanoidBones", report->UnmatchedBones }, { "warnings", report->Warnings } });
 		return state;
 	}
 
@@ -85,8 +64,11 @@ namespace Basalt {
 		m_Target.Draw("Animator Model (Target)");
 		ImGui::BeginDisabled(!m_Source.GetSource() || !m_Target.GetSource());
 		if (ImGui::Button("List Automatic Matches"))
-			if (const auto added = AutoMatch())
-				m_Context.SetStatus(fmt::format("Listed {} automatic matches", *added), false);
+			if (const auto matched = ListMatches())
+			{
+				const size_t skipped = matched->PairedElsewhere + matched->OverLimit + matched->SharedNames;
+				m_Context.SetStatus(skipped == 0 ? fmt::format("Listed {} automatic matches", matched->Added) : fmt::format("Listed {} automatic matches; skipped {} (a joint another pair names: {}, over the limit: {}, a name two nodes share: {})", matched->Added, skipped, matched->PairedElsewhere, matched->OverLimit, matched->SharedNames), false);
+			}
 		ImGui::EndDisabled();
 		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
 			ImGui::SetTooltip("Adds a pair for every joint the name and humanoid matching finds, so the map says them outright");
@@ -100,8 +82,7 @@ namespace Basalt {
 		if (!model)
 		{
 			ImGui::InputText(id, &joint);
-			if (ImGui::IsItemDeactivatedAfterEdit())
-				m_Draft.Record();
+			RecordFinishedEdit();
 			return;
 		}
 		if (ImGui::BeginCombo(id, joint.empty() ? "(none)" : joint.c_str(), ImGuiComboFlags_HeightLarge))
@@ -140,9 +121,8 @@ namespace Basalt {
 				ImGui::SetNextItemWidth(-1.0f);
 				ImGui::DragFloat3("##Offset", &pairs[i].Offset.x, 0.5f, -360.0f, 360.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
 				if (ImGui::IsItemHovered())
-					ImGui::SetTooltip("How this library joint turns so the library stands like the model at rest: Euler degrees, in the library's model space. Joints below it turn along.");
-				if (ImGui::IsItemDeactivatedAfterEdit())
-					m_Draft.Record();
+					ImGui::SetTooltip("How this library joint turns so the library stands like the model at rest: degrees about the library model's fixed axes, X, then Y, then Z. Joints below it turn along.");
+				RecordFinishedEdit();
 				ImGui::TableSetColumnIndex(3);
 				if (ImGui::SmallButton("x"))
 					removed = i;
@@ -150,18 +130,7 @@ namespace Basalt {
 			}
 			ImGui::EndTable();
 		}
-		if (removed)
-		{
-			pairs.erase(pairs.begin() + static_cast<std::ptrdiff_t>(*removed));
-			m_Draft.Record();
-		}
-		ImGui::BeginDisabled(pairs.size() >= AnimationClipLibrary::MaxJoints);
-		if (ImGui::Button("Add Pair"))
-		{
-			pairs.push_back({});
-			m_Draft.Record();
-		}
-		ImGui::EndDisabled();
+		DrawListFooter(removed, "Add Pair", AnimationClipLibrary::MaxJoints);
 	}
 
 	void AnimationJointMapPanel::DrawReport()
@@ -172,7 +141,7 @@ namespace Basalt {
 			ImGui::TextDisabled("Name both models to see what matches.");
 			return;
 		}
-		ImGui::Text("%zu joints of the model are mapped.", report->Mapped);
+		ImGui::Text("%zu joints of the model are mapped.", report->Map.MappedCount());
 		if (!report->UnmatchedBones.empty())
 		{
 			ImGui::TextColored(EditorColors::Warning(), "Humanoid bones without a match:");

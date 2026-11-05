@@ -1060,7 +1060,7 @@ TEST_SUITE("Retargeting")
 				std::vector<glm::mat4> poses, wanted;
 				REQUIRE(EvaluateAnimation(*rigs.Target, &baked, time, poses));
 				REQUIRE(EvaluateAnimation(*rigs.Target, &expected, time, wanted));
-				if (!NearRotation(GlobalRotation(poses, upperArm), GlobalRotation(wanted, upperArm), 1e-3f) || !NearRotation(GlobalRotation(poses, lowerArm), GlobalRotation(wanted, lowerArm), 1e-3f))
+				if (!NearRotation(GlobalRotation(poses, upperArm), GlobalRotation(wanted, upperArm), 1e-6f) || !NearRotation(GlobalRotation(poses, lowerArm), GlobalRotation(wanted, lowerArm), 1e-6f))
 					return false;
 			}
 			return true;
@@ -1121,6 +1121,15 @@ TEST_SUITE("Retargeting")
 		CHECK(unused.Offsets[upperArm] == glm::vec3(0));
 		CHECK(unused.SourceRest.Rotations[sourceArm] == plain.SourceRest.Rotations[sourceArm]);
 
+		// An offset C++ wrote past validation is said and ignored, rather than baking a clip that is not finite.
+		const float nan = std::numeric_limits<float>::quiet_NaN();
+		notes.clear();
+		const RetargetMap bad = Retargeting::BuildMap(*rigs.Target, *library, { { .Source = "mixamorig:LeftArm", .Target = "upperarm_l", .Offset = { 0, nan, 0 } } }, notes);
+		CHECK(HasText(notes, "Offset is not finite, so it is ignored"));
+		CHECK(bad.SourceOf[upperArm] == static_cast<int32_t>(sourceArm));
+		CHECK(bad.Offsets[upperArm] == glm::vec3(0));
+		CHECK(Math::IsFinite(bad.SourceRest.Rotations[sourceArm]));
+
 		// A joint the clip leaves alone gets a correction track when its pair's offset moves it.
 		AnimationClip still{ .Name = "Still", .Duration = 1 };
 		auto stiff = CreateRef<MeshSource>(*rigs.Source);
@@ -1141,6 +1150,7 @@ TEST_SUITE("Retargeting")
 		CHECK(map->Joints[0].Offset == glm::vec3(0, 0, 40));
 		CHECK(map->Joints[1].Offset == glm::vec3(0));
 		const nlohmann::json written = map->ToJson();
+		REQUIRE(written["Joints"][0].contains("Offset"));
 		CHECK(written["Joints"][0]["Offset"] == nlohmann::json::array({ 0.0, 0.0, 40.0 }));
 		CHECK_FALSE(written["Joints"][1].contains("Offset"));
 		REQUIRE(AnimationJointMap::FromJson(written, error));
@@ -1452,7 +1462,6 @@ TEST_SUITE("Retargeting")
 			REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath(std::string("Assets/Models/") + name), *text));
 		}
 		const std::string map = project.WriteFile("Assets/Rig.bjointmap", R"({ "Joints": [ { "Source": "mixamorig:LeftArm", "Target": "clavicle_l", "Offset": [ 0, 0, 30 ] }, { "Source": "mixamorig:Nope", "Target": "head" } ] })");
-		Run(registry, session, "scene.new", { { "name", "Library" }, { "empty", true } });
 		const nlohmann::json models = { { "source", "Assets/Models/MixamoRig.gltf" }, { "target", "Assets/Models/UnrealRig.gltf" } };
 		const auto plain = Run(registry, session, "animator.match_joints", models);
 		CHECK(std::ranges::count(plain["joints"], nlohmann::json{ { "target", "pelvis" }, { "source", "mixamorig:Hips" }, { "match", "humanoid" } }) == 1);
@@ -1477,6 +1486,13 @@ TEST_SUITE("Retargeting")
 		CHECK(errorFor({ { "target", "Assets/Gone.gltf" } }).find("cannot load model 'Assets/Gone.gltf'") != std::string::npos);
 		CHECK(errorFor({ { "jointMap", "Assets/Gone.bjointmap" } }).find("cannot load joint map 'Assets/Gone.bjointmap'") != std::string::npos);
 		CHECK(BasaltTest::RunError(registry, session, "animator.match_joints", { { "source", "a.gltf" } }).find("target") != std::string::npos);
+		// Two skeletons with nothing in common say so, rather than returning an empty list.
+		const auto text = FileSystem::ReadTextFile(FixturePath("TwoJoint.gltf"));
+		REQUIRE(text);
+		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/Models/TwoJoint.gltf"), *text));
+		const auto unrelated = Run(registry, session, "animator.match_joints", { { "source", "Assets/Models/MixamoRig.gltf" }, { "target", "Assets/Models/TwoJoint.gltf" } });
+		CHECK(unrelated["joints"].empty());
+		CHECK(unrelated["warnings"].dump().find("no joint matches") != std::string::npos);
 	}
 
 	TEST_CASE("Clip libraries that fail to load are logged as errors")
@@ -1498,5 +1514,30 @@ TEST_SUITE("Retargeting")
 			}
 		CHECK(errors == 1);
 		scene.OnRuntimeStop();
+	}
+}
+
+TEST_SUITE("Retargeting")
+{
+	TEST_CASE("A pair that lost its joint leaves its offset unused")
+	{
+		const Rigs rigs;
+		std::vector<std::string> notes;
+		const uint32_t clavicle = Node(*rigs.Target, "clavicle_l");
+		const RetargetMap map = Retargeting::BuildMap(*rigs.Target, *rigs.Source, { { .Source = "mixamorig:LeftArm", .Target = "upperarm_l" }, { .Source = "mixamorig:LeftArm", .Target = "clavicle_l", .Offset = glm::vec3(0, 0, 30) } }, notes);
+		CHECK(HasText(notes, "is skipped: an earlier entry already pairs"));
+		CHECK(map.Offsets[clavicle] == glm::vec3(0));
+	}
+
+	TEST_CASE("Only arrays of exactly three numbers parse")
+	{
+		for (const char* bad : { R"([ 1, 2, 3, 4 ])", R"({ "a": 1, "b": 2, "c": 3 })", R"([ 1 ])", R"([])" })
+		{
+			CAPTURE(bad);
+			std::string error;
+			const std::string text = std::string(R"({ "Joints": [ { "Source": "a", "Target": "b", "Offset": )") + bad + " } ] }";
+			CHECK_FALSE(AnimationJointMap::FromText(text, error));
+			CHECK(error.find("Joints[0].Offset must be three numbers") != std::string::npos);
+		}
 	}
 }

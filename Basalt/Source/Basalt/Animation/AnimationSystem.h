@@ -44,7 +44,7 @@ namespace Basalt {
 		std::string Layer;
 	};
 
-	// Where a playback's crossed markers go.
+	// Where a playback's crossed markers go. A sink only lives through a call: Layer views the configuration.
 	struct AnimationEventSink
 	{
 		UUID Entity = 0;
@@ -52,6 +52,8 @@ namespace Basalt {
 		size_t* Budget = nullptr;
 		// Empty for the base playback.
 		std::string_view Layer;
+		// The share of this update whose clock movement fires markers: a layer fading out to 0 stops firing where it gets there.
+		float Shown = 1.0f;
 	};
 
 	// Per-entity playback and poses for a playing/simulating scene. Asset data stays shared and immutable.
@@ -59,12 +61,13 @@ namespace Basalt {
 	// playback crossed (TakeEvents). The scene runs LateUpdate (inverse kinematics, ragdoll physics, spring bones, then attachments) after
 	// physics and OnLateUpdate; standalone callers get it at the end of Update by default.
 	// A preview system (Scene::UpdateAnimationPreview) animates only Animators with Preview in an edit scene: clips, state
-	// machines, layers, inverse kinematics and spring bones (against static bodies only), never writing the scene (no
+	// machines, layers, inverse kinematics and spring bones (both against static bodies only), never writing the scene (no
 	// root-motion displacement, events, ragdolls or attachments).
 	class AnimationSystem
 	{
 	public:
-		// Most events one Animator delivers per frame; the rest are dropped (warned once per playback started).
+		// Most events one Animator's base delivers per frame, and its layers together; the rest are dropped (warned once per
+		// playback started).
 		static constexpr size_t MaxEventsPerFrame = 64;
 
 		explicit AnimationSystem(Scene& scene, bool preview = false);
@@ -75,7 +78,7 @@ namespace Basalt {
 		// physical joint), then refreshes attachments after physics and OnLateUpdate. Invalid steps (reported by Update) skip IK/springs; physical overlays and attachments still refresh.
 		void LateUpdate(Timestep timestep);
 		// Sets a declared Float/Bool parameter on the base graph and on every StateMachine layer graph that declares the
-		// name. True when any of them takes it; false when none does (an unknown name, a wrong type, a non-finite value, no
+		// name (OwnParameters layers aside). True when any of them takes it; false when none does (an unknown name, a wrong type, a non-finite value, no
 		// active graph declaring it). Each graph that declares the name and cannot take the value logs that once.
 		bool SetParameter(Entity entity, const std::string& name, float value);
 		bool SetParameter(Entity entity, const std::string& name, bool value);
@@ -131,7 +134,8 @@ namespace Basalt {
 		// Additive layer whose reference clip is missing). Nullopt for an unknown layer (logged as ReportCallProblem describes).
 		std::optional<std::string> GetLayerState(Entity entity, const std::string& layer);
 		// SetParameter and SetTrigger for one StateMachine layer's graph alone, OwnParameters or not. False for an unknown
-		// layer, a layer that runs no graph or a parameter the graph does not declare, logged as ReportCallProblem describes.
+		// layer or one that runs no graph (logged as ReportCallProblem describes), and for a parameter its graph does not
+		// declare, a wrong type or a value that is not finite (logged once by the graph, as SetParameter's).
 		bool SetLayerParameter(Entity entity, const std::string& layer, const std::string& name, float value);
 		bool SetLayerParameter(Entity entity, const std::string& layer, const std::string& name, bool value);
 		bool SetLayerTrigger(Entity entity, const std::string& layer, const std::string& name);
@@ -628,7 +632,7 @@ namespace Basalt {
 		// (a preview), by component; otherwise it must have been built.
 		static std::optional<Entity> FindCharacter(Entity entity, const PhysicsWorld* physics);
 		void SolveSprings(float seconds);
-		// The edit scene's static bodies for a preview, brought up to date once per spring pass.
+		// The edit scene's static bodies for a preview, brought up to date once per LateUpdate (IK and springs share it).
 		StaticPhysicsShapes& GetStaticShapes();
 		void SolveEntitySprings(Entity entity, Playback& playback, const SpringBoneComponent& component, SpringState& state, float seconds);
 		SpringState& SyncSprings(Entity entity, const SpringBoneComponent& component);
@@ -692,7 +696,7 @@ namespace Basalt {
 		static void Start(Playback& playback, int32_t clip);
 		static void TakeDirectControl(Playback& playback, const AnimatorComponent& component);
 		void AdvanceSpace(Playback& playback, SpaceState& state, const AnimatorComponent& component, double advance, const AnimationEventSink& events);
-		// Queues the markers of `clip` that a clock moving from `from` by `advance` crosses, within `budget`.
+		// Queues the markers of `clip` that a clock moving from `from` by `advance` crosses, within the sink's budget.
 		void CollectEvents(Playback& playback, const AnimatorComponent& component, int32_t clip, double from, double advance, const AnimationEventSink& events, bool looping);
 		bool EnterState(Playback& playback, size_t stateIndex, const AnimatorComponent& component, float fade);
 		void UpdateGraph(Playback& playback, const AnimatorComponent& component);

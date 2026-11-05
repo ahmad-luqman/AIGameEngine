@@ -444,7 +444,7 @@ function Entity:IsAnimationPlaying() end
 ---@return string[]
 function Entity:GetAnimationClips() end
 
----Sets a declared Float or Bool parameter on the state machine and on every StateMachine layer graph that declares it.
+---Sets a declared Float or Bool parameter on the state machine and on every StateMachine layer graph that declares it (OwnParameters layers aside).
 ---True when any takes it; false (logged once) when none does: a missing parameter, wrong declared type, non-finite value or inactive machine.
 ---Nil and values other than numbers/booleans raise an argument error.
 ---@param name string
@@ -452,7 +452,7 @@ function Entity:GetAnimationClips() end
 ---@return boolean
 function Entity:SetAnimationParameter(name, value) end
 
----Latches a declared trigger on every graph declaring it until a successful transition consumes it; false for an unknown/wrong-type parameter or inactive graph.
+---Latches a declared trigger on every graph declaring it (OwnParameters layers aside) until a successful transition consumes it; false for an unknown/wrong-type parameter or inactive graph.
 ---@param name string
 ---@return boolean
 function Entity:SetAnimationTrigger(name) end
@@ -522,7 +522,8 @@ function Entity:GetAnimationLayerWeight(layer) end
 function Entity:GetAnimationLayerState(layer) end
 
 ---Sets a parameter of one StateMachine layer's graph alone, OwnParameters or not. False for an unknown layer, a layer
----running no graph or a name its graph does not declare.
+---running no graph, a name its graph does not declare, a wrong type or a value that is not finite. A value of another Lua
+---type raises an error.
 ---@param layer string
 ---@param name string
 ---@param value number|boolean
@@ -2040,17 +2041,17 @@ function BasaltScript:StopAllCoroutines() end
 ---@field FollowTarget boolean
 ---@field FootLock boolean
 ---@field Weight number
----@field ConeAngle number
----@field MinTwist number
----@field MaxTwist number
+---@field SwingAngle number
+---@field TwistMin number
+---@field TwistMax number
 ---@field JointLimits IKJointLimit[]
 
 ---An element of a component list field.
 ---@class IKJointLimit
 ---@field Joint string
----@field ConeAngle number
----@field MinTwist number
----@field MaxTwist number
+---@field SwingAngle number
+---@field TwistMin number
+---@field TwistMax number
 
 ---An element of a component list field.
 ---@class SpringChain

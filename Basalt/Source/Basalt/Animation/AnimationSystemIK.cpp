@@ -44,7 +44,7 @@ namespace Basalt {
 			bool Settled = false;
 		};
 
-		// Problems with a chain's settings that C++ code wrote past Validate.
+		// Problems with a chain's settings: what C++ code wrote past Validate, and joint limits on a chain they do not apply to.
 		void CheckChainSettings(const IKChain& chain, std::vector<std::string>& problems)
 		{
 			if (static_cast<size_t>(chain.Type) >= IKChainTypeCount)
@@ -184,8 +184,9 @@ namespace Basalt {
 		// Feet follow the ground only while the character stands on it, so a jump keeps its animated legs. The
 		// character's bodies (on the entity or the controller's entity above it, and below either) are not ground;
 		// other ancestors (a moving platform the character is parented to) are.
-		const std::optional<Entity> character = physics ? FindCharacter(entity, physics) : std::nullopt;
-		const bool airborne = character && !physics->IsCharacterGrounded(*character);
+		// A preview has no world to ask whether the character stands, so its feet always look for the ground.
+		const std::optional<Entity> character = FindCharacter(entity, physics);
+		const bool airborne = physics && character && !physics->IsCharacterGrounded(*character);
 		const Entity body = character.value_or(entity);
 		const float blend = smoothing > 0 ? 1.0f - std::exp(-seconds / smoothing) : 1.0f;
 		// FollowTarget chains share the component's Target; a missing one is the entity's problem, logged once.
@@ -373,7 +374,8 @@ namespace Basalt {
 			// above them.
 			const uint32_t upper = chain.Joints.front();
 			const auto movesLeg = [&](uint32_t node) { return std::ranges::find(chain.Joints, node) != chain.Joints.end() || IsAncestor(source, node, upper); };
-			if (chain.Settled && std::ranges::none_of(touched, movesLeg))
+			// A limited chain still has a pose to bring inside its limits.
+			if (chain.Settled && chain.Limits.empty() && std::ranges::none_of(touched, movesLeg))
 			{
 				report();
 				continue;

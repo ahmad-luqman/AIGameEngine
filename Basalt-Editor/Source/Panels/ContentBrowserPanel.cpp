@@ -8,6 +8,8 @@
 #include "Basalt/Automation/EditorCommandSchemas.h"
 #include "Basalt/Asset/AssetKey.h"
 #include "Basalt/Asset/AssetManager.h"
+#include "JointAssetDraft.h"
+
 #include "Basalt/Animation/AnimationJointMap.h"
 #include "Basalt/Animation/AnimationMask.h"
 #include "Basalt/Asset/MaterialAsset.h"
@@ -190,7 +192,12 @@ return %s
 			ImGui::TextUnformatted(label);
 			ImGui::InputText("##ItemName", &m_NewItemName);
 			// A material's name must already be a safe file name on every platform (no device names such as CON).
-			const bool valid = !m_NewItemName.empty() && m_NewItemName.find_first_of("/\\.:") == std::string::npos && (m_NewItem != NewItem::Material || MaterialAsset::MakeFileName(m_NewItemName) == m_NewItemName);
+			const bool jointAsset = m_NewItem == NewItem::AnimationMask || m_NewItem == NewItem::JointMap;
+			std::string nameProblem;
+			// asset.write replaces what is there, so the name must be free.
+			const bool valid = jointAsset ? JointAssetEdit::MakeNewAssetPath(m_CurrentDirectory, m_NewItemName, m_NewItem == NewItem::AnimationMask ? AnimationMask::Extension : AnimationJointMap::Extension, nameProblem).has_value() : !m_NewItemName.empty() && m_NewItemName.find_first_of("/\\.:") == std::string::npos && (m_NewItem != NewItem::Material || MaterialAsset::MakeFileName(m_NewItemName) == m_NewItemName);
+			if (!nameProblem.empty())
+				ImGui::TextColored(EditorColors::Warning(), "%s", nameProblem.c_str());
 			ImGui::BeginDisabled(!valid);
 			if (ImGui::Button("Create"))
 			{
@@ -209,11 +216,12 @@ return %s
 					case NewItem::AnimationMask:
 					case NewItem::JointMap:
 					{
+						const auto path = JointAssetEdit::MakeNewAssetPath(m_CurrentDirectory, m_NewItemName, m_NewItem == NewItem::AnimationMask ? AnimationMask::Extension : AnimationJointMap::Extension, nameProblem);
+						if (!path)
+							m_Context.SetStatus(nameProblem, true);
 						// An empty list is a valid file of either kind.
-						const std::string extension = m_NewItem == NewItem::AnimationMask ? AnimationMask::Extension : AnimationJointMap::Extension;
-						const std::string path = Project::MakeRelative(m_CurrentDirectory / FileSystem::PathFromUtf8(m_NewItemName + extension));
-						if (m_Context.Execute("asset.write", { { "path", path }, { "content", "{ \"Joints\": [] }\n" } }) && OnOpenAsset)
-							OnOpenAsset(path);
+						else if (m_Context.Execute("asset.write", { { "path", *path }, { "content", "{ \"Joints\": [] }\n" } }) && OnOpenAsset)
+							OnOpenAsset(*path);
 						break;
 					}
 					case NewItem::Folder:
