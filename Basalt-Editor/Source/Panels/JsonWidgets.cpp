@@ -344,6 +344,15 @@ namespace Basalt {
 		return true;
 	}
 
+	const char* EntityReferenceNone(const std::string& component, const std::string& field)
+	{
+		if (component == "Joint")
+			return field == "BodyEntity" ? "Self" : "World";
+		if (component == "BoneAttachment")
+			return "Parent";
+		return component == "UINavigation" ? "Automatic" : "Self";
+	}
+
 	std::optional<uint64_t> DrawEntityPicker(Scene& scene, const std::string& name, uint64_t current, const std::function<bool(Entity)>& filter, const char* noneLabel)
 	{
 		std::string preview = noneLabel;

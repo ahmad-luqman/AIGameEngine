@@ -12,6 +12,7 @@
 #include "Basalt/Scene/Scene.h"
 
 #include <glm/gtc/matrix_inverse.hpp>
+#include <spdlog/fmt/fmt.h>
 
 #include <algorithm>
 #include <unordered_set>
@@ -225,6 +226,16 @@ namespace Basalt {
 									   info->Remove(probe);
 								   if (!info->Deserialize(probe, info->Serialize(entity), error) || !info->Deserialize(probe, data, error))
 									   throw CommandError(error);
+								   // component.set lets an entity keep a stale list element ID of its own: another may not take it on.
+								   json current = info->Serialize(entity);
+								   std::unordered_set<uint64_t> held;
+								   for (const auto& field : info->EntityFields)
+									   ForEachFieldValue(current, field, [&](const json& value, const std::string&) { held.insert(value.get<uint64_t>()); });
+								   for (const auto& field : info->EntityFields)
+									   ForEachFieldValue(data, field, [&](const json& value, const std::string& label) {
+										   if (label != field && value.is_number_integer() && value != 0 && !held.contains(value.get<uint64_t>()) && !session.GetScene()->GetEntityByUUID(UUID(value.get<uint64_t>())))
+											   throw CommandError(fmt::format("{}: no entity with ID {}", label, value.get<uint64_t>()));
+									   });
 							   }
 							   for (UUID id : session.GetSelections())
 								   registry.Execute(session, "component.set", { { "entity", static_cast<uint64_t>(id) }, { "component", name }, { "data", data } });
