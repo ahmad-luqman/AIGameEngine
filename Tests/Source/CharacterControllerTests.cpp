@@ -379,7 +379,7 @@ TEST_SUITE("Physics")
 				CHECK(result.Climb < 0.0f);
 			}
 		}
-		// Rebuilding the character in mid-air (a collider change) after its grace jump keeps the jump spent: asking to go
+		// Rebuilding the character in mid-air (a new layer) after its grace jump keeps the jump spent: asking to go
 		// up again (within a long grace) does not jump a second time.
 		const Result rebuilt = walkOff(1.0f, 0.1f, [](Scene& scene, Entity character) {
 			PhysicsWorld& physics = *scene.GetPhysicsWorld();
@@ -391,6 +391,9 @@ TEST_SUITE("Physics")
 			auto capsule = character.GetComponent<CapsuleColliderComponent>();
 			capsule.Radius *= 0.9f;
 			character.AddOrReplaceComponent<CapsuleColliderComponent>(capsule);
+			auto controller = character.GetComponent<CharacterControllerComponent>();
+			controller.Layer = "Rebuilt";
+			character.AddOrReplaceComponent<CharacterControllerComponent>(controller);
 		});
 		CHECK(rebuilt.Rising < 4.0f);
 	}
@@ -549,8 +552,10 @@ TEST_SUITE("Physics")
 		CHECK(Position(ghost).x == doctest::Approx(3.0f).epsilon(0.03));
 		CHECK(Position(bystander).x == doctest::Approx(1.5f).epsilon(0.01));
 
-		// A rebuilt character (a collider change) is still pushed; a destroyed one is gone from the others' view.
-		pushed.AddOrReplaceComponent<CapsuleColliderComponent>(pushed.GetComponent<CapsuleColliderComponent>());
+		// A rebuilt character (a new layer) is still pushed; a destroyed one is gone from the others' view.
+		auto pushedController = pushed.GetComponent<CharacterControllerComponent>();
+		pushedController.Layer = "Rebuilt";
+		pushed.AddOrReplaceComponent<CharacterControllerComponent>(pushedController);
 		auto walk = [&]() { physics.MoveCharacter(pusher, { 2.0f, 0.0f, 0.0f }); };
 		Simulate(scene, 0.5f, walk);
 		CHECK(Position(pushed).x - Position(pusher).x == doctest::Approx(1.0f).epsilon(0.1));
@@ -908,8 +913,10 @@ TEST_SUITE("Physics")
 		CHECK(BasaltTest::CountLogMessages(since, "does nothing on character 'Character'") == 1);
 		CHECK(glm::length(Position(character) - glm::vec3(0.0f, StandingHeight, 0.0f)) < 0.05f);
 
-		// A collider change rebuilds the character; a jump asked for on that very step still happens.
-		character.AddOrReplaceComponent<CapsuleColliderComponent>(character.GetComponent<CapsuleColliderComponent>());
+		// A new layer rebuilds the character; a jump asked for on that very step still happens.
+		auto rebuiltController = character.GetComponent<CharacterControllerComponent>();
+		rebuiltController.Layer = "Rebuilt";
+		character.AddOrReplaceComponent<CharacterControllerComponent>(rebuiltController);
 		physics.MoveCharacter(character, { 0.0f, 5.0f, 0.0f });
 		scene.OnUpdate(Step);
 		physics.MoveCharacter(character, { 0.0f, 0.0f, 0.0f });

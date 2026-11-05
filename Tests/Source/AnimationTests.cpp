@@ -2472,7 +2472,7 @@ TEST_SUITE("Animation")
 		CHECK(RootX(rig) == doctest::Approx(expected));
 	}
 
-	TEST_CASE("Runtime character creation and collider rebuilding preserve queued root motion")
+	TEST_CASE("Runtime character creation and collider changes preserve queued root motion")
 	{
 		ClearAssetCache clear;
 		TempProject project("RootCharacterRebuild");
@@ -2485,7 +2485,7 @@ TEST_SUITE("Animation")
 		scene.OnUpdate(2);
 		CHECK(RootX(rig) < 1.1f);
 		CHECK(RootX(rig) > 0.8f);
-		// Remove the obstacle, then rebuild between extracting the next delta and stepping physics.
+		// Remove the obstacle, then change the collider between extracting the next delta and stepping physics.
 		scene.DestroyEntity(wall);
 		auto* animation = scene.GetAnimationSystem();
 		animation->Update(0.5f, false);
