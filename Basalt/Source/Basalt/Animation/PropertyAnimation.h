@@ -72,8 +72,6 @@ namespace Basalt {
 		// The entity a timeline's track with this Target animates: `timeline` for 0, otherwise that entity of its scene,
 		// which is an invalid Entity when it is not there.
 		static Entity ResolveTarget(Entity timeline, UUID target);
-		// Why ResolveTarget found no entity, for messages.
-		static std::string DescribeMissingTarget(UUID target);
 		// Samples normalized time in [0,1]. A missing entity, component or list element fails before anything changes; when
 		// a component rejects its patch, components patched before it (in order of target UUID, then name) stay changed.
 		// Tracks reaching the same field of the same entity (also through different spellings) apply in order, so the last

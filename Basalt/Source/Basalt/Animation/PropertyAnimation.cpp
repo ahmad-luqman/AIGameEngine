@@ -75,8 +75,11 @@ namespace Basalt {
 			if (key.Asset.size() > PropertyAnimationKey::MaxTextLength)
 				return fmt::format("Asset holds at most {} bytes", PropertyAnimationKey::MaxTextLength);
 			const bool text = !field.IsAsset && (field.Type.Kind == ComponentFieldKind::String || field.Type.Kind == ComponentFieldKind::Enum);
-			const char* keyField = field.IsAsset ? "Asset" : text ? "Text"
-																  : "Value";
+			const char* keyField = "Value";
+			if (field.IsAsset)
+				keyField = "Asset";
+			else if (text)
+				keyField = "Text";
 			// Text or Asset on another field would be ignored: say so rather than animate what an agent did not mean.
 			if (!text && !key.Text.empty())
 				return fmt::format("Text must be empty: {} is {} (keys use {})", field.Leaf, DescribeKind(field), keyField);
@@ -387,11 +390,6 @@ namespace Basalt {
 		return target == 0 ? timeline : timeline.GetScene()->GetEntityByUUID(target);
 	}
 
-	std::string PropertyAnimation::DescribeMissingTarget(UUID target)
-	{
-		return target == MissingEntity ? "its entity was deleted from the prefab" : fmt::format("entity {} is not in the scene", static_cast<uint64_t>(target));
-	}
-
 	bool PropertyAnimation::Sample(Entity entity, const PropertyAnimationComponent& animation, float time, std::string& outError)
 	{
 		if (!entity || !std::isfinite(time) || time < 0 || time > 1)
@@ -422,7 +420,7 @@ namespace Basalt {
 			const Entity target = ResolveTarget(entity, track.Target);
 			if (!target)
 			{
-				outError = location() + ": " + DescribeMissingTarget(track.Target);
+				outError = location() + ": the entity is not in the scene";
 				return false;
 			}
 			const auto* info = ComponentRegistry::Find(track.Component);
@@ -484,7 +482,7 @@ namespace Basalt {
 			return fail(problem);
 		const Entity owner = ResolveTarget(entity, target);
 		if (!owner)
-			return fail(DescribeMissingTarget(target));
+			return fail(fmt::format("entity {} is not in the scene", static_cast<uint64_t>(target)));
 		const auto* info = ComponentRegistry::Find(component);
 		if (!info->Has(owner))
 			return fail("the entity has no " + component);
@@ -519,13 +517,10 @@ namespace Basalt {
 			case ComponentFieldKind::Enum:
 				if (!value->is_string())
 					return mismatched();
-				{
-					std::string& slot = resolved->IsAsset ? asset : text;
-					slot = value->get<std::string>();
-					if (slot.size() > PropertyAnimationKey::MaxTextLength)
-						return fail(fmt::format("its value is longer than {} bytes", PropertyAnimationKey::MaxTextLength));
-					break;
-				}
+				if (value->get_ref<const std::string&>().size() > PropertyAnimationKey::MaxTextLength)
+					return fail(fmt::format("its value is longer than {} bytes", PropertyAnimationKey::MaxTextLength));
+				(resolved->IsAsset ? asset : text) = value->get<std::string>();
+				break;
 			default:
 				if (type.Count == 0)
 				{

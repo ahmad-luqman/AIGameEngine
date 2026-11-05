@@ -18,6 +18,8 @@
 
 namespace Basalt {
 
+	using namespace PhysicsInternal;
+
 	namespace {
 
 		// Whether a change from `built` to `current` must rebuild the body (which ends its contacts) rather than apply in
@@ -39,12 +41,18 @@ namespace Basalt {
 			return structural != built;
 		}
 
+		// Whether the change reaches what touches the body.
+		bool SurfaceChanged(const RigidBodyComponent& built, const RigidBodyComponent& current)
+		{
+			return built.Friction != current.Friction || built.Restitution != current.Restitution || built.FrictionCombine != current.FrictionCombine || built.RestitutionCombine != current.RestitutionCombine;
+		}
+
 		// A RigidBody's own settings in Jolt's terms. Their problems go to warnings, in a fixed order, so an update in place
 		// logs what a rebuild would.
 		struct BodySettings
 		{
 			uint32_t Layer = 0;
-			PhysicsInternal::ColliderMaterial Surface;
+			ColliderMaterial Surface;
 			float LinearDamping = 0.0f;
 			float AngularDamping = 0.0f;
 			JPH::EMotionQuality Quality = JPH::EMotionQuality::Discrete;
@@ -57,8 +65,8 @@ namespace Basalt {
 				settings.Layer = *index;
 			else
 				warnings.emplace_back("unknown physics layer '" + rigidBody.Layer + "', using Default");
-			settings.Surface = PhysicsInternal::SanitizeSurface(rigidBody.Friction, rigidBody.Restitution, "", warnings);
-			if (rigidBody.Mass <= 0.0f)
+			settings.Surface = SanitizeSurface(rigidBody.Friction, rigidBody.Restitution, "", warnings);
+			if (rigidBody.Type == RigidBodyType::Dynamic && rigidBody.Mass <= 0.0f)
 				warnings.emplace_back("Mass must be positive, using the smallest mass");
 			if (rigidBody.LinearDamping < 0.0f || rigidBody.AngularDamping < 0.0f)
 				warnings.emplace_back("damping must not be negative, using 0");
@@ -80,14 +88,12 @@ namespace Basalt {
 
 		// The body's colliders as one shape, in the form its motion type and sensor flag need. Jolt cannot simulate a
 		// triangle mesh on a dynamic body, so those always use the convex hull.
-		PhysicsInternal::ColliderShape BuildBodyShape(Entity entity, const glm::vec3& scale, const RigidBodyComponent& rigidBody, std::vector<std::string>& warnings)
+		ColliderShape BuildBodyShape(Entity entity, const glm::vec3& scale, const RigidBodyComponent& rigidBody, std::vector<std::string>& warnings)
 		{
-			return PhysicsInternal::BuildColliderShape(entity, scale, 1.0f, rigidBody.Type == RigidBodyType::Dynamic ? "a dynamic body" : nullptr, rigidBody.IsTrigger, true, warnings);
+			return BuildColliderShape(entity, scale, 1.0f, rigidBody.Type == RigidBodyType::Dynamic ? "a dynamic body" : nullptr, rigidBody.IsTrigger, true, warnings);
 		}
 
 	}
-
-	using namespace PhysicsInternal;
 
 	PhysicsWorld::Impl::BodyRecord* PhysicsWorld::Impl::FindBody(Entity entity) const
 	{
@@ -173,7 +179,7 @@ namespace Basalt {
 		Wire<CapsuleColliderComponent, Changed, Changed, Changed>(registry, connect);
 		Wire<MeshColliderComponent, Changed, Changed, Changed>(registry, connect);
 		Wire<MeshComponent, &Impl::OnMeshChanged, &Impl::OnMeshUpdated, &Impl::OnMeshChanged>(registry, connect);
-		// Adding or removing a controller swaps a body for a character, so it rebuilds like a collider change.
+		// Adding or removing a controller swaps a body for a character, so it rebuilds like adding or removing a collider.
 		Wire<CharacterControllerComponent, Changed, &Impl::OnCharacterChanged, Changed>(registry, connect);
 		Wire<JointComponent, &Impl::OnJointChanged, &Impl::OnJointChanged, &Impl::OnJointDestroyed>(registry, connect);
 		if (connect)
@@ -288,7 +294,7 @@ namespace Basalt {
 
 		if (auto* existing = FindBody(entity))
 		{
-			// Rebuilding (e.g. after a collider or rigid body change) keeps the body moving.
+			// Rebuilding (e.g. after a new Type or Layer) keeps the body moving.
 			previousLinearVelocity = bodies.GetLinearVelocity(existing->ID);
 			previousAngularVelocity = bodies.GetAngularVelocity(existing->ID);
 			RemoveBody(entity.GetUUID());
@@ -466,11 +472,13 @@ namespace Basalt {
 		// Joint anchors are scaled with the body (see CreateJoint), so its joints are rebuilt from the current
 		// poses before the next step, as after any rebuild. Constraints must go before their body's shape changes.
 		RemoveJointsOfBody(entity.GetUUID());
-		SwapBodyShape(entity, record, colliders);
-		record.BuiltScale = scale;
+		if (SwapBodyShape(entity, record, colliders))
+			record.BuiltScale = scale;
+		else
+			RecreateBody(entity);
 	}
 
-	void PhysicsWorld::Impl::SwapBodyShape(Entity entity, BodyRecord& record, const ColliderShape& colliders)
+	bool PhysicsWorld::Impl::SwapBodyShape(Entity entity, BodyRecord& record, const ColliderShape& colliders)
 	{
 		System->GetBodyInterface().SetShape(record.ID, colliders.Shape, false, JPH::EActivation::Activate);
 		// Shape cooking can omit a failed child, so replace its material table as well.
@@ -478,21 +486,21 @@ namespace Basalt {
 		material.Colliders.reset();
 		if (std::ranges::any_of(colliders.Materials, &ColliderMaterial::Override))
 			material.Colliders = CreateScope<const ColliderMaterials>(colliders.Materials);
-		if (record.Settings.Type == RigidBodyType::Dynamic)
-			ApplyBodyMass(record, entity.GetComponent<RigidBodyComponent>().Mass);
+		return record.Settings.Type != RigidBodyType::Dynamic || ApplyBodyMass(entity, record, entity.GetComponent<RigidBodyComponent>().Mass);
 	}
 
-	bool PhysicsWorld::Impl::ApplyBodyMass(const BodyRecord& record, float mass)
+	bool PhysicsWorld::Impl::ApplyBodyMass(Entity entity, const BodyRecord& record, float mass)
 	{
 		// As in RecreateBody: the shape's inertia at the component's mass, not at Jolt's density.
 		JPH::BodyLockWrite lock(System->GetBodyLockInterface(), record.ID);
 		if (!lock.Succeeded())
 		{
-			BS_CORE_ERROR("Physics: cannot lock a body to change its mass");
+			BS_CORE_ERROR("Physics: cannot lock the body of '{}' to change its mass; rebuilding it", entity.GetName());
 			return false;
 		}
-		JPH::MotionProperties* motion = lock.GetBody().GetMotionProperties();
-		JPH::MassProperties properties = lock.GetBody().GetShape()->GetMassProperties();
+		JPH::Body& body = lock.GetBody();
+		JPH::MotionProperties* motion = body.GetMotionProperties();
+		JPH::MassProperties properties = body.GetShape()->GetMassProperties();
 		properties.ScaleToMass(std::max(mass, 0.001f));
 		motion->SetMassProperties(motion->GetAllowedDOFs(), properties);
 		return true;
@@ -517,7 +525,8 @@ namespace Basalt {
 		if (!shape.Shape)
 			return false;
 		const JPH::Vec3 previousCenter = bodies.GetShape(record.ID)->GetCenterOfMass();
-		SwapBodyShape(entity, record, shape);
+		if (!SwapBodyShape(entity, record, shape))
+			return false;
 		// The anchors do not depend on the colliders' size, so unlike a rescale this leaves joints standing. Rebuilding
 		// would reset their rest poses every frame of an animated collider, and with them every limit.
 		if (const JPH::Vec3 moved = shape.Shape->GetCenterOfMass() - previousCenter; moved != JPH::Vec3::sZero())
@@ -540,7 +549,7 @@ namespace Basalt {
 			return true;
 		JPH::BodyInterface& bodies = System->GetBodyInterface();
 		JPH::AABox bounds = bodies.GetTransformedShape(record.ID).GetWorldSpaceBounds();
-		const bool touchChanged = reshaped || rigidBody->Friction != record.Settings.Friction || rigidBody->Restitution != record.Settings.Restitution || rigidBody->FrictionCombine != record.Settings.FrictionCombine || rigidBody->RestitutionCombine != record.Settings.RestitutionCombine;
+		const bool touchChanged = reshaped || SurfaceChanged(record.Settings, *rigidBody);
 		if (reshaped)
 		{
 			if (!ReplaceBodyColliders(entity, record, colliders))
@@ -562,16 +571,18 @@ namespace Basalt {
 				JPH::BodyLockWrite lock(System->GetBodyLockInterface(), record.ID);
 				if (!lock.Succeeded())
 				{
-					BS_CORE_ERROR("Physics: cannot lock the body of '{}' to update it", entity.GetName());
+					BS_CORE_ERROR("Physics: cannot lock the body of '{}' to update it; rebuilding it", entity.GetName());
 					return false;
 				}
-				JPH::MotionProperties* motion = lock.GetBody().GetMotionProperties();
+				JPH::Body& body = lock.GetBody();
+				JPH::MotionProperties* motion = body.GetMotionProperties();
 				motion->SetLinearDamping(checked.LinearDamping);
 				motion->SetAngularDamping(checked.AngularDamping);
-				lock.GetBody().SetAllowSleeping(rigidBody->AllowSleeping);
+				body.SetAllowSleeping(rigidBody->AllowSleeping);
 			}
 			// SwapBodyShape has applied the current mass with a new shape.
-			if (record.Settings.Type == RigidBodyType::Dynamic && !reshaped && rigidBody->Mass != record.Settings.Mass && !ApplyBodyMass(record, rigidBody->Mass))
+			const bool newMass = record.Settings.Type == RigidBodyType::Dynamic && !reshaped && rigidBody->Mass != record.Settings.Mass;
+			if (newMass && !ApplyBodyMass(entity, record, rigidBody->Mass))
 				return false;
 			bodies.ActivateBody(record.ID);
 		}

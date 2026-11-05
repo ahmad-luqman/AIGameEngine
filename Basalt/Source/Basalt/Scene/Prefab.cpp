@@ -128,8 +128,7 @@ namespace Basalt {
 			}
 		}
 
-		// Unlike prefab.apply, a save has nothing older to keep in place of such a reference, but other scenes will not have
-		// the entity.
+		// A file holds what it is given, so all a writer can do is say what other scenes will not have.
 		void ReportOutsideReferences(json& entities, std::vector<std::string>& outWarnings)
 		{
 			IdSet saved;
@@ -138,7 +137,7 @@ namespace Basalt {
 			for (json& record : entities)
 				ForEachReference(record, [&](json& value, ReferenceKind kind, const std::string& label) {
 					if (kind != ReferenceKind::Parent && IsId(value) && value != 0 && !saved.contains(value.get<uint64_t>()))
-						outWarnings.push_back(fmt::format("'{}' {} references an entity outside the prefab, which other scenes do not have", NameOf(record), label));
+						outWarnings.push_back(fmt::format("'{}' {} references an entity that is not in the prefab, which other scenes do not have", NameOf(record), label));
 				});
 		}
 
@@ -258,8 +257,10 @@ namespace Basalt {
 
 		// Source space to instance space. A reference to an entity the instance deleted keeps its reserved ID (reverting
 		// the deletion restores the reference, and no reserved ID is ever reused); a parent among them, or any other source
-		// entity the instance does not have, becomes the root, no reference or, in a list element where 0 is the entity
-		// holding the list, MissingEntity. Never an unrelated entity that happens to share the source ID.
+		// entity the instance does not have, becomes the root or no reference. Never an unrelated entity that happens to share
+		// the source ID. A list element's reference stays as the file has it: 0 there is the entity holding the list, and a
+		// fresh instance of the file holds that ID too, so it fails alike, and it reads back as the baseline's own, which lets
+		// a repair of the prefab through.
 		void ToInstanceSpace(json& record, const IdMap& toInstance, const IdMap& reserved, const IdSet& sourceKeys, uint64_t rootId)
 		{
 			record["ID"] = toInstance.at(RecordId(record));
@@ -277,9 +278,10 @@ namespace Basalt {
 					value = it->second;
 				else if (const auto kept = reserved.find(id); kept != reserved.end() && !isParent)
 					value = kept->second;
-				else if (sourceKeys.contains(id))
-					value = isParent ? rootId : kind == ReferenceKind::ListElement ? MissingEntity
-																				   : uint64_t{ 0 };
+				else if (isParent && sourceKeys.contains(id))
+					value = rootId;
+				else if (kind == ReferenceKind::Field && sourceKeys.contains(id))
+					value = 0;
 			});
 		}
 
@@ -2128,17 +2130,39 @@ namespace Basalt {
 					// 0 in an element would turn the reference into the entity holding the list.
 					const std::string top = field.substr(0, field.find('['));
 					const json::json_pointer at("/" + PointerToken(key) + "/Components/" + PointerToken(component) + "/" + PointerToken(top));
-					const json previous = in.Next.ByKey.contains(at) ? in.Next.ByKey[at] : top == field ? json(0)
-																										: json::array();
+					const bool inFile = in.Next.ByKey.contains(at);
 					std::string outside;
-					ForEachFieldValue(fields, field, [&](json& value, const std::string& label) {
+					ForEachFieldValue(fields, field, [&](const json& value, const std::string& label) {
 						if (value != 0 && !inPrefab(value) && outside.empty())
 							outside = label;
 					});
-					if (outside.empty() || fields[top] == previous)
+					if (outside.empty() || (inFile && fields[top] == in.Next.ByKey[at]))
 						continue;
-					outWarnings.push_back(fmt::format("'{}' {}.{} references an entity outside the prefab; the prefab keeps its {}", NameOf(record), component, outside, top));
-					fields[top] = previous;
+					if (top == field)
+					{
+						outWarnings.push_back(fmt::format("'{}' {}.{} references an entity outside the prefab; the prefab keeps its value", NameOf(record), component, outside));
+						fields[top] = inFile ? in.Next.ByKey[at] : json(0);
+					}
+					else if (inFile)
+					{
+						outWarnings.push_back(fmt::format("'{}' {}.{} references an entity outside the prefab, so {} stays as the prefab has it, without this instance's other changes to it", NameOf(record), component, outside, top));
+						fields[top] = in.Next.ByKey[at];
+					}
+					else
+					{
+						// New to the prefab: there is no value to keep, so what can go in goes in.
+						const std::string element = field.substr(top.size() + 3);
+						json kept = json::array();
+						for (json& item : fields[top])
+						{
+							bool leaves = false;
+							ForEachFieldValue(item, element, [&](const json& value, const std::string&) { leaves = leaves || (value != 0 && !inPrefab(value)); });
+							if (!leaves)
+								kept.push_back(std::move(item));
+						}
+						outWarnings.push_back(fmt::format("'{}' {}.{} references an entity outside the prefab, so {} of {} {} stayed out of it", NameOf(record), component, outside, fields[top].size() - kept.size(), fields[top].size(), top));
+						fields[top] = std::move(kept);
+					}
 				}
 			}
 		}
@@ -2150,6 +2174,7 @@ namespace Basalt {
 		const std::string base = LinkPath(source[0]);
 		if (!base.empty())
 			entities[0]["Components"][LinkComponent] = LinkMarker(base);
+		ReportOutsideReferences(entities, outWarnings);
 		return SceneSerializer::SavePrefabEntities(std::move(entities), path, outError, base.empty() ? PrefabFileRoot::Plain : PrefabFileRoot::Variant, &outWarnings);
 	}
 

@@ -218,11 +218,12 @@ TEST_SUITE("Math")
 
 	TEST_CASE("No rotation has no negative zeros, which saved files would show as -0.0")
 	{
-		for (const glm::quat& rotation : { glm::quat(1.0f, 0.0f, 0.0f, 0.0f), glm::quat(1.0f, -0.0f, -0.0f, -0.0f), glm::quat(-1.0f, 0.0f, 0.0f, 0.0f) })
+		// The last one's roll rounds to -0 only when the angle turns float.
+		for (const glm::quat& rotation : { glm::quat(1.0f, 0.0f, 0.0f, 0.0f), glm::quat(1.0f, -0.0f, -0.0f, -0.0f), glm::quat(-1.0f, 0.0f, 0.0f, 0.0f), glm::quat(1.0f, 1e-30f, -1e-30f, 0.0f) })
 		{
 			const glm::vec3 euler = Math::EulerFromQuat(rotation);
 			for (int axis = 0; axis < 3; axis++)
-				CHECK_FALSE(std::signbit(euler[axis]));
+				CHECK_FALSE((euler[axis] == 0 && std::signbit(euler[axis])));
 		}
 	}
 

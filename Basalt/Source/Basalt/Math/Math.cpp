@@ -157,7 +157,7 @@ namespace Basalt::Math {
 		const double sinYaw = 2 * (w * y - x * z);
 		// Taken from the first column rather than as asin(sinYaw), which loses half its digits near +-90 degrees.
 		const double cosYaw = std::hypot(m00, m10);
-		// Float rounding leaves about 2e-7 here at an exact lock, so this finds every one and nothing more than 6e-5
+		// Float rounding leaves up to about 5e-7 here at an exact lock, so this finds every one and nothing more than 6e-5
 		// degrees from it. Pitch and roll turn about one axis there: roll is 0, by the same convention glm used.
 		constexpr double LockCosine = 1e-6;
 		const bool locked = cosYaw < LockCosine;
@@ -180,8 +180,8 @@ namespace Basalt::Math {
 				steps = 180 * StepsPerDegree;
 			pitch = steps / StepsPerDegree / DegreesPerRadian;
 		}
-		// Adding 0 turns -0 into 0, or every unrotated entity would save a "-0.0".
-		const auto toFloat = [](double angle) { return static_cast<float>(angle + 0.0); };
+		// Adding 0 after the cast, which can round a tiny angle to -0, or every unrotated entity would save a "-0.0".
+		const auto toFloat = [](double angle) { return static_cast<float>(angle) + 0.0f; };
 		return glm::vec3(toFloat(pitch), toFloat(yaw), toFloat(roll));
 	}
 

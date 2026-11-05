@@ -2395,7 +2395,7 @@ namespace Basalt {
 			return info;
 		}
 
-		// A component tracks animate only these fields of: see ComponentInfo::AnimatableFields.
+		// A component whose tracks may animate only these fields (see ComponentInfo::AnimatableFields).
 		template<typename T>
 		ComponentInfo MakeInfoAnimating(const char* name, std::vector<std::string> fields)
 		{

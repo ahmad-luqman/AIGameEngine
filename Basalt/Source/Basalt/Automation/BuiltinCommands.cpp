@@ -321,14 +321,14 @@ namespace Basalt {
 
 		// Component data may name entities in reference fields (Joint "ConnectedEntity": "Door"); files and
 		// the registry store UUIDs, so names are resolved here with the same rules as the "entity" parameter.
-		// Numeric IDs must name an existing entity too (0 = none), except IDs the component already holds in list elements: a
+		// Numeric IDs must name an existing entity too (0 is exempt: what it means is each field's own), except IDs the component already holds in list elements: a
 		// list is written back whole, so an element whose entity was since deleted must not block an edit of another (it is
 		// reported where it is used). Scene and prefab files stay lenient: they may be loaded before the entities they refer
 		// to exist.
 		json ResolveEntityFields(Scene& scene, const std::string& component, json data, Entity holder = {})
 		{
 			const ComponentInfo* info = ComponentRegistry::Find(component);
-			if (!info || !data.is_object())
+			if (!info || info->EntityFields.empty() || !data.is_object())
 				return data;
 			std::unordered_set<uint64_t> held;
 			if (holder && info->Has(holder))
@@ -339,8 +339,7 @@ namespace Basalt {
 			}
 			for (const std::string& field : info->EntityFields)
 				ForEachFieldValue(data, field, [&](json& value, const std::string& label) {
-					const bool isNumber = value.is_number_integer();
-					if (value.is_string() || (isNumber && value.get<uint64_t>() != 0 && (label == field || !held.contains(value.get<uint64_t>()))))
+					if (value.is_string() || (value.is_number_integer() && value != 0 && (label == field || !held.contains(value.get<uint64_t>()))))
 						value = static_cast<uint64_t>(ResolveEntity(scene, value, label.c_str()).GetUUID());
 				});
 			return data;
@@ -2980,7 +2979,7 @@ namespace Basalt {
 					if (std::ranges::find(info.Fields, field) == info.Fields.end())
 						throw CommandError(fmt::format("unknown field '{}' for {} (valid: {})", field, name, fmt::join(info.Fields, ", ")));
 				}
-				const json expected = Asserting([&]() { return ResolveEntityFields(scene, name, params["fields"]); });
+				const json expected = Asserting([&]() { return ResolveEntityFields(scene, name, params["fields"], entity); });
 				std::vector<std::string> mismatches;
 				MatchJsonSubset(data, expected, MatchTolerance(params), name, mismatches);
 				if (!mismatches.empty())

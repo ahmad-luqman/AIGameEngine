@@ -60,9 +60,9 @@ namespace Basalt {
 			glm::quat LastRotation = { 1.0f, 0.0f, 0.0f, 0.0f };
 			// The world scale the colliders were built with (see ApplyScaleChanges).
 			glm::vec3 BuiltScale = { 1.0f, 1.0f, 1.0f };
-			// What the body was built from (plus later in-place updates): what needs a rebuild (BodyNeedsRebuild) never differs
-			// from the entity's. The warnings about its shape are added back by an update that keeps it, to keep the logged
-			// set the same.
+			// What the body was built from (plus later in-place updates), so what needs a rebuild says what the Jolt body is,
+			// whatever the component says until the next ApplyPendingChanges. The warnings about its shape are added back by an
+			// update that keeps it, to keep the logged set the same.
 			RigidBodyComponent Settings;
 			PhysicsInternal::ColliderSettings Colliders;
 			std::vector<std::string> ShapeWarnings;
@@ -416,10 +416,11 @@ namespace Basalt {
 		bool ReplaceBodyColliders(Entity entity, BodyRecord& record, const PhysicsInternal::ColliderSettings& colliders);
 		// Gives the body the new shape and its materials and (when dynamic) inertia at the component's mass. Jolt keeps the
 		// body's origin and re-evaluates its contacts without ending them. Its center of mass can move, which joints must be
-		// told of (or be gone).
-		void SwapBodyShape(Entity entity, BodyRecord& record, const PhysicsInternal::ColliderShape& colliders);
-		// The body's inertia from its shape at the mass. False, logged, when the body cannot be locked.
-		bool ApplyBodyMass(const BodyRecord& record, float mass);
+		// told of (or be gone). False as ApplyBodyMass is.
+		bool SwapBodyShape(Entity entity, BodyRecord& record, const PhysicsInternal::ColliderShape& colliders);
+		// The body's inertia from its shape at the mass. False, logged, when the body cannot be locked: only a rebuild can
+		// apply it then, so callers rebuild.
+		bool ApplyBodyMass(Entity entity, const BodyRecord& record, float mass);
 		// Colliders are sized by the entity's world scale, which a script, an animation or a parent can change
 		// without touching a physics component. Once per Step (and on a scene load), after dirty entities are
 		// applied, bodies and characters whose scale differs from the one they were built with get a new shape in
