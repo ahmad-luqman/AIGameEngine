@@ -2,6 +2,7 @@
 #include "Basalt/Animation/AnimationJointMap.h"
 #include "Basalt/Animation/AnimationMask.h"
 
+#include "Basalt/Animation/PropertyAnimation.h"
 #include "Basalt/Asset/AssetKey.h"
 #include "Basalt/Asset/AssetManager.h"
 #include "Basalt/Asset/MaterialAsset.h"
@@ -277,6 +278,7 @@ namespace Basalt {
 					return;
 				}
 				CheckEntities(*scene, Relative(path));
+				CheckTrackTargets(*scene, Relative(path), ValidationSeverity::Error);
 				CheckPrefabInstances(*scene, Relative(path));
 			}
 
@@ -314,12 +316,23 @@ namespace Basalt {
 					return;
 				}
 				CheckEntities(scene, Relative(path));
+				// A warning: only a scene says what instances of the file find there, and it is checked for real.
+				CheckTrackTargets(scene, Relative(path), ValidationSeverity::Warning);
 				// Overrides of entities a nested prefab dropped do nothing, silently: only a read notices.
 				nlohmann::json entities;
 				Prefab::ReadReport report;
 				if (Prefab::ReadFile(path, entities, error, &report))
 					for (const std::string& warning : report.Warnings)
 						m_Report.Add(ValidationSeverity::Warning, Relative(path), warning);
+			}
+
+			// A keyed track on an entity that is not there fails its timeline when sampled; an empty one does nothing.
+			void CheckTrackTargets(Scene& scene, const std::string& file, ValidationSeverity severity)
+			{
+				for (auto [handle, timeline] : scene.GetAllEntitiesWith<PropertyAnimationComponent>().each())
+					for (size_t i = 0; i < timeline.Tracks.size(); i++)
+						if (const PropertyAnimationTrack& track = timeline.Tracks[i]; !track.Keys.empty() && !PropertyAnimation::ResolveTarget(Entity(handle, &scene), track.Target))
+							m_Report.Add(severity, file, fmt::format("'{}' PropertyAnimation.Tracks[{}].Target names entity {}, which is not there", Entity(handle, &scene).GetName(), i, static_cast<uint64_t>(track.Target)));
 			}
 
 			void CheckEntities(Scene& scene, const std::string& file)
@@ -337,20 +350,11 @@ namespace Basalt {
 							if (!fields.is_object())
 								continue;
 							if (const auto* info = ComponentRegistry::Find(component))
-							{
 								for (const auto& assetField : info->AssetFields)
 									ForEachFieldValue(fields, assetField, [&](const nlohmann::json& value, const std::string&) {
 										if (value.is_string() && !value.get_ref<const std::string&>().empty())
 											paths.insert(value.get<std::string>());
 									});
-								// A list element's reference fails where it is used; top-level ones have rules of their own (a joint
-								// without its body warns, a stale navigation link does nothing).
-								for (const auto& entityField : info->EntityFields)
-									ForEachFieldValue(fields, entityField, [&](const nlohmann::json& value, const std::string& label) {
-										if (label != entityField && value != 0 && !scene.GetEntityByUUID(UUID(value.get<uint64_t>())))
-											m_Report.Add(ValidationSeverity::Error, file, fmt::format("'{}' {}.{} names entity {}, which is not in the scene", entity.value("Name", std::string()), component, label, value.get<uint64_t>()));
-									});
-							}
 							// Strings outside the asset fields that look like paths only warn (paths found above are skipped).
 							for (const auto& [field, value] : fields.items())
 								if (!(value.is_string() && IsPathField(component, field)))

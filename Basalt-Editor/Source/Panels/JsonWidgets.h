@@ -56,7 +56,7 @@ namespace Basalt {
 
 	// One field of a component or list element: DrawJsonList for a List field, DrawEntityPicker for a list element's entity
 	// field (0 is the entity holding the list), DrawJsonField (with the field's enum options) for anything else. A
-	// component's own entity fields each mean something else by 0, so their callers draw the picker themselves.
+	// component's own entity fields each decide what 0 means, so their callers draw the picker themselves.
 	JsonFieldResult DrawJsonValue(const std::string& name, nlohmann::json& value, const ComponentFieldType& type, const std::map<std::string, std::vector<std::string>>& enumOptions, Scene& scene);
 
 	// A combo of the scene's entities `filter` accepts, labelled `name` and showing `current` (0 as noneLabel; an entity

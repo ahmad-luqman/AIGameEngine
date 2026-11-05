@@ -3,7 +3,7 @@
 The `ROADMAP.md` items grouped into single-session milestones, sorted in order of implementation, with completed
 sessions retained for reference. The order follows the roadmap's priorities (P1 → P2 → P3) and is adjusted so that
 work a later session depends on comes first.
-Updated on 5 November 2026: sessions 1–23 have shipped, and sessions 24–25 are planned.
+Updated on 5 November 2026: sessions 1–24 have shipped, and session 25 is planned.
 
 Size estimates: **S** = a day or less, **M** = a few days, **L** = a week or more.
 

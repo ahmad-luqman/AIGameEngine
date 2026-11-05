@@ -122,7 +122,7 @@ namespace Basalt {
 			auto existing = Characters.find(entity.GetUUID());
 			if (existing != Characters.end())
 			{
-				// Rebuilding (e.g. after a collider change) keeps the character moving.
+				// Rebuilding (e.g. after a new Layer or collider kind) keeps the character moving.
 				previousVelocity = existing->second.Character->GetLinearVelocity();
 				moveVelocity = existing->second.MoveVelocity;
 				// A rebuild in mid-air must not hand out the coyote jump again.

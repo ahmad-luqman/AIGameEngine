@@ -43,9 +43,9 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   `ColliderSettings::SameChildren` say what only a rebuild can apply (Type, IsTrigger, FixedRotation, Layer, other
   children or meshes). Anything else keeps the body and its contacts, and leaves it asleep when no value changed: settings
   through Jolt's setters, colliders through `SwapBodyShape`, which joints hear of through `NotifyShapeChanged` when the center of mass
-  moves, instead of the rebuild a rescale needs (their anchors scale with the body). Static and kinematic bodies wake what
-  rests on them, which Jolt's islands do not link. Joints (`JointNeedsRebuild`), characters (`ApplyCharacterSettings`,
-  `ResizeCharacter`) and ragdolls (`RagdollNeedsRebuild`) follow the same split.
+  moves, instead of the rebuild a rescale needs (their anchors scale with the body). A changed surface or collider on a
+  static or kinematic body wakes what rests on it, which Jolt's islands do not link. Joints (`JointNeedsRebuild`), characters
+  (`ApplyCharacterSettings`, `UpdateCharacter`, `ResizeCharacter`) and ragdolls (`RagdollNeedsRebuild`) follow the same split.
 - **Runtime state lives in systems.** `PhysicsWorld`, `ScriptEngine`, `AudioSystem`, `AnimationSystem` and `ParticleSystem` exist
   only while a scene plays (physics, animation and particles also while it simulates; particles and animation additionally
   have isolated edit-mode Preview systems, `Scene::UpdateParticlePreview`/`UpdateAnimationPreview`, which never write the
@@ -164,7 +164,7 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   to `MeshSource::Animations` directly. List elements declare asset and entity fields as `List[].Field`, at any depth
   (`ForEachFieldValue`), which persistence, moves, validation, thumbnails, prefab references and entity remapping share. A
   list is one value to prefab merges, and 0 in a list element's entity field is the entity holding the list, so a reference
-  that is gone for good there becomes `MissingEntity`, which fails where it is used.
+  whose source entity is gone keeps its ID there and fails where it is used, as in a fresh instance of the file.
 - **Game UI geometry.** `UILayout` is shared by drawing, hit testing, `ui.layout` and viewport handles.
   Rects remain in untransformed canvas units; affine transforms compose through descendants. Clips intersect
   as canvas-aligned scissors (rotated clipping parents use their transformed bounds). Scroll views clip
@@ -179,7 +179,7 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   (`Prefab::ComputeOverrides`, `prefab.overrides`). `Scene/Prefab` merges three ways field by field (objects by key,
   other values whole, float and Euler round trips tolerated); the root's Translation/Rotation are placement, never
   overrides. A merge touches only its own instance and validates data and hierarchy before mutating; references to
-  deleted members keep their reserved IDs, other missing source references fall back to the root or none, and outside
+  deleted members keep their reserved IDs, other missing source references fall back to the root or none (in a list element they stay as the file has them), and outside
   references that collide with source IDs are tagged `External`. Prefab writes (`prefab.create/apply/save`,
   `asset.write`, `asset.refresh`, editor file-watcher reloads) merge into the instances of the edit scene and of the
   scene waiting for prefab editing (also during Play, never into the play copy); `scene.open`/`project.open` merge

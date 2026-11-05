@@ -102,6 +102,14 @@ namespace {
 		}
 	};
 
+	Entity FindNamed(Scene& scene, Entity root, const std::string& name)
+	{
+		for (Entity entity : scene.GetAllEntitiesOrdered())
+			if (entity.GetName() == name && scene.IsDescendantOf(entity, root))
+				return entity;
+		return {};
+	}
+
 	// A value of the field a little from `value`, which a resting crate stays in contact through.
 	json Nudged(const json& value, const ComponentFieldType& type, const std::vector<std::string>* options)
 	{
@@ -734,7 +742,7 @@ TEST_SUITE("Property animation")
 			run("component.set", { { "entity", IdOf(first) }, { "component", "PropertyAnimation" }, { "data", { { "Tracks", tracks } } } });
 			const json applied = run("prefab.apply", { { "entity", IdOf(first) } });
 			REQUIRE(applied.contains("warnings"));
-			CHECK(applied["warnings"].dump().find("references an entity outside the prefab; the prefab keeps its Tracks") != std::string::npos);
+			CHECK(applied["warnings"].dump().find("so Tracks stays as the prefab has it, without this instance's other changes to it") != std::string::npos);
 			Entity fresh = instantiate();
 			const auto& kept = fresh.GetComponent<PropertyAnimationComponent>().Tracks;
 			REQUIRE(kept.size() == 1);
@@ -761,7 +769,7 @@ TEST_SUITE("Property animation")
 		}
 	}
 
-	TEST_CASE("A prefab member deleted under a track fails loudly, and does not turn the track on its holder")
+	TEST_CASE("A prefab member deleted under a track fails loudly, and a repair of the prefab reaches its instances")
 	{
 		TempProject project("PropertyPrefabDeleted");
 		AutomationSession session;
@@ -780,18 +788,91 @@ TEST_SUITE("Property animation")
 		// Delete the lamp from the prefab itself: the instance merges a source without its target.
 		run("prefab.open", { { "path", "Assets/Lamp.bprefab" } });
 		run("entity.destroy", { { "entity", "Lamp" } });
-		run("prefab.save", json::object());
+		const json saved = run("prefab.save", json::object());
+		CHECK(saved.dump().find("references an entity that is not in the prefab") != std::string::npos);
 		run("prefab.close", json::object());
 
 		Entity instance = session.GetScene()->GetEntityByUUID(UUID(instanceId));
 		REQUIRE(instance);
-		const auto& track = instance.GetComponent<PropertyAnimationComponent>().Tracks[0];
-		CHECK(track.Target != 0);
+		const auto track = [&] { return instance.GetComponent<PropertyAnimationComponent>().Tracks[0]; };
+		// Not 0, which would turn the track on its holder, and just what a new instance of the file holds.
+		CHECK(track().Target != 0);
+		const uint64_t fresh = run("prefab.instantiate", { { "path", "Assets/Lamp.bprefab" } })["id"];
+		CHECK(session.GetScene()->GetEntityByUUID(UUID(fresh)).GetComponent<PropertyAnimationComponent>().Tracks[0].Target == track().Target);
 		const glm::vec3 scale = instance.GetTransform().Scale;
 		CHECK_FALSE(PropertyAnimation::Sample(instance, instance.GetComponent<PropertyAnimationComponent>(), 0, error));
-		CHECK(error.find("not in the scene") + error.find("deleted") != 2 * std::string::npos);
+		CHECK(error.find("not in the scene") != std::string::npos);
 		CHECK(instance.GetTransform().Scale == scale);
 		REQUIRE_FALSE(GetAnimationWarnings(instance).empty());
+		// Nobody edited this instance, so nothing stands between it and a repair of the prefab.
+		CHECK(run("prefab.overrides", { { "entity", instanceId } })["overrides"].empty());
+
+		run("prefab.open", { { "path", "Assets/Lamp.bprefab" } });
+		Entity opened = session.GetScene()->FindEntityByName("Root");
+		Entity bulb = session.GetScene()->CreateEntity("Bulb");
+		session.GetScene()->SetParent(bulb, opened, false);
+		json tracks = ComponentRegistry::Find("PropertyAnimation")->Serialize(opened)["Tracks"];
+		tracks[0]["Target"] = static_cast<uint64_t>(bulb.GetUUID());
+		run("component.set", { { "entity", "Root" }, { "component", "PropertyAnimation" }, { "data", { { "Tracks", tracks } } } });
+		run("prefab.save", json::object());
+		run("prefab.close", json::object());
+
+		instance = session.GetScene()->GetEntityByUUID(UUID(instanceId));
+		REQUIRE(instance);
+		Entity repaired = session.GetScene()->GetEntityByUUID(track().Target);
+		REQUIRE(repaired);
+		CHECK(session.GetScene()->IsDescendantOf(repaired, instance));
+		CHECK(PropertyAnimation::Sample(instance, instance.GetComponent<PropertyAnimationComponent>(), 0, error));
+	}
+
+	TEST_CASE("prefab.apply says when what it writes leaves a track without its entity")
+	{
+		TempProject project("PropertyPrefabApplyDeleted");
+		AutomationSession session;
+		CommandRegistry commands;
+		const auto run = [&](const std::string& command, const json& params) { return BasaltTest::Run(commands, session, command, params); };
+		auto scene = session.GetScene();
+		Entity root = scene->CreateEntity("Root");
+		Entity lamp = scene->CreateEntity("Lamp");
+		scene->SetParent(lamp, root, false);
+		std::string error;
+		REQUIRE(PropertyAnimation::Key(root, "Transform", "Scale", 0, error, lamp.GetUUID()));
+		run("prefab.create", { { "entity", IdOf(root) }, { "path", "Assets/Lamp.bprefab" } });
+		const uint64_t instanceId = run("prefab.instantiate", { { "path", "Assets/Lamp.bprefab" } })["id"];
+		Entity instance = session.GetScene()->GetEntityByUUID(UUID(instanceId));
+		session.GetScene()->DestroyEntity(session.GetScene()->GetEntityByUUID(instance.GetComponent<PropertyAnimationComponent>().Tracks[0].Target));
+		const json applied = run("prefab.apply", { { "entity", instanceId } });
+		CHECK(applied.dump().find("PropertyAnimation.Tracks[0].Target references an entity that is not in the prefab") != std::string::npos);
+	}
+
+	TEST_CASE("prefab.apply leaves out what a component new to the prefab cannot take")
+	{
+		TempProject project("PropertyPrefabApplyNew");
+		AutomationSession session;
+		CommandRegistry commands;
+		const auto run = [&](const std::string& command, const json& params) { return BasaltTest::Run(commands, session, command, params); };
+		auto scene = session.GetScene();
+		Entity root = scene->CreateEntity("Root");
+		Entity lamp = scene->CreateEntity("Lamp");
+		scene->SetParent(lamp, root, false);
+		lamp.AddComponent<PointLightComponent>();
+		run("prefab.create", { { "entity", IdOf(root) }, { "path", "Assets/Lamp.bprefab" } });
+		const uint64_t instanceId = run("prefab.instantiate", { { "path", "Assets/Lamp.bprefab" } })["id"];
+		Entity instance = session.GetScene()->GetEntityByUUID(UUID(instanceId));
+		Entity outside = session.GetScene()->CreateEntity("Outside");
+		outside.AddComponent<PointLightComponent>();
+		Entity member;
+		for (Entity candidate : session.GetScene()->GetAllEntitiesOrdered())
+			if (candidate.GetName() == "Lamp" && session.GetScene()->IsDescendantOf(candidate, instance))
+				member = candidate;
+		REQUIRE(member);
+		std::string error;
+		REQUIRE(PropertyAnimation::Key(instance, "PointLight", "Intensity", 0, error, member.GetUUID()));
+		REQUIRE(PropertyAnimation::Key(instance, "PointLight", "Intensity", 0, error, outside.GetUUID()));
+		const json applied = run("prefab.apply", { { "entity", instanceId } });
+		CHECK(applied["warnings"].dump().find("so 1 of 2 Tracks stayed out of it") != std::string::npos);
+		const uint64_t fresh = run("prefab.instantiate", { { "path", "Assets/Lamp.bprefab" } })["id"];
+		CHECK(session.GetScene()->GetEntityByUUID(UUID(fresh)).GetComponent<PropertyAnimationComponent>().Tracks.size() == 1);
 	}
 
 	TEST_CASE("prefab.create says what lies outside the prefab")
@@ -807,7 +888,7 @@ TEST_SUITE("Property animation")
 		REQUIRE(PropertyAnimation::Key(root, "PointLight", "Intensity", 0, error, outside.GetUUID()));
 		const json created = BasaltTest::Run(commands, session, "prefab.create", { { "entity", IdOf(root) }, { "path", "Assets/Root.bprefab" } });
 		REQUIRE(created.contains("warnings"));
-		CHECK(created["warnings"].dump().find("'Root' PropertyAnimation.Tracks[0].Target references an entity outside the prefab") != std::string::npos);
+		CHECK(created["warnings"].dump().find("'Root' PropertyAnimation.Tracks[0].Target references an entity that is not in the prefab") != std::string::npos);
 
 		// Applying what the file already says is no news.
 		const json applied = BasaltTest::Run(commands, session, "prefab.apply", { { "entity", IdOf(root) } });
@@ -816,11 +897,11 @@ TEST_SUITE("Property animation")
 		// Saving from an open prefab says the same.
 		BasaltTest::Run(commands, session, "prefab.open", { { "path", "Assets/Root.bprefab" } });
 		const json saved = BasaltTest::Run(commands, session, "prefab.save", json::object());
-		CHECK(saved.dump().find("references an entity outside the prefab") != std::string::npos);
+		CHECK(saved.dump().find("references an entity that is not in the prefab") != std::string::npos);
 		BasaltTest::Run(commands, session, "prefab.close", json::object());
 	}
 
-	TEST_CASE("project.validate reports a track whose entity is not in its scene")
+	TEST_CASE("project.validate reports a keyed track whose entity is not there")
 	{
 		TempProject project("PropertyValidate");
 		AutomationSession session;
@@ -828,13 +909,43 @@ TEST_SUITE("Property animation")
 		const auto run = [&](const std::string& command, const json& params) { return BasaltTest::Run(commands, session, command, params); };
 		Entity timeline = session.GetScene()->CreateEntity("Timeline");
 		run("scene.save", { { "path", "Assets/Tracks.bscene" } });
-		const int errors = run("project.validate", json::object())["errors"];
+		const json before = run("project.validate", json::object());
+		const auto setTrack = [&](const json& keys) {
+			std::string error;
+			REQUIRE(ComponentRegistry::AddOrPatch(timeline, "PropertyAnimation", { { "Tracks", { { { "Component", "PointLight" }, { "Field", "Intensity" }, { "Target", 424242 }, { "Keys", keys } } } } }, error));
+			run("scene.save", json::object());
+		};
+		// An empty track does nothing, so it cannot fail: nothing to report, as in scene.info.
+		setTrack(json::array());
+		CHECK(run("project.validate", json::object())["errors"] == before["errors"]);
+		setTrack({ { { "Time", 0 } } });
+		const json report = run("project.validate", json::object());
+		CHECK(report["errors"].get<int>() == before["errors"].get<int>() + 1);
+		CHECK(report.dump().find("PropertyAnimation.Tracks[0].Target names entity 424242") != std::string::npos);
+
+		// In a prefab file it is a warning: prefab.create said so, and only a scene shows what an instance really finds.
+		std::string error;
+		run("scene.new", json::object());
+		Entity root = session.GetScene()->CreateEntity("Root");
+		Entity outside = session.GetScene()->CreateEntity("Outside");
+		outside.AddComponent<PointLightComponent>();
+		REQUIRE(PropertyAnimation::Key(root, "PointLight", "Intensity", 0, error, outside.GetUUID()));
+		run("prefab.create", { { "entity", IdOf(root) }, { "path", "Assets/Root.bprefab" } });
+		const json withPrefab = run("project.validate", json::object());
+		CHECK(withPrefab["errors"].get<int>() == before["errors"].get<int>() + 1);
+		CHECK(withPrefab["warnings"].get<int>() > report["warnings"].get<int>());
+	}
+
+	TEST_CASE("assert.component accepts what component.get returned, stale entities included")
+	{
+		TempProject project("PropertyAssert");
+		AutomationSession session;
+		CommandRegistry commands;
+		Entity timeline = session.GetScene()->CreateEntity("Timeline");
 		std::string error;
 		REQUIRE(ComponentRegistry::AddOrPatch(timeline, "PropertyAnimation", { { "Tracks", { { { "Component", "PointLight" }, { "Field", "Intensity" }, { "Target", 424242 } } } } }, error));
-		run("scene.save", json::object());
-		const json report = run("project.validate", json::object());
-		CHECK(report["errors"] == errors + 1);
-		CHECK(report.dump().find("PropertyAnimation.Tracks[0].Target names entity 424242") != std::string::npos);
+		const json tracks = BasaltTest::Run(commands, session, "component.get", { { "entity", "Timeline" }, { "component", "PropertyAnimation" } })["Tracks"];
+		BasaltTest::Run(commands, session, "assert.component", { { "entity", "Timeline" }, { "component", "PropertyAnimation" }, { "fields", { { "Tracks", tracks } } } });
 	}
 
 	TEST_CASE("Asset tracks step through project assets and persist like any asset field")
@@ -902,8 +1013,7 @@ TEST_SUITE("Property animation")
 		entity.AddComponent<MaterialComponent>();
 		std::string error;
 		const auto keyed = [&](const char* field, const json& key) {
-			const bool valid = ComponentRegistry::AddOrPatch(entity, "PropertyAnimation", { { "Tracks", { { { "Component", "Material" }, { "Field", field }, { "Keys", { key } } } } } }, error);
-			return valid;
+			return ComponentRegistry::AddOrPatch(entity, "PropertyAnimation", { { "Tracks", { { { "Component", "Material" }, { "Field", field }, { "Keys", { key } } } } } }, error);
 		};
 		REQUIRE(PropertyAnimation::ResolveField("Material", "AlbedoMap")->IsAsset);
 		CHECK_FALSE(PropertyAnimation::ResolveField("Material", "AlbedoColor")->IsAsset);
@@ -1014,16 +1124,6 @@ TEST_SUITE("Property animation")
 		json flat = { { "Field", 1 } };
 		CHECK(ForEachFieldValue(flat, "Field", [](json& value, const std::string& label) { CHECK(label == "Field"); value = 2; }));
 		CHECK(flat["Field"] == 2);
-	}
-}
-
-namespace {
-	Entity FindNamed(Scene& scene, Entity root, const std::string& name)
-	{
-		for (Entity entity : scene.GetAllEntitiesOrdered())
-			if (entity.GetName() == name && scene.IsDescendantOf(entity, root))
-				return entity;
-		return {};
 	}
 }
 

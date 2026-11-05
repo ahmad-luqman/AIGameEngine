@@ -1210,11 +1210,12 @@ reads back and saves as the same text.
 
 `Target` is the entity a track animates; 0, the default, is the entity holding the timeline. `component.set` and
 `animation.key {target}` also take an entity name there. Prefab and scene copies follow it like any entity reference: a
-copied tree animates its own members, and a member deleted from its prefab leaves the track failing rather than animating
-the entity holding it. A sample fails, naming the track, when the entity or its component is not there; the inspector and
-`scene.info` warn about such tracks, and `project.validate` reports a `Target` missing from its scene as an error. Tracks
-are one value to prefab merges: `prefab.apply` keeps the prefab's `Tracks` when one of the instance's aims outside the
-prefab, and says so. Components are patched in order of target ID, then name.
+copied tree animates its own members, and a member deleted from its prefab leaves the track failing, as it does in a new
+instance, until the prefab or the track is repaired. A sample fails, naming the track, when the entity or its component is
+not there; the inspector and `scene.info` warn about such tracks, and `project.validate` reports a keyed track whose
+`Target` is not in its scene, as an error in a scene and a warning in a prefab file. Tracks are one value to prefab merges:
+when one of an instance's aims outside the prefab, `prefab.apply` leaves `Tracks` as the prefab has it, or if the prefab has
+no `PropertyAnimation` yet leaves that track out, and says so. Components are patched in order of target ID, then name.
 
 ```lua
 -- A switch dims every lamp it names, and shows it on its own panel.
@@ -1251,14 +1252,16 @@ and multi-value booleans and enums are excluded. A key's `Text` must be empty on
 its `Asset` on fields other than asset references, so a string key on a boolean track is an error rather than `false`.
 
 Physics configuration can be animated too, field by field: the fields a body, character, joint or ragdoll takes in place
-(`liveFields` in `component.types`), so playing a track keeps contacts and joints. A value that changes wakes the body, and
-what rests on a static or kinematic one; a held key changes nothing. A resting crate whose `Friction` or
+(`liveFields` in `component.types`), so playing a track keeps contacts and joints. A changed value wakes a dynamic or
+kinematic body, and a changed surface or collider on a static or kinematic body also wakes what rests on it; a held key
+changes nothing. A resting crate whose `Friction` or
 `BoxCollider.HalfExtents` animates raises no `OnCollisionEnd` while it stays touching, and a floor that turns to ice sets
 what sleeps on it sliding. The rest (`RigidBody.Type`, `IsTrigger`, `FixedRotation` and `Layer`, a joint's `Type`, `UseLimits`,
 bodies, anchors and axes, `CharacterController.Layer`, a mesh collider's `Mesh`, `MeshIndex` and `Convex`, a ragdoll's
 `Enabled` and structure) would rebuild the object or start or end the ragdoll, so a track on them is refused with the reason. The same in-place path serves `SetComponent`: writing a live field
 from a script keeps contacts too, and writing the values a component already has does nothing, not even waking the body.
-A `Ragdoll.MotorStrength` track ends a fade `SetRagdollMotorStrength` started, like any write to it. Animate Transform on
+A `Ragdoll.MotorStrength` track that changes the value ends a fade `SetRagdollMotorStrength` started, like any write of a
+new value. Animate Transform on
 a kinematic rigid body to move a physics platform or door.
 
 Keys use strictly increasing normalized Time in [0,1], with a maximum of 256 keys per track and 64

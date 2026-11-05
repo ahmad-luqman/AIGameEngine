@@ -21,7 +21,7 @@ the rebuild order shows in the hash), changes a joint's axis and a character's c
 
 After the original checkpoints, a Lua fixture spawns a jointed compound-body chain inside a trigger.
 Its script creations (`OnCreate`) and trigger enter/exit callbacks fold their order into a marker transform; trigger callbacks
-spawn additional scripted, jointed bodies. Further checkpoints enable collisions, rebuild colliders,
+spawn additional scripted, jointed bodies. Further checkpoints enable collisions while resizing the trigger in place, rebuild colliders,
 remove connected bodies and move the trigger away while waking the survivors. Thus hashes check both
 physics state and callback order, with assertions that the callbacks actually ran.
 
