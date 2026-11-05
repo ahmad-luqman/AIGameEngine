@@ -10,7 +10,6 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <limits>
 
 namespace Basalt {
 
@@ -169,19 +168,19 @@ namespace Basalt {
 			std::span<const FabrikJointLimit> Limits;
 			std::span<const float> Lengths;
 			std::span<const glm::vec3> Animated;
-			std::vector<glm::vec3>& Points;
+			std::span<glm::vec3> Points;
 			glm::vec3 Target;
 			// Shorter vectors have no direction to read.
-			float MinLength = 0;
-			float Tolerance = 0;
+			float MinLength;
+			float Tolerance;
 
 			std::vector<glm::vec3> Axes = {};
 			// The rotations that brought the end closest to the target.
 			std::vector<glm::quat> Best = {};
-			float BestError = std::numeric_limits<float>::max();
+			float BestError = 0;
 
 			size_t Bones() const { return Limits.size(); }
-			uint32_t End() const { return Joints.back(); }
+			float Error() const { return glm::length(Position(Globals, Joints.back()) - Target); }
 
 			void Limit(size_t i)
 			{
@@ -190,8 +189,7 @@ namespace Basalt {
 					Pose.Nodes[joint].Rotation = LimitRotation(Pose.Nodes[joint].Rotation, Source.Nodes[joint].Rotation, Axes[i], Limits[i]);
 			}
 
-			// Turns `joint` so what it carries toward `toward` lies on that direction; nothing when either has no direction
-			// (NaN lengths included: a pass composes without checking, so nothing not finite may turn a joint).
+			// Turns `joint` so what it carries toward `toward` lies on that direction; nothing when either has no direction.
 			void Turn(uint32_t joint, const glm::vec3& carried, const glm::vec3& toward)
 			{
 				const float carriedLength = glm::length(carried), towardLength = glm::length(toward);
@@ -251,7 +249,7 @@ namespace Basalt {
 
 			bool TakeIfCloser()
 			{
-				const float error = glm::length(Position(Globals, End()) - Target);
+				const float error = Error();
 				if (!(error < BestError))
 					return false;
 				TakeBest(error);
@@ -271,10 +269,11 @@ namespace Basalt {
 				Best.resize(Bones());
 				for (size_t i = 0; i < Bones(); i++)
 					Axes[i] = RestBoneAxis(Source, Joints[i], Joints[i + 1]);
-				// The first pass only brings the animated pose inside the limits, which a pose at its target needs too. It is
-				// kept whatever its error says (a target far enough away has none that compares), so the result is inside them.
+				// The first pass brings the animated pose inside the limits, which a pose at its target needs too (and bends a
+				// straight chain toward the pole). It is kept whatever its error says (a target far enough away has none that
+				// compares), so the result is inside them.
 				ForwardPass();
-				TakeBest(glm::length(Position(Globals, End()) - Target));
+				TakeBest(Error());
 				for (uint32_t iteration = 0; iteration < FabrikMaxIterations && BestError > Tolerance; iteration++)
 				{
 					Points.back() = Target;
@@ -292,7 +291,7 @@ namespace Basalt {
 					for (size_t i = Bones(); i-- > 0;)
 					{
 						const glm::vec3 origin = Position(Globals, Joints[i]);
-						Turn(Joints[i], Position(Globals, End()) - origin, Target - origin);
+						Turn(Joints[i], Position(Globals, Joints.back()) - origin, Target - origin);
 						Limit(i);
 						for (size_t below = i; below < Joints.size(); below++)
 							ComposeAnimationNode(Source, Pose, Joints[below], Globals);
@@ -592,7 +591,7 @@ namespace Basalt {
 			// A straight chain stays straight under FABRIK's passes (it folds along its line), so one whose end is not already
 			// at the target first bends its inner joints slightly toward the pole.
 			const glm::vec3 line = points.back() - root;
-			bool straight = glm::length(points.back() - target) > tolerance && glm::length(line) > 1e-6f * reach;
+			bool straight = !request.Settled && glm::length(points.back() - target) > tolerance && glm::length(line) > 1e-6f * reach;
 			for (size_t i = 1; straight && i < bones; i++)
 				straight = glm::length(glm::cross(points[i] - root, line)) <= 1e-4f * reach * glm::length(line);
 			if (straight)

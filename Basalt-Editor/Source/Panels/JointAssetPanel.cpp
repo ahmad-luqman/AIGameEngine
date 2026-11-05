@@ -4,7 +4,6 @@
 #include "FileDialogs.h"
 
 #include "Basalt/Asset/AssetManager.h"
-#include "Basalt/Automation/AutomationSession.h"
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Project/Project.h"
@@ -16,12 +15,17 @@
 
 namespace Basalt {
 
+	namespace {
+		constexpr const char* FileDeletedMessage = "The file was deleted: Save writes it again.";
+	}
+
 	void PreviewModel::Set(const std::string& path)
 	{
 		// File changes and moves name files in this form.
 		m_Path = path.empty() ? std::string() : FileSystem::NormalizeGeneric(path);
 		m_Input = m_Path;
 		m_Error.clear();
+		m_DialogError.clear();
 		m_Source = m_Path.empty() ? nullptr : AssetManager::GetMesh(m_Path);
 		if (!m_Path.empty() && !m_Source)
 			m_Error = "Cannot load the model: " + AssetManager::GetError(m_Path);
@@ -29,7 +33,9 @@ namespace Basalt {
 
 	void PreviewModel::OnFilesChanged(const std::vector<FileChange>& changes)
 	{
-		if (!m_Path.empty() && std::ranges::any_of(changes, [&](const FileChange& change) { return change.Path == m_Path; }))
+		// A model reloads with its buffers and images too.
+		const auto affected = [&](const FileChange& change) { return change.Path == m_Path || (m_Source && std::ranges::find(m_Source->ExternalFiles, change.Path) != m_Source->ExternalFiles.end()); };
+		if (!m_Path.empty() && std::ranges::any_of(changes, affected))
 			Set(m_Path);
 	}
 
@@ -58,20 +64,16 @@ namespace Basalt {
 		{
 			if (ImGui::Button("..."))
 			{
-				std::string error;
-				m_Error.clear();
-				const auto path = FileDialogs::Browse(FileDialogs::Kind::Open, Project::ResolvePath(m_Path), { { "glTF models", "gltf,glb" } }, error);
+				const auto path = FileDialogs::Browse(FileDialogs::Kind::Open, Project::ResolvePath(m_Path), { { "glTF models", "gltf,glb" } }, m_DialogError);
 				if (path)
 					chosen = Project::MakeRelative(*path);
-				else
-					m_Error = error;
 			}
 			ImGui::SameLine();
 		}
 		ImGui::TextUnformatted(label);
 		ImGui::PopID();
-		if (!m_Error.empty())
-			ImGui::TextColored(EditorColors::Warning(), "%s", m_Error.c_str());
+		if (!GetError().empty())
+			ImGui::TextColored(EditorColors::Warning(), "%s", GetError().c_str());
 		if (chosen == m_Path)
 			return false;
 		Set(chosen);
@@ -83,6 +85,7 @@ namespace Basalt {
 		: m_Context(context)
 		, m_Title(title)
 		, m_Models(std::move(models))
+		, m_DiscardPopup(std::string("Discard edits?##") + title)
 	{
 	}
 
@@ -90,8 +93,7 @@ namespace Basalt {
 	bool JointAssetPanel<Asset>::Open(const std::string& requested, std::string& outError)
 	{
 		// Before the checks below: they read a draft that may belong to the project just left.
-		if (IsOpen() && m_Project.lock() != Project::GetActive())
-			CloseForOtherProject();
+		CloseIfProjectChanged();
 		const std::filesystem::path given = FileSystem::PathFromUtf8(requested);
 		const std::string path = FileSystem::NormalizeGeneric(given.is_absolute() ? Project::MakeRelative(given) : requested);
 		if (!Project::GetActive() || !path.starts_with("Assets/") || FileSystem::GetLowercaseExtension(FileSystem::PathFromUtf8(path)) != Asset::Extension)
@@ -108,7 +110,7 @@ namespace Basalt {
 		}
 		if (!m_Draft.Load(path, outError))
 			return false;
-		m_Project = Project::GetActive();
+		m_ProjectDirectory = Project::GetActive()->GetDirectory();
 		m_Error.clear();
 		OnOpened();
 		return true;
@@ -118,16 +120,18 @@ namespace Basalt {
 	void JointAssetPanel<Asset>::Reset()
 	{
 		m_Draft.Close();
-		m_Project.reset();
+		m_ProjectDirectory.clear();
 		m_Error.clear();
-		m_PromptDiscard = false;
 		for (PreviewModel* model : m_Models)
 			model->Set({});
 	}
 
 	template<typename Asset>
-	void JointAssetPanel<Asset>::CloseForOtherProject()
+	void JointAssetPanel<Asset>::CloseIfProjectChanged()
 	{
+		const Ref<Project>& active = Project::GetActive();
+		if (!IsOpen() || (active && active->GetDirectory() == m_ProjectDirectory))
+			return;
 		if (m_Draft.IsDirty())
 		{
 			BS_WARN("Discarded the unsaved edits to '{}': its project closed", m_Draft.GetPath());
@@ -146,12 +150,14 @@ namespace Basalt {
 			return;
 		std::string error;
 		const bool followed = m_Draft.OnFileChanged(error);
-		if (!followed && change->Type == FileChangeType::Removed)
-			m_Error = "The file was deleted: Save writes it again.";
-		else if (!followed && !error.empty())
-			m_Error = "The file changed on disk and cannot be read: " + error;
-		else
+		const bool removed = change->Type == FileChangeType::Removed;
+		// A dirty draft reads nothing, so what it said stays, unless the file it called deleted is back.
+		if (followed || (m_Error == FileDeletedMessage && !removed && error.empty()))
 			m_Error.clear();
+		else if (removed)
+			m_Error = FileDeletedMessage;
+		else if (!error.empty())
+			m_Error = "The file changed on disk and cannot be read: " + error;
 	}
 
 	template<typename Asset>
@@ -165,8 +171,7 @@ namespace Basalt {
 	template<typename Asset>
 	void JointAssetPanel<Asset>::OnImGuiRender()
 	{
-		if (IsOpen() && m_Project.lock() != Project::GetActive())
-			CloseForOtherProject();
+		CloseIfProjectChanged();
 		if (!IsOpen())
 			return;
 		ImGui::SetNextWindowSize(ImVec2(520.0f, 640.0f), ImGuiCond_FirstUseEver);
@@ -183,7 +188,7 @@ namespace Basalt {
 		if (!keepOpen)
 		{
 			if (dirty)
-				m_PromptDiscard = true;
+				ImGui::OpenPopup(m_DiscardPopup.c_str());
 			else
 				Reset();
 		}
@@ -291,10 +296,7 @@ namespace Basalt {
 	template<typename Asset>
 	void JointAssetPanel<Asset>::DrawDiscardPrompt()
 	{
-		if (m_PromptDiscard)
-			ImGui::OpenPopup("Discard edits?");
-		m_PromptDiscard = false;
-		if (ImGui::BeginPopupModal("Discard edits?", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+		if (ImGui::BeginPopupModal(m_DiscardPopup.c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize))
 		{
 			ImGui::Text("Discard the unsaved edits to %s?", m_Draft.GetPath().c_str());
 			if (ImGui::Button("Discard"))

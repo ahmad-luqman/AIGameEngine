@@ -818,7 +818,7 @@ namespace Basalt {
 			const UUID id = entity.GetUUID();
 			// Apart, so a layer's markers can never crowd out the base's gameplay ones.
 			size_t budget = MaxEventsPerFrame, layerBudget = MaxEventsPerFrame;
-			const AnimationEventSink events{ .Entity = id, .Budget = &budget };
+			const AnimationEventSink events{ .Entity = id, .Budget = &budget, .LimitLogged = &playback->EventLimitLogged };
 			if (layered)
 				AdvanceLayers(*playback, component, playback->Paused ? 0.0 : static_cast<double>(seconds), !playback->Paused, { .Entity = id, .Budget = &layerBudget });
 			// Script morph weights fade like IK weights, also while the Animator is paused or stopped.
@@ -1023,9 +1023,9 @@ namespace Basalt {
 					continue;
 				if (budget == 0)
 				{
-					if (!playback.EventLimitLogged)
-						BS_CORE_WARN("Animator '{}': more than {} animation events in one frame; dropping the rest", playback.EntityName, MaxEventsPerFrame);
-					playback.EventLimitLogged = true;
+					if (!*events.LimitLogged)
+						BS_CORE_WARN("Animator '{}'{}: more than {} animation events in one frame; dropping the rest", playback.EntityName, events.Layer.empty() ? std::string() : fmt::format(" layer '{}'", events.Layer), MaxEventsPerFrame);
+					*events.LimitLogged = true;
 					return false;
 				}
 				budget--;
@@ -1534,8 +1534,7 @@ namespace Basalt {
 			LayerState& layer = playback->Layers[i];
 			if (component.Layers[i].OwnParameters)
 			{
-				const std::string& configured = component.Layers[i].StateMachine;
-				const auto graph = layer.Graph ? layer.Graph->Graph : (configured.empty() ? nullptr : AssetManager::GetAnimationGraph(configured));
+				const auto graph = layer.Graph ? layer.Graph->Graph : AssetManager::GetAnimationGraph(component.Layers[i].StateMachine);
 				if (graph && ownLayer.empty() && FindParameter(*graph, name))
 					ownLayer = layer.Name;
 				continue;
@@ -2445,7 +2444,7 @@ namespace Basalt {
 			// Markers fire while the layer shows, as for a blend's clips.
 			AnimationEventSink layerEvents;
 			if (config.Events)
-				layerEvents = { .Entity = events.Entity, .Budget = events.Budget, .Layer = config.Name, .Shown = state.Weight.ShownShare(static_cast<float>(seconds)) };
+				layerEvents = { .Entity = events.Entity, .Budget = events.Budget, .LimitLogged = &state.EventLimitLogged, .Layer = config.Name, .Shown = state.Weight.ShownShare(static_cast<float>(seconds)) };
 			if (Playback* graph = SyncLayerGraph(playback, config, state, component, false))
 				AdvanceLayerGraph(*graph, component, seconds, speed, transitions, layerEvents);
 			else if (resolved.Source == LayerSource::Clip && seconds > 0)
@@ -2494,6 +2493,7 @@ namespace Basalt {
 		LayerState previous = *state;
 		state->ScriptClip = clip;
 		state->Time = 0;
+		state->EventLimitLogged = false;
 		std::string problem;
 		if (!ResolveLayer(*playback, config, *state, component).Shows())
 		{

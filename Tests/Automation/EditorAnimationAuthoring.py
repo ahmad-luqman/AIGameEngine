@@ -121,6 +121,20 @@ def check_joint_assets(call, require, output):
     require(call("editor.joint_map", {"path": path})["open"], "A joint map did not open after a refused listMatches")
     call("editor.joint_map", {"close": True})
 
+    # Reloading the project keeps a draft's unsaved edits; another project closes the draft, which belonged to this one.
+    directory = call("project.info")["directory"]
+    require(call("editor.joint_map", {"path": path, "listMatches": True})["dirty"], "listMatches left the draft clean")
+    call("project.open", {"path": directory})
+    call("editor.window_screenshot", {"path": str(Path(output, "joint-map-reloaded.png"))})
+    require(call("editor.joint_map", {})["dirty"], "Reloading the project dropped the draft's edits")
+    other = Path(output, "OtherProject")
+    if not other.exists():
+        call("project.create", {"path": str(other), "name": "Other"})
+    call("project.open", {"path": str(other)})
+    call("editor.window_screenshot", {"path": str(Path(output, "joint-map-closed.png"))})
+    require(not call("editor.joint_map", {})["open"], "A draft outlived its project")
+    call("project.open", {"path": directory})
+
     # The same report without the editor, from saved files.
     matched = call("animator.match_joints", {"source": "Assets/MixamoRig.gltf", "target": "Assets/UnrealRig.gltf", "jointMap": path})
     require(any(joint["target"] == "clavicle_l" and joint["match"] == "joint map" and joint["offset"] == [0, 0, 25] for joint in matched["joints"]), f"animator.match_joints missed the pair: {matched}")

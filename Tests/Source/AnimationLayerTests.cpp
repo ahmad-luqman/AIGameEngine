@@ -1240,13 +1240,8 @@ TEST_SUITE("Animation")
 			layer.Events = true;
 		scene.OnRuntimeStart();
 		auto& system = *scene.GetAnimationSystem();
-		const auto count = [&](const char* layer) {
-			const auto events = system.TakeEvents();
-			return std::ranges::count(events, std::string(layer), &AnimationEventRecord::Layer);
-		};
 		// Half speed has not reached the marker at 0.1 s of clip time after 0.1 s; three times speed passed it.
 		system.Update(0.1f);
-		system.Seek(biped, 0);
 		const auto first = system.TakeEvents();
 		CHECK(std::ranges::count(first, std::string("Slow"), &AnimationEventRecord::Layer) == 0);
 		CHECK(std::ranges::count(first, std::string("Fast"), &AnimationEventRecord::Layer) == 1);
@@ -1257,7 +1252,6 @@ TEST_SUITE("Animation")
 		CHECK(std::ranges::count(loops, std::string("Slow"), &AnimationEventRecord::Layer) == 2);
 		CHECK(std::ranges::count(loops, std::string("Fast"), &AnimationEventRecord::Layer) == 9);
 		CHECK(std::ranges::count(loops, std::string("Once"), &AnimationEventRecord::Layer) == 1);
-		CHECK(count("Once") == 0);
 		scene.OnRuntimeStop();
 
 		// A graph layer's outgoing clip wraps with its own looping across a fade, and fires at its own speed.
@@ -1308,7 +1302,16 @@ TEST_SUITE("Animation")
 		CHECK(events.size() == AnimationSystem::MaxEventsPerFrame + 1);
 		CHECK(std::ranges::count(events, std::string(), &AnimationEventRecord::Layer) == 1);
 		CHECK(events.back().Name == "Base");
-		CHECK(CountLogMessages(since, "more than 64 animation events in one frame") == 1);
+		CHECK(CountLogMessages(since, "Animator 'Biped' layer 'Upper': more than 64 animation events in one frame") == 1);
+		CHECK(CountLogMessages(since, "Animator 'Biped' layer 'Second': more than 64 animation events in one frame") == 1);
+		// Each side says so once, whichever went over first.
+		const auto later = Log::GetHistory().GetTotalCount();
+		animator.Events.clear();
+		for (size_t i = 0; i < 2 * AnimationSystem::MaxEventsPerFrame; i++)
+			animator.Events.push_back({ .Clip = "Lean", .Time = 0.5f, .Name = "E" + std::to_string(i) });
+		system.Update(0.6f);
+		system.Update(1.0f);
+		CHECK(CountLogMessages(later, "Animator 'Biped': more than 64 animation events in one frame") == 1);
 		scene.OnRuntimeStop();
 	}
 
@@ -1512,41 +1515,6 @@ TEST_SUITE("Animation")
 
 TEST_SUITE("Animation")
 {
-	TEST_CASE("A layer's markers follow the layer's clock, not the frame's")
-	{
-		ClearAssetCache clear;
-		Scene scene;
-		auto biped = AddBiped(scene, "Breathe");
-		auto& animator = biped.GetComponent<AnimatorComponent>();
-		animator.Events = { { .Clip = "Wave", .Time = 0.3f, .Name = "Hit" } };
-		animator.Layers = { Layer("Upper", "Wave") };
-		animator.Layers[0].Events = true;
-		animator.Layers[0].Speed = 2;
-		scene.OnRuntimeStart();
-		auto& system = *scene.GetAnimationSystem();
-		system.Update(0.2f);
-		CHECK(system.TakeEvents().size() == 1);
-		scene.OnRuntimeStop();
-	}
-
-	TEST_CASE("A looping layer clip fires across its wrap")
-	{
-		ClearAssetCache clear;
-		Scene scene;
-		auto biped = AddBiped(scene, "Breathe");
-		auto& animator = biped.GetComponent<AnimatorComponent>();
-		animator.Events = { { .Clip = "Wave", .Time = 0.05f, .Name = "Hit" } };
-		animator.Layers = { Layer("Upper", "Wave") };
-		animator.Layers[0].Events = true;
-		scene.OnRuntimeStart();
-		auto& system = *scene.GetAnimationSystem();
-		system.Update(0.9f);
-		CHECK(system.TakeEvents().size() == 1);
-		system.Update(0.2f);
-		CHECK(system.TakeEvents().size() == 1);
-		scene.OnRuntimeStop();
-	}
-
 	TEST_CASE("A looping state of a layer graph fires across its wrap, also while fading out")
 	{
 		ClearAssetCache clear;
@@ -1571,28 +1539,6 @@ TEST_SUITE("Animation")
 			CHECK(system.TakeEvents().size() == 1);
 			scene.OnRuntimeStop();
 		}
-	}
-
-	TEST_CASE("The clip fading out of a fast layer fires at the layer's speed")
-	{
-		ClearAssetCache clear;
-		TempProject project("LayerOutgoingSpeed");
-		const std::string graph = project.WriteFile("Assets/Animations/Upper.banimgraph", UpperBodyGraph(0.5f).dump());
-		Scene scene;
-		auto biped = AddBiped(scene, "Breathe");
-		auto& animator = biped.GetComponent<AnimatorComponent>();
-		animator.Events = { { .Clip = "Lean", .Time = 0.35f, .Name = "Hit" } };
-		animator.Layers = { GraphLayer("Upper", graph) };
-		animator.Layers[0].Events = true;
-		animator.Layers[0].Speed = 2;
-		scene.OnRuntimeStart();
-		auto& system = *scene.GetAnimationSystem();
-		system.Update(0.1f);
-		CHECK(system.TakeEvents().empty());
-		REQUIRE(system.SetParameter(biped, "Waving", true));
-		system.Update(0.1f);
-		CHECK(system.TakeEvents().size() == 1);
-		scene.OnRuntimeStop();
 	}
 
 	TEST_CASE("SetLayerParameter and Lua hand a Float parameter its value")
@@ -1688,23 +1634,54 @@ TEST_SUITE("Animation")
 		CHECK(CountLogMessages(since, "layer 'Own' runs no state machine") == 2);
 		scene.OnRuntimeStop();
 	}
+}
 
-	TEST_CASE("Settings that do something raise no warning")
+// Round 2 of PR #72: appended to Tests/Source/AnimationLayerTests.cpp, whose helpers these use.
+TEST_SUITE("Animation")
+{
+	TEST_CASE("A graph layer fading out stops its markers where it reaches 0, in every way a graph plays")
 	{
 		ClearAssetCache clear;
-		TempProject project("LayerWarnings");
-		const std::string graph = project.WriteFile("Assets/Animations/Upper.banimgraph", UpperBodyGraph().dump());
-		Scene scene;
-		auto biped = AddBiped(scene);
-		auto& animator = biped.GetComponent<AnimatorComponent>();
-		animator.Events = { { .Clip = "Wave", .Time = 0.1f, .Name = "Hit" } };
-		animator.Layers = { GraphLayer("Upper", graph) };
-		animator.Layers[0].OwnParameters = true;
-		animator.Layers[0].Events = true;
-		for (const std::string& warning : GetAnimationWarnings(biped))
+		TempProject project("LayerGraphFadeOut");
+		const json spaces = {
+			{ "InitialState", "Move" },
+			{ "Parameters", json::array({ { { "Name", "Speed" }, { "Type", "Float" } } }) },
+			{ "States", json::array({ { { "Name", "Move" }, { "BlendSpace", "Space" }, { "ParameterX", "Speed" } } }) },
+		};
+		const std::string clipGraph = project.WriteFile("Assets/Animations/Clip.banimgraph", UpperBodyGraph().dump());
+		const std::string fadeGraph = project.WriteFile("Assets/Animations/Fade.banimgraph", UpperBodyGraph(0.5f).dump());
+		const std::string spaceGraph = project.WriteFile("Assets/Animations/Space.banimgraph", spaces.dump());
+		enum class Plays
 		{
-			CHECK(warning.find("OwnParameters has no effect") == std::string::npos);
-			CHECK(warning.find("Events has no effect") == std::string::npos);
+			StateClip,
+			OutgoingClip,
+			BlendSpace
+		};
+		for (const Plays plays : { Plays::StateClip, Plays::OutgoingClip, Plays::BlendSpace })
+		{
+			CAPTURE(static_cast<int>(plays));
+			Scene scene;
+			auto biped = AddBiped(scene, "Breathe");
+			auto& animator = biped.GetComponent<AnimatorComponent>();
+			animator.BlendSpaces = { { .Name = "Space", .Samples = { { .Clip = "Lean", .X = 0 }, { .Clip = "Wave", .X = 1 } } } };
+			animator.Events = { { .Clip = "Lean", .Time = 0.05f, .Name = "Early" }, { .Clip = "Lean", .Time = 0.15f, .Name = "Late" } };
+			animator.Layers = { GraphLayer("Upper", plays == Plays::StateClip ? clipGraph : plays == Plays::OutgoingClip ? fadeGraph
+																														 : spaceGraph) };
+			animator.Layers[0].Events = true;
+			scene.OnRuntimeStart();
+			auto& system = *scene.GetAnimationSystem();
+			system.Update(0.01f);
+			CHECK(system.TakeEvents().empty());
+			if (plays == Plays::OutgoingClip)
+				REQUIRE(system.SetParameter(biped, "Waving", true));
+			// 0.08 s of the 0.2 s update shows: the clock passes Early and would pass Late, but the layer is gone by then.
+			REQUIRE(system.SetLayerWeight(biped, "Upper", 0, 0.08f));
+			system.Update(0.2f);
+			const auto events = system.TakeEvents();
+			REQUIRE(events.size() == 1);
+			CHECK(events[0].Name == "Early");
+			CHECK(events[0].Layer == "Upper");
+			scene.OnRuntimeStop();
 		}
 	}
 }

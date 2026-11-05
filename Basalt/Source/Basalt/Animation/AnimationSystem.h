@@ -48,8 +48,10 @@ namespace Basalt {
 	struct AnimationEventSink
 	{
 		UUID Entity = 0;
-		// What the Animator may still deliver this frame; null fires nothing.
+		// What this sink's side (the base, or the layers together) may still deliver this frame; null fires nothing.
 		size_t* Budget = nullptr;
+		// Set once a marker was dropped, so it is said once.
+		bool* LimitLogged = nullptr;
 		// Empty for the base playback.
 		std::string_view Layer;
 		// The share of this update whose clock movement fires markers: a layer fading out to 0 stops firing where it gets there.
@@ -426,6 +428,8 @@ namespace Basalt {
 			std::string Problem;
 			std::string ConfigProblem;
 			std::string RootProblem;
+			// This layer's markers passed the budget, and that was said (until PlayLayer).
+			bool EventLimitLogged = false;
 		};
 		// Runtime state of one IK chain, matched to its configuration by name every update.
 		struct IKChainState

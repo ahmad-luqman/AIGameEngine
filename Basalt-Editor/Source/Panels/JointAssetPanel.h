@@ -7,14 +7,14 @@
 
 #include <nlohmann/json.hpp>
 
-#include <memory>
+#include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace Basalt {
 
 	class MeshSource;
-	class Project;
 
 	// A model named in a joint asset's window, to show its joints: it belongs to the window (the file holds names only).
 	class PreviewModel
@@ -29,14 +29,15 @@ namespace Basalt {
 		bool Draw(const char* label);
 
 		const std::string& GetPath() const { return m_Path; }
-		// Why the model cannot show (it did not load, or its file dialog failed).
-		const std::string& GetError() const { return m_Error; }
+		// Why the model cannot show (it did not load), else why its file dialog failed.
+		const std::string& GetError() const { return m_Error.empty() ? m_DialogError : m_Error; }
 		const Ref<MeshSource>& GetSource() const { return m_Source; }
 
 	private:
 		std::string m_Path;
 		std::string m_Input;
 		std::string m_Error;
+		std::string m_DialogError;
 		Ref<MeshSource> m_Source;
 	};
 
@@ -80,8 +81,8 @@ namespace Basalt {
 		JointAssetDraft<Asset> m_Draft;
 
 	private:
-		// A project change closes the draft, and with it any unsaved edits: says so.
-		void CloseForOtherProject();
+		// Another project closes the draft, and with it any unsaved edits: says so. The same project reloaded keeps them.
+		void CloseIfProjectChanged();
 		void Save();
 		void Revert();
 		void DrawToolbar(bool dirty);
@@ -89,10 +90,11 @@ namespace Basalt {
 
 		const char* m_Title;
 		std::vector<PreviewModel*> m_Models;
-		// The project the draft belongs to; another one closes it.
-		std::weak_ptr<Project> m_Project;
+		// Where the draft's project lives: its path means nothing in another one.
+		std::filesystem::path m_ProjectDirectory;
 		std::string m_Error;
-		bool m_PromptDiscard = false;
+		// Two panels draw their prompts side by side, outside their windows, so each needs a popup of its own.
+		std::string m_DiscardPopup;
 	};
 
 }

@@ -57,7 +57,7 @@ namespace Basalt {
 		// Each skeleton's rest pose (its orientations from its reference pose, if any, and the source's then from the pairs'
 		// offsets); both empty when either is not finite.
 		RestPose TargetRest, SourceRest;
-		// Per target node: the Offset of the explicit pair that mapped it, zero otherwise.
+		// Per target node: the finite Offset of the explicit pair that mapped it, zero otherwise.
 		std::vector<glm::vec3> Offsets;
 
 		size_t MappedCount() const;
@@ -85,7 +85,7 @@ namespace Basalt {
 		// is warned about and ignored.
 		RetargetMap BuildMap(const MeshSource& target, const MeshSource& source, const std::vector<AnimationRetargetJoint>& joints, std::vector<std::string>& outWarnings, const RetargetReferences& references = {});
 
-		// The target's joints with a humanoid bone name that `map` leaves unmatched, in node order.
+		// The target's joints with a humanoid bone name that `map` leaves unmatched, by node index.
 		std::vector<std::string> UnmatchedHumanoidBones(const MeshSource& target, const RetargetMap& map);
 
 		// Whether baking `clip` fits MaxClipBakedFloats; the reason otherwise. Cheap (no allocation) for clips well inside

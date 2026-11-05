@@ -290,7 +290,7 @@ costs one view.
   Animation Mask window, and `editor.joint_map {"path":"Assets/Rigs/Mixamo.bjointmap","source":"Assets/Models/Mixamo.gltf","target":"Assets/Models/Hero.gltf"}`
   a joint map in the Joint Map window. Without a model they take those of the first Animator using the file, else the
   selection's. Both return `{open, path, dirty, valid, problem, externalChange, error, joints}` (`joints` is how many entries the
-  file lists); the first adds `{model, modelError, missing}` (listed joints the model lacks), the second
+  draft lists, unsaved edits included); the first adds `{model, modelError, missing}` (listed joints the model lacks), the second
   `{source, target, sourceError, targetError}` and, with both models, `{mapped, unmatchedHumanoidBones, warnings}` read from the
   unsaved pairs. `{"listMatches":true}` adds the automatic matches to the draft and returns
   `listed: {added, pairedElsewhere, overLimit, sharedNames}`. `{"close":true}` discards the draft. Agents edit these files with `asset.write`; a clean draft

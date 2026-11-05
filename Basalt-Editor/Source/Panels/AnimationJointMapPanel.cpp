@@ -31,7 +31,7 @@ namespace Basalt {
 			return nullptr;
 		}
 		const auto& pairs = m_Draft.GetAsset().Joints;
-		if (m_Report && source == m_Report->Source && target == m_Report->Target && pairs == m_Report->Pairs)
+		if (m_Report && source == m_Report->Source.lock() && target == m_Report->Target.lock() && pairs == m_Report->Pairs)
 			return &*m_Report;
 		Report report{ .Pairs = pairs, .Source = source, .Target = target };
 		report.Map = Retargeting::BuildMap(*target, *source, pairs, report.Warnings);
@@ -66,8 +66,10 @@ namespace Basalt {
 		if (ImGui::Button("List Automatic Matches"))
 			if (const auto matched = ListMatches())
 			{
-				const size_t skipped = matched->PairedElsewhere + matched->OverLimit + matched->SharedNames;
-				m_Context.SetStatus(skipped == 0 ? fmt::format("Listed {} automatic matches", matched->Added) : fmt::format("Listed {} automatic matches; skipped {} (a joint another pair names: {}, over the limit: {}, a name two nodes share: {})", matched->Added, skipped, matched->PairedElsewhere, matched->OverLimit, matched->SharedNames), false);
+				std::string status = fmt::format("Listed {} automatic matches", matched->Added);
+				if (matched->Skipped() > 0)
+					status += fmt::format("; skipped {} (a joint another pair names: {}, over the limit: {}, a name two nodes share: {})", matched->Skipped(), matched->PairedElsewhere, matched->OverLimit, matched->SharedNames);
+				m_Context.SetStatus(status, false);
 			}
 		ImGui::EndDisabled();
 		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))

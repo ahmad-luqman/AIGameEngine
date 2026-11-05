@@ -92,6 +92,9 @@ namespace Basalt {
 		// Empty, or one per joint but the last: what each may do. Measured about its bone, the direction of its child at
 		// rest; a joint whose child lies on it has no bone and stays free.
 		std::span<const FabrikJointLimit> Limits;
+		// The target is where the animation already has the end, give or take rounding: a straight chain stays straight, as
+		// the solve is only there to bring the pose inside Limits.
+		bool Settled = false;
 	};
 	// Iterations SolveFabrikIK runs at most, and how close (a fraction of the chain's length) ends them early.
 	inline constexpr uint32_t FabrikMaxIterations = 32;
@@ -100,9 +103,11 @@ namespace Basalt {
 	inline constexpr uint32_t FabrikLimitedSweeps = 32;
 	// Bends every joint but the last (FABRIK, Aristidou and Lasenby 2011) so the last one reaches the target, starting from
 	// the animated pose. Without Limits a target beyond the chain's reach leaves it straight toward the target. With them,
-	// both passes respect the limits, sweeps of single-joint turns (cyclic coordinate descent) follow, and the pose that came
-	// closest wins, so the chain ends inside them, typically within a few percent of its length of a target it can only just
-	// reach. Limits apply at full weight: a lower one blends with the animated rotations, which may lie outside them.
+	// passes place bones backward against the next joint's cone and forward in rotations, limiting each joint; sweeps of
+	// single-joint turns (cyclic coordinate descent) follow, and the pose that came closest wins, so the chain ends inside
+	// them. A target they allow is nearly always reached, but it can fall short: under about 2% of the chain's length for
+	// targets inside the limits and about 7% at their edge, as measured. Limits apply at full weight: a lower one blends with
+	// the animated rotations, which may lie outside them.
 	[[nodiscard]] IKSolveResult SolveFabrikIK(const MeshSource& source, AnimationLocalPose& pose, std::vector<glm::mat4>& globals, const FabrikIKRequest& request);
 
 	// Fills outLimits with what `chain` allows each joint of `joints` but the last (joints as ResolveIKChain fills them for

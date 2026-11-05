@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstddef>
 #include <string>
 #include <vector>
@@ -190,7 +191,13 @@ namespace Basalt {
 		// along; offsets lower down apply after it, in the same fixed axes. On top of ReferenceClip's pose when there is one.
 		glm::vec3 Offset = { 0.0f, 0.0f, 0.0f };
 
-		bool operator==(const AnimationRetargetJoint&) const = default;
+		// Offset by its bits, so a NaN C++ wrote (Retargeting warns about it) equals itself: clip sets compare these every
+		// update, and a pair that never matched would rebuild the set and restart the Animator each time.
+		bool operator==(const AnimationRetargetJoint& other) const
+		{
+			using Bits = std::array<uint32_t, 3>;
+			return Source == other.Source && Target == other.Target && std::bit_cast<Bits>(Offset) == std::bit_cast<Bits>(other.Offset);
+		}
 	};
 
 	// A model whose clips an Animator also plays, retargeted onto the Animator's own skeleton. Joints (at most MaxJoints)

@@ -84,6 +84,8 @@ namespace Basalt {
 			size_t OverLimit = 0;
 			// Left out because a name stands for the first node that has it, and this was not that node.
 			size_t SharedNames = 0;
+
+			size_t Skipped() const { return PairedElsewhere + OverLimit + SharedNames; }
 		};
 		// Lists what `retarget` (built for `map`'s pairs) matched by name or humanoid bone as pairs of `map`, in the target's
 		// node order, so those joints no longer depend on automatic matching.
