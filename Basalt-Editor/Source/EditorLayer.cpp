@@ -688,7 +688,7 @@ namespace Basalt {
 								 return m_AnimationMaskPanel.Describe();
 							 } });
 
-		m_Commands.Register({ "editor.joint_map", "Opens a .bjointmap in the Joint Map window (as double-clicking it in the Content Browser does), between the models given by source and target or else those an Animator or the selection uses for it; listMatches adds the automatic matches to the unsaved draft, and close first closes the window, discarding unsaved edits. Opening another file with unsaved edits fails. Returns {open, path, dirty, valid, problem, externalChange, error, joints (how many pairs), source, target, sourceError, targetError}; with both models {mapped, unmatchedHumanoidBones, warnings}, read from the unsaved pairs; and after listMatches {listed: {added, pairedElsewhere, overLimit, sharedNames}}, what it added and why it left others out. Joint maps are authored with asset.write; animator.match_joints reads the same report from saved files without the editor.", EditorCommandSchemas::JointMap(), [this](AutomationSession&, const nlohmann::json& params) {
+		m_Commands.Register({ "editor.joint_map", "Opens a .bjointmap in the Joint Map window (as double-clicking it in the Content Browser does), between the models given by source and target or else those an Animator or the selection uses for it; listMatches adds the automatic matches to the unsaved draft, and close first closes the window, discarding unsaved edits. Opening another file with unsaved edits fails. Returns {open, path, dirty, valid, problem, externalChange, error, joints (how many pairs), source, target, sourceError, targetError}; with both models {mapped, unmatchedHumanoidBones, warnings}, read from the unsaved pairs; and after listMatches {listed: {added, pairedElsewhere, overLimit, sharedNames}}, what it added and why it left others out. Joint maps are authored with asset.write; animator.match_joints reads the same matching from saved files without the editor.", EditorCommandSchemas::JointMap(), [this](AutomationSession&, const nlohmann::json& params) {
 								 if (params.value("close", false))
 									 m_AnimationJointMapPanel.Reset();
 								 std::string error;
@@ -702,7 +702,11 @@ namespace Basalt {
 									 return m_AnimationJointMapPanel.Describe();
 								 const auto matched = m_AnimationJointMapPanel.ListMatches();
 								 if (!matched)
-									 throw CommandError("listMatches needs an open joint map and both models");
+								 {
+									 const auto& source = m_AnimationJointMapPanel.GetSourceModel();
+									 const auto& target = m_AnimationJointMapPanel.GetTargetModel();
+									 throw CommandError(fmt::format("listMatches needs an open joint map and both models{}{}", source.GetError().empty() ? "" : "; " + source.GetError(), target.GetError().empty() ? "" : "; " + target.GetError()));
+								 }
 								 nlohmann::json state = m_AnimationJointMapPanel.Describe();
 								 state["listed"] = { { "added", matched->Added }, { "pairedElsewhere", matched->PairedElsewhere }, { "overLimit", matched->OverLimit }, { "sharedNames", matched->SharedNames } };
 								 return state;

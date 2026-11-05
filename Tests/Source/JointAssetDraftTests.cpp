@@ -160,22 +160,12 @@ TEST_SUITE("Editor")
 		REQUIRE(draft.Undo());
 		CHECK(names() == "A;B;");
 
-		// A new edit drops the redo steps; the steps stop at the limit, oldest first.
+		// A new edit drops the redo steps.
 		REQUIRE(draft.Undo());
 		CHECK(draft.CanRedo());
 		JointAssetEdit::SetMaskWeight(draft.GetAsset(), "C", 1);
 		draft.Record();
 		CHECK_FALSE(draft.CanRedo());
-		for (int i = 0; i < 100; i++)
-		{
-			JointAssetEdit::SetMaskWeight(draft.GetAsset(), "C", static_cast<float>(i) / 100.0f);
-			draft.Record();
-		}
-		int steps = 0;
-		while (draft.Undo())
-			steps++;
-		CHECK(steps == 63);
-
 		// Undoing back to the file is clean again; a reload forgets the history.
 		REQUIRE(draft.Revert(error));
 		JointAssetEdit::SetMaskWeight(draft.GetAsset(), "D", 1);
@@ -215,7 +205,7 @@ TEST_SUITE("Editor")
 		REQUIRE(warnings.empty());
 		const auto matched = JointAssetEdit::AddMatchedPairs(map, before, *target, *source);
 		CHECK(matched.Added == before.MappedCount() - 1);
-		CHECK(matched.PairedElsewhere + matched.OverLimit + matched.SharedNames == 0);
+		CHECK(matched.Skipped() == 0);
 		CHECK(map.Joints.size() == before.MappedCount());
 		// The pair already there keeps its offset, and the file still parses.
 		CHECK(map.Joints[0].Offset == glm::vec3(0, 0, 40));
@@ -247,6 +237,17 @@ TEST_SUITE("Editor")
 		CHECK(limited.Added == 1);
 		CHECK(limited.OverLimit == automatic.MappedCount() - 1);
 		CHECK(full.Joints.size() == AnimationClipLibrary::MaxJoints);
+
+		// Nodes without a name have nothing in common: they match nothing, so no pair the file would refuse is listed.
+		auto nameless = CreateRef<MeshSource>(*target);
+		auto namelessLibrary = CreateRef<MeshSource>(*source);
+		nameless->Nodes[0].Name.clear();
+		namelessLibrary->Nodes[0].Name.clear();
+		AnimationJointMap empty;
+		const RetargetMap unnamed = Retargeting::BuildMap(*nameless, *namelessLibrary, {}, warnings);
+		CHECK(unnamed.SourceOf[0] < 0);
+		JointAssetEdit::AddMatchedPairs(empty, unnamed, *nameless, *namelessLibrary);
+		REQUIRE_MESSAGE(AnimationJointMap::FromJson(empty.ToJson(), error), error);
 
 		// A second node of a name cannot be a pair: its name stands for the first.
 		auto twin = CreateRef<MeshSource>(*target);

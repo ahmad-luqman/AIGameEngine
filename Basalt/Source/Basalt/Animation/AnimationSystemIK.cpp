@@ -387,7 +387,7 @@ namespace Basalt {
 			if (config.Type == IKChainType::TwoBone)
 				result = SolveTwoBoneIK(source, pose, globals, { .Upper = chain.Joints[0], .Middle = chain.Joints[1], .End = chain.Joints[2], .Target = *chain.Target, .Pole = pole, .EndRotation = chain.Rotation, .Weight = chain.Weight });
 			else if (config.Type == IKChainType::Fabrik)
-				result = SolveFabrikIK(source, pose, globals, { .Joints = chain.Joints, .Target = *chain.Target, .Pole = pole, .EndRotation = chain.Rotation, .Weight = chain.Weight, .Limits = chain.Limits });
+				result = SolveFabrikIK(source, pose, globals, { .Joints = chain.Joints, .Target = *chain.Target, .Pole = pole, .EndRotation = chain.Rotation, .Weight = chain.Weight, .Limits = chain.Limits, .Settled = chain.Settled });
 			else
 			{
 				const float maxAngle = std::isfinite(config.MaxAngle) ? std::clamp(config.MaxAngle, 0.0f, 180.0f) : 0.0f;

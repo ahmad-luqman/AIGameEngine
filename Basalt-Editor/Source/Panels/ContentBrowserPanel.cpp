@@ -1,6 +1,7 @@
 #include "Panels/ContentBrowserPanel.h"
 
 #include "EditorColors.h"
+#include "JointAssetDraft.h"
 #include "Panels/PreviewImage.h"
 #include "Panels/SkippedEntriesNote.h"
 #include "ThumbnailManager.h"
@@ -8,8 +9,6 @@
 #include "Basalt/Automation/EditorCommandSchemas.h"
 #include "Basalt/Asset/AssetKey.h"
 #include "Basalt/Asset/AssetManager.h"
-#include "JointAssetDraft.h"
-
 #include "Basalt/Animation/AnimationJointMap.h"
 #include "Basalt/Animation/AnimationMask.h"
 #include "Basalt/Asset/MaterialAsset.h"
@@ -191,11 +190,16 @@ return %s
 				label = "Joint map name:";
 			ImGui::TextUnformatted(label);
 			ImGui::InputText("##ItemName", &m_NewItemName);
-			// A material's name must already be a safe file name on every platform (no device names such as CON).
 			const bool jointAsset = m_NewItem == NewItem::AnimationMask || m_NewItem == NewItem::JointMap;
 			std::string nameProblem;
-			// asset.write replaces what is there, so the name must be free.
-			const bool valid = jointAsset ? JointAssetEdit::MakeNewAssetPath(m_CurrentDirectory, m_NewItemName, m_NewItem == NewItem::AnimationMask ? AnimationMask::Extension : AnimationJointMap::Extension, nameProblem).has_value() : !m_NewItemName.empty() && m_NewItemName.find_first_of("/\\.:") == std::string::npos && (m_NewItem != NewItem::Material || MaterialAsset::MakeFileName(m_NewItemName) == m_NewItemName);
+			// asset.write replaces what is there, so these names must be free.
+			std::optional<std::string> jointAssetPath;
+			if (jointAsset)
+				jointAssetPath = JointAssetEdit::MakeNewAssetPath(m_CurrentDirectory, m_NewItemName, m_NewItem == NewItem::AnimationMask ? AnimationMask::Extension : AnimationJointMap::Extension, nameProblem);
+			else if (m_NewItem == NewItem::Script && FileSystem::Exists(m_CurrentDirectory / FileSystem::PathFromUtf8(m_NewItemName + ".lua")))
+				nameProblem = "'" + m_NewItemName + ".lua' already exists";
+			// A material's name must already be a safe file name on every platform (no device names such as CON).
+			const bool valid = jointAsset ? jointAssetPath.has_value() : nameProblem.empty() && !m_NewItemName.empty() && m_NewItemName.find_first_of("/\\.:") == std::string::npos && (m_NewItem != NewItem::Material || MaterialAsset::MakeFileName(m_NewItemName) == m_NewItemName);
 			if (!nameProblem.empty())
 				ImGui::TextColored(EditorColors::Warning(), "%s", nameProblem.c_str());
 			ImGui::BeginDisabled(!valid);
@@ -215,15 +219,10 @@ return %s
 					}
 					case NewItem::AnimationMask:
 					case NewItem::JointMap:
-					{
-						const auto path = JointAssetEdit::MakeNewAssetPath(m_CurrentDirectory, m_NewItemName, m_NewItem == NewItem::AnimationMask ? AnimationMask::Extension : AnimationJointMap::Extension, nameProblem);
-						if (!path)
-							m_Context.SetStatus(nameProblem, true);
 						// An empty list is a valid file of either kind.
-						else if (m_Context.Execute("asset.write", { { "path", *path }, { "content", "{ \"Joints\": [] }\n" } }) && OnOpenAsset)
-							OnOpenAsset(*path);
+						if (jointAssetPath && m_Context.Execute("asset.write", { { "path", *jointAssetPath }, { "content", "{ \"Joints\": [] }\n" } }) && OnOpenAsset)
+							OnOpenAsset(*jointAssetPath);
 						break;
-					}
 					case NewItem::Folder:
 					{
 						// Outside the command layer, which would have logged the failure.

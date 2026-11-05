@@ -1373,7 +1373,7 @@ lists the pairs with combo boxes over the joints of a library model and an Anima
 the map, else the selection's), says what those models make of the unsaved pairs (joints mapped, humanoid bones unmatched,
 warnings), and List Automatic Matches adds what name and humanoid matching find to the unsaved draft as pairs, saying what it
 left out (a joint another pair already names, the 256-pair limit, a name two nodes share). `editor.joint_map` opens it
-for agents, and `animator.match_joints` reads the same report from two models and a saved map with no Animator.
+for agents, and `animator.match_joints` reads the same matching from two models and a saved map with no Animator.
 
 Every entry names both joints, and each source and each target appears once (`asset.write` and `project.validate` reject
 other files). The file's pairs follow the entry's own `Joints`: an inline pair overrides every file pair that names one
@@ -1391,8 +1391,9 @@ skeleton's rest orientations as the pose joints turn from; positions keep the re
 scale do not change. A single-frame clip of the matching pose is enough (`{ Mesh = "...", ReferenceClip = "TPose" }`).
 A library with no such frame turns joints by hand instead: a pair's `Offset` (in `Joints` or the `.bjointmap`) is how that
 source joint turns so the library stands like the model at rest, in degrees about the library model's fixed axes (X, then Y,
-then Z), which do not depend on how the rig's joints are oriented. Lifting an A-pose arm 40 degrees to a T-pose is one pair
-(`{ Source = "mixamorig:LeftArm", Target = "upperarm_l", Offset = Vec3(0, 0, 40) }`): joints below turn along, and an offset
+then Z), which do not depend on how the rig's joints are oriented. On a model facing +Z with its left arm on +X, lifting an A-pose arm 40
+degrees to a T-pose is one pair (`{ Source = "mixamorig:LeftArm", Target = "upperarm_l", Offset = Vec3(0, 0, 40) }`; the right
+arm takes -40): joints below turn along, and an offset
 further down applies after its parents', in the same axes. Offsets add to `ReferenceClip`'s pose when both are set. They apply
 only through a pair that took effect (joints matched automatically have none, so list the ones that need one), and an inline
 pair that overrides a map pair replaces its offset too. `animator.retarget` shows a pair's `offset` when it has one.
@@ -1652,12 +1653,15 @@ and, without limits, stretches straight toward targets beyond its reach.
 animation: `SwingAngle` is how far its bone (the direction of its child) may swing away from where the rest pose points it, and
 `TwistMin`..`TwistMax` how far it may turn about the bone. `SwingAngle = 0` keeps the bone on its rest direction, and a twist
 range need not contain 0. At full weight a solved chain stays inside its limits: it bends the joints that still can, stops as
-close as it gets when they put a target out of reach (typically within a few percent of the chain's length of a target it can
-only just reach), and turns an animated pose outside them back inside, even at its target. A lower weight blends the limited
-rotations with the animated ones, which may lie outside. While a chain has no target or no weight the animation plays untouched.
+close as it gets when they put a target out of reach, and turns an animated pose outside them back inside, even at its target.
+A target they allow is nearly always reached, though it can fall short: under about 2% of the chain's length for targets inside
+the limits, about 7% right at their edge, as measured. A lower weight blends the limited rotations with the animated ones, which
+may lie outside, and a later chain on the same joints is not held by them. While a chain has no target or no weight the
+animation plays untouched.
 The end joint is not limited: its target rotation stays exact. A joint whose child lies on it has no bone and stays free, and
 a `JointLimits` entry for a joint the chain does not turn is warned about, as are limits that hold every joint at rest and
-limits on other chain types. Scripts can compare `GetBoneTransform` with the target to see how close a chain came.
+limits on other chain types. Scripts can compare `GetBoneTransform` with the target to see how close a chain came (see Bones:
+outside `OnAnimationEvent` it reads the previous frame's solve).
 
 **Foot locking.** A `FootLock` chain whose joint follows its animation (or the ground: no script or `FollowTarget`
 target) locks once its target (the animated joint, or its ground point) moves slower than `LockSpeed` (default 0.5 m/s)
@@ -1889,7 +1893,7 @@ Clear `StateMachine` to use direct playback. Direct `PlayAnimation`, `CrossFadeA
 reloads.
 
 - `e:SetAnimationParameter(name, value)` sets a declared `Float` (number) or `Bool` (boolean) on the state machine and
-  on every StateMachine layer graph that declares the name; returns true when any of them takes it, false when none does
+  on every StateMachine layer graph that declares the name (`OwnParameters` layers aside); returns true when any of them takes it, false when none does
   (a wrong declared type, unknown parameter, non-finite value, or inactive machine). Nil and values other than numbers
   or booleans raise an argument error.
 - `e:SetAnimationTrigger(name)` latches a `Trigger` (on every graph that declares it, `OwnParameters` layers aside) until a successful transition

@@ -406,7 +406,9 @@ namespace Basalt {
 			std::map<std::string, size_t> sourceBones;
 			for (size_t i = 0; i < source.Nodes.size(); i++)
 			{
-				sourceNames.try_emplace(StripNamespace(source.Nodes[i].Name), i);
+				// Two nodes without a name have nothing in common, and a pair could not name them.
+				if (std::string_view name = StripNamespace(source.Nodes[i].Name); !name.empty())
+					sourceNames.try_emplace(name, i);
 				if (std::string bone = HumanoidBone(source.Nodes[i].Name); !bone.empty())
 					sourceBones.try_emplace(std::move(bone), i);
 			}

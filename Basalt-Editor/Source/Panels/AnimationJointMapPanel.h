@@ -4,7 +4,7 @@
 
 #include "Basalt/Automation/EditorCommandSchemas.h"
 
-#include <optional>
+#include <memory>
 
 namespace Basalt {
 
@@ -35,9 +35,10 @@ namespace Basalt {
 		// What the two models make of the pairs, read again when the pairs or the models change.
 		struct Report
 		{
-			// What it was read from: the models are kept alive, so a reloaded one at the same address cannot pass for them.
+			// What it was read from. Weak, so a closed window keeps no model alive; an expired one, even at the same address,
+			// never matches a reloaded model.
 			std::vector<AnimationRetargetJoint> Pairs;
-			Ref<MeshSource> Source, Target;
+			std::weak_ptr<MeshSource> Source, Target;
 			RetargetMap Map;
 			std::vector<std::string> Warnings;
 			std::vector<std::string> UnmatchedBones;

@@ -1121,7 +1121,8 @@ TEST_SUITE("Retargeting")
 		CHECK(unused.Offsets[upperArm] == glm::vec3(0));
 		CHECK(unused.SourceRest.Rotations[sourceArm] == plain.SourceRest.Rotations[sourceArm]);
 
-		// An offset C++ wrote past validation is said and ignored, rather than baking a clip that is not finite.
+		// An offset no reader lets through (only C++ can write one) is said and ignored, rather than baking a clip that is not
+		// finite.
 		const float nan = std::numeric_limits<float>::quiet_NaN();
 		notes.clear();
 		const RetargetMap bad = Retargeting::BuildMap(*rigs.Target, *library, { { .Source = "mixamorig:LeftArm", .Target = "upperarm_l", .Offset = { 0, nan, 0 } } }, notes);
@@ -1179,6 +1180,21 @@ TEST_SUITE("Retargeting")
 		system.Update(0);
 		CHECK_FALSE(AnimationTest::NearPose(first, pose(), 1e-3f));
 		scene.OnRuntimeStop();
+
+		// A NaN offset written by C++ is the same pair from one update to the next: it does not restart the Animator, whose
+		// clock runs on, and is said once.
+		Scene nanScene;
+		auto nanHero = nanScene.CreateEntity("NanHero");
+		AddHero(nanHero, { { .Source = "mixamorig:LeftArm", .Target = "upperarm_l", .Offset = { std::numeric_limits<float>::quiet_NaN(), 0, 0 } } });
+		const auto since = Log::GetHistory().GetTotalCount();
+		nanScene.OnRuntimeStart();
+		auto& played = *nanScene.GetAnimationSystem();
+		played.Update(0.1f);
+		played.Update(0.1f);
+		played.Update(0.1f);
+		CHECK(played.GetTime(nanHero) == doctest::Approx(0.3f));
+		CHECK(CountLogMessages(since, "Offset is not finite") <= 1);
+		nanScene.OnRuntimeStop();
 
 		// A saved scene keeps the offset.
 		const nlohmann::json saved = ComponentRegistry::Find("Animator")->Serialize(hero);
@@ -1539,5 +1555,38 @@ TEST_SUITE("Retargeting")
 			CHECK_FALSE(AnimationJointMap::FromText(text, error));
 			CHECK(error.find("Joints[0].Offset must be three numbers") != std::string::npos);
 		}
+	}
+}
+
+// Round 2 of PR #72: appended to Tests/Source/RetargetingTests.cpp, whose helpers these use.
+TEST_SUITE("Retargeting")
+{
+	TEST_CASE("animator.match_joints needs a project, and says so")
+	{
+		ClearAssetCache clear;
+		AutomationSession session;
+		CommandRegistry registry;
+		RegisterBuiltinCommands(registry);
+		// Not "cannot load model": the models may be fine, and the project is what to open.
+		CHECK(BasaltTest::RunError(registry, session, "animator.match_joints", { { "source", "Assets/A.gltf" }, { "target", "Assets/B.gltf" } }).find("no project is open") != std::string::npos);
+	}
+
+	TEST_CASE("A root at the skeleton's first node is reported")
+	{
+		ClearAssetCache clear;
+		BasaltTest::TempProject project("MatchJointsRoot");
+		AutomationSession session;
+		CommandRegistry registry;
+		RegisterBuiltinCommands(registry);
+		const auto text = FileSystem::ReadTextFile(FixturePath("Morph.gltf"));
+		REQUIRE(text);
+		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/Models/Morph.gltf"), *text));
+		const auto model = AssetManager::GetMesh("Assets/Models/Morph.gltf");
+		REQUIRE(model);
+		// The model on itself matches every joint by name, and the first of them is the root.
+		const auto matched = Run(registry, session, "animator.match_joints", { { "source", "Assets/Models/Morph.gltf" }, { "target", "Assets/Models/Morph.gltf" } });
+		REQUIRE_FALSE(matched["joints"].empty());
+		REQUIRE(matched["root"].is_object());
+		CHECK(matched["root"]["target"] == model->Nodes[0].Name);
 	}
 }
