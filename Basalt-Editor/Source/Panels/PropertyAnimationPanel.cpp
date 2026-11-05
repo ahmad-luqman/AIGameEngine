@@ -21,10 +21,23 @@ namespace Basalt {
 			if (entity)
 			{
 				ImGui::TextUnformatted(entity.GetName().c_str());
+				// Another selection, or a deleted target, falls back to the selected entity.
+				Entity target = PropertyAnimation::ResolveTarget(entity, m_Target);
+				if (!target || target == entity)
+				{
+					m_Target = 0;
+					target = entity;
+				}
+				if (const auto picked = DrawEntityPicker(*scene, "Target", m_Target, [&](Entity candidate) { return candidate != entity; }, "Self"))
+				{
+					m_Target = *picked;
+					target = PropertyAnimation::ResolveTarget(entity, m_Target);
+					m_Field.clear();
+				}
 				if (ImGui::BeginCombo("Component", m_Component.c_str()))
 				{
 					for (const auto& info : ComponentRegistry::GetAll())
-						if (!PropertyAnimation::ListFields(entity, info.Name).empty() && ImGui::Selectable(info.Name.c_str(), info.Name == m_Component))
+						if (!PropertyAnimation::ListFields(target, info.Name).empty() && ImGui::Selectable(info.Name.c_str(), info.Name == m_Component))
 						{
 							m_Component = info.Name;
 							m_Field.clear();
@@ -34,7 +47,7 @@ namespace Basalt {
 				if (ImGui::BeginCombo("Field", m_Field.c_str()))
 				{
 					// Nested fields are listed by their element's name where it has one ("Layers[Upper].Weight").
-					for (const std::string& field : PropertyAnimation::ListFields(entity, m_Component))
+					for (const std::string& field : PropertyAnimation::ListFields(target, m_Component))
 						if (ImGui::Selectable(field.c_str(), field == m_Field))
 							m_Field = field;
 					ImGui::EndCombo();
@@ -44,8 +57,13 @@ namespace Basalt {
 				const bool committed = ImGui::IsItemDeactivatedAfterEdit();
 				bool sampleButton = false;
 				if (ImGui::Button("Capture Key"))
-					if (m_Context.Execute("animation.key", { { "entity", id }, { "component", m_Component }, { "field", m_Field }, { "time", m_Time } }))
+				{
+					nlohmann::json key = { { "entity", id }, { "component", m_Component }, { "field", m_Field }, { "time", m_Time } };
+					if (m_Target != 0)
+						key["target"] = m_Target;
+					if (m_Context.Execute("animation.key", key))
 						m_Context.CommitHistory();
+				}
 				ImGui::SameLine();
 				if (ImGui::Button("Sample"))
 				{
@@ -74,10 +92,10 @@ namespace Basalt {
 					}
 					const auto* info = ComponentRegistry::Find("PropertyAnimation");
 					auto data = info->Serialize(entity);
-					ImGui::TextWrapped("Capture fields above. Edit duration, interpolation, key times and values below. Values use X for scalars, integers and booleans (0 or 1) and the first N lanes for vectors; strings and enums use Text. Integer, boolean, string and enum tracks always step. Scrubbing changes the scene and supports Undo.");
+					ImGui::TextWrapped("Capture fields above. Edit duration, interpolation, key times and values below. Values use X for scalars, integers and booleans (0 or 1) and the first N lanes for vectors; strings and enums use Text and asset references use Asset. Integer, boolean, string, enum and asset tracks always step. Target is the entity a track animates. Scrubbing changes the scene and supports Undo.");
 					for (const auto& field : info->Fields)
 					{
-						const auto edit = DrawJsonValue(field, data[field], info->FieldTypes.at(field), info->EnumOptions);
+						const auto edit = DrawJsonValue(field, data[field], info->FieldTypes.at(field), info->EnumOptions, scene.get());
 						m_Context.EditField("component.set", { { "entity", id }, { "component", "PropertyAnimation" }, { "data", { { field, data[field] } } } }, edit.Changed, edit.Committed);
 					}
 				}

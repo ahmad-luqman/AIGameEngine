@@ -65,6 +65,11 @@ namespace Basalt {
 			glm::quat LastRotation = { 1.0f, 0.0f, 0.0f, 0.0f };
 			// The world scale the colliders were built with (see ApplyScaleChanges).
 			glm::vec3 BuiltScale = { 1.0f, 1.0f, 1.0f };
+			// What the body was built from (plus later in-place updates), and the warnings about its shape and layer, which
+			// an update that keeps them adds back to keep the logged set the same.
+			RigidBodyComponent Settings;
+			PhysicsInternal::ColliderSettings Colliders;
+			std::vector<std::string> BuildWarnings;
 			// Set while the entity's transform cannot be decomposed (e.g. a zero scale): the body keeps its shape
 			// and simulates on, but its pose is not written back (warned once per episode).
 			bool Degenerate = false;
@@ -235,6 +240,9 @@ namespace Basalt {
 			Airtime Air;
 			// Warnings found while building the character, repeated with the settings' own when they change.
 			std::vector<std::string> BuildWarnings;
+			PhysicsInternal::ColliderSettings Colliders;
+			// A RigidBody on the entity is ignored, which only a rebuild reports.
+			bool IgnoresRigidBody = false;
 			// The last MoveCharacter velocity, used every step until the next call.
 			glm::vec3 MoveVelocity = { 0.0f, 0.0f, 0.0f };
 			// Animation movement for one Step, shared by its substeps: the root motion velocity and how much of the
@@ -399,9 +407,19 @@ namespace Basalt {
 		void RecreateBody(Entity entity);
 		// Rebuilds (or removes) the entity's character; keeps its velocity and the last Move velocity.
 		void RecreateCharacter(Entity entity);
-		// Rebuilds bodies and characters whose components changed, applies changed character settings, resizes
-		// rescaled ones and rebuilds dirty joints (the start of every Step, and OnSceneLoaded).
+		// Rebuilds bodies and characters whose components changed in a way only that can apply, updates the others in
+		// place, applies changed character settings, resizes rescaled ones and rebuilds dirty joints (the start of every
+		// Step, and OnSceneLoaded).
 		void ApplyPendingChanges();
+		// Applies a dirty entity's changed RigidBody and collider settings to its body or character, keeping contacts, joints
+		// and sleep when nothing changed. False when only a rebuild can: nothing changed yet then.
+		bool UpdateInPlace(Entity entity);
+		bool UpdateBody(Entity entity, BodyRecord& record, const PhysicsInternal::ColliderSettings& colliders);
+		// Gives the body the new shape and its materials and (when dynamic) inertia at the component's mass. Jolt keeps the
+		// body's origin and re-evaluates its contacts without ending them. Its center of mass can move, which joints must be
+		// told of (or be gone).
+		void SwapBodyShape(Entity entity, BodyRecord& record, const PhysicsInternal::ColliderShape& colliders);
+		void ApplyBodyMass(BodyRecord& record, const JPH::Shape& shape, float mass);
 		// Colliders are sized by the entity's world scale, which a script, an animation or a parent can change
 		// without touching a physics component. Once per Step (and on a scene load), after dirty entities are
 		// rebuilt, bodies and characters whose scale differs from the one they were built with get a new shape in
@@ -411,6 +429,8 @@ namespace Basalt {
 		void ApplyScaleChanges();
 		void ResizeBody(Entity entity, const glm::vec3& scale);
 		void ResizeCharacter(Entity entity, const glm::vec3& scale);
+		// What the character touches now, for a step that must not start from what it touched before a new shape.
+		void RefreshCharacterContacts(Entity entity);
 		// Applies changed CharacterController settings in place, rebuilding only when the layer changed.
 		void ApplyCharacterSettings(Entity entity);
 		void UpdateCharacters(float fixedStep);

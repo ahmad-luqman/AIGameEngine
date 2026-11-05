@@ -75,9 +75,6 @@ below extend character movement, in order of impact.
   where they stay at their authored place.
 - **Powered ragdoll follow-ups II — M.** Balance that steps (replanting feet toward the center of mass after a push), and
   several kinematic roots (both legs walking and a free spine between them).
-- **Property animation follow-ups — S.** Stable Euler serialization at exact gimbal lock, physics configuration tracks
-  that preserve contacts, asset reference tracks (texture flipbooks), and tracks on other entities; current authoring
-  covers numeric, integer, boolean, string and enum fields of the same entity, including fields inside list elements.
 - **Later: motion matching and procedural creatures — L each.** Motion matching (search a mocap database
   every few frames for the pose and future trajectory that best match the desired movement); procedural
   leg stepping for multi-legged creatures built on IK.

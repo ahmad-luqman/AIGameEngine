@@ -16,6 +16,7 @@
 #include "Basalt/Project/Project.h"
 #include "Basalt/Renderer/LocalShadows.h"
 #include "Basalt/Scene/Entity.h"
+#include "Basalt/Scene/JointFields.h"
 #include "Basalt/Scene/Prefab.h"
 #include "Basalt/UI/UIRules.h"
 
@@ -396,8 +397,6 @@ namespace Basalt {
 				FieldReader collector(nullptr);
 				E element{};
 				Fields(collector, element);
-				// Entity references are remapped and resolved by name only at the top level of a component.
-				BS_CORE_ASSERT(collector.GetEntityFields().empty(), "list elements cannot hold entity fields");
 				auto schema = std::make_shared<ComponentObjectSchema>();
 				schema->Name = E::TypeName;
 				if constexpr (requires { E::UniqueField; })
@@ -408,6 +407,7 @@ namespace Basalt {
 				schema->FieldTypes = collector.GetFieldTypes();
 				schema->EnumOptions = collector.GetEnumOptions();
 				schema->AssetFields = collector.GetAssetFields();
+				schema->EntityFields = collector.GetEntityFields();
 				schema->Default = Write(element);
 				BS_CORE_ASSERT(schema->UniqueField.empty() || (schema->FieldTypes.contains(schema->UniqueField) && schema->FieldTypes.at(schema->UniqueField).Kind == ComponentFieldKind::String), "UniqueField must name a string field");
 				BS_CORE_ASSERT(schema->NormalizedTimeField.empty() || (schema->FieldTypes.contains(schema->NormalizedTimeField) && schema->FieldTypes.at(schema->NormalizedTimeField).Kind == ComponentFieldKind::Number && schema->FieldTypes.at(schema->NormalizedTimeField).Count == 0), "NormalizedTimeField must name a scalar number field");
@@ -421,13 +421,14 @@ namespace Basalt {
 		{
 			const std::shared_ptr<const ComponentObjectSchema> schema = SchemaOf<E>();
 			Describe(name, ComponentFieldType::List(maxCount, schema));
-			// Element asset fields are declared as "List[].Field" (see ForEachAssetValue), one list level deep.
+			// Element asset and entity fields are declared as "List[].Field" (see ForEachFieldValue).
 			if (IsCollecting())
+			{
 				for (const std::string& field : schema->AssetFields)
-				{
-					BS_CORE_ASSERT(!IsListAssetField(field), "asset fields of lists inside list elements are not supported");
 					m_AssetFields.push_back(fmt::format("{}[].{}", name, field));
-				}
+				for (const std::string& field : schema->EntityFields)
+					m_EntityFields.push_back(fmt::format("{}[].{}", name, field));
+			}
 			const json* element = Find(name);
 			if (!element)
 				return;
@@ -581,11 +582,13 @@ namespace Basalt {
 			r.Field("Time", c.Time);
 			r.Field("Value", c.Value);
 			r.Field("Text", c.Text);
+			r.AssetField("Asset", c.Asset);
 		}
 		void Fields(FieldReader& r, PropertyAnimationTrack& c)
 		{
 			r.Field("Component", c.Component);
 			r.Field("Field", c.Field);
+			r.Field("Target", c.Target);
 			r.Field("Stepped", c.Stepped);
 			r.ListField("Keys", c.Keys, PropertyAnimationComponent::MaxKeys);
 		}
@@ -1284,11 +1287,11 @@ namespace Basalt {
 
 		json Write(const PropertyAnimationKey& c)
 		{
-			return { { "Time", c.Time }, { "Value", { c.Value.x, c.Value.y, c.Value.z, c.Value.w } }, { "Text", c.Text } };
+			return { { "Time", c.Time }, { "Value", { c.Value.x, c.Value.y, c.Value.z, c.Value.w } }, { "Text", c.Text }, { "Asset", c.Asset } };
 		}
 		json Write(const PropertyAnimationTrack& c)
 		{
-			return { { "Component", c.Component }, { "Field", c.Field }, { "Stepped", c.Stepped }, { "Keys", ListToJson(c.Keys) } };
+			return { { "Component", c.Component }, { "Field", c.Field }, { "Target", static_cast<uint64_t>(c.Target) }, { "Stepped", c.Stepped }, { "Keys", ListToJson(c.Keys) } };
 		}
 		json Write(const PropertyAnimationComponent& c)
 		{
@@ -1869,12 +1872,20 @@ namespace Basalt {
 				if (!has(entity))
 					return;
 				json patch = json::object();
-				const json data = serialize(entity);
+				json data = serialize(entity);
 				for (const std::string& field : fields)
 				{
-					auto it = remap.find(UUID(data[field].get<uint64_t>()));
-					if (it != remap.end())
-						patch[field] = static_cast<uint64_t>(it->second);
+					bool changed = false;
+					ForEachFieldValue(data, field, [&](json& value, const std::string&) {
+						if (auto it = remap.find(UUID(value.get<uint64_t>())); it != remap.end())
+						{
+							value = static_cast<uint64_t>(it->second);
+							changed = true;
+						}
+					});
+					// A list is written back whole.
+					if (const std::string top = field.substr(0, field.find('[')); changed)
+						patch[top] = data[top];
 				}
 				// Deserialize replaces through the registry, so a running physics world rebuilds joints.
 				std::string error;
@@ -2274,12 +2285,13 @@ namespace Basalt {
 		}
 
 		template<typename T>
-		ComponentInfo MakeInfo(const char* name, bool isCore = false, bool supportsPropertyAnimation = true)
+		ComponentInfo MakeInfo(const char* name, bool isCore = false, bool supportsPropertyAnimation = true, std::vector<std::string> liveFields = {})
 		{
 			ComponentInfo info;
 			info.Name = name;
 			info.IsCore = isCore;
 			info.SupportsPropertyAnimation = supportsPropertyAnimation;
+			info.LiveFields = std::move(liveFields);
 			CollectFields<T>(info);
 			info.Has = [](Entity entity) { return entity.HasComponent<T>(); };
 			info.Add = [](Entity entity) {
@@ -2384,6 +2396,12 @@ namespace Basalt {
 
 		std::vector<ComponentInfo> BuildRegistry()
 		{
+			// What physics applies in place (ComponentInfo::LiveFields). A field that is not listed cannot be animated, so a
+			// new field stays safe until physics applies it; a test changes each listed field on a resting body or joint.
+			const auto withSurface = [](std::vector<std::string> fields) {
+				fields.insert(fields.end(), { "OverrideMaterial", "Friction", "Restitution" });
+				return fields;
+			};
 			std::vector<ComponentInfo> infos;
 			infos.push_back(MakeInfo<TagComponent>("Tag", true));
 			infos.push_back(MakeInfo<TransformComponent>("Transform", true));
@@ -2394,21 +2412,21 @@ namespace Basalt {
 			infos.push_back(MakeInfo<BoneAttachmentComponent>("BoneAttachment"));
 			infos.push_back(MakeInfo<InverseKinematicsComponent>("InverseKinematics"));
 			infos.push_back(MakeInfo<SpringBoneComponent>("SpringBone"));
-			infos.push_back(MakeInfo<RagdollComponent>("Ragdoll", false, false));
+			infos.push_back(MakeInfo<RagdollComponent>("Ragdoll", false, true, { "RecoveryTime", "Bones[].MotorStrength", "MotorStrength", "MotorFrequency", "MotorDamping", "MotorTorque", "BalanceStrength", "BalanceFrequency", "BalanceDamping", "BalanceMaxTilt" }));
 			infos.push_back(MakeInfo<MaterialComponent>("Material"));
 			infos.push_back(MakeInfo<DirectionalLightComponent>("DirectionalLight"));
 			infos.push_back(MakeInfo<PointLightComponent>("PointLight"));
 			infos.push_back(MakeInfo<SpotLightComponent>("SpotLight"));
 			infos.push_back(MakeInfo<SkyLightComponent>("SkyLight"));
 			infos.push_back(MakeInfo<PostProcessComponent>("PostProcess"));
-			infos.push_back(MakeInfo<RigidBodyComponent>("RigidBody", false, false));
-			infos.push_back(MakeInfo<BoxColliderComponent>("BoxCollider", false, false));
-			infos.push_back(MakeInfo<SphereColliderComponent>("SphereCollider", false, false));
-			infos.push_back(MakeInfo<CapsuleColliderComponent>("CapsuleCollider", false, false));
-			infos.push_back(MakeInfo<MeshColliderComponent>("MeshCollider", false, false));
-			infos.push_back(MakeInfo<JointComponent>("Joint", false, false));
-			infos.push_back(MakeInfo<CharacterControllerComponent>("CharacterController", false, false));
-			infos.push_back(MakeInfo<ScriptComponent>("Script"));
+			infos.push_back(MakeInfo<RigidBodyComponent>("RigidBody", false, true, { "Mass", "LinearDamping", "AngularDamping", "GravityFactor", "Friction", "Restitution", "FrictionCombine", "RestitutionCombine", "Continuous", "AllowSleeping" }));
+			infos.push_back(MakeInfo<BoxColliderComponent>("BoxCollider", false, true, withSurface({ "HalfExtents", "Offset" })));
+			infos.push_back(MakeInfo<SphereColliderComponent>("SphereCollider", false, true, withSurface({ "Radius", "Offset" })));
+			infos.push_back(MakeInfo<CapsuleColliderComponent>("CapsuleCollider", false, true, withSurface({ "Radius", "HalfHeight", "Offset" })));
+			infos.push_back(MakeInfo<MeshColliderComponent>("MeshCollider", false, true, withSurface({})));
+			infos.push_back(MakeInfo<JointComponent>("Joint", false, true, GetLiveJointFieldNames()));
+			infos.push_back(MakeInfo<CharacterControllerComponent>("CharacterController", false, true, { "SlopeLimit", "StepHeight", "MaxStrength", "Mass", "GravityFactor", "JumpGrace" }));
+			infos.push_back(MakeInfo<ScriptComponent>("Script", false, false));
 			infos.push_back(MakeInfo<AudioSourceComponent>("AudioSource"));
 			infos.push_back(MakeInfo<AudioListenerComponent>("AudioListener"));
 			infos.push_back(MakeInfo<AudioReverbZoneComponent>("AudioReverbZone"));
@@ -2425,7 +2443,7 @@ namespace Basalt {
 			infos.push_back(MakeInfo<UIPanelComponent>("UIPanel"));
 			infos.push_back(MakeInfo<UINavigationComponent>("UINavigation"));
 			infos.push_back(MakeInfo<UIFocusRingComponent>("UIFocusRing"));
-			infos.push_back(MakeInfo<PrefabComponent>("Prefab"));
+			infos.push_back(MakeInfo<PrefabComponent>("Prefab", false, false));
 			// A copied instance (duplicate, paste, nested tree) tracks its own entities. Members that were not copied
 			// (deleted by the instance, or moved out of its tree) get fresh IDs, so the copy never claims the
 			// original's entities: to the copy they are deleted, and Revert recreates its own.

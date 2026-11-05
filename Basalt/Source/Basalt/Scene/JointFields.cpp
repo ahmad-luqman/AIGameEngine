@@ -114,6 +114,18 @@ namespace Basalt {
 		return s_Names;
 	}
 
+	const std::vector<std::string>& GetLiveJointFieldNames()
+	{
+		static const std::vector<std::string> s_Names = [] {
+			std::vector<std::string> names;
+			for (const JointField& field : s_JointFields)
+				if (field.Update == FieldUpdate::Live)
+					names.emplace_back(field.Name);
+			return names;
+		}();
+		return s_Names;
+	}
+
 	std::vector<std::string> GetIgnoredJointFields(const JointComponent& joint)
 	{
 		const JointComponent defaults;

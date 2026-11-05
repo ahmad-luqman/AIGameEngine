@@ -270,7 +270,7 @@ namespace Basalt {
 	};
 
 	// One normalized-time sample. Number, integer and boolean fields use Value's lanes (capture zeros unused lanes; sampling
-	// ignores them); string and enum fields use Text.
+	// ignores them); string and enum fields use Text; asset fields use Asset, which persists and moves like any asset field.
 	struct PropertyAnimationKey
 	{
 		static constexpr const char* TypeName = "PropertyAnimationKey";
@@ -280,18 +280,21 @@ namespace Basalt {
 		float Time = 0;
 		glm::vec4 Value{ 0.0f };
 		std::string Text;
+		std::string Asset;
 	};
-	// A field on this entity, addressed through ComponentRegistry rather than a memory offset. Field is a top-level field
-	// ("Translation") or a path into list elements ("Layers[Upper].Weight", "Chains[0].Stiffness"; see
+	// A field of this entity or of Target, addressed through ComponentRegistry rather than a memory offset. Field is a
+	// top-level field ("Translation") or a path into list elements ("Layers[Upper].Weight", "Chains[0].Stiffness"; see
 	// PropertyAnimation::ResolveField).
 	struct PropertyAnimationTrack
 	{
 		static constexpr const char* TypeName = "PropertyAnimationTrack";
 		std::string Component = "Transform";
 		std::string Field = "Translation";
-		// Holds each key until the next one. Integer, boolean, string and enum fields always step.
+		// Holds each key until the next one. Integer, boolean, string, enum and asset fields always step.
 		bool Stepped = false;
 		std::vector<PropertyAnimationKey> Keys;
+		// The entity animated: 0 is the one holding the timeline.
+		UUID Target = 0;
 	};
 	// Authored property timelines. Playback clocks belong to PropertyAnimationSystem in Play/Simulate.
 	struct PropertyAnimationComponent
@@ -770,11 +773,13 @@ namespace Basalt {
 		// a dynamic body stay awake with it (Jolt does not link kinematic bodies into islands). Only affects dynamic and
 		// kinematic bodies that are not triggers (triggers never sleep).
 		bool AllowSleeping = true;
+		bool operator==(const RigidBodyComponent&) const = default;
 	};
 
 	// Collider shapes are sized in local space and scaled by the entity's world scale. A scale change during
 	// play (the entity's or a parent's) resizes the body's shape in place: its velocity and contacts carry on,
-	// and its joints are rebuilt from the current poses (their anchors scale with the body).
+	// and its joints are rebuilt from the current poses (their anchors scale with the body). So does a change to a
+	// collider's own size, offset or material, except that its joints carry on too (their anchors do not move).
 	// Every collider can set OverrideMaterial to touch with its own Friction and Restitution instead of the
 	// RigidBody's (still combined with the other body by the RigidBody's combine modes and clamped the same way),
 	// e.g. an icy runner under a grippy cart. Characters ignore it (with a warning).

@@ -321,22 +321,21 @@ namespace Basalt {
 
 		// Component data may name entities in reference fields (Joint "ConnectedEntity": "Door"); files and
 		// the registry store UUIDs, so names are resolved here with the same rules as the "entity" parameter.
-		// Numeric IDs must name an existing entity too (0 = none). Scene and prefab files stay lenient: they
-		// may be loaded before the entities they refer to exist.
+		// Numeric IDs of top-level fields must name an existing entity too (0 = none). Scene and prefab files stay
+		// lenient: they may be loaded before the entities they refer to exist.
 		json ResolveEntityFields(Scene& scene, const std::string& component, json data)
 		{
 			const ComponentInfo* info = ComponentRegistry::Find(component);
 			if (!info || !data.is_object())
 				return data;
 			for (const std::string& field : info->EntityFields)
-			{
-				auto it = data.find(field);
-				if (it == data.end())
-					continue;
-				const bool isNumber = it->is_number_unsigned() || it->is_number_integer();
-				if (it->is_string() || (isNumber && it->get<uint64_t>() != 0))
-					*it = static_cast<uint64_t>(ResolveEntity(scene, *it, field.c_str()).GetUUID());
-			}
+				ForEachFieldValue(data, field, [&](json& value, const std::string& label) {
+					// A list is written back whole, so an element holding the ID of a since-deleted entity must not block an
+					// edit of another element: such a stale reference is reported where it is used instead.
+					const bool isNumber = value.is_number_unsigned() || value.is_number_integer();
+					if (value.is_string() || (isNumber && value.get<uint64_t>() != 0 && label == field))
+						value = static_cast<uint64_t>(ResolveEntity(scene, value, label.c_str()).GetUUID());
+				});
 			return data;
 		}
 
@@ -745,7 +744,7 @@ namespace Basalt {
 				return json{ { "commands", commands } };
 			});
 
-			Add(registry, "component.types", "Lists every component type with its fields (for component.set): their names in order, each field's JSON type ('number', 'integer', 'boolean', 'string', 'object', 'entity', 'enum', an array such as 'number[3]', or 'object[]' for a list of objects), the values of enum fields, the fields that reference entities, and for each list field its element type under 'lists' ({name, fields, types, enums, maxCount, default, lists, and uniqueField when one string field must differ between elements}; a set replaces the whole list). Includes quaternionRotations (Euler-degree fields sampled as quaternion orientations) and supportsPropertyAnimation (false for physics configuration components and PropertyAnimation itself).", Schema::Object(), [](AutomationSession&, const json&) {
+			Add(registry, "component.types", "Lists every component type with its fields (for component.set): their names in order, each field's JSON type ('number', 'integer', 'boolean', 'string', 'object', 'entity', 'enum', an array such as 'number[3]', or 'object[]' for a list of objects), the values of enum fields, the fields that reference entities, and for each list field its element type under 'lists' ({name, fields, types, enums, maxCount, default, lists, and uniqueField when one string field must differ between elements}; a set replaces the whole list). entityFields names list element fields as 'List[].Field'. Includes quaternionRotations (Euler-degree fields sampled as quaternion orientations), supportsPropertyAnimation (false for PropertyAnimation, Prefab and Script) and, on physics configuration components, liveFields: the only fields tracks may animate, which physics applies in place.", Schema::Object(), [](AutomationSession&, const json&) {
 				json types = json::array();
 				for (const ComponentInfo& info : ComponentRegistry::GetAll())
 				{
@@ -754,6 +753,8 @@ namespace Basalt {
 					description["entityFields"] = info.EntityFields;
 					description["core"] = info.IsCore;
 					description["supportsPropertyAnimation"] = info.SupportsPropertyAnimation;
+					if (!info.LiveFields.empty())
+						description["liveFields"] = info.LiveFields;
 					types.push_back(std::move(description));
 				}
 				return json{ { "components", types } };
@@ -1555,7 +1556,7 @@ namespace Basalt {
 						bool changed = false;
 						for (const auto& field : info.AssetFields)
 						{
-							const bool present = ForEachAssetValue(data, field, [&](json& value, const std::string& label) {
+							const bool present = ForEachFieldValue(data, field, [&](json& value, const std::string& label) {
 								if (!value.is_string())
 									throw CommandError("asset field did not serialize as a path: " + info.Name + "." + label);
 								const auto& key = value.get_ref<const std::string&>();
@@ -2459,10 +2460,11 @@ namespace Basalt {
 					throw CommandError(error);
 				return system->Status(entity);
 			});
-			Add(registry, "animation.key", "Captures an existing component field into this entity's PropertyAnimation timeline at normalized time [0,1]: a number (up to 4 lanes), integer, boolean, string or enum, top-level or inside list elements picked by index or name (\"Layers[Upper].Weight\"). Creates the component/track as needed (Stepped for integer, boolean, string and enum fields, which always step), inserts sorted keys and replaces an exact-time key. Unused Value lanes are zero; strings and enums go in Text. All writes use ComponentRegistry.", Schema::Object({ { "entity", Schema::Entity("ID or name") }, { "component", Schema::String("component name", true) }, { "field", Schema::String("field or path, e.g. Translation or Layers[Upper].Weight", true) }, { "time", Schema::Number("normalized time", 0, 1) } }, { "entity", "component", "field", "time" }), [](AutomationSession& session, const json& params) {
+			Add(registry, "animation.key", "Captures an existing component field of this entity, or of `target`, into this entity's PropertyAnimation timeline at normalized time [0,1]: a number (up to 4 lanes), integer, boolean, string, enum or asset reference, top-level or inside list elements picked by index or name (\"Layers[Upper].Weight\"). Creates the component/track as needed (Stepped for integer, boolean, string, enum and asset fields, which always step), inserts sorted keys and replaces an exact-time key. Unused Value lanes are zero; strings and enums go in Text, asset references in Asset. All writes use ComponentRegistry.", Schema::Object({ { "entity", Schema::Entity("ID or name of the entity holding the timeline") }, { "component", Schema::String("component name", true) }, { "field", Schema::String("field or path, e.g. Translation or Layers[Upper].Weight", true) }, { "time", Schema::Number("normalized time", 0, 1) }, { "target", Schema::Entity("ID or name of the entity animated, default the timeline's own") } }, { "entity", "component", "field", "time" }), [](AutomationSession& session, const json& params) {
 				Entity entity = RequireEntity(session, params);
 				std::string error;
-				if (!PropertyAnimation::Key(entity, RequireString(params, "component"), RequireString(params, "field"), NormalizedAnimationTime(params), error))
+				const UUID target = params.contains("target") ? RequireEntity(session, params, "target").GetUUID() : UUID(0);
+				if (!PropertyAnimation::Key(entity, RequireString(params, "component"), RequireString(params, "field"), NormalizedAnimationTime(params), error, target))
 					throw CommandError(error);
 				MarkEdited(session);
 				return ComponentRegistry::Find("PropertyAnimation")->Serialize(entity);

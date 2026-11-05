@@ -4,11 +4,16 @@
 
 #include <nlohmann/json.hpp>
 
+#include <functional>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace Basalt {
+
+	class Entity;
+	class Scene;
 
 	struct JsonFieldResult
 	{
@@ -45,11 +50,16 @@ namespace Basalt {
 
 	// Draws a List field as a tree: one node per element (labelled by its Name or Clip) holding the element's fields,
 	// with move and remove buttons per element (duplicate and the rest in its context menu) and an Add button.
-	// Structural edits change and commit at once; field edits report like DrawJsonField.
-	JsonFieldResult DrawJsonList(const std::string& name, nlohmann::json& array, const ComponentFieldType& type);
+	// Structural edits change and commit at once; field edits report like DrawJsonField. `scene` names the entities of
+	// entity fields in the elements; without one they are shown read-only.
+	JsonFieldResult DrawJsonList(const std::string& name, nlohmann::json& array, const ComponentFieldType& type, Scene* scene = nullptr);
 
-	// One field of a component or list element: DrawJsonList for a List field, DrawJsonField (with the field's enum
-	// options) for anything else.
-	JsonFieldResult DrawJsonValue(const std::string& name, nlohmann::json& value, const ComponentFieldType& type, const std::map<std::string, std::vector<std::string>>& enumOptions);
+	// One field of a component or list element: DrawJsonList for a List field, DrawEntityPicker for an entity field,
+	// DrawJsonField (with the field's enum options) for anything else.
+	JsonFieldResult DrawJsonValue(const std::string& name, nlohmann::json& value, const ComponentFieldType& type, const std::map<std::string, std::vector<std::string>>& enumOptions, Scene* scene = nullptr);
+
+	// A combo of the scene's entities `filter` accepts, labelled `name` and showing `current` (0 as noneLabel; an entity
+	// that is gone as missing, so it can be replaced). Returns the ID picked this frame, if it differs.
+	std::optional<uint64_t> DrawEntityPicker(Scene& scene, const std::string& name, uint64_t current, const std::function<bool(Entity)>& filter, const char* noneLabel);
 
 }

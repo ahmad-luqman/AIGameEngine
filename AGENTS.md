@@ -38,6 +38,14 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   writer that every consumer shares: scene and prefab files, Lua `GetComponent/SetComponent`, the
   automation commands and the editor inspector. Adding a component = one registry entry (see the
   `basalt-add-component` skill).
+- **Physics updates in place.** A dirty entity goes through `PhysicsWorld::Impl::UpdateInPlace` before any rebuild.
+  `BodyRecord` keeps the `RigidBodyComponent` and `ColliderSettings` it was built from: `BodyNeedsRebuild` and
+  `ColliderSettings::SameChildren` say what only a rebuild can apply (Type, IsTrigger, FixedRotation, Layer, other
+  children or meshes). Anything else keeps the body, its contacts and its sleep when nothing changed: settings through Jolt's
+  setters, colliders through `SwapBodyShape`, which joints hear of through `NotifyShapeChanged` when the center of mass
+  moves, instead of the rebuild a rescale needs (their anchors scale with the body). Static and kinematic bodies wake what
+  rests on them, which Jolt's islands do not link. Joints (`JointNeedsRebuild`), characters (`ApplyCharacterSettings`,
+  `ResizeCharacter`) and ragdolls (`RagdollNeedsRebuild`) follow the same split.
 - **Runtime state lives in systems.** `PhysicsWorld`, `ScriptEngine`, `AudioSystem`, `AnimationSystem` and `ParticleSystem` exist
   only while a scene plays (physics, animation and particles also while it simulates; particles and animation additionally
   have isolated edit-mode Preview systems, `Scene::UpdateParticlePreview`/`UpdateAnimationPreview`, which never write the
@@ -59,11 +67,13 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   references on rename and prunes dependent edges on deletion. `.banimmask` and `.bjointmap` files share one headless
   `JointAssetDraft<Asset>` (typed, validated by the parser that loads the file) and one `JointAssetPanel<Asset>` (windows that
   show only with a file open, saved through `asset.write`); a preview model belongs to the window, never the file, and defaults
-  to an Animator using the asset. `PropertyAnimationComponent` stores same-entity
-  registry-field tracks with normalized keys: numbers (registry-tagged quaternion rotations use slerp) and always-stepped
-  integers, booleans, strings and enums (`Text` keys), top-level or through list elements picked by index or unique name
-  (`PropertyAnimation::ResolveField`, shared by validation, sampling, capture and the editor's `ListFields`; each list is
-  patched once per sample); physics configuration components are excluded. `PropertyAnimationSystem` owns runtime clocks in Play/Simulate,
+  to an Animator using the asset. `PropertyAnimationComponent` stores
+  registry-field tracks with normalized keys, each on its entity or a `Target` (`PropertyAnimation::ResolveTarget`): numbers
+  (registry-tagged quaternion rotations use slerp) and always-stepped integers, booleans, strings, enums (`Text` keys) and
+  asset references (`Asset` keys, which the system's clocks request on creation), top-level or through list elements picked
+  by index or unique name (`PropertyAnimation::ResolveField`, shared by validation, sampling, capture and the editor's
+  `ListFields`; each list is patched once per sample). `ComponentInfo::LiveFields` limits physics configuration to what
+  physics applies in place; `SupportsPropertyAnimation` is false for PropertyAnimation, Prefab and Script. `PropertyAnimationSystem` owns runtime clocks in Play/Simulate,
   samples after scripts and before skeletal animation/physics through grouped `ComponentRegistry` patches, and
   logs/suspends failed timelines until edited or explicitly repaired. `animation.key/sample/control` share these paths;
   Lua uses `ControlPropertyAnimation` and `GetPropertyAnimationStatus`. See `Docs/ScriptingAPI.md`.
@@ -151,8 +161,8 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   pairs), resolving both once per update; reference clips (`ReferenceClip`, `ModelReferenceClip`) replace a skeleton's rest
   orientations, never its positions, a pair's `Offset` turns the source's in model space on top of them (`ApplyRestOffsets`,
   children along), and a missing reference or unloadable map adds no clips; every playback clip index refers to that set, never
-  to `MeshSource::Animations` directly. List elements declare asset fields as `List[].Field` (`ForEachAssetValue`), which
-  persistence, moves, validation and thumbnails share.
+  to `MeshSource::Animations` directly. List elements declare asset and entity fields as `List[].Field`, at any depth
+  (`ForEachFieldValue`), which persistence, moves, validation, thumbnails, prefab references and entity remapping share.
 - **Game UI geometry.** `UILayout` is shared by drawing, hit testing, `ui.layout` and viewport handles.
   Rects remain in untransformed canvas units; affine transforms compose through descendants. Clips intersect
   as canvas-aligned scissors (rotated clipping parents use their transformed bounds). Scroll views clip

@@ -208,8 +208,10 @@ namespace Basalt {
 								   throw CommandError("unknown component '" + name + "'");
 							   json data = params["data"];
 							   for (const auto& field : info->EntityFields)
-								   if (data.contains(field) && data[field].is_string())
-									   data[field] = registry.Execute(session, "entity.get", { { "entity", data[field] } })["ID"];
+								   ForEachFieldValue(data, field, [&](json& value, const std::string&) {
+									   if (value.is_string())
+										   value = registry.Execute(session, "entity.get", { { "entity", value } })["ID"];
+								   });
 							   // Validate each entity's merged value without mutating the live scene or copying unrelated components.
 							   Scene scratch;
 							   Entity probe = scratch.CreateEntity("Validation");

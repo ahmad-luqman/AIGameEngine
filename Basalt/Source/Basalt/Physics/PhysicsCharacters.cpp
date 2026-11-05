@@ -195,6 +195,8 @@ namespace Basalt {
 		record.BorrowedMesh = colliders.BorrowedMesh;
 		// A copy: configuration and reporting keep using warnings below.
 		record.BuildWarnings = warnings; // NOLINT(performance-use-std-move)
+		record.Colliders = ColliderSettings::Capture(entity);
+		record.IgnoresRigidBody = entity.HasComponent<RigidBodyComponent>();
 		record.MoveVelocity = moveVelocity;
 		record.Air = air;
 		record.LastPosition = position;
@@ -219,9 +221,17 @@ namespace Basalt {
 
 		// A new character starts in the air; find its ground now so a rebuild (e.g. a crouch changing the
 		// collider) does not lose a step of IsGrounded or a jump.
-		const JPH::ObjectLayer objectLayer = MakeObjectLayer(true, layer);
-		character->RefreshContacts(JPH::DefaultBroadPhaseLayerFilter(ObjectVsBroadPhaseLayerFilter, objectLayer), JPH::DefaultObjectLayerFilter(ObjectLayerPairFilter, objectLayer), NonCharacterBodyFilter(*this, entity.GetUUID()), JPH::ShapeFilter(),
-								   *TempAllocator);
+		RefreshCharacterContacts(entity);
+	}
+
+	void PhysicsWorld::Impl::RefreshCharacterContacts(Entity entity)
+	{
+		const auto found = Characters.find(entity.GetUUID());
+		if (found == Characters.end())
+			return;
+		const JPH::ObjectLayer layer = MakeObjectLayer(true, found->second.Layer);
+		found->second.Character->RefreshContacts(JPH::DefaultBroadPhaseLayerFilter(ObjectVsBroadPhaseLayerFilter, layer), JPH::DefaultObjectLayerFilter(ObjectLayerPairFilter, layer), NonCharacterBodyFilter(*this, entity.GetUUID()), JPH::ShapeFilter(),
+												 *TempAllocator);
 	}
 
 	void PhysicsWorld::Impl::ResizeCharacter(Entity entity, const glm::vec3& scale)

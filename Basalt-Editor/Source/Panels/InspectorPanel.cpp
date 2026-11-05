@@ -161,37 +161,9 @@ namespace Basalt {
 
 	void InspectorPanel::DrawEntityReference(Entity entity, const std::string& component, const std::string& field, uint64_t current, const std::function<bool(Entity)>& filter, const char* noneLabel)
 	{
-		Scene& scene = *entity.GetScene();
-		std::string preview = noneLabel;
-		if (current != 0)
-		{
-			const Entity target = scene.GetEntityByUUID(current);
-			preview = target ? target.GetName() : "<missing " + std::to_string(current) + ">";
-		}
-
-		uint64_t selected = current;
-		if (ImGui::BeginCombo(field.c_str(), preview.c_str()))
-		{
-			if (ImGui::Selectable(noneLabel, current == 0))
-				selected = 0;
-			for (Entity candidate : scene.GetAllEntitiesOrdered())
-			{
-				if (!filter(candidate))
-					continue;
-				const uint64_t id = candidate.GetUUID();
-				ImGui::PushID(static_cast<int>(id ^ (id >> 32)));
-				if (ImGui::Selectable(candidate.GetName().c_str(), id == current))
-					selected = id;
-				ImGui::PopID();
-			}
-			ImGui::EndCombo();
-		}
-
-		if (selected != current)
-		{
-			if (m_Context.Execute("component.set", { { "entity", static_cast<uint64_t>(entity.GetUUID()) }, { "component", component }, { "data", { { field, selected } } } }))
+		if (const auto selected = DrawEntityPicker(*entity.GetScene(), field, current, filter, noneLabel))
+			if (m_Context.Execute("component.set", { { "entity", static_cast<uint64_t>(entity.GetUUID()) }, { "component", component }, { "data", { { field, *selected } } } }))
 				m_Context.CommitHistory();
-		}
 	}
 
 	void InspectorPanel::DrawMultiSelection()
@@ -235,7 +207,7 @@ namespace Basalt {
 						}
 						ImGui::TextDisabled("%s (mixed)", field.c_str());
 					}
-					const auto result = DrawJsonValue(field, data[field], type->second, info.EnumOptions);
+					const auto result = DrawJsonValue(field, data[field], type->second, info.EnumOptions, m_Context.Session.GetScene().get());
 					m_Context.EditField("editor.component_set", { { "component", info.Name }, { "data", { { field, data[field] } } } }, result.Changed, result.Committed);
 				}
 			}
@@ -342,7 +314,7 @@ namespace Basalt {
 						ComponentFieldType listType = type->second;
 						if (info.Name == "SpringBone" && field == "Chains")
 							listType.Element = WithChainLayers(*listType.Element, data[field]);
-						const JsonFieldResult result = DrawJsonList(field, data[field], listType);
+						const JsonFieldResult result = DrawJsonList(field, data[field], listType, entity.GetScene());
 						m_Context.EditField("component.set", { { "entity", id }, { "component", info.Name }, { "data", { { field, data[field] } } } }, result.Changed, result.Committed);
 						continue;
 					}

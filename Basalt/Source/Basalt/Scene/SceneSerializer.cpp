@@ -532,7 +532,7 @@ namespace Basalt {
 				for (const auto& field : info->AssetFields)
 				{
 					bool failed = false;
-					ForEachAssetValue(component, field, [&](json& value, const std::string& label) {
+					ForEachFieldValue(component, field, [&](json& value, const std::string& label) {
 						if (failed || !value.is_string())
 							return;
 						const auto path = value.get<std::string>();

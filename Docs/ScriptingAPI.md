@@ -1189,19 +1189,45 @@ end
 
 ## Property animation
 
-`PropertyAnimation` stores timelines for fields of components on the same entity: numbers (scalars and 2–4 lane
-vectors), integers, booleans, strings and enums. The Property Animation editor panel lists every field it can animate
-from `ComponentRegistry`. Capture Key records the current serialized value at the normalized timeline cursor;
+`PropertyAnimation` stores timelines for fields of components on the entity holding it, or on another entity of the
+scene: numbers (scalars and 2–4 lane vectors), integers, booleans, strings, enums and asset references. The Property
+Animation editor panel lists every field it can animate from `ComponentRegistry`. Capture Key records the current
+serialized value at the normalized timeline cursor, from the entity its Target names;
 Sample/scrubbing applies the timeline to the current scene and supports editor Undo. The inspector exposes the same
 Duration, Speed, Looping, PlayOnStart, Tracks, Stepped and Keys fields. Key Value is a four-lane vector: scalars use X
 and vector fields use the first N lanes; integer keys hold a whole number in X (0 to 16777216, which a float lane holds
-exactly; a larger value is not captured), boolean keys 0 or 1 in X, and string and enum keys use `Text` (at most 1024
-bytes; an enum key must be one of the field's values). Integer, boolean, string and enum tracks always step, whatever
+exactly; a larger value is not captured), boolean keys 0 or 1 in X, string and enum keys use `Text` (at most 1024
+bytes; an enum key must be one of the field's values) and asset keys use `Asset` (at most 1024 bytes; empty clears the
+field). Integer, boolean, string, enum and asset tracks always step, whatever
 their `Stepped` says (Capture Key creates them Stepped). Quaternion rotation fields are identified by registry
 metadata (`quaternionRotations` in `component.types`): keys hold Euler degrees, but sampling uses shortest-arc
 quaternion slerp, including rotations beyond 90° and across ±180°. Use intermediate keys for turns exceeding
 180°. Stepped rotation tracks hold the preceding orientation. Scalar angles remain ordinary numeric tracks.
-Quaternion keys retain the registry's Euler serialization, including its existing limitations at exact gimbal lock (tracked in ROADMAP.md).
+Quaternion keys hold the registry's Euler serialization, whose angles always rebuild the orientation; at gimbal lock (yaw
+±90°) it writes one canonical form (roll 0, yaw exact, pitch on a 0.0001° grid), so the same rotation saves the same text.
+
+`Target` is the entity a track animates; 0, the default, is the entity holding the timeline. `component.set` and
+`animation.key {target}` also take an entity name there. Prefab and scene copies follow it like any entity reference: a
+copied tree animates its own members. A sample fails, naming the track, when the entity or its component is not there, and
+the inspector and `scene.info` warn about such tracks. Components are patched in order of target ID, then name.
+
+```lua
+-- A switch dims every lamp it names, and shows it on its own panel.
+local tracks = {
+    { Component = "PointLight", Field = "Intensity", Target = Scene.FindEntityByName("Lamp").ID,
+      Keys = { { Time = 0, Value = { 8, 0, 0, 0 } }, { Time = 1, Value = { 0, 0, 0, 0 } } } },
+    -- A texture flipbook: asset keys step, and starting the timeline loads their textures.
+    { Component = "Material", Field = "AlbedoMap",
+      Keys = { { Time = 0, Asset = "Assets/Textures/Off.png" }, { Time = 0.5, Asset = "Assets/Textures/On.png" } } },
+}
+self.Entity:AddComponent("PropertyAnimation", { Duration = 2, Looping = false, Tracks = tracks })
+```
+
+Asset keys persist as UUID references, move with `asset.move` and are checked by `project.validate`, like any asset
+field. Starting a timeline (its first update, or `Control`) requests the textures and models its keys name, so a
+flipbook does not show placeholders on its first pass in a renderer that streams; other assets load when their
+component reads them. A track that swaps a `MeshCollider`'s borrowed `Mesh` rebuilds that body; `Script` and `Prefab`
+components cannot be animated.
 
 `Field` is a top-level field (`Translation`) or a path into list elements: `List[selector].Field`, nested as deep as
 the lists go (`Layers[Upper].Weight`, `Chains[Hair].Colliders[0].Name`). A selector of only digits is an index; any
@@ -1215,12 +1241,18 @@ script sets it). Tracks that reach the same field through different spellings (`
 reaches, whichever way its path is written.
 
 Empty tracks do nothing; targets must exist when sampling (the inspector and `scene.info` warn about tracks whose
-component or list element is not there). Entity, asset (including list elements' asset fields), object and list
-fields, the names that identify list elements, and multi-value booleans and enums are excluded. A key's `Text` must be
-empty on fields other than strings and enums, so a string key on a boolean track is an error rather than `false`. The registry also
-excludes physics configuration components (RigidBody, all colliders, Joint, CharacterController and Ragdoll): their
-update signals reconstruct physics objects and reset contacts. Animate Transform on a kinematic rigid body to move a
-physics platform or door.
+entity, component or list element is not there). Entity, object and list fields, the names that identify list elements,
+and multi-value booleans and enums are excluded. A key's `Text` must be empty on fields other than strings and enums, and
+its `Asset` on fields other than asset references, so a string key on a boolean track is an error rather than `false`.
+
+Physics configuration can be animated too, field by field: the fields a body, character, joint or ragdoll takes in place
+(`liveFields` in `component.types`), so playing a track keeps contacts, joints and sleep. A resting crate whose
+`Friction` or `BoxCollider.HalfExtents` animates raises no `OnCollisionEnd`, and a floor that turns to ice sets what
+sleeps on it sliding. The rest (`RigidBody.Type`, `IsTrigger`, `FixedRotation` and `Layer`, a joint's bodies, anchors and axes,
+`CharacterController.Layer`, a mesh collider's `Mesh`, `MeshIndex` and `Convex`, a ragdoll's structure) would rebuild the
+object, so a track on them is refused with the reason. The same in-place path serves `SetComponent`: writing a live field
+from a script keeps contacts too, and writing the values a component already has does nothing, not even waking the body.
+Animate Transform on a kinematic rigid body to move a physics platform or door.
 
 Keys use strictly increasing normalized Time in [0,1], with a maximum of 256 keys per track and 64
 tracks per entity. Repeated targets use the last nonempty track. Key capture edits that winning track,

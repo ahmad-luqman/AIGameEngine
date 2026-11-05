@@ -1,5 +1,6 @@
 #include "Basalt/Animation/PropertyAnimation.h"
 
+#include "Basalt/Asset/AssetManager.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Core/JsonUtils.h"
 #include "Basalt/Math/Math.h"
@@ -56,6 +57,11 @@ namespace Basalt {
 			return fmt::format("{} {} field", std::string_view("aeiou").find(kind.front()) != std::string_view::npos ? "an" : "a", kind);
 		}
 
+		std::string DescribeKind(const PropertyAnimationField& field)
+		{
+			return field.IsAsset ? "an asset field" : DescribeKind(field.Type);
+		}
+
 		// Why a key does not fit its field, or empty.
 		std::string CheckKey(const PropertyAnimationField& field, const PropertyAnimationKey& key)
 		{
@@ -64,10 +70,14 @@ namespace Basalt {
 					return "Value must be finite";
 			if (key.Text.size() > PropertyAnimationKey::MaxTextLength)
 				return fmt::format("Text holds at most {} bytes", PropertyAnimationKey::MaxTextLength);
-			const bool text = field.Type.Kind == ComponentFieldKind::String || field.Type.Kind == ComponentFieldKind::Enum;
-			// Text on another field would be ignored: say so rather than animate the Value an agent did not mean.
+			if (key.Asset.size() > PropertyAnimationKey::MaxTextLength)
+				return fmt::format("Asset holds at most {} bytes", PropertyAnimationKey::MaxTextLength);
+			const bool text = !field.IsAsset && (field.Type.Kind == ComponentFieldKind::String || field.Type.Kind == ComponentFieldKind::Enum);
+			// Text or Asset on another field would be ignored: say so rather than animate what an agent did not mean.
 			if (!text && !key.Text.empty())
-				return fmt::format("Text must be empty: {} is {} (keys use Value)", field.Leaf, DescribeKind(field.Type));
+				return fmt::format("Text must be empty: {} is {} (keys use {})", field.Leaf, DescribeKind(field), field.IsAsset ? "Asset" : "Value");
+			if (!field.IsAsset && !key.Asset.empty())
+				return fmt::format("Asset must be empty: {} is {} (keys use {})", field.Leaf, DescribeKind(field), text ? "Text" : "Value");
 			switch (field.Type.Kind)
 			{
 				case ComponentFieldKind::Integer:
@@ -95,6 +105,8 @@ namespace Basalt {
 			const auto& left = next == track.Keys.begin() ? *next : *std::prev(next);
 			const auto& right = next == track.Keys.end() ? left : *next;
 			const ComponentFieldType& type = field.Type;
+			if (field.IsAsset)
+				return left.Asset;
 			switch (type.Kind)
 			{
 				case ComponentFieldKind::Integer:
@@ -123,6 +135,25 @@ namespace Basalt {
 			for (int lane = 0; lane < static_cast<int>(type.Count); lane++)
 				value.push_back(lerpLane(lane));
 			return value;
+		}
+
+		// Starts loading what asset tracks name, so the first pass through their keys does not show placeholders. Only the
+		// kinds renderers stream: anything else loads when its component reads it.
+		void PreloadAssets(const PropertyAnimationComponent& animation)
+		{
+			for (const PropertyAnimationTrack& track : animation.Tracks)
+			{
+				const auto field = PropertyAnimation::ResolveField(track.Component, track.Field);
+				if (!field || !field->IsAsset)
+					continue;
+				for (const PropertyAnimationKey& key : track.Keys)
+				{
+					if (AssetManager::IsTextureFile(key.Asset))
+						AssetManager::RequestTexture(key.Asset);
+					else if (AssetManager::IsMeshFile(key.Asset))
+						AssetManager::RequestMesh(key.Asset);
+				}
+			}
 		}
 
 		// How a path picks element `index` of `list`: by its unique name when that picks it alone and reads as a name
@@ -259,7 +290,7 @@ namespace Basalt {
 		if (!info)
 			return fail(fmt::format("there is no component '{}'", component));
 		if (!info->SupportsPropertyAnimation)
-			return fail(fmt::format("{} cannot be animated (physics configuration and PropertyAnimation are excluded)", component));
+			return fail(fmt::format("{} cannot be animated", component));
 		// The schema the next name is looked up in: the component's, then each picked element's.
 		struct Schema
 		{
@@ -269,6 +300,8 @@ namespace Basalt {
 		} schema{ &info->FieldTypes, &info->EnumOptions, &info->AssetFields };
 		PropertyAnimationField result;
 		std::string_view rest = field;
+		// The path with its selectors left out, as ComponentInfo::LiveFields spells it.
+		std::string declared;
 		while (true)
 		{
 			const size_t end = rest.find_first_of("[.");
@@ -278,6 +311,7 @@ namespace Basalt {
 			const auto type = schema.Types->find(name);
 			if (type == schema.Types->end())
 				return fail(fmt::format("{} has no field '{}'", component, name));
+			declared += name;
 			if (end == std::string_view::npos)
 			{
 				result.Leaf = name;
@@ -309,17 +343,19 @@ namespace Basalt {
 				step.Selector = std::string(selector);
 			result.Steps.push_back(std::move(step));
 			schema = { &element.FieldTypes, &element.EnumOptions, &element.AssetFields };
+			declared += "[].";
 			rest = rest.substr(close + 2);
 		}
+		if (!info->LiveFields.empty() && std::ranges::find(info->LiveFields, declared) == info->LiveFields.end())
+			return fail(fmt::format("{}.{} rebuilds the physics object when it changes, which ends its contacts or resets its rest pose, so tracks do not animate it (they can animate {})", component, declared, fmt::join(info->LiveFields, ", ")));
 		const ComponentFieldType& type = result.Type;
-		if (std::ranges::find(*schema.Assets, result.Leaf) != schema.Assets->end())
-			return fail(fmt::format("{} names an asset, which tracks do not animate", result.Leaf));
+		result.IsAsset = std::ranges::find(*schema.Assets, result.Leaf) != schema.Assets->end();
 		// Renaming the element mid-timeline would lose it (and the state systems key by that name).
 		if (!result.Steps.empty() && result.Leaf == result.Steps.back().UniqueField)
 			return fail(fmt::format("{} names its list element, which tracks do not animate", result.Leaf));
 		const bool supported = result.IsDiscrete() ? type.Count == 0 : type.Kind == ComponentFieldKind::Number && type.Count <= 4 && (!type.QuaternionRotation || type.Count == 3);
 		if (!supported)
-			return fail(fmt::format("{} is {}; tracks animate numbers (up to 4 lanes) and single integers, booleans, strings and enums", result.Leaf, DescribeKind(type)));
+			return fail(fmt::format("{} is {}; tracks animate numbers (up to 4 lanes) and single integers, booleans, strings, enums and asset references", result.Leaf, DescribeKind(type)));
 		if (type.Kind == ComponentFieldKind::Enum)
 		{
 			const auto options = schema.Enums->find(result.Leaf);
@@ -340,6 +376,11 @@ namespace Basalt {
 		return fields;
 	}
 
+	Entity PropertyAnimation::ResolveTarget(Entity timeline, UUID target)
+	{
+		return target == 0 ? timeline : timeline.GetScene()->GetEntityByUUID(target);
+	}
+
 	bool PropertyAnimation::Sample(Entity entity, const PropertyAnimationComponent& animation, float time, std::string& outError)
 	{
 		if (!entity || !std::isfinite(time) || time < 0 || time > 1)
@@ -352,31 +393,39 @@ namespace Basalt {
 		if (!outError.empty())
 			return false;
 		BS_CORE_ASSERT(fields.size() == animation.Tracks.size(), "a valid timeline resolves every track, in order");
-		// Each component's JSON as serialized and as the tracks leave it, so tracks into one list compose and the list is
-		// patched once.
+		// Each animated component's JSON as serialized and as the tracks leave it, so tracks into one list compose and the
+		// list is patched once.
 		struct Working
 		{
+			Entity Target;
 			nlohmann::json Original;
 			nlohmann::json Current;
 		};
-		std::map<std::string, Working> components;
+		std::map<std::pair<uint64_t, std::string>, Working> components;
 		for (size_t i = 0; i < animation.Tracks.size(); i++)
 		{
 			const PropertyAnimationTrack& track = animation.Tracks[i];
 			if (track.Keys.empty())
 				continue;
-			const auto location = [&] { return track.Component + "." + track.Field; };
+			const auto location = [&] { return track.Target == 0 ? track.Component + "." + track.Field : fmt::format("{}.{} of entity {}", track.Component, track.Field, static_cast<uint64_t>(track.Target)); };
+			const Entity target = ResolveTarget(entity, track.Target);
+			if (!target)
+			{
+				outError = location() + ": the entity is not in the scene";
+				return false;
+			}
 			const auto* info = ComponentRegistry::Find(track.Component);
-			if (!info->Has(entity))
+			if (!info->Has(target))
 			{
 				outError = fmt::format("{}: the entity has no {}", location(), track.Component);
 				return false;
 			}
-			auto [entry, inserted] = components.try_emplace(track.Component);
+			auto [entry, inserted] = components.try_emplace({ static_cast<uint64_t>(target.GetUUID()), track.Component });
 			Working& working = entry->second;
 			if (inserted)
 			{
-				working.Original = info->Serialize(entity);
+				working.Target = target;
+				working.Original = info->Serialize(target);
 				working.Current = working.Original;
 			}
 			std::string problem;
@@ -390,20 +439,20 @@ namespace Basalt {
 			if (nlohmann::json value = SampleTrack(track, fields[i], time); !SameValue(fields[i].Type, *current, value))
 				*current = std::move(value);
 		}
-		for (const auto& [component, working] : components)
+		for (const auto& [key, working] : components)
 		{
 			// Only fields a track changed differ (a list two tracks changed and changed back does not).
 			nlohmann::json patch = nlohmann::json::object();
 			for (const auto& [name, value] : working.Current.items())
 				if (value != working.Original.at(name))
 					patch[name] = value;
-			if (!patch.empty() && !ComponentRegistry::AddOrPatch(entity, component, patch, outError))
+			if (!patch.empty() && !ComponentRegistry::AddOrPatch(working.Target, key.second, patch, outError))
 				return false;
 		}
 		return true;
 	}
 
-	bool PropertyAnimation::Key(Entity entity, const std::string& component, const std::string& field, float time, std::string& outError)
+	bool PropertyAnimation::Key(Entity entity, const std::string& component, const std::string& field, float time, std::string& outError, UUID target)
 	{
 		if (!entity || !std::isfinite(time) || time < 0 || time > 1)
 		{
@@ -418,15 +467,19 @@ namespace Basalt {
 		};
 		if (!resolved)
 			return fail(problem);
+		const Entity owner = ResolveTarget(entity, target);
+		if (!owner)
+			return fail(fmt::format("entity {} is not in the scene", static_cast<uint64_t>(target)));
 		const auto* info = ComponentRegistry::Find(component);
-		if (!info->Has(entity))
+		if (!info->Has(owner))
 			return fail("the entity has no " + component);
-		nlohmann::json data = info->Serialize(entity);
+		nlohmann::json data = info->Serialize(owner);
 		const nlohmann::json* value = resolved->Find(data, problem);
 		if (!value)
 			return fail(problem);
 		nlohmann::json lanes = nlohmann::json::array({ 0.0f, 0.0f, 0.0f, 0.0f });
 		std::string text;
+		std::string asset;
 		const ComponentFieldType& type = resolved->Type;
 		// The registry writes each field as its declared kind; a value of another type is reported, never thrown on.
 		const auto mismatched = [&] { return fail(fmt::format("its value {} is not {}", value->dump(), DescribeKind(type))); };
@@ -451,8 +504,8 @@ namespace Basalt {
 			case ComponentFieldKind::Enum:
 				if (!value->is_string())
 					return mismatched();
-				text = value->get<std::string>();
-				if (text.size() > PropertyAnimationKey::MaxTextLength)
+				(resolved->IsAsset ? asset : text) = value->get<std::string>();
+				if (text.size() + asset.size() > PropertyAnimationKey::MaxTextLength)
 					return fail(fmt::format("its value is longer than {} bytes", PropertyAnimationKey::MaxTextLength));
 				break;
 			default:
@@ -474,12 +527,14 @@ namespace Basalt {
 		const auto* animationInfo = ComponentRegistry::Find("PropertyAnimation");
 		auto animation = animationInfo->Has(entity) ? animationInfo->Serialize(entity) : nlohmann::json{ { "Tracks", nlohmann::json::array() } };
 		auto& tracks = animation["Tracks"];
-		// A track spelled the same way, else one reaching the same field another way ("Layers[0].Weight" keys the track
-		// written "Layers[Upper].Weight"). A track of the component that reaches nothing now would fail every sample, so
-		// keying past it is refused rather than reported as done.
+		// A track of that entity spelled the same way, else one reaching the same field another way ("Layers[0].Weight" keys
+		// the track written "Layers[Upper].Weight"). A track of the component that reaches nothing now would fail every
+		// sample, so keying past it is refused rather than reported as done.
 		std::string stale;
+		const uint64_t self = entity.GetUUID(), wanted = owner.GetUUID();
 		const auto reaches = [&](const nlohmann::json& existing) {
-			if (existing.at("Component") != component)
+			const uint64_t existingTarget = existing.at("Target");
+			if (existing.at("Component") != component || (existingTarget == 0 ? self : existingTarget) != wanted)
 				return false;
 			const std::string& spelling = existing.at("Field").get_ref<const std::string&>();
 			std::string unreachable;
@@ -507,7 +562,7 @@ namespace Basalt {
 			return fail(stale);
 		if (track == tracks.end())
 		{
-			tracks.push_back({ { "Component", component }, { "Field", field }, { "Stepped", resolved->IsDiscrete() }, { "Keys", nlohmann::json::array() } });
+			tracks.push_back({ { "Component", component }, { "Field", field }, { "Target", wanted == self ? 0 : wanted }, { "Stepped", resolved->IsDiscrete() }, { "Keys", nlohmann::json::array() } });
 			track = std::prev(tracks.end());
 		}
 		auto& keys = (*track)["Keys"];
@@ -516,9 +571,10 @@ namespace Basalt {
 		{
 			(*key)["Value"] = lanes;
 			(*key)["Text"] = text;
+			(*key)["Asset"] = asset;
 		}
 		else
-			keys.push_back({ { "Time", time }, { "Value", lanes }, { "Text", text } });
+			keys.push_back({ { "Time", time }, { "Value", lanes }, { "Text", text }, { "Asset", asset } });
 		std::sort(keys.begin(), keys.end(), [](const auto& a, const auto& b) { return a.at("Time") < b.at("Time"); });
 		return ComponentRegistry::AddOrPatch(entity, "PropertyAnimation", animation, outError);
 	}
@@ -548,7 +604,11 @@ namespace Basalt {
 	{
 		auto [it, inserted] = m_Clocks.try_emplace(entity.GetUUID());
 		if (inserted)
-			it->second.Playing = entity.GetComponent<PropertyAnimationComponent>().PlayOnStart;
+		{
+			const auto& animation = entity.GetComponent<PropertyAnimationComponent>();
+			it->second.Playing = animation.PlayOnStart;
+			PreloadAssets(animation);
+		}
 		return it->second;
 	}
 	nlohmann::json PropertyAnimationSystem::Status(Entity entity) const

@@ -24,7 +24,7 @@ Components, Lua, automation snapshots and replay hashes continue to expose paths
 start-scene UUID opens the project with no start scene and a diagnostic, preserving its reference across
 unrelated saves until `project.set startScene` explicitly repairs or clears it. Asset fields are
 marked once in ComponentRegistry and shared by persistence and rename; a list element's asset field (an Animator's
-`ClipLibraries[].Mesh`) is declared as `List[].Field` and handled the same way in every element. Paths inside arbitrary script
+`ClipLibraries[].Mesh`, a property key's `Tracks[].Keys[].Asset`) is declared as `List[].Field`, at any depth, and handled the same way in every element. Paths inside arbitrary script
 properties, script source, module imports, animation clip names and external glTF resource URIs are
 not rewritten or assigned IDs by scene persistence.
 
