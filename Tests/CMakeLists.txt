@@ -19,7 +19,7 @@ target_compile_definitions(BasaltTests PRIVATE BASALT_TEST_DATA_DIR="${CMAKE_CUR
 set(basaltTestShards Editor Physics Animation Core)
 set(basaltTestShard_Editor EditorHistoryTests EditorReviewTests JointAssetDraftTests)
 set(basaltTestShard_Physics PhysicsTests CharacterControllerTests RagdollTests BenchmarkTests)
-set(basaltTestShard_Animation AnimationTests SpringBoneTests MorphTargetTests InverseKinematicsTests RetargetingTests AnimationLayerTests)
+set(basaltTestShard_Animation AnimationTests SpringBoneTests MorphTargetTests InverseKinematicsTests RetargetingTests AnimationLayerTests PropertyTrackTests)
 set(basaltTestShard_Core CoreTests ScriptingTests AudioTests ProjectTests)
 set(basaltUnitTests "")
 set(basaltShardPatterns "")

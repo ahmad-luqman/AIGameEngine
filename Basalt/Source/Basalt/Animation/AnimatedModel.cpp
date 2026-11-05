@@ -420,8 +420,8 @@ namespace Basalt {
 			}
 		}
 
-		// Keyed tracks whose target is not there now (a component removed, a list element renamed or removed), which would
-		// fail and suspend the timeline, and keyed tracks a later one hides by reaching the same field.
+		// Keyed tracks whose target is not there now (an entity or component removed, a list element renamed or removed), which
+		// would fail and suspend the timeline, and keyed tracks a later one hides by reaching the same field.
 		void AddPropertyAnimationWarnings(Entity entity, const PropertyAnimationComponent& timeline, std::vector<std::string>& warnings)
 		{
 			// The registry validates what it writes; C++ code may not.
@@ -430,7 +430,7 @@ namespace Basalt {
 				warnings.push_back("PropertyAnimation: " + problem);
 				return;
 			}
-			std::map<std::string, nlohmann::json> components;
+			std::map<std::pair<uint64_t, std::string>, nlohmann::json> components;
 			// The track reaching each field last, by the field's place in its component's JSON.
 			std::map<const nlohmann::json*, size_t> reachedBy;
 			for (size_t i = 0; i < timeline.Tracks.size(); i++)
@@ -446,13 +446,16 @@ namespace Basalt {
 				const auto* info = ComponentRegistry::Find(track.Component);
 				std::string problem;
 				const nlohmann::json* reached = nullptr;
-				if (!info->Has(entity))
+				const Entity target = PropertyAnimation::ResolveTarget(entity, track.Target);
+				if (!target)
+					problem = fmt::format("entity {} is not in the scene", static_cast<uint64_t>(track.Target));
+				else if (!info->Has(target))
 					problem = "the entity has no " + track.Component;
 				else
 				{
-					auto [data, inserted] = components.try_emplace(track.Component);
+					auto [data, inserted] = components.try_emplace({ static_cast<uint64_t>(target.GetUUID()), track.Component });
 					if (inserted)
-						data->second = info->Serialize(entity);
+						data->second = info->Serialize(target);
 					reached = field->Find(data->second, problem);
 				}
 				if (!problem.empty())

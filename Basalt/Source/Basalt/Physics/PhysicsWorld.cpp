@@ -271,29 +271,20 @@ namespace Basalt {
 			warnings.emplace_back("unknown physics layer '" + rigidBody.Layer + "', using Default");
 		JPH::BodyCreationSettings settings(colliders.Shape, ToJolt(position), ToJolt(rotation), motionType, MakeObjectLayer(moving, layer));
 		settings.mUserData = static_cast<uint64_t>(entity.GetUUID());
-		const ColliderMaterial surface = SanitizeSurface(rigidBody.Friction, rigidBody.Restitution, "", warnings);
-		settings.mFriction = surface.Friction;
-		settings.mRestitution = surface.Restitution;
+		std::vector<std::string> buildWarnings = warnings;
+		const BodySettings checked = CheckBodySettings(rigidBody, warnings);
+		settings.mFriction = checked.Surface.Friction;
+		settings.mRestitution = checked.Surface.Restitution;
 		settings.mLinearDamping = rigidBody.LinearDamping;
 		settings.mAngularDamping = rigidBody.AngularDamping;
 		settings.mGravityFactor = rigidBody.GravityFactor;
 		settings.mIsSensor = rigidBody.IsTrigger;
 		settings.mAllowSleeping = rigidBody.AllowSleeping;
-		// Static bodies never sleep or wake and Jolt never puts a sensor to sleep, so turning sleeping off there has no effect.
-		if (!rigidBody.AllowSleeping && (motionType == JPH::EMotionType::Static || rigidBody.IsTrigger))
-			warnings.emplace_back("AllowSleeping only affects dynamic and kinematic bodies that are not triggers");
+		settings.mMotionQuality = checked.Quality;
 		// Kinematic triggers must also see static bodies; kinematic bodies are otherwise skipped vs static.
 		settings.mCollideKinematicVsNonDynamic = rigidBody.IsTrigger;
 		if (rigidBody.FixedRotation && motionType == JPH::EMotionType::Dynamic)
 			settings.mAllowedDOFs = JPH::EAllowedDOFs::TranslationX | JPH::EAllowedDOFs::TranslationY | JPH::EAllowedDOFs::TranslationZ;
-		// Jolt only sweeps dynamic, non-sensor bodies.
-		if (rigidBody.Continuous)
-		{
-			if (motionType == JPH::EMotionType::Dynamic && !rigidBody.IsTrigger)
-				settings.mMotionQuality = JPH::EMotionQuality::LinearCast;
-			else
-				warnings.emplace_back("Continuous only affects dynamic bodies that are not triggers");
-		}
 		reportWarnings();
 		// A triangle mesh has no volume, so Jolt cannot derive the mass a kinematic body still needs; a solid
 		// box of the shape's bounds stands in (kinematic bodies are not moved by forces, only its presence counts).
@@ -331,6 +322,9 @@ namespace Basalt {
 		record.LastPosition = position;
 		record.LastRotation = rotation;
 		record.BuiltScale = scale;
+		record.Settings = rigidBody;
+		record.Colliders = ColliderSettings::Capture(entity);
+		record.BuildWarnings = std::move(buildWarnings);
 		ScenePtr->GetRegistry().emplace<BodyRecord>(entity, std::move(record));
 		BodyToEntity[bodyID.GetIndexAndSequenceNumber()] = entity.GetUUID();
 		if (motionType == JPH::EMotionType::Dynamic)
@@ -413,26 +407,122 @@ namespace Basalt {
 		// Joint anchors are scaled with the body (see CreateJoint), so its joints are rebuilt from the current
 		// poses before the next step, as after any rebuild. Constraints must go before their body's shape changes.
 		RemoveJointsOfBody(entity.GetUUID());
-		// Jolt keeps the body's position (its origin) and re-evaluates its contacts without ending them.
-		// Shape cooking can omit a failed child, so replace its material table as well.
+		SwapBodyShape(entity, record, colliders);
+		record.BuiltScale = scale;
+	}
+
+	void PhysicsWorld::Impl::SwapBodyShape(Entity entity, BodyRecord& record, const ColliderShape& colliders)
+	{
 		System->GetBodyInterface().SetShape(record.ID, colliders.Shape, false, JPH::EActivation::Activate);
+		// Shape cooking can omit a failed child, so replace its material table as well.
 		BodyMaterial& material = ContactListener.Materials[record.ID.GetIndex()];
 		material.Colliders.reset();
 		if (std::ranges::any_of(colliders.Materials, &ColliderMaterial::Override))
 			material.Colliders = CreateScope<const ColliderMaterials>(colliders.Materials);
-		if (dynamic)
+		if (record.Type == RigidBodyType::Dynamic)
+			ApplyBodyMass(record, *colliders.Shape, entity.GetComponent<RigidBodyComponent>().Mass);
+	}
+
+	void PhysicsWorld::Impl::ApplyBodyMass(BodyRecord& record, const JPH::Shape& shape, float mass)
+	{
+		// As in RecreateBody: the shape's inertia at the component's mass, not at Jolt's density.
+		JPH::BodyLockWrite lock(System->GetBodyLockInterface(), record.ID);
+		if (lock.Succeeded())
 		{
-			// As in RecreateBody: the new shape's inertia at the component's mass, not at Jolt's density.
-			JPH::BodyLockWrite lock(System->GetBodyLockInterface(), record.ID);
-			if (lock.Succeeded())
-			{
-				JPH::MotionProperties* motion = lock.GetBody().GetMotionProperties();
-				JPH::MassProperties mass = colliders.Shape->GetMassProperties();
-				mass.ScaleToMass(std::max(entity.GetComponent<RigidBodyComponent>().Mass, 0.001f));
-				motion->SetMassProperties(motion->GetAllowedDOFs(), mass);
-			}
+			JPH::MotionProperties* motion = lock.GetBody().GetMotionProperties();
+			JPH::MassProperties properties = shape.GetMassProperties();
+			properties.ScaleToMass(std::max(mass, 0.001f));
+			motion->SetMassProperties(motion->GetAllowedDOFs(), properties);
 		}
-		record.BuiltScale = scale;
+	}
+
+	bool PhysicsWorld::Impl::UpdateInPlace(Entity entity)
+	{
+		const UUID uuid = entity.GetUUID();
+		if (RagdollReplacesBody(uuid))
+			return false;
+		const ColliderSettings colliders = ColliderSettings::Capture(entity);
+		if (auto* record = FindBody(entity))
+		{
+			const auto* rigidBody = entity.TryGetComponent<RigidBodyComponent>();
+			if (!rigidBody || entity.HasComponent<CharacterControllerComponent>() || BodyNeedsRebuild(record->Settings, *rigidBody) || !colliders.SameChildren(record->Colliders))
+				return false;
+			// Rewriting the same values must not wake the body or its neighbours.
+			return (colliders == record->Colliders && *rigidBody == record->Settings) || UpdateBody(entity, *record, colliders);
+		}
+		const auto character = Characters.find(uuid);
+		if (character == Characters.end() || !entity.HasComponent<CharacterControllerComponent>() || entity.HasComponent<RigidBodyComponent>() != character->second.IgnoresRigidBody || !colliders.SameChildren(character->second.Colliders))
+			return false;
+		if (colliders != character->second.Colliders)
+		{
+			character->second.Colliders = colliders;
+			ResizeCharacter(entity, character->second.BuiltScale);
+			RefreshCharacterContacts(entity);
+		}
+		return true;
+	}
+
+	bool PhysicsWorld::Impl::UpdateBody(Entity entity, BodyRecord& record, const ColliderSettings& colliders)
+	{
+		JPH::BodyInterface& bodies = System->GetBodyInterface();
+		const auto& rigidBody = entity.GetComponent<RigidBodyComponent>();
+		JPH::AABox bounds = bodies.GetTransformedShape(record.ID).GetWorldSpaceBounds();
+		std::vector<std::string> warnings = record.BuildWarnings;
+		if (colliders != record.Colliders)
+		{
+			warnings.clear();
+			const ColliderShape shape = BuildColliderShape(entity, record.BuiltScale, 1.0f, record.Type == RigidBodyType::Dynamic ? "a dynamic body" : nullptr, record.IsTrigger, true, warnings);
+			if (!shape.Shape)
+				return false;
+			const JPH::Vec3 previousCenter = bodies.GetShape(record.ID)->GetCenterOfMass();
+			SwapBodyShape(entity, record, shape);
+			// The anchors do not depend on the colliders' size, so unlike a rescale this leaves joints standing. Rebuilding
+			// would reset their rest poses every frame of an animated collider, and with them every limit.
+			if (const JPH::Vec3 moved = shape.Shape->GetCenterOfMass() - previousCenter; moved != JPH::Vec3::sZero())
+				for (const auto& [holder, joint] : Joints)
+					if (joint.Body == entity.GetUUID() || joint.Settings.ConnectedEntity == entity.GetUUID())
+						joint.Constraint->NotifyShapeChanged(record.ID, moved);
+			if (!Layers.Find(rigidBody.Layer))
+				warnings.emplace_back("unknown physics layer '" + rigidBody.Layer + "', using Default");
+			record.Colliders = colliders;
+			record.BuildWarnings = warnings;
+			bounds.Encapsulate(bodies.GetTransformedShape(record.ID).GetWorldSpaceBounds());
+		}
+		const BodySettings checked = CheckBodySettings(rigidBody, warnings);
+		bodies.SetFriction(record.ID, checked.Surface.Friction);
+		bodies.SetRestitution(record.ID, checked.Surface.Restitution);
+		BodyMaterial& material = ContactListener.Materials[record.ID.GetIndex()];
+		material.FrictionCombine = rigidBody.FrictionCombine;
+		material.RestitutionCombine = rigidBody.RestitutionCombine;
+		if (record.Type != RigidBodyType::Static)
+		{
+			bodies.SetGravityFactor(record.ID, rigidBody.GravityFactor);
+			bodies.SetMotionQuality(record.ID, checked.Quality);
+			{
+				JPH::BodyLockWrite lock(System->GetBodyLockInterface(), record.ID);
+				if (lock.Succeeded())
+				{
+					JPH::MotionProperties* motion = lock.GetBody().GetMotionProperties();
+					motion->SetLinearDamping(rigidBody.LinearDamping);
+					motion->SetAngularDamping(rigidBody.AngularDamping);
+					lock.GetBody().SetAllowSleeping(rigidBody.AllowSleeping);
+				}
+			}
+			if (record.Type == RigidBodyType::Dynamic && rigidBody.Mass != record.Settings.Mass)
+				ApplyBodyMass(record, *bodies.GetShape(record.ID), rigidBody.Mass);
+			bodies.ActivateBody(record.ID);
+		}
+		// What rests on a static or kinematic body sleeps on, not linked to it, while the ground changes under it: a
+		// floor turning to ice must set its crates sliding. A body that moves wakes what it touches by itself.
+		if (record.Type != RigidBodyType::Dynamic)
+		{
+			constexpr float TouchMargin = 0.05f;
+			bounds.ExpandBy(JPH::Vec3::sReplicate(TouchMargin));
+			bodies.ActivateBodiesInAABox(bounds, JPH::BroadPhaseLayerFilter(), JPH::ObjectLayerFilter());
+		}
+		record.Settings = rigidBody;
+		BodyWarnings.Report(entity, warnings);
+		return true;
 	}
 
 	void PhysicsWorld::OnEntityDestroyed(Entity entity)
@@ -478,6 +568,8 @@ namespace Basalt {
 			Entity entity = ScenePtr->GetEntityByUUID(uuid);
 			if (entity)
 			{
+				if (UpdateInPlace(entity))
+					continue;
 				RecreateBody(entity);
 				RecreateCharacter(entity);
 			}

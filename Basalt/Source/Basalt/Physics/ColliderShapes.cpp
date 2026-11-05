@@ -24,6 +24,53 @@ namespace Basalt::PhysicsInternal {
 		return { .Override = true, .Friction = std::max(friction, 0.0f), .Restitution = std::clamp(restitution, 0.0f, 1.0f) };
 	}
 
+	ColliderSettings ColliderSettings::Capture(Entity entity)
+	{
+		ColliderSettings colliders;
+		const auto capture = [&]<typename Component>(std::optional<Component>& slot) {
+			if (const auto* collider = entity.TryGetComponent<Component>())
+				slot = *collider;
+		};
+		capture(colliders.Box);
+		capture(colliders.Sphere);
+		capture(colliders.Capsule);
+		capture(colliders.Mesh);
+		if (colliders.Mesh && colliders.Mesh->Mesh.empty())
+			if (const auto* mesh = entity.TryGetComponent<MeshComponent>())
+				colliders.BorrowedMesh.emplace(mesh->Mesh, mesh->MeshIndex);
+		return colliders;
+	}
+
+	bool ColliderSettings::SameChildren(const ColliderSettings& other) const
+	{
+		if (Box.has_value() != other.Box.has_value() || Sphere.has_value() != other.Sphere.has_value() || Capsule.has_value() != other.Capsule.has_value() || Mesh.has_value() != other.Mesh.has_value())
+			return false;
+		return !Mesh || (Mesh->Mesh == other.Mesh->Mesh && Mesh->MeshIndex == other.Mesh->MeshIndex && Mesh->Convex == other.Mesh->Convex && BorrowedMesh == other.BorrowedMesh);
+	}
+
+	bool BodyNeedsRebuild(const RigidBodyComponent& built, const RigidBodyComponent& current)
+	{
+		return built.Type != current.Type || built.IsTrigger != current.IsTrigger || built.FixedRotation != current.FixedRotation || built.Layer != current.Layer;
+	}
+
+	BodySettings CheckBodySettings(const RigidBodyComponent& rigidBody, std::vector<std::string>& warnings)
+	{
+		BodySettings settings;
+		settings.Surface = SanitizeSurface(rigidBody.Friction, rigidBody.Restitution, "", warnings);
+		// Static bodies never sleep or wake and Jolt never puts a sensor to sleep, so turning sleeping off there has no effect.
+		if (!rigidBody.AllowSleeping && (rigidBody.Type == RigidBodyType::Static || rigidBody.IsTrigger))
+			warnings.emplace_back("AllowSleeping only affects dynamic and kinematic bodies that are not triggers");
+		// Jolt only sweeps dynamic, non-sensor bodies.
+		if (rigidBody.Continuous)
+		{
+			if (rigidBody.Type == RigidBodyType::Dynamic && !rigidBody.IsTrigger)
+				settings.Quality = JPH::EMotionQuality::LinearCast;
+			else
+				warnings.emplace_back("Continuous only affects dynamic bodies that are not triggers");
+		}
+		return settings;
+	}
+
 	ColliderShape BuildColliderShape(Entity entity, const glm::vec3& signedScale, float sizeFraction, const char* convexReason, bool isTrigger, bool useMaterials, std::vector<std::string>& warnings)
 	{
 		const glm::vec3 scale = glm::abs(signedScale) * sizeFraction;

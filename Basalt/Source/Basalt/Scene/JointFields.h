@@ -27,6 +27,9 @@ namespace Basalt {
 	// Every JointComponent field name, in declaration order (the same list the component registry reads).
 	const std::vector<std::string>& GetJointFieldNames();
 
+	// The JointComponent fields a joint in play applies in place, in declaration order.
+	const std::vector<std::string>& GetLiveJointFieldNames();
+
 	// The fields set away from their defaults that this joint ignores, in declaration order.
 	std::vector<std::string> GetIgnoredJointFields(const JointComponent& joint);
 

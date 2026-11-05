@@ -601,8 +601,8 @@ TEST_SUITE("Scripting")
 			scene.OnUpdate(Step);
 		REQUIRE(Field(scene, ball, "Begins") == 1);
 
-		// A collider change rebuilds the body: the old body is gone, so neither side gets a contact.
-		ball.AddOrReplaceComponent<SphereColliderComponent>(SphereColliderComponent{ .Radius = 0.45f });
+		// A structural change rebuilds the body: the old body is gone, so neither side gets a contact.
+		ball.AddOrReplaceComponent<RigidBodyComponent>(RigidBodyComponent{ .Type = RigidBodyType::Dynamic, .FixedRotation = true });
 		for (int i = 0; i < 30; i++)
 			scene.OnUpdate(Step);
 		CHECK(Field(scene, ball, "NilEnds") == 1);

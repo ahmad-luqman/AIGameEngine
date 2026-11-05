@@ -338,7 +338,7 @@ namespace Basalt {
 								continue;
 							if (const auto* info = ComponentRegistry::Find(component))
 								for (const auto& assetField : info->AssetFields)
-									ForEachAssetValue(fields, assetField, [&](const nlohmann::json& value, const std::string&) {
+									ForEachFieldValue(fields, assetField, [&](const nlohmann::json& value, const std::string&) {
 										if (value.is_string() && !value.get_ref<const std::string&>().empty())
 											paths.insert(value.get<std::string>());
 									});

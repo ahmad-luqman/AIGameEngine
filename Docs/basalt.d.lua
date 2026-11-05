@@ -2019,6 +2019,7 @@ function BasaltScript:StopAllCoroutines() end
 ---@class PropertyAnimationTrack
 ---@field Component string
 ---@field Field string
+---@field Target integer
 ---@field Stepped boolean
 ---@field Keys PropertyAnimationKey[]
 
@@ -2027,6 +2028,7 @@ function BasaltScript:StopAllCoroutines() end
 ---@field Time number
 ---@field Value number[]
 ---@field Text string
+---@field Asset string
 
 ---An element of a component list field.
 ---@class IKChain

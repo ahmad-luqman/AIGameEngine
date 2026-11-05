@@ -870,7 +870,8 @@ TEST_SUITE("Serialization")
 					for (const nlohmann::json& component : value)
 						CHECK(MatchesFieldKind(component, fieldType.Kind, enumOptions));
 				}
-				CHECK(fieldType.Kind != ComponentFieldKind::Entity);
+				if (fieldType.Kind == ComponentFieldKind::Entity)
+					CHECK(path == "PropertyAnimation.Tracks");
 				if (fieldType.Kind == ComponentFieldKind::List)
 					checkList(fmt::format("{}.{}", path, field), fieldType);
 			}
@@ -916,6 +917,11 @@ TEST_SUITE("Serialization")
 			else if (info.Name == "UINavigation")
 			{
 				CHECK(info.EntityFields == std::vector<std::string>{ "Up", "Down", "Left", "Right" });
+				CHECK(info.RemapEntityReferences);
+			}
+			else if (info.Name == "PropertyAnimation")
+			{
+				CHECK(info.EntityFields == std::vector<std::string>{ "Tracks[].Target" });
 				CHECK(info.RemapEntityReferences);
 			}
 			else

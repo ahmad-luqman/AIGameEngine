@@ -101,7 +101,7 @@ TEST_SUITE("Ragdolls")
 		Entity entity = Rig(scene);
 		const auto* info = ComponentRegistry::Find("Ragdoll");
 		REQUIRE(info);
-		CHECK_FALSE(info->SupportsPropertyAnimation);
+		CHECK(std::ranges::find(info->LiveFields, "Enabled") == info->LiveFields.end());
 		std::string error;
 		const json valid = { { "Enabled", true }, { "Bones", { { { "Joint", "Tip" }, { "Radius", 0.1 }, { "Length", 0.4 }, { "SwingAngle", 20 }, { "TwistMin", -10 } } } } };
 		REQUIRE(info->Deserialize(entity, valid, error));

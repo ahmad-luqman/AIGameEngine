@@ -66,13 +66,14 @@ Controls a PropertyAnimation in Play or Simulate. action is Play (restart at zer
 
 ### `animation.key`
 
-Captures an existing component field into this entity's PropertyAnimation timeline at normalized time [0,1]: a number (up to 4 lanes), integer, boolean, string or enum, top-level or inside list elements picked by index or name ("Layers[Upper].Weight"). Creates the component/track as needed (Stepped for integer, boolean, string and enum fields, which always step), inserts sorted keys and replaces an exact-time key. Unused Value lanes are zero; strings and enums go in Text. All writes use ComponentRegistry.
+Captures an existing component field of this entity, or of `target`, into this entity's PropertyAnimation timeline at normalized time [0,1]: a number (up to 4 lanes), integer, boolean, string, enum or asset reference, top-level or inside list elements picked by index or name ("Layers[Upper].Weight"). Creates the component/track as needed (Stepped for integer, boolean, string, enum and asset fields, which always step), inserts sorted keys and replaces an exact-time key. Unused Value lanes are zero; strings and enums go in Text, asset references in Asset. All writes use ComponentRegistry.
 
 | Parameter | Type / description |
 |-----------|--------------------|
 | `component` | component name |
-| `entity` | ID or name |
+| `entity` | ID or name of the entity holding the timeline |
 | `field` | field or path, e.g. Translation or Layers[Upper].Weight |
+| `target` | ID or name of the entity animated, default the timeline's own |
 | `time` | normalized time |
 
 <details><summary>Parameter JSON Schema</summary>
@@ -100,12 +101,28 @@ Captures an existing component field into this entity's PropertyAnimation timeli
           "type": "integer"
         }
       ],
-      "description": "ID or name"
+      "description": "ID or name of the entity holding the timeline"
     },
     "field": {
       "description": "field or path, e.g. Translation or Layers[Upper].Weight",
       "minLength": 1,
       "type": "string"
+    },
+    "target": {
+      "anyOf": [
+        {
+          "description": "",
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "description": "",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        }
+      ],
+      "description": "ID or name of the entity animated, default the timeline's own"
     },
     "time": {
       "description": "normalized time",
@@ -1022,7 +1039,7 @@ Adds the component if missing and sets the given fields (others keep their value
 
 ### `component.types`
 
-Lists every component type with its fields (for component.set): their names in order, each field's JSON type ('number', 'integer', 'boolean', 'string', 'object', 'entity', 'enum', an array such as 'number[3]', or 'object[]' for a list of objects), the values of enum fields, the fields that reference entities, and for each list field its element type under 'lists' ({name, fields, types, enums, maxCount, default, lists, and uniqueField when one string field must differ between elements}; a set replaces the whole list). Includes quaternionRotations (Euler-degree fields sampled as quaternion orientations) and supportsPropertyAnimation (false for physics configuration components and PropertyAnimation itself).
+Lists every component type with its fields (for component.set): their names in order, each field's JSON type ('number', 'integer', 'boolean', 'string', 'object', 'entity', 'enum', an array such as 'number[3]', or 'object[]' for a list of objects), the values of enum fields, the fields that reference entities, and for each list field its element type under 'lists' ({name, fields, types, enums, maxCount, default, lists, and uniqueField when one string field must differ between elements}; a set replaces the whole list). entityFields names list element fields as 'List[].Field'. Includes quaternionRotations (Euler-degree fields sampled as quaternion orientations), supportsPropertyAnimation (false for PropertyAnimation, Prefab and Script) and, on physics configuration components, liveFields: the only fields tracks may animate, which physics applies in place.
 
 <details><summary>Parameter JSON Schema</summary>
 

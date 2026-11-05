@@ -118,7 +118,7 @@ TEST_SUITE("Animation authoring")
 			}
 		}
 	}
-	TEST_CASE("Capture ignores empty duplicate tracks and physics configuration is not animatable")
+	TEST_CASE("Capture ignores empty duplicate tracks and fields that are not animatable")
 	{
 		Scene scene;
 		auto entity = scene.CreateEntity();
@@ -141,9 +141,10 @@ TEST_SUITE("Animation authoring")
 			if (!info.SupportsPropertyAnimation)
 				for (const auto& field : info.Fields)
 					CHECK_FALSE(PropertyAnimation::ResolveField(info.Name, field));
-		entity.AddComponent<BoxColliderComponent>();
-		CHECK_FALSE(PropertyAnimation::Key(entity, "BoxCollider", "HalfExtents", 0, error));
-		CHECK_FALSE(ComponentRegistry::AddOrPatch(entity, "PropertyAnimation", { { "Tracks", json::array({ { { "Component", "RigidBody" }, { "Field", "Mass" } } }) } }, error));
+		entity.AddComponent<RigidBodyComponent>();
+		CHECK_FALSE(PropertyAnimation::Key(entity, "RigidBody", "Type", 0, error));
+		CHECK(error.find("rebuilds") != std::string::npos);
+		CHECK_FALSE(ComponentRegistry::AddOrPatch(entity, "PropertyAnimation", { { "Tracks", json::array({ { { "Component", "RigidBody" }, { "Field", "Type" } } }) } }, error));
 	}
 	TEST_CASE("Failed timelines log once suspend and require a successful repair")
 	{
@@ -268,7 +269,7 @@ TEST_SUITE("Animation authoring")
 		const auto* info = ComponentRegistry::Find("PropertyAnimation");
 		const auto baseline = info->Serialize(entity);
 		const json track = { { "Component", "Transform" }, { "Field", "Translation" } };
-		std::vector<json> invalid = { { { "Duration", 86401 } }, { { "Speed", 1001 } }, { { "Tracks", json::array({ { { "Component", "PropertyAnimation" }, { "Field", "Duration" } } }) } }, { { "Tracks", json::array({ { { "Component", "Animator" }, { "Field", "Mesh" } } }) } }, { { "Tracks", json::array({ { { "Component", "BoneAttachment" }, { "Field", "Target" } } }) } }, { { "Tracks", json::array({ { { "Component", "Animator" }, { "Field", "Layers" } } }) } } };
+		std::vector<json> invalid = { { { "Duration", 86401 } }, { { "Speed", 1001 } }, { { "Tracks", json::array({ { { "Component", "PropertyAnimation" }, { "Field", "Duration" } } }) } }, { { "Tracks", json::array({ { { "Component", "Script" }, { "Field", "Script" } } }) } }, { { "Tracks", json::array({ { { "Component", "BoneAttachment" }, { "Field", "Target" } } }) } }, { { "Tracks", json::array({ { { "Component", "Animator" }, { "Field", "Layers" } } }) } } };
 		for (const auto times : std::vector<glm::vec2>{ { .8f, .2f }, { -.1f, .2f }, { 0, 1.1f } })
 		{
 			auto bad = track;
@@ -378,9 +379,9 @@ TEST_SUITE("Animation authoring")
 		CHECK(edit.Text == "Walk");
 		CHECK(draft.Data["States"][1]["Name"] == "Walk");
 	}
-	TEST_CASE("The exact physics configuration set stays excluded from property animation")
+	TEST_CASE("Only what physics applies in place is animatable on physics configuration")
 	{
-		for (const char* name : { "RigidBody", "BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider", "Joint", "CharacterController", "Ragdoll", "PropertyAnimation" })
+		for (const char* name : { "PropertyAnimation", "Prefab", "Script" })
 		{
 			const auto* info = ComponentRegistry::Find(name);
 			REQUIRE(info);
@@ -388,9 +389,38 @@ TEST_SUITE("Animation authoring")
 			for (const auto& field : info->Fields)
 				CHECK_FALSE(PropertyAnimation::ResolveField(name, field));
 		}
+		for (const char* name : { "RigidBody", "BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider", "Joint", "CharacterController", "Ragdoll" })
+		{
+			const auto* info = ComponentRegistry::Find(name);
+			REQUIRE(info);
+			CHECK(info->SupportsPropertyAnimation);
+			CHECK_FALSE(info->LiveFields.empty());
+			for (const auto& field : info->Fields)
+				if (std::ranges::find(info->LiveFields, field) == info->LiveFields.end())
+				{
+					CAPTURE(field);
+					CHECK_FALSE(PropertyAnimation::ResolveField(name, field));
+				}
+		}
+		CHECK(PropertyAnimation::ResolveField("RigidBody", "Friction"));
+		CHECK(PropertyAnimation::ResolveField("Ragdoll", "Bones[0].MotorStrength"));
+		CHECK_FALSE(PropertyAnimation::ResolveField("Ragdoll", "Bones[0].Mass"));
 		CHECK(PropertyAnimation::ResolveField("Transform", "Translation"));
 		CHECK(PropertyAnimation::ResolveField("PointLight", "Intensity"));
 		CHECK(PropertyAnimation::ResolveField("Camera", "FOV"));
+		// Everything the registry lists as live is one a component really has.
+		for (const ComponentInfo& info : ComponentRegistry::GetAll())
+			for (const std::string& field : info.LiveFields)
+				if (const size_t list = field.find("[]."); list == std::string::npos)
+				{
+					CAPTURE(field);
+					CHECK(std::ranges::find(info.Fields, field) != info.Fields.end());
+				}
+				else
+				{
+					const ComponentObjectSchema& element = *info.FieldTypes.at(field.substr(0, list)).Element;
+					CHECK(std::ranges::find(element.Fields, field.substr(list + 3)) != element.Fields.end());
+				}
 	}
 	TEST_CASE("Clocks reset when ID destruction precedes timeline destruction")
 	{
@@ -690,7 +720,6 @@ TEST_SUITE("Animation authoring")
 		CHECK(PropertyAnimation::ResolveField("Animator", "Layers[Upper].Blend")->Type.Kind == ComponentFieldKind::Enum);
 		const std::vector<std::pair<std::string, std::string>> rejected = {
 			{ "Layers[Upper].Name", "names its list element" },
-			{ "Layers[Upper].MaskAsset", "names an asset" },
 			{ "Layers[Upper].Mask", "is a list field" },
 			{ "Layers[16].Weight", "holds at most 16 elements" },
 			// Past size_t: an overflow is no exception, just an element that cannot be there.
@@ -718,7 +747,8 @@ TEST_SUITE("Animation authoring")
 		CHECK(has(fields, "Layers[Upper].Weight"));
 		CHECK(has(fields, "Layers[Breath].Blend"));
 		CHECK_FALSE(has(fields, "Layers[Upper].Name"));
-		CHECK_FALSE(has(fields, "Mesh"));
+		CHECK(has(fields, "Mesh"));
+		CHECK(has(fields, "Layers[Upper].MaskAsset"));
 		CHECK(has(PropertyAnimation::ListFields(entity, "SpringBone"), "Chains[Hair].Colliders[0].Name"));
 		CHECK(PropertyAnimation::ListFields(entity, "Camera").empty());
 		// A name that cannot pick its element alone (only digits, empty, with ']', or used twice from C++ past Validate)
@@ -836,8 +866,14 @@ TEST_SUITE("Animation authoring")
 		{
 			if (info["name"] == "Transform")
 				CHECK(info["quaternionRotations"] == json::array({ "Rotation" }));
-			if (info["name"] == "RigidBody")
+			if (info["name"] == "PropertyAnimation")
 				CHECK(info["supportsPropertyAnimation"] == false);
+			if (info["name"] == "RigidBody")
+			{
+				CHECK(info["supportsPropertyAnimation"] == true);
+				CHECK(std::ranges::find(info["liveFields"], json("Friction")) != info["liveFields"].end());
+				CHECK(std::ranges::find(info["liveFields"], json("Type")) == info["liveFields"].end());
+			}
 		}
 		Run(commands, session, "scene.new");
 		Run(commands, session, "entity.create", { { "name", "Door" } });

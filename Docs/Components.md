@@ -206,11 +206,11 @@ Fields: `Source` (string), `Target` (string), `Offset` (number[3])
 
 ### PropertyAnimationTrack
 
-Fields: `Component` (string), `Field` (string), `Stepped` (boolean), `Keys` (list of [PropertyAnimationKey](#propertyanimationkey), at most 256)
+Fields: `Component` (string), `Field` (string), `Target` (entity), `Stepped` (boolean), `Keys` (list of [PropertyAnimationKey](#propertyanimationkey), at most 256)
 
 ### PropertyAnimationKey
 
-Fields: `Time` (number), `Value` (number[4]), `Text` (string)
+Fields: `Time` (number), `Value` (number[4]), `Text` (string), `Asset` (string)
 
 ### IKChain
 

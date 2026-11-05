@@ -114,9 +114,20 @@ namespace Basalt {
 				if (component == components->end() || !component->is_object())
 					continue;
 				for (const auto& field : info.EntityFields)
-					if (auto value = component->find(field); value != component->end())
-						visit(*value, false);
+					ForEachFieldValue(*component, field, [&](json& value, const std::string&) { visit(value, false); });
 			}
+		}
+
+		// A ForEachFieldValue label ("Tracks[2].Entity") as JSON pointer tokens ("Tracks/2/Entity").
+		std::string LabelPointer(const std::string& label)
+		{
+			std::string pointer;
+			for (const char c : label)
+				if (c == '[' || c == '.')
+					pointer += '/';
+				else if (c != ']')
+					pointer += c;
+			return pointer;
 		}
 
 		void RenumberReferences(json& record, const IdMap& ids)
@@ -2002,7 +2013,7 @@ namespace Basalt {
 				for (const auto& field : info.AssetFields)
 				{
 					bool stopped = false;
-					ForEachAssetValue(*component, field, [&](json& value, const std::string& label) {
+					ForEachFieldValue(*component, field, [&](json& value, const std::string& label) {
 						if (!stopped && !visit(value, record, info.Name + "." + label))
 							stopped = true;
 					});
@@ -2095,18 +2106,18 @@ namespace Basalt {
 				const auto* info = ComponentRegistry::Find(component);
 				if (!info || !fields.is_object())
 					continue;
+				const std::string& name = component;
 				for (const auto& field : info->EntityFields)
-				{
-					const auto value = fields.find(field);
-					if (value == fields.end() || *value == 0 || inPrefab(*value))
-						continue;
-					const json::json_pointer at("/" + PointerToken(key) + "/Components/" + PointerToken(component) + "/" + PointerToken(field));
-					const json previous = in.Next.ByKey.contains(at) ? in.Next.ByKey[at] : json(0);
-					if (*value == previous)
-						continue;
-					outWarnings.push_back(fmt::format("'{}' {}.{} references an entity outside the prefab; the prefab keeps its value", NameOf(record), component, field));
-					*value = previous;
-				}
+					ForEachFieldValue(fields, field, [&](json& value, const std::string& label) {
+						if (value == 0 || inPrefab(value))
+							return;
+						const json::json_pointer at("/" + PointerToken(key) + "/Components/" + PointerToken(name) + "/" + LabelPointer(label));
+						const json previous = in.Next.ByKey.contains(at) ? in.Next.ByKey[at] : json(0);
+						if (value == previous)
+							return;
+						outWarnings.push_back(fmt::format("'{}' {}.{} references an entity outside the prefab; the prefab keeps its value", NameOf(record), name, label));
+						value = previous;
+					});
 			}
 		}
 		Scene scratch("Apply prefab overrides");

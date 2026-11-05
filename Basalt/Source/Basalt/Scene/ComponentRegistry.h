@@ -53,8 +53,7 @@ namespace Basalt {
 		std::string ToString() const;
 	};
 
-	// The fields of one element of a List field (e.g. one Animator event). Elements may hold List fields of
-	// their own; they never hold entity references (only top-level fields are remapped and resolved by name).
+	// The fields of one element of a List field (e.g. one Animator event). Elements may hold List fields of their own.
 	struct ComponentObjectSchema
 	{
 		// Type name for tooling (the Lua class in Docs/basalt.d.lua), e.g. "AnimationEvent".
@@ -62,8 +61,9 @@ namespace Basalt {
 		std::vector<std::string> Fields;
 		std::map<std::string, ComponentFieldType> FieldTypes;
 		std::map<std::string, std::vector<std::string>> EnumOptions;
-		// Fields naming project assets, which the owning component declares as "List[].Field".
+		// Fields naming project assets and other entities, which the owning component declares as "List[].Field".
 		std::vector<std::string> AssetFields;
+		std::vector<std::string> EntityFields;
 		// A string field whose value must differ between the list's elements (empty: none). Editors give the
 		// elements they add or duplicate a fresh value; the owning component's Validate must reject duplicates (the
 		// registry does not).
@@ -89,9 +89,12 @@ namespace Basalt {
 		std::string Name;
 		// Core components (Tag, Transform) exist on every entity and cannot be added or removed.
 		bool IsCore = false;
-		// False for physics configuration components whose update signals reconstruct bodies/constraints.
-		// Their transforms can still be animated through Transform on kinematic entities.
+		// Whether property tracks may animate the component: not PropertyAnimation itself, a Prefab's tracking or a Script.
 		bool SupportsPropertyAnimation = true;
+		// When not empty, the only fields tracks may animate ("List[].Field" as in AssetFields): for physics configuration,
+		// those physics applies in place. Any other field rebuilds the body, character, joint or ragdoll when it changes,
+		// which ends its contacts or resets its rest pose.
+		std::vector<std::string> LiveFields;
 
 		std::function<bool(Entity)> Has;
 		// Adds a default-constructed component if missing.
@@ -107,10 +110,10 @@ namespace Basalt {
 		// Valid values of string-enum fields (e.g. RigidBody "Type"), for inspectors and validation messages.
 		std::map<std::string, std::vector<std::string>> EnumOptions;
 		// Fields naming project assets; persistence and move commands share this declaration. "List[].Field" names a
-		// field of every element of a list field (see ForEachAssetValue).
+		// field of every element of a list field, at any depth (see ForEachFieldValue).
 		std::vector<std::string> AssetFields;
-		// Fields that hold an entity UUID (collected from the field list). Tools may let users name entities
-		// there (see component.set), and inspectors show an entity picker.
+		// Fields that hold an entity UUID (collected from the field list; "List[].Field" as above). Tools may let users
+		// name entities there (see component.set), and inspectors show an entity picker.
 		std::vector<std::string> EntityFields;
 		// Rewrites the component's entity references (e.g. Joint "ConnectedEntity") through the map;
 		// references not in the map are kept, except that a copied prefab instance gives members it did not copy
@@ -118,18 +121,12 @@ namespace Basalt {
 		std::function<void(Entity, const std::unordered_map<UUID, UUID>&)> RemapEntityReferences;
 	};
 
-	// Whether a ComponentInfo::AssetFields entry names a field of a list's elements ("List[].Field").
-	inline bool IsListAssetField(std::string_view field)
-	{
-		return field.find("[].") != std::string_view::npos;
-	}
-
-	// Visits the values one ComponentInfo::AssetFields entry names in a component's JSON: the top-level field, or for
-	// "List[].Field" that field of every object element of the list (one list level only), with a label such as
-	// "ClipLibraries[2].Mesh" for messages. Returns whether the field (or the list) is present; absent element fields and
-	// non-object elements are skipped. Values are passed as they are (paths, UUID references, or anything malformed).
+	// Visits the values a ComponentInfo::AssetFields or EntityFields entry names in a component's JSON: the top-level field,
+	// or for "List[].Field" that field of every object element of the list, at any depth ("Tracks[].Keys[].Asset"), with a
+	// label such as "Tracks[2].Keys[0].Asset" for messages. Returns whether the field (or the first list) is present; absent
+	// element fields and non-object elements are skipped. Values are passed as they are (malformed ones included).
 	template<typename Json, typename Visit>
-	bool ForEachAssetValue(Json& component, const std::string& field, Visit&& visit)
+	bool ForEachFieldValue(Json& component, const std::string& field, Visit&& visit, const std::string& prefix = {})
 	{
 		if (!component.is_object())
 			return false;
@@ -139,7 +136,7 @@ namespace Basalt {
 			auto value = component.find(field);
 			if (value == component.end())
 				return false;
-			visit(*value, field);
+			visit(*value, prefix + field);
 			return true;
 		}
 		const std::string listName = field.substr(0, list);
@@ -149,15 +146,9 @@ namespace Basalt {
 			return false;
 		for (size_t i = 0; i < items->size(); i++)
 		{
-			auto& item = (*items)[i];
-			if (!item.is_object())
-				continue;
-			if (auto value = item.find(element); value != item.end())
-			{
-				std::string label = listName;
-				label.append("[").append(std::to_string(i)).append("].").append(element);
-				visit(*value, label);
-			}
+			std::string label = prefix + listName;
+			label.append("[").append(std::to_string(i)).append("].");
+			ForEachFieldValue((*items)[i], element, visit, label);
 		}
 		return true;
 	}

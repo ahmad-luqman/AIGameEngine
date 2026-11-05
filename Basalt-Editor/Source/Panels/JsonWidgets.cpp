@@ -4,12 +4,15 @@
 
 #include "Basalt/Core/Assert.h"
 #include "Basalt/Core/JsonUtils.h"
+#include "Basalt/Scene/Entity.h"
+#include "Basalt/Scene/Scene.h"
 
 #include <imgui.h>
 #include <imgui_stdlib.h>
 
 #include <algorithm>
 #include <optional>
+#include <string>
 #include <utility>
 
 namespace Basalt {
@@ -341,15 +344,59 @@ namespace Basalt {
 		return true;
 	}
 
-	JsonFieldResult DrawJsonValue(const std::string& name, nlohmann::json& value, const ComponentFieldType& type, const std::map<std::string, std::vector<std::string>>& enumOptions)
+	std::optional<uint64_t> DrawEntityPicker(Scene& scene, const std::string& name, uint64_t current, const std::function<bool(Entity)>& filter, const char* noneLabel)
+	{
+		std::string preview = noneLabel;
+		if (current != 0)
+		{
+			const Entity target = scene.GetEntityByUUID(current);
+			preview = target ? target.GetName() : "<missing " + std::to_string(current) + ">";
+		}
+		uint64_t selected = current;
+		if (ImGui::BeginCombo(name.c_str(), preview.c_str()))
+		{
+			if (ImGui::Selectable(noneLabel, current == 0))
+				selected = 0;
+			for (Entity candidate : scene.GetAllEntitiesOrdered())
+			{
+				if (!filter(candidate))
+					continue;
+				const uint64_t id = candidate.GetUUID();
+				ImGui::PushID(static_cast<int>(id ^ (id >> 32)));
+				if (ImGui::Selectable(candidate.GetName().c_str(), id == current))
+					selected = id;
+				ImGui::PopID();
+			}
+			ImGui::EndCombo();
+		}
+		return selected != current ? std::optional(selected) : std::nullopt;
+	}
+
+	JsonFieldResult DrawJsonValue(const std::string& name, nlohmann::json& value, const ComponentFieldType& type, const std::map<std::string, std::vector<std::string>>& enumOptions, Scene* scene)
 	{
 		if (type.Kind == ComponentFieldKind::List)
-			return DrawJsonList(name, value, type);
+			return DrawJsonList(name, value, type, scene);
+		if (type.Kind == ComponentFieldKind::Entity)
+		{
+			if (!scene)
+			{
+				ImGui::TextDisabled("%s: %s", name.c_str(), value.dump().c_str());
+				return {};
+			}
+			ImGui::PushID(name.c_str());
+			// 0 in a list element means the entity holding the list (a track's Target is the only such field).
+			const auto picked = DrawEntityPicker(*scene, name, value.get<uint64_t>(), [](Entity) { return true; }, "Self");
+			ImGui::PopID();
+			if (!picked)
+				return {};
+			value = *picked;
+			return { true, true };
+		}
 		const auto options = enumOptions.find(name);
 		return DrawJsonField(name, value, options == enumOptions.end() ? nullptr : &options->second);
 	}
 
-	JsonFieldResult DrawJsonList(const std::string& name, nlohmann::json& array, const ComponentFieldType& type)
+	JsonFieldResult DrawJsonList(const std::string& name, nlohmann::json& array, const ComponentFieldType& type, Scene* scene)
 	{
 		JsonFieldResult result;
 		if (!array.is_array() || !type.Element)
@@ -407,7 +454,7 @@ namespace Basalt {
 						BS_ASSERT(fieldType != schema.FieldTypes.end(), "every schema field has a type");
 						if (fieldType == schema.FieldTypes.end())
 							continue;
-						const JsonFieldResult fieldResult = DrawJsonValue(field, *value, fieldType->second, schema.EnumOptions);
+						const JsonFieldResult fieldResult = DrawJsonValue(field, *value, fieldType->second, schema.EnumOptions, scene);
 						result.Changed |= fieldResult.Changed;
 						result.Committed |= fieldResult.Committed;
 					}
