@@ -51,7 +51,7 @@ def check_animation_authoring(call, require, output):
     call("assert.component", {"entity": entity, "component": "Transform", "fields": {"Translation": [8, 4, 2]}})
     call("editor.redo")
     call("assert.component", {"entity": entity, "component": "Transform", "fields": {"Translation": [4, 2, 1]}})
-    # A track on another entity: capture and scrubbing both change that entity, and both undo.
+    # A track on another entity: capture records it, and scrubbing changes that entity and undoes.
     lamp = call("entity.create", {"name": "AuthoredLamp"})["id"]
     call("component.set", {"entity": lamp, "component": "PointLight", "data": {"Intensity": 1}})
     call("animation.key", {"entity": entity, "component": "PointLight", "field": "Intensity", "time": 0, "target": "AuthoredLamp"})

@@ -2407,7 +2407,8 @@ namespace Basalt {
 		std::vector<ComponentInfo> BuildRegistry()
 		{
 			// What physics applies in place. A field that is not listed cannot be animated, so a new field stays safe until
-			// physics applies it; PropertyTrackTests changes the listed fields on resting bodies, characters and joints.
+			// physics applies it. PropertyTrackTests plays the listed body, collider and character fields against contacts;
+			// the joint and ragdoll lists come from, or are checked against, what rebuilds them.
 			const auto withSurface = [](std::vector<std::string> fields) {
 				fields.insert(fields.end(), { "OverrideMaterial", "Friction", "Restitution" });
 				return fields;

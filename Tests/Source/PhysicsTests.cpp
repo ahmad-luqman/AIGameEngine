@@ -1801,10 +1801,10 @@ TEST_SUITE("Physics")
 		CHECK_FALSE(physics.HasJoint(dangling));
 
 		// Rebuilding either body rebuilds the joint.
-		door.AddOrReplaceComponent<BoxColliderComponent>(BoxColliderComponent{ { 0.4f, 0.4f, 0.4f } });
+		physics.RecreateBody(door);
 		scene.OnUpdate(Step);
 		CHECK(physics.HasJoint(door));
-		frame.AddOrReplaceComponent<BoxColliderComponent>(BoxColliderComponent{ { 0.4f, 0.4f, 0.4f } });
+		physics.RecreateBody(frame);
 		scene.OnUpdate(Step);
 		CHECK(physics.HasJoint(door));
 
@@ -2964,7 +2964,7 @@ TEST_SUITE("Physics")
 		CHECK(std::abs((transform.Rotation * glm::vec3(1.0f, 0.0f, 0.0f)).y) < 0.02f);
 
 		// Rebuilding the rung's body rebuilds both of its joints.
-		rung.AddOrReplaceComponent<BoxColliderComponent>(BoxColliderComponent{ { 1.0f, 0.12f, 0.12f } });
+		physics.RecreateBody(rung);
 		scene.OnUpdate(Step);
 		CHECK(physics.HasJoint(left));
 		CHECK(physics.HasJoint(right));
@@ -3289,7 +3289,7 @@ TEST_SUITE("Physics")
 			scene.OnSimulationStart();
 			Simulate(scene, 1.0f);
 			// Rebuilding the hub's body removes and rebuilds all four of its joints mid-run.
-			hub.AddOrReplaceComponent<BoxColliderComponent>(BoxColliderComponent{ { 0.55f, 0.55f, 0.55f } });
+			scene.GetPhysicsWorld()->RecreateBody(hub);
 			Simulate(scene, 1.0f);
 			std::vector<glm::vec3> positions;
 			positions.reserve(spokes.size() + 1);

@@ -1258,7 +1258,8 @@ what sleeps on it sliding. The rest (`RigidBody.Type`, `IsTrigger`, `FixedRotati
 bodies, anchors and axes, `CharacterController.Layer`, a mesh collider's `Mesh`, `MeshIndex` and `Convex`, a ragdoll's
 `Enabled` and structure) would rebuild the object or start or end the ragdoll, so a track on them is refused with the reason. The same in-place path serves `SetComponent`: writing a live field
 from a script keeps contacts too, and writing the values a component already has does nothing, not even waking the body.
-Animate Transform on a kinematic rigid body to move a physics platform or door.
+A `Ragdoll.MotorStrength` track ends a fade `SetRagdollMotorStrength` started, like any write to it. Animate Transform on
+a kinematic rigid body to move a physics platform or door.
 
 Keys use strictly increasing normalized Time in [0,1], with a maximum of 256 keys per track and 64
 tracks per timeline. Tracks reaching the same field of the same entity use the last nonempty one. Key capture edits that winning track,

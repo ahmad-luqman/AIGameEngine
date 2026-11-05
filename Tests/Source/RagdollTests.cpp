@@ -1,5 +1,7 @@
 #include <doctest/doctest.h>
 
+#include <Basalt/Animation/PropertyAnimation.h>
+
 #include "AnimationTestUtils.h"
 #include "TestUtils.h"
 
@@ -1223,6 +1225,17 @@ TEST_SUITE("Ragdolls")
 		CHECK(powered.physics->GetRagdollBuildCount() == builds);
 		CHECK(powered.physics->IsRagdollActive(powered.rig));
 
+		// A track plays on the live rig: it reaches the motors, and nothing is rebuilt.
+		std::string trackError;
+		PropertyAnimationComponent track;
+		track.PlayOnStart = false;
+		track.Tracks.push_back({ "Ragdoll", "MotorStrength", false, { { 0, glm::vec4(0.25f, 0, 0, 0) } } });
+		REQUIRE_MESSAGE(PropertyAnimation::Sample(powered.rig, track, 0, trackError), trackError);
+		Simulate(powered.scene, 2);
+		CHECK(powered.physics->GetRagdollMotorStrength(powered.rig) == doctest::Approx(0.25f));
+		CHECK(powered.physics->GetRagdollBuildCount() == builds);
+		CHECK(powered.physics->IsRagdollActive(powered.rig));
+
 		// At strength 0 the motors let go: the bend no longer follows the animation back to straight.
 		REQUIRE(powered.physics->SetRagdollMotorStrength(powered.rig, 0, 0));
 		REQUIRE(powered.scene.GetAnimationSystem()->Seek(powered.rig, 0));
@@ -2210,9 +2223,15 @@ TEST_SUITE("Ragdolls")
 			REQUIRE(physics.ActivateRagdoll(rig));
 			Simulate(scene, 10);
 			REQUIRE(listener.Begin == 1);
-			// A collider edit rebuilds what the entity keeps, which touched nothing.
+			// Rebuilding what the entity keeps, which touched nothing, and a collider edit in place.
+			if (character)
+				scene.GetRegistry().patch<CharacterControllerComponent>(rig, [](CharacterControllerComponent& controller) { controller.Layer = "Rebuilt"; });
+			else
+				physics.RecreateBody(rig);
+			Simulate(scene, 3);
+			CHECK(listener.End == 0);
 			scene.GetRegistry().patch<CapsuleColliderComponent>(rig, [](CapsuleColliderComponent& capsule) { capsule.Radius = 0.25f; });
-			Simulate(scene, 10);
+			Simulate(scene, 3);
 			CHECK(listener.End == 0);
 			// The hand's real exit is still reported.
 			zone.GetTransform().Translation.y += 5;
@@ -2237,10 +2256,11 @@ TEST_SUITE("Ragdolls")
 		Simulate(scene, 2);
 		REQUIRE(physics.ActivateRagdoll(rig));
 		Simulate(scene, 90);
-		// In the air, wanting to jump: a rebuild must not count the limbs under the capsule as ground.
+		// In the air, wanting to jump: neither a new shape nor a rebuild may count the limbs under the capsule as ground.
 		const float falling = physics.GetLinearVelocity(rig).y;
 		REQUIRE(falling < -2.5f);
 		scene.GetRegistry().patch<CapsuleColliderComponent>(rig, [](CapsuleColliderComponent& capsule) { capsule.HalfHeight = 0.45f; });
+		scene.GetRegistry().patch<CharacterControllerComponent>(rig, [](CharacterControllerComponent& controller) { controller.Layer = "Rebuilt"; });
 		physics.MoveCharacter(rig, { 0, 5, 0 });
 		Simulate(scene, 1);
 		CHECK_FALSE(physics.IsCharacterGrounded(rig));
