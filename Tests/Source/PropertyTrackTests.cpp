@@ -565,7 +565,17 @@ TEST_SUITE("Property animation")
 		CHECK(CountLogMessages(since, "CapsuleCollider Radius and HalfHeight must be positive") == 1);
 	}
 
-	TEST_CASE("Mass and damping writes to a static floor leave what sleeps on it alone")
+	TEST_CASE("Mass only warns where it counts")
+	{
+		RestingCrate scene;
+		scene.Start();
+		const uint64_t since = Log::GetHistory().GetTotalCount();
+		scene.Patch(scene.Floor, "RigidBody", { { "Mass", 0.0f } });
+		scene.Frames(1);
+		CHECK(CountLogMessages(since, "Mass must be positive") == 0);
+	}
+
+	TEST_CASE("Writes that do not touch a static floor's surface leave what sleeps on it alone")
 	{
 		RestingCrate scene;
 		scene.Start();
@@ -903,7 +913,7 @@ TEST_SUITE("Property animation")
 
 		// Applying what the file already says is no news.
 		const json applied = BasaltTest::Run(commands, session, "prefab.apply", { { "entity", IdOf(root) } });
-		CHECK(applied.dump().find("the prefab keeps") == std::string::npos);
+		CHECK(applied.dump().find("stays as the prefab has it") == std::string::npos);
 
 		// Saving from an open prefab says the same.
 		BasaltTest::Run(commands, session, "prefab.open", { { "path", "Assets/Root.bprefab" } });
@@ -1881,6 +1891,10 @@ TEST_SUITE("Property animation")
 		tracks[0]["Stepped"] = true;
 		CHECK_THROWS_AS(commands.Execute(session, "editor.component_set", { { "component", "PropertyAnimation" }, { "data", { { "Tracks", tracks } } } }), CommandError);
 		CHECK_FALSE(a.GetComponent<PropertyAnimationComponent>().Tracks[0].Stepped);
+		// The entity that holds the ID may keep it.
+		session.SetSelections({ a.GetUUID() });
+		commands.Execute(session, "editor.component_set", { { "component", "PropertyAnimation" }, { "data", { { "Tracks", tracks } } } });
+		CHECK(a.GetComponent<PropertyAnimationComponent>().Tracks[0].Stepped);
 	}
 
 	TEST_CASE("assert.component reads a stale ID the entity holds")
