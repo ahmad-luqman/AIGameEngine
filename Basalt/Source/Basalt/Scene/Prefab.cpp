@@ -101,10 +101,20 @@ namespace Basalt {
 			return value.is_object() && value.size() == 1 && value.contains(ExternalKey) && IsId(value[ExternalKey]);
 		}
 
-		// Calls visit on a record's parent and on every entity field of its components.
-		void ForEachReference(json& record, const std::function<void(json& value, bool isParent)>& visit)
+		enum class ReferenceKind
 		{
-			visit(record["Parent"], true);
+			Parent,
+			// A component's field, whose 0 means no reference, or whatever that field makes of it.
+			Field,
+			// A list element's field, whose 0 means the entity holding the list.
+			ListElement
+		};
+
+		// Calls visit on a record's parent and on every entity field of its components, with labels like
+		// "PropertyAnimation.Tracks[2].Target".
+		void ForEachReference(json& record, const std::function<void(json& value, ReferenceKind kind, const std::string& label)>& visit)
+		{
+			visit(record["Parent"], ReferenceKind::Parent, "Parent");
 			auto components = record.find("Components");
 			if (components == record.end() || !components->is_object())
 				return;
@@ -114,25 +124,27 @@ namespace Basalt {
 				if (component == components->end() || !component->is_object())
 					continue;
 				for (const auto& field : info.EntityFields)
-					ForEachFieldValue(*component, field, [&](json& value, const std::string&) { visit(value, false); });
+					ForEachFieldValue(*component, field, [&](json& value, const std::string& label) { visit(value, label == field ? ReferenceKind::Field : ReferenceKind::ListElement, info.Name + "." + label); });
 			}
 		}
 
-		// A ForEachFieldValue label ("Tracks[2].Entity") as JSON pointer tokens ("Tracks/2/Entity").
-		std::string LabelPointer(const std::string& label)
+		// Unlike prefab.apply, a save has nothing older to keep in place of such a reference, but other scenes will not have
+		// the entity.
+		void ReportOutsideReferences(json& entities, std::vector<std::string>& outWarnings)
 		{
-			std::string pointer;
-			for (const char c : label)
-				if (c == '[' || c == '.')
-					pointer += '/';
-				else if (c != ']')
-					pointer += c;
-			return pointer;
+			IdSet saved;
+			for (const json& record : entities)
+				saved.insert(RecordId(record));
+			for (json& record : entities)
+				ForEachReference(record, [&](json& value, ReferenceKind kind, const std::string& label) {
+					if (kind != ReferenceKind::Parent && IsId(value) && value != 0 && !saved.contains(value.get<uint64_t>()))
+						outWarnings.push_back(fmt::format("'{}' {} references an entity outside the prefab, which other scenes do not have", NameOf(record), label));
+				});
 		}
 
 		void RenumberReferences(json& record, const IdMap& ids)
 		{
-			ForEachReference(record, [&](json& value, bool) {
+			ForEachReference(record, [&](json& value, ReferenceKind, const std::string&) {
 				if (IsId(value))
 					if (const auto it = ids.find(value.get<uint64_t>()); it != ids.end())
 						value = it->second;
@@ -233,7 +245,7 @@ namespace Basalt {
 		void ToSourceSpace(json& record, const IdMap& toSource, const IdSet& sourceKeys)
 		{
 			record["ID"] = toSource.at(RecordId(record));
-			ForEachReference(record, [&](json& value, bool) {
+			ForEachReference(record, [&](json& value, ReferenceKind, const std::string&) {
 				if (!IsId(value) || value == 0)
 					return;
 				const uint64_t id = value.get<uint64_t>();
@@ -246,12 +258,13 @@ namespace Basalt {
 
 		// Source space to instance space. A reference to an entity the instance deleted keeps its reserved ID (reverting
 		// the deletion restores the reference, and no reserved ID is ever reused); a parent among them, or any other source
-		// entity the instance does not have, becomes the root or no reference. Never an unrelated entity that happens to
-		// share the source ID.
+		// entity the instance does not have, becomes the root, no reference or, in a list element where 0 is the entity
+		// holding the list, MissingEntity. Never an unrelated entity that happens to share the source ID.
 		void ToInstanceSpace(json& record, const IdMap& toInstance, const IdMap& reserved, const IdSet& sourceKeys, uint64_t rootId)
 		{
 			record["ID"] = toInstance.at(RecordId(record));
-			ForEachReference(record, [&](json& value, bool isParent) {
+			ForEachReference(record, [&](json& value, ReferenceKind kind, const std::string&) {
+				const bool isParent = kind == ReferenceKind::Parent;
 				if (IsExternal(value))
 				{
 					value = json(value[ExternalKey]);
@@ -265,7 +278,8 @@ namespace Basalt {
 				else if (const auto kept = reserved.find(id); kept != reserved.end() && !isParent)
 					value = kept->second;
 				else if (sourceKeys.contains(id))
-					value = isParent ? rootId : 0;
+					value = isParent ? rootId : kind == ReferenceKind::ListElement ? MissingEntity
+																				   : uint64_t{ 0 };
 			});
 		}
 
@@ -1768,6 +1782,7 @@ namespace Basalt {
 			if (std::any_of(std::begin(PlacementFields), std::end(PlacementFields), moved))
 				outWarnings.push_back(fmt::format("'{}' keeps its base's position and rotation: a variant's root has no place of its own, so moving it is not saved", root.GetName()));
 		}
+		ReportOutsideReferences(entities, outWarnings);
 		return SceneSerializer::SavePrefabEntities(std::move(entities), path, outError, rootKind, &outWarnings);
 	}
 
@@ -1901,6 +1916,7 @@ namespace Basalt {
 			for (const auto& [source, entity] : tree.Members)
 				sourceOf[entity] = NestedId(sourceOf.at(tree.Root), source);
 		RenumberTree(entities, sourceOf);
+		ReportOutsideReferences(entities, outWarnings);
 		return rootKind;
 	}
 
@@ -1977,7 +1993,7 @@ namespace Basalt {
 				unsign(record["ID"]);
 			// ForEachReference would insert a missing Parent; malformed records are left for Validate to reject.
 			if (record.contains("Parent"))
-				ForEachReference(record, [&](json& value, bool) { unsign(value); });
+				ForEachReference(record, [&](json& value, ReferenceKind, const std::string&) { unsign(value); });
 		}
 		// Baselines compare with serialized instance components, which hold asset paths.
 		const auto& project = Project::GetActive();
@@ -2106,18 +2122,24 @@ namespace Basalt {
 				const auto* info = ComponentRegistry::Find(component);
 				if (!info || !fields.is_object())
 					continue;
-				const std::string& name = component;
 				for (const auto& field : info->EntityFields)
+				{
+					// A list is one value here as in every merge: a position in it means nothing across versions of the list, and
+					// 0 in an element would turn the reference into the entity holding the list.
+					const std::string top = field.substr(0, field.find('['));
+					const json::json_pointer at("/" + PointerToken(key) + "/Components/" + PointerToken(component) + "/" + PointerToken(top));
+					const json previous = in.Next.ByKey.contains(at) ? in.Next.ByKey[at] : top == field ? json(0)
+																										: json::array();
+					std::string outside;
 					ForEachFieldValue(fields, field, [&](json& value, const std::string& label) {
-						if (value == 0 || inPrefab(value))
-							return;
-						const json::json_pointer at("/" + PointerToken(key) + "/Components/" + PointerToken(name) + "/" + LabelPointer(label));
-						const json previous = in.Next.ByKey.contains(at) ? in.Next.ByKey[at] : json(0);
-						if (value == previous)
-							return;
-						outWarnings.push_back(fmt::format("'{}' {}.{} references an entity outside the prefab; the prefab keeps its value", NameOf(record), name, label));
-						value = previous;
+						if (value != 0 && !inPrefab(value) && outside.empty())
+							outside = label;
 					});
+					if (outside.empty() || fields[top] == previous)
+						continue;
+					outWarnings.push_back(fmt::format("'{}' {}.{} references an entity outside the prefab; the prefab keeps its {}", NameOf(record), component, outside, top));
+					fields[top] = previous;
+				}
 			}
 		}
 		Scene scratch("Apply prefab overrides");

@@ -337,11 +337,20 @@ namespace Basalt {
 							if (!fields.is_object())
 								continue;
 							if (const auto* info = ComponentRegistry::Find(component))
+							{
 								for (const auto& assetField : info->AssetFields)
 									ForEachFieldValue(fields, assetField, [&](const nlohmann::json& value, const std::string&) {
 										if (value.is_string() && !value.get_ref<const std::string&>().empty())
 											paths.insert(value.get<std::string>());
 									});
+								// A list element's reference fails where it is used; top-level ones have rules of their own (a joint
+								// without its body warns, a stale navigation link does nothing).
+								for (const auto& entityField : info->EntityFields)
+									ForEachFieldValue(fields, entityField, [&](const nlohmann::json& value, const std::string& label) {
+										if (label != entityField && value != 0 && !scene.GetEntityByUUID(UUID(value.get<uint64_t>())))
+											m_Report.Add(ValidationSeverity::Error, file, fmt::format("'{}' {}.{} names entity {}, which is not in the scene", entity.value("Name", std::string()), component, label, value.get<uint64_t>()));
+									});
+							}
 							// Strings outside the asset fields that look like paths only warn (paths found above are skipped).
 							for (const auto& [field, value] : fields.items())
 								if (!(value.is_string() && IsPathField(component, field)))

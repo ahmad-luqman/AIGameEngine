@@ -1,6 +1,8 @@
 #include "Basalt/Animation/PropertyAnimation.h"
 
+#include "Basalt/Asset/AssetKey.h"
 #include "Basalt/Asset/AssetManager.h"
+#include "Basalt/Asset/MaterialAsset.h"
 #include "Basalt/Core/Log.h"
 #include "Basalt/Core/JsonUtils.h"
 #include "Basalt/Math/Math.h"
@@ -73,11 +75,13 @@ namespace Basalt {
 			if (key.Asset.size() > PropertyAnimationKey::MaxTextLength)
 				return fmt::format("Asset holds at most {} bytes", PropertyAnimationKey::MaxTextLength);
 			const bool text = !field.IsAsset && (field.Type.Kind == ComponentFieldKind::String || field.Type.Kind == ComponentFieldKind::Enum);
+			const char* keyField = field.IsAsset ? "Asset" : text ? "Text"
+																  : "Value";
 			// Text or Asset on another field would be ignored: say so rather than animate what an agent did not mean.
 			if (!text && !key.Text.empty())
-				return fmt::format("Text must be empty: {} is {} (keys use {})", field.Leaf, DescribeKind(field), field.IsAsset ? "Asset" : "Value");
+				return fmt::format("Text must be empty: {} is {} (keys use {})", field.Leaf, DescribeKind(field), keyField);
 			if (!field.IsAsset && !key.Asset.empty())
-				return fmt::format("Asset must be empty: {} is {} (keys use {})", field.Leaf, DescribeKind(field), text ? "Text" : "Value");
+				return fmt::format("Asset must be empty: {} is {} (keys use {})", field.Leaf, DescribeKind(field), keyField);
 			switch (field.Type.Kind)
 			{
 				case ComponentFieldKind::Integer:
@@ -137,7 +141,7 @@ namespace Basalt {
 			return value;
 		}
 
-		// Starts loading what asset tracks name, so the first pass through their keys does not show placeholders. Only the
+		// Starts loading what asset tracks name, so it loads ahead of its keys rather than when one first shows it. Only the
 		// kinds renderers stream: anything else loads when its component reads it.
 		void PreloadAssets(const PropertyAnimationComponent& animation)
 		{
@@ -148,7 +152,9 @@ namespace Basalt {
 					continue;
 				for (const PropertyAnimationKey& key : track.Keys)
 				{
-					if (AssetManager::IsTextureFile(key.Asset))
+					if (MaterialAsset::IsMaterialKey(key.Asset))
+						AssetManager::RequestMaterial(key.Asset);
+					else if (AssetManager::IsTextureFile(key.Asset) || GetSubAssetFragment(key.Asset).starts_with(EmbeddedImageMarker))
 						AssetManager::RequestTexture(key.Asset);
 					else if (AssetManager::IsMeshFile(key.Asset))
 						AssetManager::RequestMesh(key.Asset);
@@ -289,7 +295,7 @@ namespace Basalt {
 		const auto* info = ComponentRegistry::Find(component);
 		if (!info)
 			return fail(fmt::format("there is no component '{}'", component));
-		if (!info->SupportsPropertyAnimation)
+		if (!info->SupportsPropertyAnimation())
 			return fail(fmt::format("{} cannot be animated", component));
 		// The schema the next name is looked up in: the component's, then each picked element's.
 		struct Schema
@@ -300,7 +306,7 @@ namespace Basalt {
 		} schema{ &info->FieldTypes, &info->EnumOptions, &info->AssetFields };
 		PropertyAnimationField result;
 		std::string_view rest = field;
-		// The path with its selectors left out, as ComponentInfo::LiveFields spells it.
+		// The path with its selectors left out, as ComponentInfo::AnimatableFields spells it.
 		std::string declared;
 		while (true)
 		{
@@ -346,8 +352,8 @@ namespace Basalt {
 			declared += "[].";
 			rest = rest.substr(close + 2);
 		}
-		if (!info->LiveFields.empty() && std::ranges::find(info->LiveFields, declared) == info->LiveFields.end())
-			return fail(fmt::format("{}.{} rebuilds the physics object when it changes, which ends its contacts or resets its rest pose, so tracks do not animate it (they can animate {})", component, declared, fmt::join(info->LiveFields, ", ")));
+		if (info->AnimatableFields && std::ranges::find(*info->AnimatableFields, declared) == info->AnimatableFields->end())
+			return fail(fmt::format("{}.{} rebuilds the physics object when it changes, which ends its contacts or resets its rest pose (a ragdoll's Enabled starts or ends it), so tracks do not animate it (they can animate {})", component, declared, fmt::join(*info->AnimatableFields, ", ")));
 		const ComponentFieldType& type = result.Type;
 		result.IsAsset = std::ranges::find(*schema.Assets, result.Leaf) != schema.Assets->end();
 		// Renaming the element mid-timeline would lose it (and the state systems key by that name).
@@ -370,7 +376,7 @@ namespace Basalt {
 	{
 		std::vector<std::string> fields;
 		const auto* info = ComponentRegistry::Find(component);
-		if (!entity || !info || !info->SupportsPropertyAnimation || !info->Has(entity))
+		if (!entity || !info || !info->SupportsPropertyAnimation() || !info->Has(entity))
 			return fields;
 		CollectFields(component, info->Fields, info->FieldTypes, info->Serialize(entity), "", fields);
 		return fields;
@@ -379,6 +385,11 @@ namespace Basalt {
 	Entity PropertyAnimation::ResolveTarget(Entity timeline, UUID target)
 	{
 		return target == 0 ? timeline : timeline.GetScene()->GetEntityByUUID(target);
+	}
+
+	std::string PropertyAnimation::DescribeMissingTarget(UUID target)
+	{
+		return target == MissingEntity ? "its entity was deleted from the prefab" : fmt::format("entity {} is not in the scene", static_cast<uint64_t>(target));
 	}
 
 	bool PropertyAnimation::Sample(Entity entity, const PropertyAnimationComponent& animation, float time, std::string& outError)
@@ -411,7 +422,7 @@ namespace Basalt {
 			const Entity target = ResolveTarget(entity, track.Target);
 			if (!target)
 			{
-				outError = location() + ": the entity is not in the scene";
+				outError = location() + ": " + DescribeMissingTarget(track.Target);
 				return false;
 			}
 			const auto* info = ComponentRegistry::Find(track.Component);
@@ -447,7 +458,11 @@ namespace Basalt {
 				if (value != working.Original.at(name))
 					patch[name] = value;
 			if (!patch.empty() && !ComponentRegistry::AddOrPatch(working.Target, key.second, patch, outError))
+			{
+				if (working.Target != entity)
+					outError = fmt::format("entity '{}': {}", working.Target.GetName(), outError);
 				return false;
+			}
 		}
 		return true;
 	}
@@ -469,7 +484,7 @@ namespace Basalt {
 			return fail(problem);
 		const Entity owner = ResolveTarget(entity, target);
 		if (!owner)
-			return fail(fmt::format("entity {} is not in the scene", static_cast<uint64_t>(target)));
+			return fail(DescribeMissingTarget(target));
 		const auto* info = ComponentRegistry::Find(component);
 		if (!info->Has(owner))
 			return fail("the entity has no " + component);
@@ -482,7 +497,7 @@ namespace Basalt {
 		std::string asset;
 		const ComponentFieldType& type = resolved->Type;
 		// The registry writes each field as its declared kind; a value of another type is reported, never thrown on.
-		const auto mismatched = [&] { return fail(fmt::format("its value {} is not {}", value->dump(), DescribeKind(type))); };
+		const auto mismatched = [&] { return fail(fmt::format("its value {} is not {}", value->dump(), DescribeKind(*resolved))); };
 		switch (type.Kind)
 		{
 			case ComponentFieldKind::Integer:
@@ -504,10 +519,13 @@ namespace Basalt {
 			case ComponentFieldKind::Enum:
 				if (!value->is_string())
 					return mismatched();
-				(resolved->IsAsset ? asset : text) = value->get<std::string>();
-				if (text.size() + asset.size() > PropertyAnimationKey::MaxTextLength)
-					return fail(fmt::format("its value is longer than {} bytes", PropertyAnimationKey::MaxTextLength));
-				break;
+				{
+					std::string& slot = resolved->IsAsset ? asset : text;
+					slot = value->get<std::string>();
+					if (slot.size() > PropertyAnimationKey::MaxTextLength)
+						return fail(fmt::format("its value is longer than {} bytes", PropertyAnimationKey::MaxTextLength));
+					break;
+				}
 			default:
 				if (type.Count == 0)
 				{
@@ -528,8 +546,8 @@ namespace Basalt {
 		auto animation = animationInfo->Has(entity) ? animationInfo->Serialize(entity) : nlohmann::json{ { "Tracks", nlohmann::json::array() } };
 		auto& tracks = animation["Tracks"];
 		// A track of that entity spelled the same way, else one reaching the same field another way ("Layers[0].Weight" keys
-		// the track written "Layers[Upper].Weight"). A track of the component that reaches nothing now would fail every
-		// sample, so keying past it is refused rather than reported as done.
+		// the track written "Layers[Upper].Weight"). A track of that entity and component that reaches nothing now would fail
+		// every sample, so keying past it is refused rather than reported as done (scene.info reports the rest).
 		std::string stale;
 		const uint64_t self = entity.GetUUID(), wanted = owner.GetUUID();
 		const auto reaches = [&](const nlohmann::json& existing) {

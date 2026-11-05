@@ -146,10 +146,10 @@ namespace Basalt {
 	// Jolt-backed physics simulation for one running scene.
 	//
 	// Bodies are created for every entity with a RigidBodyComponent and at least one collider (box, sphere,
-	// capsule or mesh; several combine into one compound shape). Entities whose RigidBody or collider components
-	// are added, changed or removed at runtime are rebuilt before the next step (CharacterController changes
-	// apply in place); a world-scale change resizes the body's or character's shape in place (see
-	// ApplyScaleChanges).
+	// capsule or mesh; several combine into one compound shape). RigidBody and collider components added or removed at
+	// runtime rebuild the body before the next step; changes to them apply in place unless only a rebuild can (see
+	// UpdateInPlace), as CharacterController changes do; a world-scale change resizes the body's or character's shape in
+	// place (see ApplyScaleChanges).
 	// JointComponents become Jolt constraints once both bodies exist (a joint whose body is missing is
 	// retried when that body is created). A joint moves its BodyEntity's body, so several joint entities can
 	// act on one body; joints are tracked by the entity holding the component. A joint is rebuilt from the
@@ -188,7 +188,7 @@ namespace Basalt {
 		void OnEntityDestroyed(Entity entity);
 
 		bool HasBody(Entity entity) const;
-		// Rebuilds the body from the entity's current components (e.g. after changing collider sizes).
+		// Rebuilds the body from the entity's current components.
 		void RecreateBody(Entity entity);
 
 		void AddForce(Entity entity, const glm::vec3& force);

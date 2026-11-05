@@ -81,7 +81,7 @@ These are things Godot/Unity/Unreal users assume exist:
 | 2D game pipeline (sprites, tilemaps, 2D physics) | Medium | 2D is only UI; 2D samples are built from 3D primitives |
 | Localization | Medium | No string tables / font fallback per locale |
 | Cloth, soft bodies, vehicles | Low-Med | Jolt supports them; not exposed |
-| Sequencer / cinematics, video playback | Low-Med | Partly covered by planned property animation |
+| Sequencer / cinematics, video playback | Low-Med | Partly covered by property animation |
 | Platform reach beyond desktop | Strategic | No mobile, web or console; Vulkan-only (MoltenVK on macOS); export only for the host OS |
 | Accessibility (screen reader, remapping UI, colour-blind modes) | Low-Med | Input actions help remapping |
 | Real-world validation | Critical | No shipped title, no external users, GPU verified on Apple M4 Max + lavapipe only |

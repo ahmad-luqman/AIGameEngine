@@ -448,7 +448,7 @@ namespace Basalt {
 				const nlohmann::json* reached = nullptr;
 				const Entity target = PropertyAnimation::ResolveTarget(entity, track.Target);
 				if (!target)
-					problem = fmt::format("entity {} is not in the scene", static_cast<uint64_t>(track.Target));
+					problem = PropertyAnimation::DescribeMissingTarget(track.Target);
 				else if (!info->Has(target))
 					problem = "the entity has no " + track.Component;
 				else

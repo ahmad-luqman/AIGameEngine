@@ -321,19 +321,26 @@ namespace Basalt {
 
 		// Component data may name entities in reference fields (Joint "ConnectedEntity": "Door"); files and
 		// the registry store UUIDs, so names are resolved here with the same rules as the "entity" parameter.
-		// Numeric IDs of top-level fields must name an existing entity too (0 = none). Scene and prefab files stay
-		// lenient: they may be loaded before the entities they refer to exist.
-		json ResolveEntityFields(Scene& scene, const std::string& component, json data)
+		// Numeric IDs must name an existing entity too (0 = none), except IDs the component already holds in list elements: a
+		// list is written back whole, so an element whose entity was since deleted must not block an edit of another (it is
+		// reported where it is used). Scene and prefab files stay lenient: they may be loaded before the entities they refer
+		// to exist.
+		json ResolveEntityFields(Scene& scene, const std::string& component, json data, Entity holder = {})
 		{
 			const ComponentInfo* info = ComponentRegistry::Find(component);
 			if (!info || !data.is_object())
 				return data;
+			std::unordered_set<uint64_t> held;
+			if (holder && info->Has(holder))
+			{
+				json current = info->Serialize(holder);
+				for (const std::string& field : info->EntityFields)
+					ForEachFieldValue(current, field, [&](const json& value, const std::string&) { held.insert(value.get<uint64_t>()); });
+			}
 			for (const std::string& field : info->EntityFields)
 				ForEachFieldValue(data, field, [&](json& value, const std::string& label) {
-					// A list is written back whole, so an element holding the ID of a since-deleted entity must not block an
-					// edit of another element: such a stale reference is reported where it is used instead.
-					const bool isNumber = value.is_number_unsigned() || value.is_number_integer();
-					if (value.is_string() || (isNumber && value.get<uint64_t>() != 0 && label == field))
+					const bool isNumber = value.is_number_integer();
+					if (value.is_string() || (isNumber && value.get<uint64_t>() != 0 && (label == field || !held.contains(value.get<uint64_t>()))))
 						value = static_cast<uint64_t>(ResolveEntity(scene, value, label.c_str()).GetUUID());
 				});
 			return data;
@@ -752,9 +759,9 @@ namespace Basalt {
 					description["name"] = info.Name;
 					description["entityFields"] = info.EntityFields;
 					description["core"] = info.IsCore;
-					description["supportsPropertyAnimation"] = info.SupportsPropertyAnimation;
-					if (!info.LiveFields.empty())
-						description["liveFields"] = info.LiveFields;
+					description["supportsPropertyAnimation"] = info.SupportsPropertyAnimation();
+					if (info.SupportsPropertyAnimation() && info.AnimatableFields)
+						description["liveFields"] = *info.AnimatableFields;
 					types.push_back(std::move(description));
 				}
 				return json{ { "components", types } };
@@ -1492,7 +1499,7 @@ namespace Basalt {
 				const std::string name = RequireString(params, "component");
 				std::string error;
 				Scene& scene = RequireScene(session);
-				if (!ComponentRegistry::AddOrPatch(entity, name, ResolveEntityFields(scene, name, params.value("data", json::object())), error))
+				if (!ComponentRegistry::AddOrPatch(entity, name, ResolveEntityFields(scene, name, params.value("data", json::object()), entity), error))
 					throw CommandError(error);
 				if (name == "Script" && session.IsPlaying() && scene.GetScriptEngine())
 					scene.GetScriptEngine()->EnsureInstance(entity);

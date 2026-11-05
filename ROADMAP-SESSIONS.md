@@ -40,13 +40,14 @@ Size estimates: **S** = a day or less, **M** = a few days, **L** = a week or mor
 - **Shipped outside the sessions:**
   - The fix for glTF primitives that share index accessors ([PR #64](https://github.com/ahmad-luqman/AIGameEngine/pull/64)).
   - UTF-8 command-line arguments and paths on Windows ([PR #65](https://github.com/ahmad-luqman/AIGameEngine/pull/65)).
-- **Shipped in sessions:** sessions 17–23 ([PR #66](https://github.com/ahmad-luqman/AIGameEngine/pull/66),
+- **Shipped in sessions:** sessions 17–24 ([PR #66](https://github.com/ahmad-luqman/AIGameEngine/pull/66),
   [#67](https://github.com/ahmad-luqman/AIGameEngine/pull/67), [#68](https://github.com/ahmad-luqman/AIGameEngine/pull/68),
   [#69](https://github.com/ahmad-luqman/AIGameEngine/pull/69), [#70](https://github.com/ahmad-luqman/AIGameEngine/pull/70),
-  [#71](https://github.com/ahmad-luqman/AIGameEngine/pull/71), [#72](https://github.com/ahmad-luqman/AIGameEngine/pull/72)).
-  `ROADMAP.md` lists only their follow-ups (session 24, and the IK and retargeting, spring bone and powered ragdoll follow-ups, which have
-  no session yet).
-- **Next:** session 24 (Property animation III), the highest-priority work left.
+  [#71](https://github.com/ahmad-luqman/AIGameEngine/pull/71), [#72](https://github.com/ahmad-luqman/AIGameEngine/pull/72),
+  [#73](https://github.com/ahmad-luqman/AIGameEngine/pull/73)).
+  `ROADMAP.md` lists only their follow-ups (the IK and retargeting, spring bone and powered ragdoll follow-ups, which have no
+  session yet).
+- **Next:** session 25 (Signing), once a Windows certificate and the CI secrets are available.
 - **Open checks after #69:** its Windows crash paths (deadline thread, watchdog timeouts, Open Report) are only
   compile-tested, so they belong with the real-GPU smoke tests on Windows hardware.
 

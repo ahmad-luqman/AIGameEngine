@@ -127,7 +127,7 @@ TEST_SUITE("Property animation")
 		for (const char* component : { "RigidBody", "BoxCollider", "SphereCollider", "CapsuleCollider" })
 		{
 			const ComponentInfo& info = *ComponentRegistry::Find(component);
-			for (const std::string& field : info.LiveFields)
+			for (const std::string& field : *info.AnimatableFields)
 			{
 				CAPTURE(component);
 				CAPTURE(field);
@@ -172,6 +172,21 @@ TEST_SUITE("Property animation")
 		CHECK_FALSE(scene.Physics().IsBodySleeping(scene.Crate));
 		CHECK(glm::length(scene.Crate.GetTransform().Translation - start) > 0.5f);
 		CHECK(scene.Log.End == 0);
+	}
+
+	TEST_CASE("A floor that reaches a sleeping body wakes it, past its old bounds")
+	{
+		RestingCrate scene;
+		Entity shelf = scene.World.CreateEntity("Shelf");
+		shelf.GetTransform().Translation = { 10, 0, 0 };
+		shelf.AddComponent<RigidBodyComponent>();
+		shelf.AddComponent<BoxColliderComponent>().HalfExtents = { 1, 0.5f, 1 };
+		// The crate sleeps on the floor, nowhere near the shelf until the shelf's box grows under it.
+		scene.Start();
+		scene.Patch(shelf, "BoxCollider", { { "HalfExtents", { 10.5f, 0.75f, 1 } } });
+		scene.Frames(30);
+		CHECK(scene.Crate.GetTransform().Translation.y > 1.1f);
+		CHECK_FALSE(scene.Physics().IsBodySleeping(scene.Crate));
 	}
 
 	TEST_CASE("A floor that shrinks away drops what slept on it, past its old and new bounds alike")
@@ -236,6 +251,27 @@ TEST_SUITE("Property animation")
 			scene.Patch(scene.Crate, "RigidBody", { { "FrictionCombine", "Max" } });
 			scene.Frames(90);
 			CHECK(glm::length(scene.Physics().GetLinearVelocity(scene.Crate)) < 0.05f);
+		}
+		SUBCASE("Restitution, and which body's mode decides it")
+		{
+			const auto bounce = [](const json& crate, const json& floor) {
+				RestingCrate scene;
+				scene.Crate.GetTransform().Translation.y = 3;
+				scene.Crate.AddComponent<BoxColliderComponent>();
+				scene.World.OnRuntimeStart();
+				scene.Patch(scene.Crate, "RigidBody", crate);
+				scene.Patch(scene.Floor, "RigidBody", floor);
+				float rebound = 0;
+				for (int i = 0; i < 90; i++)
+				{
+					scene.Frames(1);
+					rebound = std::max(rebound, scene.Physics().GetLinearVelocity(scene.Crate).y);
+				}
+				return rebound;
+			};
+			// Jolt's default keeps the larger of the two, Min the smaller.
+			CHECK(bounce({ { "Restitution", 0.8f } }, { { "Restitution", 0.0f } }) > 2.0f);
+			CHECK(bounce({ { "Restitution", 0.8f }, { "RestitutionCombine", "Min" } }, { { "Restitution", 0.0f } }) < 0.5f);
 		}
 		SUBCASE("Sleeping")
 		{
@@ -320,11 +356,22 @@ TEST_SUITE("Property animation")
 			scene.Frames(2);
 			CHECK(scene.Log.End > 0);
 		}
-		SUBCASE("A structural field")
+		SUBCASE("One collider of several")
 		{
 			RestingCrate scene;
+			scene.Crate.AddComponent<BoxColliderComponent>();
+			scene.Crate.AddComponent<SphereColliderComponent>().Radius = 0.2f;
 			scene.Start();
-			scene.Patch(scene.Crate, "RigidBody", { { "Type", "Kinematic" } });
+			scene.Crate.RemoveComponent<BoxColliderComponent>();
+			scene.Frames(2);
+			CHECK(scene.Log.End > 0);
+		}
+		for (const json& change : { json{ { "Type", "Kinematic" } }, json{ { "IsTrigger", true } }, json{ { "FixedRotation", true } }, json{ { "Layer", "Elsewhere" } } })
+		{
+			CAPTURE(change.dump());
+			RestingCrate scene;
+			scene.Start();
+			scene.Patch(scene.Crate, "RigidBody", change);
 			scene.Frames(2);
 			CHECK(scene.Log.End > 0);
 		}
@@ -406,9 +453,36 @@ TEST_SUITE("Property animation")
 		// The new height stands: the capsule's bottom stays on the floor at 0.5.
 		scene.Frames(30);
 		CHECK(scene.Crate.GetTransform().Translation.y == doctest::Approx(0.5f + 0.8f + 0.4f).epsilon(0.03));
-		scene.Patch(scene.Crate, "CharacterController", { { "Layer", "Default" }, { "StepHeight", 0.1f } });
+		// A live setting keeps it all too; a new layer ends what the inner body touched.
+		scene.Patch(scene.Crate, "CharacterController", { { "StepHeight", 0.1f } });
 		scene.Frames(1);
 		CHECK(scene.Log.End == 0);
+		scene.Patch(scene.Crate, "CharacterController", { { "Layer", "Elsewhere" } });
+		scene.Frames(1);
+		CHECK(scene.Log.End > 0);
+	}
+
+	TEST_CASE("In-place character edits log what a rebuild would")
+	{
+		RestingCrate scene;
+		scene.Crate.RemoveComponent<RigidBodyComponent>();
+		scene.Crate.GetTransform().Translation = { 0, 1.5f, 0 };
+		auto& capsule = scene.Crate.AddComponent<CapsuleColliderComponent>();
+		capsule.OverrideMaterial = true;
+		scene.Crate.AddComponent<CharacterControllerComponent>();
+		scene.World.OnRuntimeStart();
+		scene.Frames(2);
+		// Fixed: it must not come back with the next settings change, as the warnings of the old shape would.
+		scene.Patch(scene.Crate, "CapsuleCollider", { { "OverrideMaterial", false } });
+		scene.Frames(1);
+		const uint64_t since = Log::GetHistory().GetTotalCount();
+		scene.Patch(scene.Crate, "CharacterController", { { "StepHeight", 0.1f } });
+		scene.Frames(1);
+		CHECK(CountLogMessages(since, "OverrideMaterial") == 0);
+		// A RigidBody a character ignores says so, which takes a rebuild.
+		scene.Crate.AddComponent<RigidBodyComponent>();
+		scene.Frames(1);
+		CHECK(CountLogMessages(since, "its RigidBody is ignored") == 1);
 	}
 
 	TEST_CASE("Motor targets play on a joint without resetting its rest pose")
@@ -445,6 +519,22 @@ TEST_SUITE("Property animation")
 		scene.Patch(scene.Crate, "RigidBody", { { "Friction", -2.0f } });
 		scene.Frames(1);
 		CHECK(CountLogMessages(since, "Friction must not be negative") == 1);
+		scene.Patch(scene.Crate, "RigidBody", { { "Friction", 1.0f }, { "Mass", 0.0f }, { "LinearDamping", -1.0f } });
+		scene.Frames(1);
+		CHECK(CountLogMessages(since, "Mass must be positive") == 1);
+		CHECK(CountLogMessages(since, "damping must not be negative") == 1);
+		scene.Patch(scene.Crate, "BoxCollider", { { "HalfExtents", { 0, 0.5f, 0.5f } } });
+		scene.Frames(1);
+		CHECK(CountLogMessages(since, "BoxCollider HalfExtents must be positive") == 1);
+	}
+
+	TEST_CASE("Mass and damping writes to a static floor leave what sleeps on it alone")
+	{
+		RestingCrate scene;
+		scene.Start();
+		scene.Patch(scene.Floor, "RigidBody", { { "Mass", 3.0f }, { "LinearDamping", 0.5f }, { "GravityFactor", 0.5f } });
+		scene.Frames(2);
+		CHECK(scene.Physics().IsBodySleeping(scene.Crate));
 	}
 
 	TEST_CASE("A track animates another entity")
@@ -548,8 +638,12 @@ TEST_SUITE("Property animation")
 		tracks[1]["Target"] = "Outside";
 		run("component.set", { { "entity", "Root" }, { "component", "PropertyAnimation" }, { "data", { { "Tracks", tracks } } } });
 		CHECK(root.GetComponent<PropertyAnimationComponent>().Tracks[1].Target == outside.GetUUID());
+		// An ID that is new must name an entity, while a track the entity already holds may have outlived its own.
 		tracks[1]["Target"] = 987654321;
-		run("component.set", { { "entity", "Root" }, { "component", "PropertyAnimation" }, { "data", { { "Tracks", tracks } } } });
+		CHECK(RunError(commands, session, "component.set", { { "entity", "Root" }, { "component", "PropertyAnimation" }, { "data", { { "Tracks", tracks } } } }).find("987654321") != std::string::npos);
+		root.GetComponent<PropertyAnimationComponent>().Tracks[1].Target = UUID(987654321);
+		run("component.set", { { "entity", "Root" }, { "component", "PropertyAnimation" }, { "data", { { "Duration", 2 }, { "Tracks", tracks } } } });
+		CHECK(root.GetComponent<PropertyAnimationComponent>().Duration == 2);
 		CHECK(root.GetComponent<PropertyAnimationComponent>().Tracks[1].Target == UUID(987654321));
 		tracks[1]["Target"] = "Nobody";
 		CHECK(RunError(commands, session, "component.set", { { "entity", "Root" }, { "component", "PropertyAnimation" }, { "data", { { "Tracks", tracks } } } }).find("Nobody") != std::string::npos);
@@ -600,17 +694,105 @@ TEST_SUITE("Property animation")
 		CHECK(first.GetComponent<PropertyAnimationComponent>().Tracks[0].Target != second.GetComponent<PropertyAnimationComponent>().Tracks[0].Target);
 		CHECK(run("prefab.overrides", { { "entity", IdOf(first) } })["overrides"].empty());
 
-		// A reference out of the prefab means nothing in other scenes: applying it keeps the prefab's own.
+		// A reference out of the prefab means nothing in other scenes: applying it keeps the prefab's own tracks.
 		Entity outside = session.GetScene()->CreateEntity("Outside");
 		outside.AddComponent<PointLightComponent>();
-		json tracks = ComponentRegistry::Find("PropertyAnimation")->Serialize(first)["Tracks"];
-		tracks[0]["Target"] = static_cast<uint64_t>(outside.GetUUID());
-		run("component.set", { { "entity", IdOf(first) }, { "component", "PropertyAnimation" }, { "data", { { "Tracks", tracks } } } });
-		const json applied = run("prefab.apply", { { "entity", IdOf(first) } });
-		REQUIRE(applied.contains("warnings"));
-		CHECK(applied["warnings"].dump().find("PropertyAnimation.Tracks[0].Target references an entity outside the prefab") != std::string::npos);
-		Entity third = instantiate();
-		CHECK(third.GetComponent<PropertyAnimationComponent>().Tracks[0].Target != outside.GetUUID());
+		const json authored = ComponentRegistry::Find("PropertyAnimation")->Serialize(first)["Tracks"];
+		const auto applyTracks = [&](json tracks) {
+			run("component.set", { { "entity", IdOf(first) }, { "component", "PropertyAnimation" }, { "data", { { "Tracks", tracks } } } });
+			const json applied = run("prefab.apply", { { "entity", IdOf(first) } });
+			REQUIRE(applied.contains("warnings"));
+			CHECK(applied["warnings"].dump().find("references an entity outside the prefab; the prefab keeps its Tracks") != std::string::npos);
+			Entity fresh = instantiate();
+			const auto& kept = fresh.GetComponent<PropertyAnimationComponent>().Tracks;
+			REQUIRE(kept.size() == 1);
+			CHECK(kept[0].Component == "PointLight");
+		};
+		const auto aimedOutside = [&](const char* component) {
+			json track = authored[0];
+			track["Component"] = component;
+			track["Target"] = static_cast<uint64_t>(outside.GetUUID());
+			return track;
+		};
+		SUBCASE("A track retargeted")
+		{
+			applyTracks(json::array({ aimedOutside("PointLight") }));
+		}
+		// Neither may become a track of the holder (0), nor take the target of whatever had its place in the list.
+		SUBCASE("A new track at the end")
+		{
+			applyTracks(json::array({ authored[0], aimedOutside("SpotLight") }));
+		}
+		SUBCASE("A new track in front")
+		{
+			applyTracks(json::array({ aimedOutside("SpotLight"), authored[0] }));
+		}
+	}
+
+	TEST_CASE("A prefab member deleted under a track fails loudly, and does not turn the track on its holder")
+	{
+		TempProject project("PropertyPrefabDeleted");
+		AutomationSession session;
+		CommandRegistry commands;
+		const auto run = [&](const std::string& command, const json& params) { return BasaltTest::Run(commands, session, command, params); };
+		auto scene = session.GetScene();
+		Entity root = scene->CreateEntity("Root");
+		Entity lamp = scene->CreateEntity("Lamp");
+		scene->SetParent(lamp, root, false);
+		lamp.GetTransform().Scale = glm::vec3(2);
+		std::string error;
+		REQUIRE(PropertyAnimation::Key(root, "Transform", "Scale", 0, error, lamp.GetUUID()));
+		run("prefab.create", { { "entity", IdOf(root) }, { "path", "Assets/Lamp.bprefab" } });
+		const uint64_t instanceId = run("prefab.instantiate", { { "path", "Assets/Lamp.bprefab" } })["id"];
+
+		// Delete the lamp from the prefab itself: the instance merges a source without its target.
+		run("prefab.open", { { "path", "Assets/Lamp.bprefab" } });
+		run("entity.destroy", { { "entity", "Lamp" } });
+		run("prefab.save", json::object());
+		run("prefab.close", json::object());
+
+		Entity instance = session.GetScene()->GetEntityByUUID(UUID(instanceId));
+		REQUIRE(instance);
+		const auto& track = instance.GetComponent<PropertyAnimationComponent>().Tracks[0];
+		CHECK(track.Target != 0);
+		const glm::vec3 scale = instance.GetTransform().Scale;
+		CHECK_FALSE(PropertyAnimation::Sample(instance, instance.GetComponent<PropertyAnimationComponent>(), 0, error));
+		CHECK(error.find("not in the scene") + error.find("deleted") != 2 * std::string::npos);
+		CHECK(instance.GetTransform().Scale == scale);
+		REQUIRE_FALSE(GetAnimationWarnings(instance).empty());
+	}
+
+	TEST_CASE("prefab.create says what lies outside the prefab")
+	{
+		TempProject project("PropertyPrefabOutside");
+		AutomationSession session;
+		CommandRegistry commands;
+		auto scene = session.GetScene();
+		Entity root = scene->CreateEntity("Root");
+		Entity outside = scene->CreateEntity("Outside");
+		outside.AddComponent<PointLightComponent>();
+		std::string error;
+		REQUIRE(PropertyAnimation::Key(root, "PointLight", "Intensity", 0, error, outside.GetUUID()));
+		const json created = BasaltTest::Run(commands, session, "prefab.create", { { "entity", IdOf(root) }, { "path", "Assets/Root.bprefab" } });
+		REQUIRE(created.contains("warnings"));
+		CHECK(created["warnings"].dump().find("'Root' PropertyAnimation.Tracks[0].Target references an entity outside the prefab") != std::string::npos);
+	}
+
+	TEST_CASE("project.validate reports a track whose entity is not in its scene")
+	{
+		TempProject project("PropertyValidate");
+		AutomationSession session;
+		CommandRegistry commands;
+		const auto run = [&](const std::string& command, const json& params) { return BasaltTest::Run(commands, session, command, params); };
+		Entity timeline = session.GetScene()->CreateEntity("Timeline");
+		run("scene.save", { { "path", "Assets/Tracks.bscene" } });
+		const int errors = run("project.validate", json::object())["errors"];
+		std::string error;
+		REQUIRE(ComponentRegistry::AddOrPatch(timeline, "PropertyAnimation", { { "Tracks", { { { "Component", "PointLight" }, { "Field", "Intensity" }, { "Target", 424242 } } } } }, error));
+		run("scene.save", json::object());
+		const json report = run("project.validate", json::object());
+		CHECK(report["errors"] == errors + 1);
+		CHECK(report.dump().find("PropertyAnimation.Tracks[0].Target names entity 424242") != std::string::npos);
 	}
 
 	TEST_CASE("Asset tracks step through project assets and persist like any asset field")

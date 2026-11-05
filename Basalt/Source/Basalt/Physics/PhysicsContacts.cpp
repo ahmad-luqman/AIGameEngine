@@ -96,7 +96,7 @@ namespace Basalt {
 	bool PhysicsWorld::Impl::IsTrigger(UUID uuid) const
 	{
 		auto* body = FindBody(uuid);
-		return body != nullptr && body->IsTrigger;
+		return body != nullptr && body->Settings.IsTrigger;
 	}
 
 	void PhysicsWorld::Impl::EndContacts(UUID uuid, std::span<const JPH::BodyID> bodies, bool trigger, bool defer)
@@ -247,7 +247,7 @@ namespace Basalt {
 			if (owner == BodyToEntity.end() || bodies.IsActive(id))
 				return false;
 			if (const auto* body = FindBody(owner->second); body && body->ID == id)
-				return body->Type != RigidBodyType::Static;
+				return body->Settings.Type != RigidBodyType::Static;
 			const auto rig = Ragdolls.find(owner->second);
 			return rig != Ragdolls.end() && rig->second.HasPart(id);
 		};

@@ -1884,8 +1884,11 @@ namespace Basalt {
 						}
 					});
 					// A list is written back whole.
-					if (const std::string top = field.substr(0, field.find('[')); changed)
+					if (changed)
+					{
+						const std::string top = field.substr(0, field.find('['));
 						patch[top] = data[top];
+					}
 				}
 				// Deserialize replaces through the registry, so a running physics world rebuilds joints.
 				std::string error;
@@ -2285,13 +2288,11 @@ namespace Basalt {
 		}
 
 		template<typename T>
-		ComponentInfo MakeInfo(const char* name, bool isCore = false, bool supportsPropertyAnimation = true, std::vector<std::string> liveFields = {})
+		ComponentInfo MakeInfo(const char* name, bool isCore = false)
 		{
 			ComponentInfo info;
 			info.Name = name;
 			info.IsCore = isCore;
-			info.SupportsPropertyAnimation = supportsPropertyAnimation;
-			info.LiveFields = std::move(liveFields);
 			CollectFields<T>(info);
 			info.Has = [](Entity entity) { return entity.HasComponent<T>(); };
 			info.Add = [](Entity entity) {
@@ -2394,10 +2395,19 @@ namespace Basalt {
 			return info;
 		}
 
+		// A component tracks animate only these fields of: see ComponentInfo::AnimatableFields.
+		template<typename T>
+		ComponentInfo MakeInfoAnimating(const char* name, std::vector<std::string> fields)
+		{
+			ComponentInfo info = MakeInfo<T>(name);
+			info.AnimatableFields = std::move(fields);
+			return info;
+		}
+
 		std::vector<ComponentInfo> BuildRegistry()
 		{
-			// What physics applies in place (ComponentInfo::LiveFields). A field that is not listed cannot be animated, so a
-			// new field stays safe until physics applies it; a test changes each listed field on a resting body or joint.
+			// What physics applies in place. A field that is not listed cannot be animated, so a new field stays safe until
+			// physics applies it; PropertyTrackTests changes the listed fields on resting bodies, characters and joints.
 			const auto withSurface = [](std::vector<std::string> fields) {
 				fields.insert(fields.end(), { "OverrideMaterial", "Friction", "Restitution" });
 				return fields;
@@ -2408,25 +2418,25 @@ namespace Basalt {
 			infos.push_back(MakeCameraInfo());
 			infos.push_back(MakeInfo<MeshComponent>("Mesh"));
 			infos.push_back(MakeInfo<AnimatorComponent>("Animator"));
-			infos.push_back(MakeInfo<PropertyAnimationComponent>("PropertyAnimation", false, false));
+			infos.push_back(MakeInfoAnimating<PropertyAnimationComponent>("PropertyAnimation", {}));
 			infos.push_back(MakeInfo<BoneAttachmentComponent>("BoneAttachment"));
 			infos.push_back(MakeInfo<InverseKinematicsComponent>("InverseKinematics"));
 			infos.push_back(MakeInfo<SpringBoneComponent>("SpringBone"));
-			infos.push_back(MakeInfo<RagdollComponent>("Ragdoll", false, true, { "RecoveryTime", "Bones[].MotorStrength", "MotorStrength", "MotorFrequency", "MotorDamping", "MotorTorque", "BalanceStrength", "BalanceFrequency", "BalanceDamping", "BalanceMaxTilt" }));
+			infos.push_back(MakeInfoAnimating<RagdollComponent>("Ragdoll", { "RecoveryTime", "Bones[].MotorStrength", "MotorStrength", "MotorFrequency", "MotorDamping", "MotorTorque", "BalanceStrength", "BalanceFrequency", "BalanceDamping", "BalanceMaxTilt" }));
 			infos.push_back(MakeInfo<MaterialComponent>("Material"));
 			infos.push_back(MakeInfo<DirectionalLightComponent>("DirectionalLight"));
 			infos.push_back(MakeInfo<PointLightComponent>("PointLight"));
 			infos.push_back(MakeInfo<SpotLightComponent>("SpotLight"));
 			infos.push_back(MakeInfo<SkyLightComponent>("SkyLight"));
 			infos.push_back(MakeInfo<PostProcessComponent>("PostProcess"));
-			infos.push_back(MakeInfo<RigidBodyComponent>("RigidBody", false, true, { "Mass", "LinearDamping", "AngularDamping", "GravityFactor", "Friction", "Restitution", "FrictionCombine", "RestitutionCombine", "Continuous", "AllowSleeping" }));
-			infos.push_back(MakeInfo<BoxColliderComponent>("BoxCollider", false, true, withSurface({ "HalfExtents", "Offset" })));
-			infos.push_back(MakeInfo<SphereColliderComponent>("SphereCollider", false, true, withSurface({ "Radius", "Offset" })));
-			infos.push_back(MakeInfo<CapsuleColliderComponent>("CapsuleCollider", false, true, withSurface({ "Radius", "HalfHeight", "Offset" })));
-			infos.push_back(MakeInfo<MeshColliderComponent>("MeshCollider", false, true, withSurface({})));
-			infos.push_back(MakeInfo<JointComponent>("Joint", false, true, GetLiveJointFieldNames()));
-			infos.push_back(MakeInfo<CharacterControllerComponent>("CharacterController", false, true, { "SlopeLimit", "StepHeight", "MaxStrength", "Mass", "GravityFactor", "JumpGrace" }));
-			infos.push_back(MakeInfo<ScriptComponent>("Script", false, false));
+			infos.push_back(MakeInfoAnimating<RigidBodyComponent>("RigidBody", { "Mass", "LinearDamping", "AngularDamping", "GravityFactor", "Friction", "Restitution", "FrictionCombine", "RestitutionCombine", "Continuous", "AllowSleeping" }));
+			infos.push_back(MakeInfoAnimating<BoxColliderComponent>("BoxCollider", withSurface({ "HalfExtents", "Offset" })));
+			infos.push_back(MakeInfoAnimating<SphereColliderComponent>("SphereCollider", withSurface({ "Radius", "Offset" })));
+			infos.push_back(MakeInfoAnimating<CapsuleColliderComponent>("CapsuleCollider", withSurface({ "Radius", "HalfHeight", "Offset" })));
+			infos.push_back(MakeInfoAnimating<MeshColliderComponent>("MeshCollider", withSurface({})));
+			infos.push_back(MakeInfoAnimating<JointComponent>("Joint", GetLiveJointFieldNames()));
+			infos.push_back(MakeInfoAnimating<CharacterControllerComponent>("CharacterController", { "SlopeLimit", "StepHeight", "MaxStrength", "Mass", "GravityFactor", "JumpGrace" }));
+			infos.push_back(MakeInfoAnimating<ScriptComponent>("Script", {}));
 			infos.push_back(MakeInfo<AudioSourceComponent>("AudioSource"));
 			infos.push_back(MakeInfo<AudioListenerComponent>("AudioListener"));
 			infos.push_back(MakeInfo<AudioReverbZoneComponent>("AudioReverbZone"));
@@ -2443,7 +2453,7 @@ namespace Basalt {
 			infos.push_back(MakeInfo<UIPanelComponent>("UIPanel"));
 			infos.push_back(MakeInfo<UINavigationComponent>("UINavigation"));
 			infos.push_back(MakeInfo<UIFocusRingComponent>("UIFocusRing"));
-			infos.push_back(MakeInfo<PrefabComponent>("Prefab", false, false));
+			infos.push_back(MakeInfoAnimating<PrefabComponent>("Prefab", {}));
 			// A copied instance (duplicate, paste, nested tree) tracks its own entities. Members that were not copied
 			// (deleted by the instance, or moved out of its tree) get fresh IDs, so the copy never claims the
 			// original's entities: to the copy they are deleted, and Revert recreates its own.

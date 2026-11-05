@@ -19,6 +19,7 @@ namespace Basalt {
 		// Jolt's samples): the character stops just short of what it walks into, so a full-size inner body
 		// would touch it and shove dynamic bodies regardless of MaxStrength.
 		constexpr float InnerShapeFraction = 0.9f;
+		constexpr const char* IgnoredRigidBodyWarning = "its RigidBody is ignored (the character controller replaces it)";
 
 	}
 
@@ -137,7 +138,7 @@ namespace Basalt {
 		std::vector<std::string> warnings;
 		auto report = [&]() { CharacterWarnings.Report(entity, warnings); };
 		if (entity.HasComponent<RigidBodyComponent>())
-			warnings.emplace_back("its RigidBody is ignored (the character controller replaces it)");
+			warnings.emplace_back(IgnoredRigidBodyWarning);
 
 		glm::vec3 position;
 		glm::quat rotation;
@@ -192,7 +193,6 @@ namespace Basalt {
 		CharacterCollision.Add(character);
 		record.Settings = controller;
 		record.Layer = layer;
-		record.BorrowedMesh = colliders.BorrowedMesh;
 		// A copy: configuration and reporting keep using warnings below.
 		record.BuildWarnings = warnings; // NOLINT(performance-use-std-move)
 		record.Colliders = ColliderSettings::Capture(entity);
@@ -219,8 +219,8 @@ namespace Basalt {
 		Impl::ConfigureCharacter(record, warnings);
 		report();
 
-		// A new character starts in the air; find its ground now so a rebuild (e.g. a crouch changing the
-		// collider) does not lose a step of IsGrounded or a jump.
+		// A new character starts in the air; find its ground now so a rebuild (e.g. a new Layer or collider kind) does not
+		// lose a step of IsGrounded or a jump.
 		RefreshCharacterContacts(entity);
 	}
 
@@ -234,23 +234,14 @@ namespace Basalt {
 												 *TempAllocator);
 	}
 
-	void PhysicsWorld::Impl::ResizeCharacter(Entity entity, const glm::vec3& scale)
+	bool PhysicsWorld::Impl::ReshapeCharacter(Entity entity, CharacterRecord& record, const glm::vec3& scale, std::vector<std::string>& warnings)
 	{
-		auto found = Characters.find(entity.GetUUID());
-		if (found == Characters.end())
-			return;
-		Impl::CharacterRecord& record = found->second;
-		std::vector<std::string> warnings;
 		const ColliderShape outer = BuildColliderShape(entity, scale, 1.0f, "a character", false, false, warnings);
-		const ColliderShape inner = BuildColliderShape(entity, scale, InnerShapeFraction, "a character", false, false, warnings);
-		std::ranges::sort(warnings);
-		warnings.erase(std::unique(warnings.begin(), warnings.end()), warnings.end());
-		ResizeWarnings.Report(entity, warnings);
+		// Same colliders, so its warnings would only repeat the outer shape's.
+		std::vector<std::string> ignoredWarnings;
+		const ColliderShape inner = BuildColliderShape(entity, scale, InnerShapeFraction, "a character", false, false, ignoredWarnings);
 		if (!outer.Shape || !inner.Shape)
-		{
-			RecreateCharacter(entity);
-			return;
-		}
+			return false;
 
 		JPH::CharacterVirtual& character = *record.Character;
 		const JPH::ObjectLayer layer = MakeObjectLayer(true, record.Layer);
@@ -262,7 +253,43 @@ namespace Basalt {
 		record.Bounds = outer.Shape->GetLocalBounds();
 		record.Bounds.Translate(outer.Shape->GetCenterOfMass());
 		Impl::UpdateSupportingVolume(record);
-		record.BuiltScale = scale;
+		return true;
+	}
+
+	void PhysicsWorld::Impl::ResizeCharacter(Entity entity, const glm::vec3& scale)
+	{
+		auto found = Characters.find(entity.GetUUID());
+		if (found == Characters.end())
+			return;
+		std::vector<std::string> warnings;
+		const bool reshaped = ReshapeCharacter(entity, found->second, scale, warnings);
+		ResizeWarnings.Report(entity, warnings);
+		if (reshaped)
+			found->second.BuiltScale = scale;
+		else
+			RecreateCharacter(entity);
+	}
+
+	bool PhysicsWorld::Impl::UpdateCharacter(Entity entity, CharacterRecord& record, const ColliderSettings& colliders)
+	{
+		if (!entity.HasComponent<CharacterControllerComponent>() || entity.HasComponent<RigidBodyComponent>() != record.IgnoresRigidBody || !colliders.SameChildren(record.Colliders))
+			return false;
+		if (colliders == record.Colliders)
+			return true;
+		std::vector<std::string> warnings;
+		if (record.IgnoresRigidBody)
+			warnings.emplace_back(IgnoredRigidBodyWarning);
+		if (!ReshapeCharacter(entity, record, record.BuiltScale, warnings))
+			return false;
+		// As after a rebuild: the step must not start from what the old shape touched.
+		RefreshCharacterContacts(entity);
+		if (!Layers.Find(record.Settings.Layer))
+			warnings.emplace_back("unknown physics layer '" + record.Settings.Layer + "', using Default");
+		record.Colliders = colliders;
+		record.BuildWarnings = warnings;
+		Impl::ConfigureCharacter(record, warnings);
+		CharacterWarnings.Report(entity, warnings);
+		return true;
 	}
 
 	void PhysicsWorld::Impl::ApplyCharacterSettings(Entity entity)

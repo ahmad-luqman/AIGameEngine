@@ -3,6 +3,7 @@
 #include "UITestUtils.h"
 
 #include <Basalt/Scene/ComponentRegistry.h>
+#include <Basalt/Scene/Scene.h>
 
 #include <doctest/doctest.h>
 #include <imgui.h>
@@ -43,7 +44,8 @@ namespace {
 		ImGui::SetNextWindowSize({ 600, 900 });
 		ImGui::Begin("Inspector");
 		Frame frame;
-		frame.Result = DrawJsonList("BlendSpaces", value, AnimatorList("BlendSpaces"));
+		Scene scene;
+		frame.Result = DrawJsonList("BlendSpaces", value, AnimatorList("BlendSpaces"), scene);
 		frame.LastItemMin = ImGui::GetItemRectMin();
 		frame.LastItemMax = ImGui::GetItemRectMax();
 		ImGui::End();

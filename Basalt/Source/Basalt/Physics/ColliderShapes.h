@@ -7,7 +7,6 @@
 
 #include <Jolt/Jolt.h>
 
-#include <Jolt/Physics/Body/MotionQuality.h>
 #include <Jolt/Physics/Collision/Shape/Shape.h>
 
 #include <glm/glm.hpp>
@@ -46,8 +45,6 @@ namespace Basalt::PhysicsInternal {
 		JPH::Ref<JPH::Shape> Shape;
 		// A MeshCollider contributed an exact triangle mesh (which has no volume).
 		bool HasTriangleMesh = false;
-		// The MeshComponent mesh a MeshCollider without its own Mesh used.
-		std::optional<std::pair<std::string, uint32_t>> BorrowedMesh;
 		ColliderMaterials Materials{};
 	};
 
@@ -58,7 +55,8 @@ namespace Basalt::PhysicsInternal {
 		std::optional<SphereColliderComponent> Sphere;
 		std::optional<CapsuleColliderComponent> Capsule;
 		std::optional<MeshColliderComponent> Mesh;
-		// The MeshComponent a MeshCollider without its own Mesh borrows.
+		// The MeshComponent a MeshCollider without its own Mesh borrows, so edits to the MeshComponent's other fields (e.g.
+		// CastShadows) leave the body alone.
 		std::optional<std::pair<std::string, uint32_t>> BorrowedMesh;
 
 		static ColliderSettings Capture(Entity entity);
@@ -67,19 +65,6 @@ namespace Basalt::PhysicsInternal {
 		// materials: Jolt keys contacts by child, so only then can a new shape keep them.
 		bool SameChildren(const ColliderSettings& other) const;
 	};
-
-	// Whether a change from `built` to `current` must rebuild the body (which ends its contacts) rather than apply in
-	// place. A field listed here must not be in the RigidBody's ComponentInfo::LiveFields.
-	bool BodyNeedsRebuild(const RigidBodyComponent& built, const RigidBodyComponent& current);
-
-	// A RigidBody's own settings in Jolt's terms. Their problems go to warnings, in a fixed order, so an update in place
-	// logs what a rebuild would.
-	struct BodySettings
-	{
-		ColliderMaterial Surface;
-		JPH::EMotionQuality Quality = JPH::EMotionQuality::Discrete;
-	};
-	BodySettings CheckBodySettings(const RigidBodyComponent& rigidBody, std::vector<std::string>& warnings);
 
 	// Clamps friction to >= 0 and restitution to [0, 1] with a warning each, so the combine modes cannot invert
 	// Jolt's friction clamp or add energy on every bounce. `owner` prefixes the warnings ("BoxCollider ", or ""

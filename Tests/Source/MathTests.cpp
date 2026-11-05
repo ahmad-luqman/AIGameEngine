@@ -176,6 +176,27 @@ TEST_SUITE("Math")
 			REQUIRE(negated.x == first.x);
 			REQUIRE(negated.y == first.y);
 		}
+		// Pitch +-180 is one orientation, whose sign is rounding noise: it must not alternate from save to save.
+		for (const float yaw : { 90.0f, -90.0f })
+			for (float pitch = -180.0f; pitch <= 180.0f; pitch += 1.0f)
+				for (float roll = -180.0f; roll <= 180.0f; roll += 15.0f)
+				{
+					CAPTURE(pitch);
+					CAPTURE(roll);
+					const glm::vec3 first = ToDegrees(FromDegrees({ pitch, yaw, roll }));
+					const glm::vec3 second = ToDegrees(FromDegrees(first));
+					REQUIRE(second.x == first.x);
+					REQUIRE(first.x > -180.0f);
+				}
+		// Rotations that reach the lock through float products are further from it than those built whole.
+		for (int i = 0; i < 100000; i++)
+		{
+			const glm::quat rotation = glm::normalize(glm::angleAxis(glm::radians(angle(random)), glm::vec3(0, 0, 1)) * glm::angleAxis(glm::radians(90.0f), glm::vec3(0, 1, 0)) * glm::angleAxis(glm::radians(angle(random)), glm::vec3(1, 0, 0)));
+			const glm::vec3 euler = ToDegrees(rotation);
+			REQUIRE(euler.y == 90.0f);
+			REQUIRE(euler.z == 0.0f);
+			REQUIRE(AngleBetween(rotation, FromDegrees(euler)) < 2e-4);
+		}
 		// Only pitch minus roll (plus roll, below) matters at the lock.
 		CHECK(ToDegrees(FromDegrees({ 30.0f, 90.0f, 10.0f })).x == doctest::Approx(20.0f).epsilon(1e-4));
 		CHECK(ToDegrees(FromDegrees({ 30.0f, -90.0f, 10.0f })).x == doctest::Approx(40.0f).epsilon(1e-4));

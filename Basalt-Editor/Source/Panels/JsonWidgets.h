@@ -50,13 +50,14 @@ namespace Basalt {
 
 	// Draws a List field as a tree: one node per element (labelled by its Name or Clip) holding the element's fields,
 	// with move and remove buttons per element (duplicate and the rest in its context menu) and an Add button.
-	// Structural edits change and commit at once; field edits report like DrawJsonField. `scene` names the entities of
-	// entity fields in the elements; without one they are shown read-only.
-	JsonFieldResult DrawJsonList(const std::string& name, nlohmann::json& array, const ComponentFieldType& type, Scene* scene = nullptr);
+	// Structural edits change and commit at once; field edits report like DrawJsonField. `scene` lists the entities entity
+	// fields in the elements can name.
+	JsonFieldResult DrawJsonList(const std::string& name, nlohmann::json& array, const ComponentFieldType& type, Scene& scene);
 
-	// One field of a component or list element: DrawJsonList for a List field, DrawEntityPicker for an entity field,
-	// DrawJsonField (with the field's enum options) for anything else.
-	JsonFieldResult DrawJsonValue(const std::string& name, nlohmann::json& value, const ComponentFieldType& type, const std::map<std::string, std::vector<std::string>>& enumOptions, Scene* scene = nullptr);
+	// One field of a component or list element: DrawJsonList for a List field, DrawEntityPicker for a list element's entity
+	// field (0 is the entity holding the list), DrawJsonField (with the field's enum options) for anything else. A
+	// component's own entity fields each mean something else by 0, so their callers draw the picker themselves.
+	JsonFieldResult DrawJsonValue(const std::string& name, nlohmann::json& value, const ComponentFieldType& type, const std::map<std::string, std::vector<std::string>>& enumOptions, Scene& scene);
 
 	// A combo of the scene's entities `filter` accepts, labelled `name` and showing `current` (0 as noneLabel; an entity
 	// that is gone as missing, so it can be replaced). Returns the ID picked this frame, if it differs.

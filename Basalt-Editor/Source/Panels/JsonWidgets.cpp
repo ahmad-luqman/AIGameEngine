@@ -372,21 +372,13 @@ namespace Basalt {
 		return selected != current ? std::optional(selected) : std::nullopt;
 	}
 
-	JsonFieldResult DrawJsonValue(const std::string& name, nlohmann::json& value, const ComponentFieldType& type, const std::map<std::string, std::vector<std::string>>& enumOptions, Scene* scene)
+	JsonFieldResult DrawJsonValue(const std::string& name, nlohmann::json& value, const ComponentFieldType& type, const std::map<std::string, std::vector<std::string>>& enumOptions, Scene& scene)
 	{
 		if (type.Kind == ComponentFieldKind::List)
 			return DrawJsonList(name, value, type, scene);
 		if (type.Kind == ComponentFieldKind::Entity)
 		{
-			if (!scene)
-			{
-				ImGui::TextDisabled("%s: %s", name.c_str(), value.dump().c_str());
-				return {};
-			}
-			ImGui::PushID(name.c_str());
-			// 0 in a list element means the entity holding the list (a track's Target is the only such field).
-			const auto picked = DrawEntityPicker(*scene, name, value.get<uint64_t>(), [](Entity) { return true; }, "Self");
-			ImGui::PopID();
+			const auto picked = DrawEntityPicker(scene, name, value.get<uint64_t>(), [](Entity) { return true; }, "Self");
 			if (!picked)
 				return {};
 			value = *picked;
@@ -396,7 +388,7 @@ namespace Basalt {
 		return DrawJsonField(name, value, options == enumOptions.end() ? nullptr : &options->second);
 	}
 
-	JsonFieldResult DrawJsonList(const std::string& name, nlohmann::json& array, const ComponentFieldType& type, Scene* scene)
+	JsonFieldResult DrawJsonList(const std::string& name, nlohmann::json& array, const ComponentFieldType& type, Scene& scene)
 	{
 		JsonFieldResult result;
 		if (!array.is_array() || !type.Element)

@@ -59,7 +59,7 @@ return Player
   push nothing). `OnCollisionEnd` and `OnTriggerExit` get where the bodies parted: `Point` midway between
   their closest points right after they separated and `Normal` pointing away from `other` (the way this
   entity left), `Impulse` 0. Their `contact` is nil when either body is gone (destroyed, or rebuilt after a
-  `RigidBody` or collider change) or they are already far apart (e.g. one was teleported away).
+  change that cannot apply in place; see Property animation for what can) or they are already far apart (e.g. one was teleported away).
 - Friction and restitution of a contact are combined from both bodies by `RigidBody.FrictionCombine` and
   `RestitutionCombine`: `Default`, `GeometricMean`, `Average`, `Min`, `Multiply` or `Max`. When the bodies
   differ, the mode later in that list wins (so `Default` defers to the other body); when both are
@@ -182,7 +182,7 @@ Entity handles store an ID and stay safe to hold: using a destroyed entity raise
 | `e:GetAudioDopplerPitch()` | The Doppler pitch factor of the AudioSource from the last update (the shift its next mix applies): 1 = unshifted, also while it is not playing or for a non-spatial source |
 | `e:PlayParticles()`, `e:StopParticles([clear])`, `e:EmitParticles(count)` | The entity's ParticleEmitter (see Particles; `clear` is a boolean). Errors without a ParticleEmitter |
 | `e:IsEmittingParticles()`, `e:GetParticleCount()` | Whether the ParticleEmitter is playing, and its live particles (false/0 without one) |
-| `e:ControlPropertyAnimation(action, [time])`, `e:GetPropertyAnimationStatus()` | Numeric property timeline controls and status; see Property animation |
+| `e:ControlPropertyAnimation(action, [time])`, `e:GetPropertyAnimationStatus()` | Property timeline controls and status; see Property animation |
 | `e:PlayAnimation([clip])`, `e:CrossFadeAnimation(clip, seconds)`, `e:BlendAnimations(first, second, weight)` | Animator playback and transitions; see Skeletal animation |
 | `e:PauseAnimation([paused])`, `e:StopAnimation()`, `e:SetAnimationTime(seconds)` | Animator pause, stop and seek |
 | `e:GetAnimationClips()`, `e:GetAnimationTime()`, `e:GetAnimationDuration()`, `e:IsAnimationPlaying()` | Animator queries |
@@ -723,8 +723,9 @@ end
 - The character enters triggers like any body (`OnTriggerEnter`/`OnTriggerExit`). Dynamic bodies that run
   into it raise collision callbacks (kinematic ones, such as other characters, do not); the character walking into something does not (it stops just short of it),
   so use a trigger or a query to detect what it touches.
-- Changing `SlopeLimit`, `StepHeight`, `MaxStrength`, `Mass`, `GravityFactor` or `JumpGrace` applies in place; a new
-  `Layer` or collider rebuilds the character, which keeps its velocity and ground. Out-of-range values are
+- Changing `SlopeLimit`, `StepHeight`, `MaxStrength`, `Mass`, `GravityFactor` or `JumpGrace` applies in place, and so
+  does a new size or offset of its colliders; a new `Layer`, or a collider added, removed or of another mesh, rebuilds the
+  character, which keeps its velocity and ground. Out-of-range values are
   clamped with one warning; `SlopeLimit` is at least 1 degree.
 
 ## Particles
@@ -1204,12 +1205,16 @@ metadata (`quaternionRotations` in `component.types`): keys hold Euler degrees, 
 quaternion slerp, including rotations beyond 90° and across ±180°. Use intermediate keys for turns exceeding
 180°. Stepped rotation tracks hold the preceding orientation. Scalar angles remain ordinary numeric tracks.
 Quaternion keys hold the registry's Euler serialization, whose angles always rebuild the orientation; at gimbal lock (yaw
-±90°) it writes one canonical form (roll 0, yaw exact, pitch on a 0.0001° grid), so the same rotation saves the same text.
+±90°) it writes one canonical form (roll 0, yaw exact, pitch on a 0.0001° grid, 180 rather than -180), so a saved rotation
+reads back and saves as the same text.
 
 `Target` is the entity a track animates; 0, the default, is the entity holding the timeline. `component.set` and
 `animation.key {target}` also take an entity name there. Prefab and scene copies follow it like any entity reference: a
-copied tree animates its own members. A sample fails, naming the track, when the entity or its component is not there, and
-the inspector and `scene.info` warn about such tracks. Components are patched in order of target ID, then name.
+copied tree animates its own members, and a member deleted from its prefab leaves the track failing rather than animating
+the entity holding it. A sample fails, naming the track, when the entity or its component is not there; the inspector and
+`scene.info` warn about such tracks, and `project.validate` reports a `Target` missing from its scene as an error. Tracks
+are one value to prefab merges: `prefab.apply` keeps the prefab's `Tracks` when one of the instance's aims outside the
+prefab, and says so. Components are patched in order of target ID, then name.
 
 ```lua
 -- A switch dims every lamp it names, and shows it on its own panel.
@@ -1224,9 +1229,9 @@ self.Entity:AddComponent("PropertyAnimation", { Duration = 2, Looping = false, T
 ```
 
 Asset keys persist as UUID references, move with `asset.move` and are checked by `project.validate`, like any asset
-field. Starting a timeline (its first update, or `Control`) requests the textures and models its keys name, so a
-flipbook does not show placeholders on its first pass in a renderer that streams; other assets load when their
-component reads them. A track that swaps a `MeshCollider`'s borrowed `Mesh` rebuilds that body; `Script` and `Prefab`
+field. Starting a timeline (its first update, or `Control`) requests the textures, models and materials its keys name, so
+in a renderer that streams a flipbook's textures load ahead of their keys rather than on first use; other assets load when
+their component reads them. A track that swaps a `MeshCollider`'s borrowed `Mesh` rebuilds that body; `Script` and `Prefab`
 components cannot be animated.
 
 `Field` is a top-level field (`Translation`) or a path into list elements: `List[selector].Field`, nested as deep as
@@ -1237,7 +1242,7 @@ is usable: nonempty, not only digits, without `]` and used once; otherwise by in
 when the element is not there. Tracks into the same list compose, and each list is patched once per sample, with the
 component's own validation and update signals (a nested Animator layer weight, for instance, applies at once, as when a
 script sets it). Tracks that reach the same field through different spellings (`Layers[0].Weight` and
-`Layers[Upper].Weight`) follow the repeated-target rule below, and Capture Key finds the existing track by the field it
+`Layers[Upper].Weight`) follow the same-field rule below, and Capture Key finds the existing track by the field it
 reaches, whichever way its path is written.
 
 Empty tracks do nothing; targets must exist when sampling (the inspector and `scene.info` warn about tracks whose
@@ -1246,20 +1251,21 @@ and multi-value booleans and enums are excluded. A key's `Text` must be empty on
 its `Asset` on fields other than asset references, so a string key on a boolean track is an error rather than `false`.
 
 Physics configuration can be animated too, field by field: the fields a body, character, joint or ragdoll takes in place
-(`liveFields` in `component.types`), so playing a track keeps contacts, joints and sleep. A resting crate whose
-`Friction` or `BoxCollider.HalfExtents` animates raises no `OnCollisionEnd`, and a floor that turns to ice sets what
-sleeps on it sliding. The rest (`RigidBody.Type`, `IsTrigger`, `FixedRotation` and `Layer`, a joint's bodies, anchors and axes,
-`CharacterController.Layer`, a mesh collider's `Mesh`, `MeshIndex` and `Convex`, a ragdoll's structure) would rebuild the
-object, so a track on them is refused with the reason. The same in-place path serves `SetComponent`: writing a live field
+(`liveFields` in `component.types`), so playing a track keeps contacts and joints. A value that changes wakes the body, and
+what rests on a static or kinematic one; a held key changes nothing. A resting crate whose `Friction` or
+`BoxCollider.HalfExtents` animates raises no `OnCollisionEnd` while it stays touching, and a floor that turns to ice sets
+what sleeps on it sliding. The rest (`RigidBody.Type`, `IsTrigger`, `FixedRotation` and `Layer`, a joint's `Type`, `UseLimits`,
+bodies, anchors and axes, `CharacterController.Layer`, a mesh collider's `Mesh`, `MeshIndex` and `Convex`, a ragdoll's
+`Enabled` and structure) would rebuild the object or start or end the ragdoll, so a track on them is refused with the reason. The same in-place path serves `SetComponent`: writing a live field
 from a script keeps contacts too, and writing the values a component already has does nothing, not even waking the body.
 Animate Transform on a kinematic rigid body to move a physics platform or door.
 
 Keys use strictly increasing normalized Time in [0,1], with a maximum of 256 keys per track and 64
-tracks per entity. Repeated targets use the last nonempty track. Key capture edits that winning track,
+tracks per timeline. Tracks reaching the same field of the same entity use the last nonempty one. Key capture edits that winning track,
 falling back to the last matching empty track only when all matches are empty. Sampling holds the first/last value outside the keys'
 interval. Linear interpolation is the default; Stepped holds the left key until the next key's time.
 Changed samples use the component's existing validator and update signals. Patches matching serialized values are skipped; quaternion orientation comparisons allow float roundoff. Fields of the same component
-are applied together; when a component rejects its patch, earlier components in component-name order may already have changed.
+are applied together; when a component rejects its patch, components patched earlier, in order of target ID then name, may already have changed.
 No missing target component is implicitly added.
 
 Playback runs after script OnUpdate and before skeletal animation and physics in Play/Simulate.

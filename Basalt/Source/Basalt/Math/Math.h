@@ -25,8 +25,9 @@ namespace Basalt::Math {
 	// Euler angles in radians (pitch = X, yaw = Y, roll = Z), applied in the order used by glm::quat(eulerAngles).
 	glm::quat QuatFromEuler(const glm::vec3& euler);
 	// Any rotation (normalized here; a zero quaternion is no rotation) as angles QuatFromEuler turns back into it. At gimbal
-	// lock (yaw +-90 degrees) roll is 0, yaw is exact and pitch sits on a 1e-4 degree grid, so such a rotation comes back to
-	// the same bits after one round trip; elsewhere the last bits may differ, never the orientation by more than rounding.
+	// lock (yaw +-90 degrees) roll is 0, yaw is exact and pitch sits on a 1e-4 degree grid, with 180 rather than -180, so what
+	// this returns there comes back as the same bits; elsewhere the last bits may differ, never the orientation by more than
+	// rounding.
 	glm::vec3 EulerFromQuat(const glm::quat& rotation);
 
 	// Shortest-arc spherical interpolation (weight 0: from, 1: to), normalized, computed with Jolt's portable trigonometry so
