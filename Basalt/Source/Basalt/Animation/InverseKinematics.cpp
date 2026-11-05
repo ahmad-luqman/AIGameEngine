@@ -78,7 +78,7 @@ namespace Basalt {
 
 		bool IsFree(const FabrikJointLimit& limit)
 		{
-			return limit.ConeAngle >= glm::pi<float>() && limit.MinTwist <= -glm::pi<float>() && limit.MaxTwist >= glm::pi<float>();
+			return limit.SwingAngle >= glm::pi<float>() && limit.TwistMin <= -glm::pi<float>() && limit.TwistMax >= glm::pi<float>();
 		}
 
 		// `rotation` brought within `limit` of `rest`, measured about `axis` (the bone, unit, in the joint's own space).
@@ -92,12 +92,10 @@ namespace Basalt {
 				relative = -relative;
 			const float twist = 2.0f * std::atan2(glm::dot(glm::vec3(relative.x, relative.y, relative.z), axis), relative.w);
 			glm::quat swing = glm::normalize(relative * glm::inverse(glm::angleAxis(twist, axis)));
-			if (swing.w < 0.0f)
-				swing = -swing;
 			const float swingAngle = 2.0f * std::atan2(glm::length(glm::vec3(swing.x, swing.y, swing.z)), swing.w);
-			if (swingAngle > limit.ConeAngle)
-				swing = glm::slerp(glm::quat(1, 0, 0, 0), swing, limit.ConeAngle / swingAngle);
-			return glm::normalize(rest * swing * glm::angleAxis(std::clamp(twist, limit.MinTwist, limit.MaxTwist), axis));
+			if (swingAngle > limit.SwingAngle)
+				swing = glm::slerp(glm::quat(1, 0, 0, 0), swing, limit.SwingAngle / swingAngle);
+			return glm::normalize(rest * swing * glm::angleAxis(std::clamp(twist, limit.TwistMin, limit.TwistMax), axis));
 		}
 
 		// The direction of `child` from its parent at rest, in the parent's own space; zero when it has no bone.
@@ -150,6 +148,162 @@ namespace Basalt {
 			saved.Restore(source, pose, globals);
 			return false;
 		}
+
+		// Where a bone lies after a FABRIK pass; one that collapsed onto its neighbour keeps the direction it had.
+		glm::vec3 PlaceBone(const glm::vec3& from, const glm::vec3& toward, const glm::vec3& fallback, float length)
+		{
+			const glm::vec3 direction = toward - from;
+			const float distance = glm::length(direction);
+			return from + (distance > 1e-9f ? direction / distance : fallback) * length;
+		}
+
+		// SolveFabrikIK's solve under Limits, from the points of the pose it starts on. Only the chain's own globals are kept
+		// up to date until Solve composes the whole pose.
+		struct LimitedFabrik
+		{
+			const MeshSource& Source;
+			AnimationLocalPose& Pose;
+			std::vector<glm::mat4>& Globals;
+			const SavedRotations& Saved;
+			std::span<const uint32_t> Joints;
+			std::span<const FabrikJointLimit> Limits;
+			std::span<const float> Lengths;
+			std::span<const glm::vec3> Animated;
+			std::vector<glm::vec3>& Points;
+			glm::vec3 Target;
+			// Shorter vectors have no direction to read.
+			float MinLength = 0;
+			float Tolerance = 0;
+
+			std::vector<glm::vec3> Axes = {};
+			// The rotations that brought the end closest to the target.
+			std::vector<glm::quat> Best = {};
+			float BestError = std::numeric_limits<float>::max();
+
+			size_t Bones() const { return Limits.size(); }
+			uint32_t End() const { return Joints.back(); }
+
+			void Limit(size_t i)
+			{
+				const uint32_t joint = Joints[i];
+				if (Axes[i] != glm::vec3(0) && !IsFree(Limits[i]))
+					Pose.Nodes[joint].Rotation = LimitRotation(Pose.Nodes[joint].Rotation, Source.Nodes[joint].Rotation, Axes[i], Limits[i]);
+			}
+
+			// Turns `joint` so what it carries toward `toward` lies on that direction; nothing when either has no direction
+			// (NaN lengths included: a pass composes without checking, so nothing not finite may turn a joint).
+			void Turn(uint32_t joint, const glm::vec3& carried, const glm::vec3& toward)
+			{
+				const float carriedLength = glm::length(carried), towardLength = glm::length(toward);
+				if (carriedLength >= MinLength && towardLength >= MinLength)
+					RotateJoint(Source, Pose, Globals, joint, RotationBetween(carried / carriedLength, toward / towardLength));
+			}
+
+			// A forward pass in rotations: each joint turns toward its point, is limited, and moves the rest of the chain, so
+			// Points always describe a pose within the limits.
+			void ForwardPass()
+			{
+				for (size_t i = 0; i < Bones(); i++)
+				{
+					const uint32_t joint = Joints[i], child = Joints[i + 1];
+					ComposeAnimationNode(Source, Pose, child, Globals);
+					const glm::vec3 origin = Position(Globals, joint);
+					Turn(joint, Position(Globals, child) - origin, Points[i + 1] - origin);
+					Limit(i);
+					ComposeAnimationNode(Source, Pose, joint, Globals);
+					ComposeAnimationNode(Source, Pose, child, Globals);
+					Points[i + 1] = Position(Globals, child);
+				}
+			}
+
+			// Where the backward pass puts joint i: where the joint at the bone's end can still point the bone already placed
+			// after it, so the chain's free joints take up what a limited one cannot give, instead of every pass asking that
+			// joint again. The bone's frame is the last forward pass's, turned onto its new direction; the next forward pass
+			// makes it exact.
+			glm::vec3 BackwardPoint(size_t i) const
+			{
+				const glm::vec3 point = PlaceBone(Points[i + 1], Points[i], -Animated[i], Lengths[i]);
+				if (i + 1 == Bones() || Lengths[i] < MinLength || Lengths[i + 1] < MinLength)
+					return point;
+				const uint32_t joint = Joints[i], child = Joints[i + 1];
+				const glm::vec3 bone = glm::normalize(Points[i + 1] - point);
+				const glm::vec3 current = Position(Globals, child) - Position(Globals, joint);
+				// Where the rest pose points the next bone from this bone's frame, in model space.
+				const glm::vec3 rest = glm::mat3(Globals[joint]) * (Source.Nodes[child].Rotation * Axes[i + 1]);
+				if (glm::length(current) < MinLength || glm::length(rest) < 1e-6f)
+					return point;
+				const glm::vec3 reference = RotationBetween(glm::normalize(current), bone) * glm::normalize(rest);
+				const glm::vec3 next = glm::normalize(Points[i + 2] - Points[i + 1]);
+				const float angle = SafeAcos(glm::dot(reference, next));
+				const float limit = Limits[i + 1].SwingAngle;
+				if (angle <= limit)
+					return point;
+				const glm::quat correction = glm::slerp(glm::quat(1, 0, 0, 0), RotationBetween(reference, next), (angle - limit) / angle);
+				return Points[i + 1] - (correction * bone) * Lengths[i];
+			}
+
+			void TakeBest(float error)
+			{
+				BestError = error;
+				for (size_t i = 0; i < Bones(); i++)
+					Best[i] = Pose.Nodes[Joints[i]].Rotation;
+			}
+
+			bool TakeIfCloser()
+			{
+				const float error = glm::length(Position(Globals, End()) - Target);
+				if (!(error < BestError))
+					return false;
+				TakeBest(error);
+				return true;
+			}
+
+			bool RestoreBest()
+			{
+				for (size_t i = 0; i < Bones(); i++)
+					Pose.Nodes[Joints[i]].Rotation = Best[i];
+				return ComposeOrRestore(Source, Pose, Globals, Saved);
+			}
+
+			bool Solve()
+			{
+				Axes.resize(Bones());
+				Best.resize(Bones());
+				for (size_t i = 0; i < Bones(); i++)
+					Axes[i] = RestBoneAxis(Source, Joints[i], Joints[i + 1]);
+				// The first pass only brings the animated pose inside the limits, which a pose at its target needs too. It is
+				// kept whatever its error says (a target far enough away has none that compares), so the result is inside them.
+				ForwardPass();
+				TakeBest(glm::length(Position(Globals, End()) - Target));
+				for (uint32_t iteration = 0; iteration < FabrikMaxIterations && BestError > Tolerance; iteration++)
+				{
+					Points.back() = Target;
+					for (size_t i = Bones(); i-- > 0;)
+						Points[i] = BackwardPoint(i);
+					ForwardPass();
+					TakeIfCloser();
+				}
+				if (!RestoreBest())
+					return false;
+				// Clamped passes stall against tight limits: each undoes what the limits took from the one before. Turning one
+				// joint at a time (cyclic coordinate descent) from the best of them stays inside the limits and keeps closing in.
+				for (uint32_t sweep = 0; sweep < FabrikLimitedSweeps && BestError > Tolerance; sweep++)
+				{
+					for (size_t i = Bones(); i-- > 0;)
+					{
+						const glm::vec3 origin = Position(Globals, Joints[i]);
+						Turn(Joints[i], Position(Globals, End()) - origin, Target - origin);
+						Limit(i);
+						for (size_t below = i; below < Joints.size(); below++)
+							ComposeAnimationNode(Source, Pose, Joints[below], Globals);
+					}
+					// A sweep that came no closer has done what the limits allow.
+					if (!TakeIfCloser())
+						break;
+				}
+				return RestoreBest();
+			}
+		};
 
 		IKSolveResult Finalize(const MeshSource& source, AnimationLocalPose& pose, std::vector<glm::mat4>& globals, const SavedRotations& saved, float weight)
 		{
@@ -244,13 +398,13 @@ namespace Basalt {
 		// In radians; nullopt for values ComponentRegistry would refuse.
 		const auto convert = [](float cone, float minTwist, float maxTwist) -> std::optional<FabrikJointLimit> {
 			const auto valid = [](float angle, float low, float high) { return std::isfinite(angle) && angle >= low && angle <= high; };
-			if (!valid(cone, 0, IKChain::MaxConeAngle) || !valid(minTwist, -IKChain::MaxTwistAngle, IKChain::MaxTwistAngle) || !valid(maxTwist, minTwist, IKChain::MaxTwistAngle))
+			if (!valid(cone, 0, IKChain::MaxSwingAngle) || !valid(minTwist, -IKChain::MaxTwistAngle, IKChain::MaxTwistAngle) || !valid(maxTwist, minTwist, IKChain::MaxTwistAngle))
 				return std::nullopt;
-			return FabrikJointLimit{ .ConeAngle = glm::radians(cone), .MinTwist = glm::radians(minTwist), .MaxTwist = glm::radians(maxTwist) };
+			return FabrikJointLimit{ .SwingAngle = glm::radians(cone), .TwistMin = glm::radians(minTwist), .TwistMax = glm::radians(maxTwist) };
 		};
-		const std::optional<FabrikJointLimit> common = convert(chain.ConeAngle, chain.MinTwist, chain.MaxTwist);
+		const std::optional<FabrikJointLimit> common = convert(chain.SwingAngle, chain.TwistMin, chain.TwistMax);
 		if (!common)
-			outProblems.emplace_back("ConeAngle, MinTwist or MaxTwist is out of range; those joints stay free");
+			outProblems.emplace_back("SwingAngle, TwistMin or TwistMax is out of range; those joints stay free");
 		const std::span<const uint32_t> turned = joints.first(joints.size() - 1);
 		std::vector<FabrikJointLimit> limits(turned.size(), common.value_or(FabrikJointLimit{}));
 		for (const IKJointLimit& limit : chain.JointLimits)
@@ -263,7 +417,7 @@ namespace Basalt {
 				outProblems.push_back(fmt::format("JointLimits: '{}' is not a joint the chain turns", limit.Joint));
 				continue;
 			}
-			const std::optional<FabrikJointLimit> own = convert(limit.ConeAngle, limit.MinTwist, limit.MaxTwist);
+			const std::optional<FabrikJointLimit> own = convert(limit.SwingAngle, limit.TwistMin, limit.TwistMax);
 			if (!own)
 				outProblems.push_back(fmt::format("JointLimits: the limits of '{}' are out of range; it stays free", limit.Joint));
 			limits[static_cast<size_t>(joint - turned.begin())] = own.value_or(FabrikJointLimit{});
@@ -425,12 +579,6 @@ namespace Basalt {
 			return IKSolveResult::Degenerate;
 		const glm::vec3 root = points.front();
 		const glm::vec3& target = request.Target;
-		// Where a bone lies after a pass; a bone that collapsed onto its neighbour keeps the direction it had.
-		const auto place = [](const glm::vec3& from, const glm::vec3& toward, const glm::vec3& fallback, float length) {
-			const glm::vec3 direction = toward - from;
-			const float distance = glm::length(direction);
-			return from + (distance > 1e-9f ? direction / distance : fallback) * length;
-		};
 		const float tolerance = FabrikTolerance * reach;
 		// A limited chain may not straighten: its passes find what it can do.
 		if (!limited && glm::length(target - root) >= reach)
@@ -461,10 +609,10 @@ namespace Basalt {
 			{
 				points.back() = target;
 				for (size_t i = bones; i-- > 0;)
-					points[i] = place(points[i + 1], points[i], -animated[i], lengths[i]);
+					points[i] = PlaceBone(points[i + 1], points[i], -animated[i], lengths[i]);
 				points.front() = root;
 				for (size_t i = 0; i < bones; i++)
-					points[i + 1] = place(points[i], points[i + 1], animated[i], lengths[i]);
+					points[i + 1] = PlaceBone(points[i], points[i + 1], animated[i], lengths[i]);
 			}
 		}
 		if (!std::ranges::all_of(points, [](const glm::vec3& point) { return Math::IsFinite(point); }))
@@ -473,108 +621,8 @@ namespace Basalt {
 		const SavedRotations saved(pose, joints);
 		if (limited)
 		{
-			std::vector<glm::vec3> axes(bones);
-			for (size_t i = 0; i < bones; i++)
-				axes[i] = RestBoneAxis(source, joints[i], joints[i + 1]);
-			const auto limitJoint = [&](size_t i) {
-				const uint32_t joint = joints[i];
-				if (axes[i] != glm::vec3(0) && !IsFree(request.Limits[i]))
-					pose.Nodes[joint].Rotation = LimitRotation(pose.Nodes[joint].Rotation, source.Nodes[joint].Rotation, axes[i], request.Limits[i]);
-			};
-			// A forward pass in rotations: each joint turns toward its point, is limited, and moves the rest of the chain, so
-			// points always describe a pose within the limits. Only the chain's own globals are kept up to date.
-			const auto forward = [&] {
-				for (size_t i = 0; i < bones; i++)
-				{
-					const uint32_t joint = joints[i], child = joints[i + 1];
-					ComposeAnimationNode(source, pose, child, globals);
-					const glm::vec3 origin = Position(globals, joint);
-					const glm::vec3 bone = Position(globals, child) - origin;
-					const glm::vec3 aim = points[i + 1] - origin;
-					if (glm::length(bone) >= 1e-6f * reach && glm::length(aim) >= 1e-6f * reach)
-						RotateJoint(source, pose, globals, joint, RotationBetween(glm::normalize(bone), glm::normalize(aim)));
-					limitJoint(i);
-					ComposeAnimationNode(source, pose, joint, globals);
-					ComposeAnimationNode(source, pose, child, globals);
-					points[i + 1] = Position(globals, child);
-				}
-			};
-			// Keeps the rotations that brought the end closest to the target.
-			std::vector<glm::quat> best(bones);
-			for (size_t i = 0; i < bones; i++)
-				best[i] = pose.Nodes[joints[i]].Rotation;
-			float bestError = std::numeric_limits<float>::max();
-			const auto keepBest = [&] {
-				const float error = glm::length(Position(globals, joints.back()) - target);
-				if (!(error < bestError))
-					return false;
-				bestError = error;
-				for (size_t i = 0; i < bones; i++)
-					best[i] = pose.Nodes[joints[i]].Rotation;
-				return true;
-			};
-			const auto restoreBest = [&] {
-				for (size_t i = 0; i < bones; i++)
-					pose.Nodes[joints[i]].Rotation = best[i];
-				return ComposeOrRestore(source, pose, globals, saved);
-			};
-			// The first pass only brings the animated pose inside the limits, which a pose at its target needs too.
-			forward();
-			keepBest();
-			// The backward pass places each bone so the joint at its end can still point the bone already placed: the chain's
-			// free joints then take up what a limited one cannot give, instead of every pass asking the same joint again. The
-			// bone's frame is the last pass's turned onto its new direction, which the forward pass makes exact.
-			const auto backward = [&](size_t i) {
-				const glm::vec3 point = place(points[i + 1], points[i], -animated[i], lengths[i]);
-				if (i + 1 == bones || axes[i + 1] == glm::vec3(0) || lengths[i] < 1e-6f * reach || lengths[i + 1] < 1e-6f * reach)
-					return point;
-				const uint32_t joint = joints[i], child = joints[i + 1];
-				const glm::vec3 bone = glm::normalize(points[i + 1] - point);
-				const glm::vec3 current = Position(globals, child) - Position(globals, joint);
-				// Where the rest pose points the next bone, in this bone's frame.
-				const glm::vec3 rest = glm::mat3(globals[joint]) * (source.Nodes[child].Rotation * axes[i + 1]);
-				if (glm::length(current) < 1e-6f * reach || glm::length(rest) < 1e-6f)
-					return point;
-				const glm::vec3 reference = RotationBetween(glm::normalize(current), bone) * glm::normalize(rest);
-				const glm::vec3 next = glm::normalize(points[i + 2] - points[i + 1]);
-				const float angle = SafeAcos(glm::dot(reference, next));
-				const float limit = request.Limits[i + 1].ConeAngle;
-				if (angle <= limit)
-					return point;
-				const glm::quat correction = glm::slerp(glm::quat(1, 0, 0, 0), RotationBetween(reference, next), (angle - limit) / angle);
-				return points[i + 1] - (correction * bone) * lengths[i];
-			};
-			for (uint32_t iteration = 0; iteration < FabrikMaxIterations && bestError > tolerance; iteration++)
-			{
-				points.back() = target;
-				for (size_t i = bones; i-- > 0;)
-					points[i] = backward(i);
-				forward();
-				keepBest();
-			}
-			if (!restoreBest())
-				return IKSolveResult::NonFinite;
-			// Clamped passes stall against tight limits: each undoes what the limits took from the one before. Turning one joint
-			// at a time (cyclic coordinate descent) from the best of them stays inside the limits and keeps closing in.
-			for (uint32_t sweep = 0; sweep < FabrikLimitedSweeps && bestError > tolerance; sweep++)
-			{
-				for (size_t i = bones; i-- > 0;)
-				{
-					const uint32_t joint = joints[i];
-					const glm::vec3 origin = Position(globals, joint);
-					const glm::vec3 toEnd = Position(globals, joints.back()) - origin;
-					const glm::vec3 toTarget = target - origin;
-					if (glm::length(toEnd) >= 1e-6f * reach && glm::length(toTarget) >= 1e-6f * reach)
-						RotateJoint(source, pose, globals, joint, RotationBetween(glm::normalize(toEnd), glm::normalize(toTarget)));
-					limitJoint(i);
-					for (size_t below = i; below < joints.size(); below++)
-						ComposeAnimationNode(source, pose, joints[below], globals);
-				}
-				// A sweep that came no closer has done what the limits allow.
-				if (!keepBest())
-					break;
-			}
-			if (!restoreBest())
+			LimitedFabrik solve{ .Source = source, .Pose = pose, .Globals = globals, .Saved = saved, .Joints = joints, .Limits = request.Limits, .Lengths = lengths, .Animated = animated, .Points = points, .Target = target, .MinLength = 1e-6f * reach, .Tolerance = tolerance };
+			if (!solve.Solve())
 				return IKSolveResult::NonFinite;
 		}
 		else

@@ -75,16 +75,18 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   overlays) in `LayerState::Graph`: transitions and clocks advance in `AdvanceLayers` on the main thread, and `Finish`
   only samples it (`SampleBase`), so pose jobs stay disjoint; parameters and triggers reach every graph declaring the
   name, except `OwnParameters` layers, which take `SetLayerParameter`/`SetLayerTrigger` (the same `WriteParameter`). A layer
-  with `Events` fires the Animator's markers through the base's `CollectEvents` and `AdvanceSpace` while its weight is above 0,
-  into the Animator's per-frame budget (`AnimationEventSink`; a null `Budget` fires nothing, which is what the zero-second
-  catch-up calls pass); the record names the layer. `InverseKinematicsComponent` chains solve in
+  with `Events` fires the Animator's markers through the base's `CollectEvents` and `AdvanceSpace` for the share of the update
+  its weight shows (`FadingWeight::ShownShare`), before the base and from a budget of the layers' own, so they cannot crowd
+  out base markers (`AnimationEventSink`; a null `Budget` fires nothing, which is what the zero-second catch-up calls pass);
+  the record names the layer. `InverseKinematicsComponent` chains solve in
   `AnimationSystem::LateUpdate` (after physics and OnLateUpdate, before attachments) from `Pose`, never from the last
   solution; the solved joints' local transforms are kept as an overlay so a pose evaluated again that frame (Play in a
   callback) keeps the IK. Fabrik limits (`ResolveFabrikLimits`, in radians, empty when nothing limits, so a free chain takes the
   plain solver) are swing-twist about each joint's rest bone in its own space, measured from its rest rotation, not the
-  animation (the solver's shortest-arc turns add no twist, so only a rest frame gives a twist range meaning). Each pass places
-  bones backward against the next joint's cone and forward in rotations, limiting each joint; coordinate-descent sweeps follow,
-  as clamped passes stall against tight limits, and the closest pose wins. Targets apply as script target, then the component's `Target` (FollowTarget chains), then
+  animation (the solver's shortest-arc turns add no twist, so only a rest frame gives a twist range meaning). `LimitedFabrik`
+  places bones backward against the next joint's cone and forward in rotations, limiting each joint; coordinate-descent sweeps
+  follow, as clamped passes stall against tight limits, and the closest pose wins. A limited Ground chain is solved even when
+  `Settled`, since the animated pose may lie outside its limits. Targets apply as script target, then the component's `Target` (FollowTarget chains), then
   ground; FootLock chains hold a planted joint's position across the up axis (its height follows the animation and the
   ground) from when its target is slower than `LockSpeed` until a lift, a carry or leaving the ground, and release at once
   when another target applies, FootLock turns off, or the entity's IK does not run. Foot rays use

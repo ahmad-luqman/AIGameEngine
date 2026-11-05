@@ -1802,7 +1802,8 @@ namespace {
 	};
 	JointTurn MeasureTurn(const Rig& rig, uint32_t joint, uint32_t child)
 	{
-		const glm::vec3 axis = glm::normalize(rig.Source->Nodes[child].Translation);
+		const MeshNode& node = rig.Source->Nodes[child];
+		const glm::vec3 axis = glm::normalize(rig.Source->Nodes[joint].Scale * (node.HasMatrix ? glm::vec3(node.Matrix[3]) : node.Translation));
 		const glm::quat relative = glm::normalize(glm::inverse(rig.Source->Nodes[joint].Rotation) * rig.Pose.Nodes[joint].Rotation);
 		const glm::vec3 swung = relative * axis;
 		const glm::quat twist = glm::normalize(glm::inverse(RotationBetween(axis, swung)) * relative);
@@ -1815,7 +1816,7 @@ namespace {
 	}
 	std::vector<FabrikJointLimit> Limits(size_t count, float cone, float minTwist = -180, float maxTwist = 180)
 	{
-		return std::vector<FabrikJointLimit>(count, { .ConeAngle = glm::radians(cone), .MinTwist = glm::radians(minTwist), .MaxTwist = glm::radians(maxTwist) });
+		return std::vector<FabrikJointLimit>(count, { .SwingAngle = glm::radians(cone), .TwistMin = glm::radians(minTwist), .TwistMax = glm::radians(maxTwist) });
 	}
 }
 
@@ -1922,7 +1923,7 @@ TEST_SUITE("Animation")
 			std::ranges::sort(errors);
 			CHECK(errors[errors.size() / 2] < 2 * FabrikTolerance * reach);
 			CHECK(errors[errors.size() * 9 / 10] < 1e-3f * reach);
-			CHECK(errors.back() < 0.05f * reach);
+			CHECK(errors.back() < 0.03f * reach);
 		}
 	}
 
@@ -1957,14 +1958,119 @@ TEST_SUITE("Animation")
 			CHECK(MeasureTurn(flipped, joints[i], joints[i + 1]).Swing <= doctest::Approx(40).epsilon(1e-3));
 		CHECK(glm::length(Position(flipped.Globals, joints.back()) - far) < 0.2f);
 
-		// A joint whose child lies on it has no bone to measure from: it stays free, and its neighbours stay limited.
+		// A joint whose child lies on it has no bone to measure from: it stays free, and its neighbours stay limited. The free
+		// joint keeps an animated turn the limits would have taken away.
 		auto boneless = CreateRef<MeshSource>(*source);
-		boneless->Nodes[joints[2]].Translation = glm::vec3(0);
+		boneless->Nodes[joints[3]].Translation = glm::vec3(0);
 		Rig stub(boneless);
-		const auto strict = Limits(3, 10);
+		const glm::quat kept = AxisAngle(glm::vec3(0, 1, 0), 60);
+		stub.Pose.Nodes[joints[2]].Rotation = kept;
+		REQUIRE(ComposeAnimationPose(*boneless, stub.Pose, stub.Globals));
+		const auto strict = Limits(3, 10, -1, 1);
 		REQUIRE(SolveFabrikIK(*boneless, stub.Pose, stub.Globals, { .Joints = joints, .Target = glm::vec3(0.3f, 1.2f, 0.5f), .Limits = strict }) == IKSolveResult::Solved);
 		CHECK(Math::IsFinite(stub.Globals[joints.back()]));
-		CHECK(MeasureTurn(stub, joints[2], joints[3]).Swing <= doctest::Approx(10).epsilon(1e-3));
+		CHECK(NearRotation(stub.Pose.Nodes[joints[2]].Rotation, kept));
+		CHECK(MeasureTurn(stub, joints[1], joints[2]).Swing <= doctest::Approx(10).epsilon(1e-3));
+	}
+
+	TEST_CASE("Limited FABRIK reads each joint's own rest rotation, scale and child, and either sign of a rotation")
+	{
+		const auto biped = LoadBiped();
+		const std::vector<uint32_t> joints = LeftArmChain(*biped);
+		// Rest rotations that are not the identity: limits follow them, not the local rotation's own axes.
+		auto turned = CreateRef<MeshSource>(*biped);
+		const glm::quat rest = AxisAngle(glm::normalize(glm::vec3(1, 2, 3)), 70);
+		turned->Nodes[joints[1]].Rotation = rest;
+		turned->Nodes[joints[2]].Rotation = glm::inverse(rest);
+		for (const glm::vec3& target : { glm::vec3(0.1f, 1.2f, 0.6f), glm::vec3(0.2f, 2, -1), glm::vec3(1, 1, 1) })
+		{
+			CAPTURE(target);
+			Rig rig(turned);
+			const auto limits = Limits(3, 20, -5, 15);
+			REQUIRE(SolveFabrikIK(*turned, rig.Pose, rig.Globals, { .Joints = joints, .Target = target, .Limits = limits }) == IKSolveResult::Solved);
+			for (size_t i = 0; i < 3; i++)
+			{
+				const JointTurn turn = MeasureTurn(rig, joints[i], joints[i + 1]);
+				CHECK(turn.Swing <= doctest::Approx(20).epsilon(1e-3));
+				CHECK(turn.Twist >= doctest::Approx(-5).epsilon(1e-3));
+				CHECK(turn.Twist <= doctest::Approx(15).epsilon(1e-3));
+			}
+		}
+		// A pose at its rest rotation is inside any limit, so it stays exactly there.
+		Rig still(turned);
+		const auto strict = Limits(3, 0, 0, 0);
+		const auto before = still.Globals;
+		REQUIRE(SolveFabrikIK(*turned, still.Pose, still.Globals, { .Joints = joints, .Target = glm::vec3(0, 5, 0), .Limits = strict }) == IKSolveResult::Solved);
+		CHECK(NearPose(still.Globals, before));
+
+		// -q is the same rotation as q: a twist past the half turn must not read as its opposite.
+		const glm::vec3 bone = glm::normalize(biped->Nodes[joints[3]].Translation);
+		for (const float sign : { 1.0f, -1.0f })
+		{
+			Rig rig(biped);
+			rig.Pose.Nodes[joints[2]].Rotation = sign * AxisAngle(bone, 80);
+			REQUIRE(ComposeAnimationPose(*biped, rig.Pose, rig.Globals));
+			std::vector<FabrikJointLimit> one = Limits(3, 180);
+			one[2] = Limits(1, 180, -20, 40)[0];
+			REQUIRE(SolveFabrikIK(*biped, rig.Pose, rig.Globals, { .Joints = joints, .Target = Position(rig.Globals, joints.back()), .Limits = one }) == IKSolveResult::Solved);
+			CHECK(MeasureTurn(rig, joints[2], joints[3]).Twist == doctest::Approx(40).epsilon(1e-3));
+		}
+
+		// A bone is where the joint's scale puts its child, not just the child's translation.
+		auto stretched = CreateRef<MeshSource>(*biped);
+		stretched->Nodes[joints[1]].Scale = glm::vec3(1, 4, 1);
+		stretched->Nodes[joints[2]].Translation = glm::vec3(0.3f, 0.1f, 0);
+		Rig scaled(stretched);
+		const auto narrow = Limits(3, 10);
+		REQUIRE(SolveFabrikIK(*stretched, scaled.Pose, scaled.Globals, { .Joints = joints, .Target = glm::vec3(0.1f, 2, 0.6f), .Limits = narrow }) == IKSolveResult::Solved);
+		CHECK(MeasureTurn(scaled, joints[1], joints[2]).Swing <= doctest::Approx(10).epsilon(1e-3));
+		CHECK(MeasureTurn(scaled, joints[1], joints[2]).Swing > 1);
+
+		// A last joint given as a matrix still gives its parent a bone.
+		const std::vector<uint32_t> toProp{ Node(*biped, "LeftForeArm"), Node(*biped, "LeftHand"), Node(*biped, "Prop") };
+		Rig prop(biped);
+		if (biped->Nodes[toProp[2]].Matrix[3] != glm::vec4(0, 0, 0, 1))
+		{
+			const auto twoBones = Limits(2, 15);
+			REQUIRE(SolveFabrikIK(*biped, prop.Pose, prop.Globals, { .Joints = toProp, .Target = glm::vec3(0.5f, 1, 0.4f), .Limits = twoBones }) == IKSolveResult::Solved);
+			CHECK(MeasureTurn(prop, toProp[1], toProp[2]).Swing <= doctest::Approx(15).epsilon(1e-3));
+		}
+
+		// However far a target, the result is inside the limits: an error too large to compare keeps the first pass.
+		Rig far(biped);
+		far.Pose.Nodes[joints[2]].Rotation = AxisAngle(glm::vec3(0, 0, 1), 70);
+		REQUIRE(ComposeAnimationPose(*biped, far.Pose, far.Globals));
+		const auto tight = Limits(3, 20);
+		const float huge = std::numeric_limits<float>::max() / 4;
+		REQUIRE(SolveFabrikIK(*biped, far.Pose, far.Globals, { .Joints = joints, .Target = glm::vec3(huge), .Limits = tight }) == IKSolveResult::Solved);
+		CHECK(MeasureTurn(far, joints[2], joints[3]).Swing <= doctest::Approx(20).epsilon(1e-3));
+	}
+
+	TEST_CASE("Ground chains on flat ground still keep their limits")
+	{
+		ClearAssetCache clear;
+		Scene scene;
+		auto foot = Chain("Foot", IKChainType::Fabrik, "LeftFoot");
+		foot.Ground = true;
+		foot.ChainLength = 2;
+		foot.SwingAngle = 2;
+		auto biped = AddBiped(scene, { foot });
+		biped.GetComponent<AnimatorComponent>().Clip = "Walk";
+		biped.GetComponent<AnimatorComponent>().PlayOnStart = false;
+		biped.GetComponent<InverseKinematicsComponent>().Smoothing = 0;
+		AddBox(scene, "Floor", { 0, -0.5f, 0 }, { 5, 0.5f, 5 });
+		scene.OnRuntimeStart();
+		auto& system = *scene.GetAnimationSystem();
+		REQUIRE(system.Seek(biped, 0.25f));
+		RunAnimation(scene, 2);
+		// The clip swings the upper leg 20 degrees; on flat ground the chain has nothing to reach for, but its limit holds.
+		const auto source = AssetManager::GetMesh(biped.GetComponent<AnimatorComponent>().Mesh);
+		const auto& pose = *system.GetPose(biped);
+		const uint32_t upper = Node(*source, "LeftUpperLeg");
+		const glm::vec3 axis = glm::normalize(source->Nodes[Node(*source, "LeftLowerLeg")].Translation);
+		const glm::mat3 local(glm::inverse(pose[source->Nodes[upper].Parent]) * pose[upper]);
+		CHECK(glm::degrees(std::acos(std::clamp(glm::dot(axis, glm::normalize(local * axis)), -1.0f, 1.0f))) <= doctest::Approx(2).epsilon(1e-2));
+		scene.OnRuntimeStop();
 	}
 
 	TEST_CASE("Fabrik chains resolve joint limits with per-joint overrides and leave free chains to the plain solver")
@@ -1978,31 +2084,48 @@ TEST_SUITE("Animation")
 		REQUIRE(ResolveIKChain(*source, chain, joints).empty());
 		ResolveFabrikLimits(*source, chain, joints, limits, problems);
 		CHECK(limits.empty());
-		chain.ConeAngle = 30;
-		chain.MinTwist = -10;
-		chain.MaxTwist = 20;
-		chain.JointLimits = { { .Joint = "LeftForeArm", .ConeAngle = 5, .MinTwist = 0, .MaxTwist = 1 }, { .Joint = "" }, { .Joint = "LeftHand" }, { .Joint = "RightHand" } };
+		chain.SwingAngle = 30;
+		chain.TwistMin = -10;
+		chain.TwistMax = 20;
+		chain.JointLimits = { { .Joint = "LeftForeArm", .SwingAngle = 5, .TwistMin = 0, .TwistMax = 1 }, { .Joint = "" }, { .Joint = "LeftHand" }, { .Joint = "RightHand" } };
 		ResolveFabrikLimits(*source, chain, joints, limits, problems);
 		REQUIRE(limits.size() == 3);
-		CHECK(limits[0].ConeAngle == doctest::Approx(glm::radians(30.0f)));
-		CHECK(limits[0].MinTwist == doctest::Approx(glm::radians(-10.0f)));
-		CHECK(limits[1].MaxTwist == doctest::Approx(glm::radians(20.0f)));
-		CHECK(limits[2].ConeAngle == doctest::Approx(glm::radians(5.0f)));
-		CHECK(limits[2].MaxTwist == doctest::Approx(glm::radians(1.0f)));
+		CHECK(limits[0].SwingAngle == doctest::Approx(glm::radians(30.0f)));
+		CHECK(limits[0].TwistMin == doctest::Approx(glm::radians(-10.0f)));
+		CHECK(limits[1].TwistMax == doctest::Approx(glm::radians(20.0f)));
+		CHECK(limits[2].SwingAngle == doctest::Approx(glm::radians(5.0f)));
+		CHECK(limits[2].TwistMax == doctest::Approx(glm::radians(1.0f)));
 		// The end joint is not turned, and an entry without a name is an inspector's addition.
 		REQUIRE(problems.size() == 2);
 		CHECK(problems[0] == "JointLimits: 'LeftHand' is not a joint the chain turns");
 		CHECK(problems[1] == "JointLimits: 'RightHand' is not a joint the chain turns");
 
+		// An entry leaves out nothing it names: what it does not set is free, not the chain's.
+		chain.JointLimits = { { .Joint = "LeftForeArm", .SwingAngle = 5 } };
+		problems.clear();
+		ResolveFabrikLimits(*source, chain, joints, limits, problems);
+		CHECK(problems.empty());
+		CHECK(limits[2].SwingAngle == doctest::Approx(glm::radians(5.0f)));
+		CHECK(limits[2].TwistMax == doctest::Approx(glm::pi<float>()));
+		CHECK(limits[1].TwistMax == doctest::Approx(glm::radians(20.0f)));
+
+		// A bad entry leaves its own joint free even while the chain's limits are good.
+		chain.JointLimits = { { .Joint = "LeftForeArm", .SwingAngle = 500 } };
+		ResolveFabrikLimits(*source, chain, joints, limits, problems);
+		REQUIRE(problems.size() == 1);
+		CHECK(limits[2].SwingAngle == doctest::Approx(glm::pi<float>()));
+		CHECK(limits[1].SwingAngle == doctest::Approx(glm::radians(30.0f)));
+		problems.clear();
+
 		// Values past Validate leave their joint free, and say so.
-		chain.JointLimits = { { .Joint = "LeftForeArm", .ConeAngle = std::numeric_limits<float>::quiet_NaN() } };
-		chain.MinTwist = 50;
-		chain.MaxTwist = 20;
+		chain.JointLimits = { { .Joint = "LeftForeArm", .SwingAngle = std::numeric_limits<float>::quiet_NaN() } };
+		chain.TwistMin = 50;
+		chain.TwistMax = 20;
 		problems.clear();
 		ResolveFabrikLimits(*source, chain, joints, limits, problems);
 		CHECK(limits.empty());
 		REQUIRE(problems.size() == 2);
-		CHECK(problems[0] == "ConeAngle, MinTwist or MaxTwist is out of range; those joints stay free");
+		CHECK(problems[0] == "SwingAngle, TwistMin or TwistMax is out of range; those joints stay free");
 		CHECK(problems[1] == "JointLimits: the limits of 'LeftForeArm' are out of range; it stays free");
 	}
 
@@ -2012,7 +2135,7 @@ TEST_SUITE("Animation")
 		Scene scene;
 		auto chain = Chain("Arm", IKChainType::Fabrik, "LeftHand");
 		chain.ChainLength = 3;
-		chain.ConeAngle = 20;
+		chain.SwingAngle = 20;
 		auto biped = AddBiped(scene, { chain });
 		scene.OnRuntimeStart();
 		auto& system = *scene.GetAnimationSystem();
@@ -2030,7 +2153,7 @@ TEST_SUITE("Animation")
 		CHECK(swing("LeftForeArm", "LeftHand") <= doctest::Approx(20).epsilon(1e-2));
 		CHECK(swing("LeftForeArm", "LeftHand") > 1);
 		// A per-joint entry frees one joint of the chain, at once.
-		biped.GetComponent<InverseKinematicsComponent>().Chains[0].JointLimits = { { .Joint = "LeftForeArm", .ConeAngle = 100 } };
+		biped.GetComponent<InverseKinematicsComponent>().Chains[0].JointLimits = { { .Joint = "LeftForeArm", .SwingAngle = 100 } };
 		RunAnimation(scene, 1);
 		CHECK(swing("LeftForeArm", "LeftHand") > 21);
 		CHECK(swing("LeftUpperArm", "LeftForeArm") <= doctest::Approx(20).epsilon(1e-2));
@@ -2038,12 +2161,12 @@ TEST_SUITE("Animation")
 
 		const json limit = { { "Name", "Arm" }, { "Type", "Fabrik" }, { "Joint", "LeftHand" } };
 		const std::vector<std::pair<json, std::string>> invalid = {
-			{ { { "ConeAngle", -1 } }, "Chains[0].ConeAngle -1 must be between 0 and 180 degrees" },
-			{ { { "ConeAngle", 181 } }, "ConeAngle 181" },
-			{ { { "MinTwist", -181 } }, "twist -181 must be between -180 and 180 degrees" },
-			{ { { "MaxTwist", 200 } }, "twist 200" },
-			{ { { "MinTwist", 20 }, { "MaxTwist", 10 } }, "Chains[0].MinTwist 20 must not exceed MaxTwist 10" },
-			{ { { "JointLimits", { { { "Joint", "LeftForeArm" }, { "ConeAngle", 200 } } } } }, "Chains[0].JointLimits[0].ConeAngle 200" },
+			{ { { "SwingAngle", -1 } }, "Chains[0].SwingAngle -1 must be between 0 and 180 degrees" },
+			{ { { "SwingAngle", 181 } }, "SwingAngle 181" },
+			{ { { "TwistMin", -181 } }, "twist -181 must be between -180 and 180 degrees" },
+			{ { { "TwistMax", 200 } }, "twist 200" },
+			{ { { "TwistMin", 20 }, { "TwistMax", 10 } }, "Chains[0].TwistMin 20 must not exceed TwistMax 10" },
+			{ { { "JointLimits", { { { "Joint", "LeftForeArm" }, { "SwingAngle", 200 } } } } }, "Chains[0].JointLimits[0].SwingAngle 200" },
 			{ { { "JointLimits", { { { "Joint", "LeftForeArm" } }, { { "Joint", "LeftForeArm" } } } } }, "Chains[0].JointLimits[1].Joint 'LeftForeArm' is already used by JointLimits[0]" },
 		};
 		Scene other;
@@ -2059,27 +2182,54 @@ TEST_SUITE("Animation")
 		}
 		// Several unnamed additions are fine, as in the inspector; the fields round-trip.
 		json data = limit;
-		data.update({ { "ConeAngle", 45 }, { "MinTwist", -5 }, { "MaxTwist", 6 }, { "JointLimits", { { { "Joint", "" } }, { { "Joint", "" } }, { { "Joint", "LeftForeArm" }, { "ConeAngle", 7 } } } } });
+		data.update({ { "SwingAngle", 45 }, { "TwistMin", -5 }, { "TwistMax", 6 }, { "JointLimits", { { { "Joint", "" } }, { { "Joint", "" } }, { { "Joint", "LeftForeArm" }, { "SwingAngle", 7 } } } } });
 		REQUIRE_MESSAGE(ComponentRegistry::AddOrPatch(entity, "InverseKinematics", { { "Chains", { data } } }, error), error);
 		const json written = ComponentRegistry::Find("InverseKinematics")->Serialize(entity);
-		CHECK(written["Chains"][0]["ConeAngle"] == 45);
-		CHECK(written["Chains"][0]["JointLimits"][2]["ConeAngle"] == 7);
-		CHECK(written["Chains"][0]["JointLimits"][2]["MaxTwist"] == 180);
+		CHECK(written["Chains"][0]["SwingAngle"] == 45);
+		CHECK(written["Chains"][0]["JointLimits"][2]["SwingAngle"] == 7);
+		CHECK(written["Chains"][0]["JointLimits"][2]["TwistMax"] == 180);
+
+		// A limit that holds every joint at rest is a chain that never moves.
+		Scene frozen;
+		auto stiff = Chain("Stiff", IKChainType::Fabrik, "LeftHand");
+		stiff.SwingAngle = stiff.TwistMin = stiff.TwistMax = 0;
+		const auto frozenWarnings = GetAnimationWarnings(AddBiped(frozen, { stiff }));
+		CHECK(std::ranges::find(frozenWarnings, "InverseKinematics chain 'Stiff': its limits hold every joint at the rest pose, so it never reaches for a target") != frozenWarnings.end());
+		// One free joint is enough for a chain to move.
+		Scene moving;
+		auto loose = Chain("Loose", IKChainType::Fabrik, "LeftHand");
+		loose.ChainLength = 2;
+		loose.SwingAngle = loose.TwistMin = loose.TwistMax = 0;
+		loose.JointLimits = { { .Joint = "LeftForeArm", .SwingAngle = 10 } };
+		const auto movingWarnings = GetAnimationWarnings(AddBiped(moving, { loose }));
+		CHECK(std::ranges::none_of(movingWarnings, [](const std::string& line) { return line.find("Loose") != std::string::npos; }));
+		// An unnamed entry is the inspector's addition: it limits nothing, on any chain type.
+		auto blank = Chain("Blank", IKChainType::TwoBone, "LeftFoot");
+		blank.JointLimits = { { .Joint = "" } };
+		CHECK_FALSE(HasIKJointLimits(blank));
 
 		// Warnings: limits on other chain types, and joints no chain turns.
 		Scene warned;
 		auto look = Chain("Look", IKChainType::LookAt, "Head");
-		look.ConeAngle = 10;
+		look.SwingAngle = 10;
 		auto arm = Chain("Arm", IKChainType::Fabrik, "LeftHand");
 		arm.JointLimits = { { .Joint = "Head" } };
 		auto twoBone = Chain("Leg", IKChainType::TwoBone, "LeftFoot");
-		twoBone.MaxTwist = 10;
+		twoBone.TwistMax = 10;
 		auto rig = AddBiped(warned, { look, arm, twoBone });
 		const auto warnings = GetAnimationWarnings(rig);
 		const auto has = [&](const std::string& text) { return std::ranges::find(warnings, text) != warnings.end(); };
-		CHECK(has("InverseKinematics chain 'Look': ConeAngle, MinTwist, MaxTwist and JointLimits only apply to Fabrik chains"));
-		CHECK(has("InverseKinematics chain 'Leg': ConeAngle, MinTwist, MaxTwist and JointLimits only apply to Fabrik chains"));
+		CHECK(has("InverseKinematics chain 'Look': SwingAngle, TwistMin, TwistMax and JointLimits only apply to Fabrik chains"));
+		CHECK(has("InverseKinematics chain 'Leg': SwingAngle, TwistMin, TwistMax and JointLimits only apply to Fabrik chains"));
 		CHECK(has("InverseKinematics chain 'Arm': JointLimits: 'Head' is not a joint the chain turns"));
+		// A chain the limits do apply to, and one with none, draw no such warning.
+		Scene clean;
+		auto fine = Chain("Fine", IKChainType::Fabrik, "LeftHand");
+		fine.ChainLength = 2;
+		fine.SwingAngle = 30;
+		auto plain = Chain("Plain", IKChainType::TwoBone, "LeftFoot");
+		const auto cleanWarnings = GetAnimationWarnings(AddBiped(clean, { fine, plain }));
+		CHECK(std::ranges::none_of(cleanWarnings, [](const std::string& line) { return line.find("only apply to Fabrik") != std::string::npos || line.find("JointLimits") != std::string::npos; }));
 
 		// The same problems reach the log once, from the solve, for chains the check cannot stop.
 		const auto since = Log::GetHistory().GetTotalCount();
@@ -2149,11 +2299,233 @@ TEST_SUITE("Animation")
 		biped.RemoveComponent<RigidBodyComponent>();
 		scene.DestroyEntity(ownChild);
 
+		// So are a character controller's bodies above it, as they are in Play.
+		auto controller = scene.CreateEntity("Controller");
+		controller.AddComponent<CharacterControllerComponent>();
+		scene.SetParent(biped, controller, false);
+		auto ownBody = AddBox(scene, "OwnBody", { 0.1f, 0.2f, 0 }, { 0.3f, 0.2f, 0.3f });
+		scene.SetParent(ownBody, controller, false);
+		scene.UpdateAnimationPreview(Step);
+		CHECK(footHeight(preview) == doctest::Approx(placed).epsilon(1e-3));
+		scene.DestroyEntity(ownBody);
+		scene.SetParent(biped, Entity(), false);
+		scene.DestroyEntity(controller);
+
 		// Play agrees.
 		scene.OnRuntimeStart();
 		RunAnimation(scene, 1);
 		RunAnimation(scene, 1);
 		CHECK(footHeight(*scene.GetAnimationSystem()) == doctest::Approx(placed).epsilon(1e-3));
 		scene.OnRuntimeStop();
+	}
+}
+
+namespace {
+	float TwistAbout(const glm::quat& rotation, const glm::vec3& axis)
+	{
+		const glm::quat q = rotation.w < 0 ? -rotation : rotation;
+		return glm::degrees(2.0f * std::atan2(glm::dot(glm::vec3(q.x, q.y, q.z), axis), q.w));
+	}
+	float AngleOf(const glm::quat& rotation)
+	{
+		return glm::degrees(2.0f * std::atan2(glm::length(glm::vec3(rotation.x, rotation.y, rotation.z)), std::abs(rotation.w)));
+	}
+	// A rig whose chain joints rest turned, as real skeletons do.
+	Ref<MeshSource> TurnedRest(const std::vector<uint32_t>& joints)
+	{
+		auto source = CreateRef<MeshSource>(*LoadBiped());
+		source->Nodes[joints[0]].Rotation = AxisAngle(glm::vec3(0, 1, 0), 15);
+		source->Nodes[joints[1]].Rotation = AxisAngle(glm::vec3(0, 0, 1), 35);
+		source->Nodes[joints[2]].Rotation = AxisAngle(glm::vec3(0, 1, 0), 50);
+		return source;
+	}
+}
+
+TEST_SUITE("Animation")
+{
+	TEST_CASE("The rest pose of a turned skeleton is inside any limits, and limits read from it")
+	{
+		const std::vector<uint32_t> joints = LeftArmChain(*LoadBiped());
+		const auto source = TurnedRest(joints);
+		const auto tight = Limits(3, 20, -10, 10);
+		Rig rest(source);
+		const glm::vec3 hand = Position(rest.Globals, joints.back());
+		REQUIRE(SolveFabrikIK(*source, rest.Pose, rest.Globals, { .Joints = joints, .Target = hand, .Limits = tight }) == IKSolveResult::Solved);
+		for (size_t i = 0; i < 3; i++)
+			CHECK(NearRotation(rest.Pose.Nodes[joints[i]].Rotation, source->Nodes[joints[i]].Rotation, 1e-3f));
+
+		// Outside the limits, measured from rest and not from identity, and pulled back to them.
+		Rig bent(source);
+		bent.Pose.Nodes[joints[2]].Rotation = source->Nodes[joints[2]].Rotation * AxisAngle(glm::vec3(0, 0, 1), 70);
+		REQUIRE(ComposeAnimationPose(*source, bent.Pose, bent.Globals));
+		REQUIRE(SolveFabrikIK(*source, bent.Pose, bent.Globals, { .Joints = joints, .Target = glm::vec3(0.4f, 1.2f, 0.4f), .Limits = tight }) == IKSolveResult::Solved);
+		for (size_t i = 0; i < 3; i++)
+		{
+			const JointTurn turn = MeasureTurn(bent, joints[i], joints[i + 1]);
+			CHECK(turn.Swing <= doctest::Approx(20).epsilon(1e-3));
+			CHECK(std::abs(turn.Twist) <= doctest::Approx(10).epsilon(1e-3));
+		}
+	}
+
+	TEST_CASE("A turned skeleton reaches what its limits allow as well as an upright one")
+	{
+		const auto biped = LoadBiped();
+		const std::vector<uint32_t> joints = TorsoToHand(*biped);
+		auto source = CreateRef<MeshSource>(*biped);
+		for (size_t i = 1; i + 1 < joints.size(); i++)
+			source->Nodes[joints[i]].Rotation = AxisAngle(glm::normalize(glm::vec3(1, static_cast<float>(i), 0.5f)), 25);
+		const Rig rest(source);
+		float reach = 0;
+		for (const float length : BoneLengths(rest.Globals, joints))
+			reach += length;
+		std::mt19937 random(11);
+		const auto unit = [&] { return static_cast<float>(random()) / static_cast<float>(std::mt19937::max()); };
+		const auto limits = Limits(joints.size() - 1, 30);
+		std::vector<float> errors;
+		for (int i = 0; i < 200; i++)
+		{
+			Rig posed(source);
+			for (size_t j = 0; j + 1 < joints.size(); j++)
+			{
+				const glm::vec3 bone = glm::normalize(source->Nodes[joints[j + 1]].Translation);
+				const glm::vec3 side = glm::normalize(glm::cross(bone, glm::vec3(unit(), unit(), unit()) - glm::vec3(0.5f)));
+				posed.Pose.Nodes[joints[j]].Rotation = source->Nodes[joints[j]].Rotation * glm::angleAxis(glm::radians(30 * unit()), side);
+			}
+			REQUIRE(ComposeAnimationPose(*source, posed.Pose, posed.Globals));
+			const glm::vec3 target = Position(posed.Globals, joints.back());
+			Rig rig(source);
+			REQUIRE(SolveFabrikIK(*source, rig.Pose, rig.Globals, { .Joints = joints, .Target = target, .Limits = limits }) == IKSolveResult::Solved);
+			errors.push_back(glm::length(Position(rig.Globals, joints.back()) - target));
+		}
+		std::ranges::sort(errors);
+		CHECK(errors[100] < 2 * FabrikTolerance * reach);
+		CHECK(errors[180] < 5e-3f * reach);
+	}
+
+	TEST_CASE("A pose stored as the negative quaternion reads as the same rotation")
+	{
+		const auto source = LoadBiped();
+		const std::vector<uint32_t> joints = LeftArmChain(*source);
+		const uint32_t elbow = joints[2];
+		const glm::vec3 bone = glm::normalize(source->Nodes[joints[3]].Translation);
+		Rig rig(source);
+		rig.Pose.Nodes[elbow].Rotation = -AxisAngle(bone, 50);
+		REQUIRE(ComposeAnimationPose(*source, rig.Pose, rig.Globals));
+		std::vector<FabrikJointLimit> limits = Limits(3, 180);
+		limits[2] = Limits(1, 180, -60, 60)[0];
+		REQUIRE(SolveFabrikIK(*source, rig.Pose, rig.Globals, { .Joints = joints, .Target = Position(rig.Globals, joints.back()), .Limits = limits }) == IKSolveResult::Solved);
+		CHECK(TwistAbout(rig.Pose.Nodes[elbow].Rotation, bone) == doctest::Approx(50).epsilon(1e-2));
+	}
+
+	TEST_CASE("A joint limited on one side of its twist alone is limited")
+	{
+		const auto source = LoadBiped();
+		const std::vector<uint32_t> joints = LeftArmChain(*source);
+		const uint32_t elbow = joints[2];
+		const glm::vec3 bone = glm::normalize(source->Nodes[joints[3]].Translation);
+		for (const auto& [start, minimum, maximum, wanted] : { std::array<float, 4>{ 80, -180, 30, 30 }, std::array<float, 4>{ -80, -30, 180, -30 } })
+		{
+			CAPTURE(start);
+			Rig rig(source);
+			rig.Pose.Nodes[elbow].Rotation = AxisAngle(bone, start);
+			REQUIRE(ComposeAnimationPose(*source, rig.Pose, rig.Globals));
+			std::vector<FabrikJointLimit> limits = Limits(3, 180);
+			limits[2] = Limits(1, 180, minimum, maximum)[0];
+			REQUIRE(SolveFabrikIK(*source, rig.Pose, rig.Globals, { .Joints = joints, .Target = Position(rig.Globals, joints.back()), .Limits = limits }) == IKSolveResult::Solved);
+			CHECK(MeasureTurn(rig, elbow, joints[3]).Twist == doctest::Approx(wanted).epsilon(1e-3));
+		}
+	}
+
+	TEST_CASE("The bone is where a joint's own scale puts its child")
+	{
+		auto source = CreateRef<MeshSource>(*LoadBiped());
+		const std::vector<uint32_t> joints = LeftArmChain(*source);
+		const uint32_t elbow = joints[2];
+		source->Nodes[joints[3]].Translation = glm::vec3(0.1f, 0.2f, 0);
+		source->Nodes[elbow].Scale = glm::vec3(1, 3, 1);
+		const glm::vec3 axis = glm::normalize(source->Nodes[elbow].Scale * source->Nodes[joints[3]].Translation);
+		Rig rig(source);
+		rig.Pose.Nodes[elbow].Rotation = AxisAngle(axis, 50);
+		REQUIRE(ComposeAnimationPose(*source, rig.Pose, rig.Globals));
+		std::vector<FabrikJointLimit> limits = Limits(3, 180);
+		limits[2] = Limits(1, 180, -10, 10)[0];
+		REQUIRE(SolveFabrikIK(*source, rig.Pose, rig.Globals, { .Joints = joints, .Target = Position(rig.Globals, joints.back()), .Limits = limits }) == IKSolveResult::Solved);
+		CHECK(AngleOf(rig.Pose.Nodes[elbow].Rotation) == doctest::Approx(10).epsilon(0.02));
+		CHECK(TwistAbout(rig.Pose.Nodes[elbow].Rotation, axis) == doctest::Approx(10).epsilon(0.02));
+	}
+
+	TEST_CASE("An end joint given as a matrix still defines its parent's bone")
+	{
+		auto source = CreateRef<MeshSource>(*LoadBiped());
+		const std::vector<uint32_t> joints = LeftArmChain(*source);
+		const uint32_t elbow = joints[2];
+		const glm::vec3 offset(0.1f, 0.2f, 0);
+		source->Nodes[joints[3]].HasMatrix = true;
+		source->Nodes[joints[3]].Matrix = glm::translate(glm::mat4(1.0f), offset);
+		const glm::vec3 axis = glm::normalize(offset);
+		Rig rig(source);
+		rig.Pose.Nodes[elbow].Rotation = AxisAngle(axis, 50);
+		REQUIRE(ComposeAnimationPose(*source, rig.Pose, rig.Globals));
+		std::vector<FabrikJointLimit> limits = Limits(3, 180);
+		limits[2] = Limits(1, 180, -10, 10)[0];
+		REQUIRE(SolveFabrikIK(*source, rig.Pose, rig.Globals, { .Joints = joints, .Target = Position(rig.Globals, joints.back()), .Limits = limits }) == IKSolveResult::Solved);
+		CHECK(AngleOf(rig.Pose.Nodes[elbow].Rotation) == doctest::Approx(10).epsilon(0.02));
+		CHECK(TwistAbout(rig.Pose.Nodes[elbow].Rotation, axis) == doctest::Approx(10).epsilon(0.02));
+	}
+
+	TEST_CASE("A joint whose child lies on it keeps a turn past the limit")
+	{
+		auto source = CreateRef<MeshSource>(*LoadBiped());
+		const std::vector<uint32_t> joints = LeftArmChain(*source);
+		source->Nodes[joints[2]].Translation = glm::vec3(0);
+		Rig rig(source);
+		rig.Pose.Nodes[joints[1]].Rotation = AxisAngle(glm::vec3(0, 0, 1), 60);
+		REQUIRE(ComposeAnimationPose(*source, rig.Pose, rig.Globals));
+		const auto strict = Limits(3, 10);
+		REQUIRE(SolveFabrikIK(*source, rig.Pose, rig.Globals, { .Joints = joints, .Target = Position(rig.Globals, joints.back()), .Limits = strict }) == IKSolveResult::Solved);
+		CHECK(AngleOf(rig.Pose.Nodes[joints[1]].Rotation) > 30);
+	}
+
+	TEST_CASE("Bad values free only their own joint, at the edges of the ranges too")
+	{
+		const auto source = LoadBiped();
+		std::vector<uint32_t> joints;
+		std::vector<FabrikJointLimit> limits;
+		std::vector<std::string> problems;
+		auto chain = Chain("Arm", IKChainType::Fabrik, "LeftHand");
+		chain.ChainLength = 3;
+		REQUIRE(ResolveIKChain(*source, chain, joints).empty());
+		chain.SwingAngle = 30;
+		chain.JointLimits = { { .Joint = "LeftForeArm", .SwingAngle = std::numeric_limits<float>::quiet_NaN() } };
+		ResolveFabrikLimits(*source, chain, joints, limits, problems);
+		REQUIRE(limits.size() == 3);
+		CHECK(limits[0].SwingAngle == doctest::Approx(glm::radians(30.0f)));
+		CHECK(limits[2].SwingAngle == doctest::Approx(glm::pi<float>()));
+
+		chain.JointLimits.clear();
+		for (const auto& [cone, minimum, maximum] : { std::array<float, 3>{ 200, -180, 180 }, std::array<float, 3>{ -1, -180, 180 }, std::array<float, 3>{ 30, -200, 180 }, std::array<float, 3>{ 30, -180, 200 } })
+		{
+			CAPTURE(cone);
+			CAPTURE(minimum);
+			chain.SwingAngle = cone;
+			chain.TwistMin = minimum;
+			chain.TwistMax = maximum;
+			problems.clear();
+			ResolveFabrikLimits(*source, chain, joints, limits, problems);
+			CHECK(limits.empty());
+			CHECK(problems.size() == 1);
+		}
+	}
+
+	TEST_CASE("Limits on a Fabrik chain are not reported as misplaced")
+	{
+		ClearAssetCache clear;
+		Scene scene;
+		auto arm = Chain("Arm", IKChainType::Fabrik, "LeftHand");
+		arm.ChainLength = 3;
+		arm.SwingAngle = 30;
+		auto rig = AddBiped(scene, { arm });
+		for (const std::string& warning : GetAnimationWarnings(rig))
+			CHECK(warning.find("only apply to Fabrik chains") == std::string::npos);
 	}
 }

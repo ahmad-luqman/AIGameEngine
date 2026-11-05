@@ -214,11 +214,11 @@ Fields: `Time` (number), `Value` (number[4]), `Text` (string)
 
 ### IKChain
 
-Fields: `Name` (string), `Type` (enum: TwoBone, LookAt, Fabrik), `Joint` (string), `ChainLength` (integer), `Axis` (number[3]), `MaxAngle` (number), `Pole` (number[3]), `Ground` (boolean), `FollowTarget` (boolean), `FootLock` (boolean), `Weight` (number), `ConeAngle` (number), `MinTwist` (number), `MaxTwist` (number), `JointLimits` (list of [IKJointLimit](#ikjointlimit), at most 16)
+Fields: `Name` (string), `Type` (enum: TwoBone, LookAt, Fabrik), `Joint` (string), `ChainLength` (integer), `Axis` (number[3]), `MaxAngle` (number), `Pole` (number[3]), `Ground` (boolean), `FollowTarget` (boolean), `FootLock` (boolean), `Weight` (number), `SwingAngle` (number), `TwistMin` (number), `TwistMax` (number), `JointLimits` (list of [IKJointLimit](#ikjointlimit), at most 16)
 
 ### IKJointLimit
 
-Fields: `Joint` (string), `ConeAngle` (number), `MinTwist` (number), `MaxTwist` (number)
+Fields: `Joint` (string), `SwingAngle` (number), `TwistMin` (number), `TwistMax` (number)
 
 ### SpringChain
 

@@ -178,7 +178,7 @@ Scrubs this entity's PropertyAnimation at normalized time [0,1] through the comp
 
 ### `animator.match_joints`
 
-How a library model's skeleton maps onto a model's, for authoring a .bjointmap: the same matching as animator.retarget, on two models with no Animator (the pairs of jointMap come first, then equal names and humanoid bones). Returns {joints: [{target, source, match, offset}], unmatchedHumanoidBones, root, warnings}. The automatic matches of joints can go into a joint map as they are. Read-only.
+How a library model's skeleton maps onto a model's, for authoring a .bjointmap: the same matching as animator.retarget, on two models with no Animator (the pairs of jointMap first, then equal names, then humanoid bones). Returns {joints: [{target, source, match}], unmatchedHumanoidBones, root, warnings}, with offset on a pair that has one. Read-only; needs a project, not a scene.
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -194,14 +194,17 @@ How a library model's skeleton maps onto a model's, for authoring a .bjointmap: 
   "properties": {
     "jointMap": {
       "description": "Project-relative .bjointmap, optional",
+      "minLength": 1,
       "type": "string"
     },
     "source": {
       "description": "Project-relative model the clips come from",
+      "minLength": 1,
       "type": "string"
     },
     "target": {
       "description": "Project-relative model an Animator plays them on",
+      "minLength": 1,
       "type": "string"
     }
   },
@@ -1537,7 +1540,7 @@ Returns (and removes) up to 'max' events a polled subscription collected, oldest
 
 ### `events.subscribe`
 
-Starts collecting events: log lines, script errors, play-state changes (play, simulate, stop; pause and resume from the editor's Pause button), collisions (collisionBegin/End and triggerEnter/Exit, in Play and Simulate) and animation events (Animator Events markers playback crossed: name, clip, entity, frame; in Play and Simulate). On the editor's TCP server a line-protocol connection receives them as {"event": ...} lines without 'ok' (and {"event": "dropped"} when it falls behind); MCP and CLI clients read them with events.poll. A TCP connection's subscriptions end with it. Returns {subscription, types, minLevel, streamed}.
+Starts collecting events: log lines, script errors, play-state changes (play, simulate, stop; pause and resume from the editor's Pause button), collisions (collisionBegin/End and triggerEnter/Exit, in Play and Simulate) and animation events (Animator Events markers playback crossed: name, clip, layer (null for the base), entity, frame; in Play and Simulate). On the editor's TCP server a line-protocol connection receives them as {"event": ...} lines without 'ok' (and {"event": "dropped"} when it falls behind); MCP and CLI clients read them with events.poll. A TCP connection's subscriptions end with it. Returns {subscription, types, minLevel, streamed}.
 
 | Parameter | Type / description |
 |-----------|--------------------|

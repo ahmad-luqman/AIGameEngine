@@ -11,6 +11,7 @@
 #include <glm/gtc/quaternion.hpp>
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <string>
@@ -106,7 +107,7 @@ namespace Basalt {
 
 	inline constexpr float MaxAnimatorSpeed = 100.0f;
 
-	// A named marker on a clip's timeline, delivered to scripts as OnAnimationEvent(name, clip) when playback
+	// A named marker on a clip's timeline, delivered to scripts as OnAnimationEvent(name, clip, layer) when playback
 	// crosses it.
 	struct AnimationEvent
 	{
@@ -184,9 +185,9 @@ namespace Basalt {
 
 		std::string Source;
 		std::string Target;
-		// A reference pose without a clip: how the Source joint turns (Euler degrees, in its model's space) so the library
-		// stands like the Animator's model at rest, e.g. lifting an A-pose arm to a T-pose. Joints below it turn along;
-		// offsets lower down apply after it, in the same fixed axes. On top of ReferenceClip's pose when there is one.
+		// A reference pose without a clip: how the Source joint turns (degrees about its model's fixed axes, X, then Y, then Z)
+		// so the library stands like the Animator's model at rest, e.g. lifting an A-pose arm to a T-pose. Joints below it turn
+		// along; offsets lower down apply after it, in the same fixed axes. On top of ReferenceClip's pose when there is one.
 		glm::vec3 Offset = { 0.0f, 0.0f, 0.0f };
 
 		bool operator==(const AnimationRetargetJoint&) const = default;
@@ -212,7 +213,7 @@ namespace Basalt {
 		// whose pose at ModelReferenceTime stands like the library's rest pose. Either replaces its skeleton's rest
 		// orientations when joints turn (positions, and so limb lengths and the root's scale, keep the rest pose). Empty:
 		// the rest pose. A clip that is not there makes the library add no clips. A library with no such frame turns its
-		// joints with their pairs' Offset instead.
+		// joints with their pairs' Offset, which also adds to a ReferenceClip.
 		std::string ReferenceClip;
 		float ReferenceTime = 0.0f;
 		std::string ModelReferenceClip;
@@ -240,8 +241,8 @@ namespace Basalt {
 		// StateMachine layers: SetParameter and SetTrigger pass this layer by, so its graph holds its own values of the
 		// names it shares with the others and only SetLayerParameter and SetLayerTrigger reach it.
 		bool OwnParameters = false;
-		// Animator.Events fire for this layer's clips too, while it shows (a weight above 0) and names it in the event. Off
-		// by default: a marker without a Clip would fire once for the base and again for the layer.
+		// Animator.Events fire for this layer's clips too, while it shows (a weight above 0), naming it in the event. Off by
+		// default: a marker without a Clip would fire once for the base and again for the layer.
 		bool Events = false;
 		AnimationLayerBlend Blend = AnimationLayerBlend::Override;
 		// 0..1. The starting weight of the layer; a changed value applies at once.
@@ -375,16 +376,18 @@ namespace Basalt {
 		return type == IKChainType::TwoBone || type == IKChainType::Fabrik;
 	}
 
-	// Overrides a Fabrik chain's limits for one of its joints (see IKChain::ConeAngle).
+	// Replaces a Fabrik chain's limits for one of its joints (see IKChain::SwingAngle), all three: what it leaves out is free,
+	// not inherited from the chain.
 	struct IKJointLimit
 	{
 		static constexpr const char* TypeName = "IKJointLimit";
 
-		// A joint the chain turns: an ancestor of the chain's Joint. Entries without a name are the inspector's additions.
+		// A joint the chain turns: an ancestor of the chain's Joint. Entries without a name are the inspector's additions, and
+		// ignored.
 		std::string Joint;
-		float ConeAngle = 180.0f;
-		float MinTwist = -180.0f;
-		float MaxTwist = 180.0f;
+		float SwingAngle = 180.0f;
+		float TwistMin = -180.0f;
+		float TwistMax = 180.0f;
 	};
 
 	// One inverse kinematics chain of an InverseKinematics component. Targets come from scripts (SetIKTarget), then from
@@ -395,7 +398,7 @@ namespace Basalt {
 		// Chains are found by name.
 		static constexpr const char* UniqueField = "Name";
 		static constexpr uint32_t MaxChainLength = 16;
-		static constexpr float MaxConeAngle = 180.0f;
+		static constexpr float MaxSwingAngle = 180.0f;
 		static constexpr float MaxTwistAngle = 180.0f;
 
 		std::string Name = "Chain";
@@ -424,22 +427,22 @@ namespace Basalt {
 		// 0..1. The starting weight of the chain; a changed value applies at once.
 		float Weight = 1.0f;
 		// Fabrik: what each joint the chain turns may do, measured from its rest rotation (the model's, not the animated one).
-		// ConeAngle (degrees, 0..180) bounds how far its bone swings away from where the rest pose points it, as seen from
-		// its parent; MinTwist..MaxTwist (degrees, -180..180) bound the turn about the bone itself. 180 and -180..180 leave
-		// it free. A solved chain keeps them even where that leaves the target out of reach, and turns an animated pose
-		// outside them back inside; while the chain has no target the animation plays untouched. Chain's Joint is the end,
-		// not a turned joint: its target rotation stays exact.
-		float ConeAngle = MaxConeAngle;
-		float MinTwist = -MaxTwistAngle;
-		float MaxTwist = MaxTwistAngle;
-		// Fabrik: per-joint overrides of the three above, at most MaxChainLength.
+		// SwingAngle (degrees, 0..180) bounds how far its bone swings away from where the rest pose points it, as seen from
+		// its parent; TwistMin..TwistMax (degrees, -180..180) bound the turn about the bone itself. 180 and -180..180 leave
+		// it free. At full weight a solved chain keeps them even where that leaves the target out of reach, and turns an
+		// animated pose outside them back inside; while the chain has no target the animation plays untouched. The chain's
+		// Joint is its end, not a turned joint: its target rotation stays exact.
+		float SwingAngle = MaxSwingAngle;
+		float TwistMin = -MaxTwistAngle;
+		float TwistMax = MaxTwistAngle;
+		// Fabrik: what replaces the three above for single joints, at most MaxChainLength.
 		std::vector<IKJointLimit> JointLimits;
 	};
 
 	// Whether a chain's settings limit any joint, whatever its Type does with them.
 	inline bool HasIKJointLimits(const IKChain& chain)
 	{
-		return chain.ConeAngle != IKChain::MaxConeAngle || chain.MinTwist != -IKChain::MaxTwistAngle || chain.MaxTwist != IKChain::MaxTwistAngle || !chain.JointLimits.empty();
+		return chain.SwingAngle != IKChain::MaxSwingAngle || chain.TwistMin != -IKChain::MaxTwistAngle || chain.TwistMax != IKChain::MaxTwistAngle || std::ranges::any_of(chain.JointLimits, [](const IKJointLimit& limit) { return !limit.Joint.empty(); });
 	}
 
 	// Inverse kinematics applied to the Animator on the same entity after physics and OnLateUpdate, before

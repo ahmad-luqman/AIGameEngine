@@ -1,6 +1,8 @@
 #include "JointAssetDraft.h"
 
 #include "Basalt/Animation/AnimationPose.h"
+#include "Basalt/Asset/MaterialAsset.h"
+#include "Basalt/Core/Assert.h"
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Project/Project.h"
 #include "Basalt/Scene/Components.h"
@@ -85,6 +87,7 @@ namespace Basalt {
 	template<typename Asset>
 	void JointAssetDraft<Asset>::Record()
 	{
+		BS_CORE_ASSERT(IsOpen(), "a closed draft has no edits to record");
 		if (!m_Undo.empty() && m_Undo.back() == m_Asset.Joints)
 			return;
 		m_Undo.push_back(m_Asset.Joints);
@@ -140,32 +143,54 @@ namespace Basalt {
 			std::erase_if(mask.Joints, [&](const AnimationMaskJoint& entry) { return entry.Joint == joint; });
 		}
 
-		size_t AddMatchedPairs(AnimationJointMap& map, const RetargetMap& retarget, const MeshSource& target, const MeshSource& source)
+		MatchedPairs AddMatchedPairs(AnimationJointMap& map, const RetargetMap& retarget, const MeshSource& target, const MeshSource& source)
 		{
-			size_t added = 0;
+			const auto named = [&](const std::string& joint, std::string AnimationRetargetJoint::* side) { return std::ranges::any_of(map.Joints, [&](const AnimationRetargetJoint& pair) { return pair.*side == joint; }); };
+			MatchedPairs result;
 			for (uint32_t node : target.NodeOrder)
 			{
-				if (map.Joints.size() >= AnimationClipLibrary::MaxJoints)
-					break;
 				if (retarget.SourceOf[node] < 0 || retarget.Matches[node] == RetargetMatch::JointMap)
 					continue;
 				const auto sourceNode = static_cast<uint32_t>(retarget.SourceOf[node]);
 				const std::string& targetName = target.Nodes[node].Name;
 				const std::string& sourceName = source.Nodes[sourceNode].Name;
-				// A pair names joints, and a name stands for the first node that has it.
 				if (FindNode(target, targetName) != static_cast<int32_t>(node) || FindNode(source, sourceName) != static_cast<int32_t>(sourceNode))
-					continue;
-				map.Joints.push_back({ .Source = sourceName, .Target = targetName });
-				added++;
+					result.SharedNames++;
+				else if (named(sourceName, &AnimationRetargetJoint::Source) || named(targetName, &AnimationRetargetJoint::Target))
+					result.PairedElsewhere++;
+				else if (map.Joints.size() >= AnimationClipLibrary::MaxJoints)
+					result.OverLimit++;
+				else
+				{
+					map.Joints.push_back({ .Source = sourceName, .Target = targetName });
+					result.Added++;
+				}
 			}
-			return added;
+			return result;
+		}
+
+		std::optional<std::string> MakeNewAssetPath(const std::filesystem::path& directory, const std::string& name, const std::string& extension, std::string& outError)
+		{
+			if (name.empty() || name.find_first_of("/\\.:") != std::string::npos || MaterialAsset::MakeFileName(name) != name)
+			{
+				outError = "'" + name + "' is not a safe file name";
+				return std::nullopt;
+			}
+			const std::filesystem::path file = directory / FileSystem::PathFromUtf8(name + extension);
+			if (FileSystem::Exists(file))
+			{
+				outError = "'" + name + extension + "' already exists";
+				return std::nullopt;
+			}
+			return Project::MakeRelative(file);
 		}
 
 		std::string FindMaskModel(Scene& scene, const std::string& maskPath, UUID selection)
 		{
 			for (entt::entity handle : scene.GetAllEntitiesWith<AnimatorComponent>())
 			{
-				const auto& animator = Entity(handle, &scene).GetComponent<AnimatorComponent>();
+				const Entity entity(handle, &scene);
+				const auto& animator = entity.GetComponent<AnimatorComponent>();
 				if (std::ranges::any_of(animator.Layers, [&](const AnimationLayer& layer) { return layer.MaskAsset == maskPath; }))
 					return animator.Mesh;
 			}
@@ -179,7 +204,8 @@ namespace Basalt {
 		{
 			for (entt::entity handle : scene.GetAllEntitiesWith<AnimatorComponent>())
 			{
-				const auto& animator = Entity(handle, &scene).GetComponent<AnimatorComponent>();
+				const Entity entity(handle, &scene);
+				const auto& animator = entity.GetComponent<AnimatorComponent>();
 				const auto library = std::ranges::find(animator.ClipLibraries, mapPath, &AnimationClipLibrary::JointMap);
 				if (library != animator.ClipLibraries.end())
 					return { library->Mesh, animator.Mesh };

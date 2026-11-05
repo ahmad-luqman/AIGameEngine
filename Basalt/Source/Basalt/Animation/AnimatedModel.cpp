@@ -261,7 +261,7 @@ namespace Basalt {
 				if (chain.Type == IKChainType::LookAt && chain.MaxAngle == 0)
 					warnings.push_back(fmt::format("InverseKinematics chain '{}': MaxAngle 0 never turns the chain", chain.Name));
 				if (chain.Type != IKChainType::Fabrik && HasIKJointLimits(chain))
-					warnings.push_back(fmt::format("InverseKinematics chain '{}': ConeAngle, MinTwist, MaxTwist and JointLimits only apply to Fabrik chains", chain.Name));
+					warnings.push_back(fmt::format("InverseKinematics chain '{}': SwingAngle, TwistMin, TwistMax and JointLimits only apply to Fabrik chains", chain.Name));
 			}
 			if (ik.Target != 0)
 			{
@@ -296,6 +296,8 @@ namespace Basalt {
 					ResolveFabrikLimits(*source, chain, joints, limits, problems);
 					for (const std::string& problem : problems)
 						warnings.push_back(fmt::format("InverseKinematics chain '{}': {}", chain.Name, problem));
+					if (!limits.empty() && std::ranges::all_of(limits, [](const FabrikJointLimit& limit) { return limit.SwingAngle == 0 && limit.TwistMin == 0 && limit.TwistMax == 0; }))
+						warnings.push_back(fmt::format("InverseKinematics chain '{}': its limits hold every joint at the rest pose, so it never reaches for a target", chain.Name));
 				}
 				if (chain.Ground && IKChainReaches(chain.Type))
 					groundUppers.push_back(joints.front());

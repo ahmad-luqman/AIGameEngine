@@ -1371,7 +1371,8 @@ Pairs shared by many Animators (every character rigged one way, every library do
 The Joint Map window edits these files: double-click one in the Content Browser, or New Joint Map... in its context menu. It
 lists the pairs with combo boxes over the joints of a library model and an Animator's model (those of an Animator that uses
 the map, else the selection's), says what those models make of the unsaved pairs (joints mapped, humanoid bones unmatched,
-warnings), and List Automatic Matches writes what name and humanoid matching find into the file. `editor.joint_map` opens it
+warnings), and List Automatic Matches adds what name and humanoid matching find to the unsaved draft as pairs, saying what it
+left out (a joint another pair already names, the 256-pair limit, a name two nodes share). `editor.joint_map` opens it
 for agents, and `animator.match_joints` reads the same report from two models and a saved map with no Animator.
 
 Every entry names both joints, and each source and each target appears once (`asset.write` and `project.validate` reject
@@ -1389,12 +1390,12 @@ not other libraries') whose pose at `ModelReferenceTime` stands like the library
 skeleton's rest orientations as the pose joints turn from; positions keep the rest pose, so limb lengths and the root's
 scale do not change. A single-frame clip of the matching pose is enough (`{ Mesh = "...", ReferenceClip = "TPose" }`).
 A library with no such frame turns joints by hand instead: a pair's `Offset` (in `Joints` or the `.bjointmap`) is how that
-source joint turns so the library stands like the model at rest, as Euler degrees about the library model's own axes, which
-do not depend on how the rig's joints are oriented. Lifting an A-pose arm 40 degrees to a T-pose is one pair
+source joint turns so the library stands like the model at rest, in degrees about the library model's fixed axes (X, then Y,
+then Z), which do not depend on how the rig's joints are oriented. Lifting an A-pose arm 40 degrees to a T-pose is one pair
 (`{ Source = "mixamorig:LeftArm", Target = "upperarm_l", Offset = Vec3(0, 0, 40) }`): joints below turn along, and an offset
 further down applies after its parents', in the same axes. Offsets add to `ReferenceClip`'s pose when both are set. They apply
 only through a pair that took effect (joints matched automatically have none, so list the ones that need one), and an inline
-pair that overrides a map pair replaces its offset too. `animator.retarget` shows each pair's `offset`.
+pair that overrides a map pair replaces its offset too. `animator.retarget` shows a pair's `offset` when it has one.
 A joint the clip leaves alone that a reference corrects still plays corrected when the clip is the base, but a layer
 playing the clip leaves that joint to the poses below, as for any joint the clip does not animate.
 A reference clip that is not there makes the library add no clips; a time past the clip's end takes its last pose, with
@@ -1435,7 +1436,7 @@ playback; a layer with `Events` on fires these markers for what it plays, as des
   the target. With `BlendAnimations` each clip fires while its weight is above 0. In a blend space only the heaviest sample's clip
   fires, because its clips run in step and would repeat each marker; when the parameter makes another sample the
   heaviest, a marker near that moment can be skipped or repeated once.
-- At most 64 events per Animator and frame are delivered; the rest are dropped with a warning (once per
+- At most 64 events per Animator and frame are delivered, and 64 more from its layers together; the rest are dropped with a warning (once per
   animation started). A marker past the end of the playing clip does not fire for it (an empty-`Clip` marker still
   fires for longer clips); markers naming a missing or zero-length clip never fire. The inspector and `scene.info`
   warn about markers that can never fire.
@@ -1519,7 +1520,7 @@ actor:SetComponent("Animator", { Layers = {
     { Name = "Upper", StateMachine = "Assets/Animations/UpperBody.banimgraph", MaskAsset = "Assets/Masks/UpperBody.banimmask" },
 } })
 actor:SetAnimationLayerWeight("Wave", 0, 0.3) -- fade the wave out over 0.3 s
-actor:SetAnimationParameter("Aiming", true)  -- reaches every graph declaring "Aiming", the layer's too
+actor:SetAnimationParameter("Aiming", true)  -- reaches every graph declaring "Aiming", the layer's too (OwnParameters layers aside)
 ```
 
 | Field | Meaning |
@@ -1554,8 +1555,9 @@ the value (a wrong type, a stopped base graph) logs that once, and each graph co
 `OwnParameters` a layer stays out of that: two layers running one graph can hold different values, and only
 `SetAnimationLayerParameter`/`SetAnimationLayerTrigger` reach it (they work on any graph layer, for a value only that layer
 should take). A layer graph has no root motion. With `Events` on, a layer fires the Animator's `Events` as the base does
-(in a crossfade both clips until the fade ends, in a blend space the heaviest sample) while its weight is above 0, sharing
-the Animator's 64 events per frame; a clip layer fires them too. An Override layer moves every channel a clip of any of its graph's states (and
+(a crossfade from a single playing clip fires both clips until the fade ends, a blend space its heaviest sample) for the part of
+each update its weight is above 0; a clip layer fires them too. Layers fire before the base, in `Layers` order, and share 64
+events per frame of their own, so a busy layer cannot crowd out the base's markers. An Override layer moves every channel a clip of any of its graph's states (and
 their blend spaces' samples) animates, so a state that leaves such a channel alone holds it at the model's rest pose; an
 Additive graph layer adds each state's difference from its `ReferenceClip` pose, so give the states and the reference the
 same channels. `PlayAnimationLayer(layer)` restarts a running graph at its initial state, keeping its parameter values (latched
@@ -1582,8 +1584,8 @@ reload).
 | `e:PlayAnimationLayer(layer, [clip])` | Restarts the layer at 0, on `clip` when given (until the configured `Clip` changes), otherwise on its configured `Clip` (or its `StateMachine`'s initial state). False, changing nothing, for an unknown layer, an unknown or empty clip name, or when the layer would show nothing (no clip, a missing reference clip, mask asset or graph, a graph whose initial state cannot play) |
 | `e:SetAnimationLayerWeight(layer, weight, [seconds])` | Fades the weight (0..1) linearly over `seconds` (default 0: at once). False for an unknown layer or an invalid weight or time |
 | `e:GetAnimationLayerWeight(layer)` | The current weight, or nil for an unknown layer |
-| `e:SetAnimationLayerParameter(layer, name, value)` | Sets a number or boolean parameter of this layer's graph alone, `OwnParameters` or not. False for an unknown layer, a layer running no graph, or a name its graph does not declare (each logged once) |
-| `e:SetAnimationLayerTrigger(layer, name)` | Latches a trigger of this layer's graph alone, as `SetAnimationLayerParameter` |
+| `e:SetAnimationLayerParameter(layer, name, value)` | Sets a number or boolean parameter of this layer's graph alone, `OwnParameters` or not. False for an unknown layer, a layer running no graph, a name its graph does not declare, a wrong type or a value that is not finite (each logged once); a value of another Lua type raises an error |
+| `e:SetAnimationLayerTrigger(layer, name)` | Latches a trigger of this layer's graph alone; false as for `SetAnimationLayerParameter` |
 | `e:GetAnimationLayerState(layer)` | The current state of a `StateMachine` layer's graph; `""` for a clip layer, while a script clip plays instead, and while the layer shows no graph (one that cannot load or has no playable initial state, an unloadable mask, an Additive layer whose reference clip is missing); nil for an unknown layer |
 
 A failing call is logged once per entity, function and layer, whatever values it passes, until the same call
@@ -1626,8 +1628,8 @@ actor:SetIKWeight("RightHand", 1, 0.25)
 | `Ground` | TwoBone, Fabrik (rejected on LookAt): foot placement while no other target is set |
 | `FollowTarget` | Reach for (aim at) the component's `Target` entity's position while no script target is set |
 | `FootLock` | TwoBone, Fabrik (rejected on LookAt): hold the joint where it was planted (see Foot locking) |
-| `ConeAngle`, `MinTwist`, `MaxTwist` | Fabrik: what each joint the chain turns may do, in degrees from its rest rotation (see Joint limits). 180, -180 and 180 leave it free |
-| `JointLimits` | Fabrik: overrides of the three above for single joints, `{ Joint = "Elbow", ConeAngle = 120, MinTwist = -10, MaxTwist = 10 }` (at most 16) |
+| `SwingAngle`, `TwistMin`, `TwistMax` | Fabrik: what each joint the chain turns may do, in degrees from its rest rotation (see Joint limits). 180, -180 and 180 leave it free |
+| `JointLimits` | Fabrik: what replaces the three above for single joints, `{ Joint = "Elbow", SwingAngle = 120, TwistMin = -10, TwistMax = 10 }` (at most 16). An entry replaces all three: what it leaves out is free, not inherited from the chain |
 | `Weight` | 0..1, the starting weight; a changed value applies at once |
 
 | Component field | Meaning |
@@ -1643,18 +1645,19 @@ after a spine look-at reaches from the turned spine). Every frame solves from th
 never from the last solution. Parent joints are treated as rigid: under a non-uniformly scaled parent the result is
 approximate. A Fabrik chain starts from the animated pose (so it keeps the animated bend, and a straight chain bends
 toward `Pole`, else +Z), iterates up to 32 times until its end is within 0.01% of the chain's length of the target,
-and stretches straight toward targets beyond its reach.
+and, without limits, stretches straight toward targets beyond its reach.
 
-**Joint limits.** `ConeAngle`, `MinTwist` and `MaxTwist` bound what a Fabrik chain does to every joint it turns, and
-`JointLimits` entries override them for one joint. They are measured from the joint's rest rotation in the model, not from
-the animation: `ConeAngle` is how far its bone (the direction of its child) may swing away from where the rest pose points it,
-and `MinTwist`..`MaxTwist` how far it may turn about the bone. `ConeAngle = 0` keeps the bone on its rest direction, and a twist
-range need not contain 0. A solved chain never leaves its limits: it bends the joints that still can, stops as close as it gets
-when they put a target out of reach (a few percent of the chain's length short, at worst, of a target only the limits' edge
-reaches), and turns an animated pose outside them back inside, even at its target. While a chain has no target or no weight the
-animation plays untouched, and the chain's weight blends the limited rotations with the animated ones. The end joint is not
-limited: its target rotation stays exact. A joint whose child lies on it has no bone and stays free, and a `JointLimits` entry
-for a joint the chain does not turn is warned about.
+**Joint limits.** `SwingAngle`, `TwistMin` and `TwistMax` bound what a Fabrik chain does to every joint it turns, and a
+`JointLimits` entry replaces them for one joint. They are measured from the joint's rest rotation in the model, not from the
+animation: `SwingAngle` is how far its bone (the direction of its child) may swing away from where the rest pose points it, and
+`TwistMin`..`TwistMax` how far it may turn about the bone. `SwingAngle = 0` keeps the bone on its rest direction, and a twist
+range need not contain 0. At full weight a solved chain stays inside its limits: it bends the joints that still can, stops as
+close as it gets when they put a target out of reach (typically within a few percent of the chain's length of a target it can
+only just reach), and turns an animated pose outside them back inside, even at its target. A lower weight blends the limited
+rotations with the animated ones, which may lie outside. While a chain has no target or no weight the animation plays untouched.
+The end joint is not limited: its target rotation stays exact. A joint whose child lies on it has no bone and stays free, and
+a `JointLimits` entry for a joint the chain does not turn is warned about, as are limits that hold every joint at rest and
+limits on other chain types. Scripts can compare `GetBoneTransform` with the target to see how close a chain came.
 
 **Foot locking.** A `FootLock` chain whose joint follows its animation (or the ground: no script or `FollowTarget`
 target) locks once its target (the animated joint, or its ground point) moves slower than `LockSpeed` (default 0.5 m/s)
@@ -1889,7 +1892,7 @@ reloads.
   on every StateMachine layer graph that declares the name; returns true when any of them takes it, false when none does
   (a wrong declared type, unknown parameter, non-finite value, or inactive machine). Nil and values other than numbers
   or booleans raise an argument error.
-- `e:SetAnimationTrigger(name)` latches a `Trigger` (on every graph that declares it) until a successful transition
+- `e:SetAnimationTrigger(name)` latches a `Trigger` (on every graph that declares it, `OwnParameters` layers aside) until a successful transition
   using it consumes it; returns true on success, false for an unknown/wrong-type parameter or inactive machine.
   Pausing preserves parameters and triggers; stopping disables the state machine (its setters fail and log, though a
   StateMachine layer declaring the name still takes the value, so the call can return true; GetAnimationState returns

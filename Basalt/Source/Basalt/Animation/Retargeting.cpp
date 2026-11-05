@@ -349,6 +349,15 @@ namespace Basalt {
 			return side + found->second;
 		}
 
+		std::vector<std::string> UnmatchedHumanoidBones(const MeshSource& target, const RetargetMap& map)
+		{
+			std::vector<std::string> unmatched;
+			for (size_t node = 0; node < map.SourceOf.size(); node++)
+				if (map.SourceOf[node] < 0 && !HumanoidBone(target.Nodes[node].Name).empty())
+					unmatched.push_back(target.Nodes[node].Name);
+			return unmatched;
+		}
+
 		RetargetMap BuildMap(const MeshSource& target, const MeshSource& source, const std::vector<AnimationRetargetJoint>& joints, std::vector<std::string>& outWarnings, const RetargetReferences& references)
 		{
 			// Sampling another model's clip would index past this model's nodes.
@@ -388,8 +397,10 @@ namespace Basalt {
 					outWarnings.push_back(fmt::format("joint map entry '{}' -> '{}': {}", joint.Source, joint.Target, fmt::join(missing, "; ")));
 				else if (!pair(static_cast<size_t>(targetNode), static_cast<size_t>(sourceNode), RetargetMatch::JointMap))
 					outWarnings.push_back(fmt::format("joint map entry '{}' -> '{}' is skipped: an earlier entry already pairs one of the joints", joint.Source, joint.Target));
-				else
+				else if (Math::IsFinite(joint.Offset))
 					map.Offsets[targetNode] = joint.Offset;
+				else
+					outWarnings.push_back(fmt::format("joint map entry '{}' -> '{}': Offset is not finite, so it is ignored", joint.Source, joint.Target));
 			}
 			std::map<std::string_view, size_t> sourceNames;
 			std::map<std::string, size_t> sourceBones;

@@ -5,6 +5,8 @@
 #include "Basalt/Animation/Retargeting.h"
 #include "Basalt/Core/UUID.h"
 
+#include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -14,7 +16,7 @@ namespace Basalt {
 
 	// The editor's working copy of one joint list file, a .banimmask or a .bjointmap (headless, so tests cover it). Widgets
 	// change GetAsset() in place and call Record when an edit is finished; a save writes MakeFileText() through asset.write
-	// and then calls MarkSaved.
+	// and then calls MarkSaved. Dirtiness and undo follow the asset's Joints, which is all these files hold.
 	template<typename Asset>
 	class JointAssetDraft
 	{
@@ -34,7 +36,8 @@ namespace Basalt {
 		std::string MakeFileText() const;
 		// The save went through: the edits are the new baseline.
 		void MarkSaved();
-		// Discards the edits, reading the file again (it may have changed on disk).
+		// Discards the edits and the undo steps, reading the file again (it may have changed on disk); when it cannot be read
+		// they stay.
 		bool Revert(std::string& outError);
 		// The file was changed by something else: a clean draft follows it (true when it read the new version), a dirty one
 		// keeps its edits and reports the conflict (HasExternalChange) until Revert or a save. A new version that cannot be
@@ -44,7 +47,7 @@ namespace Basalt {
 		// asset.move/asset.rename moved `from` to `to`: the draft follows its own file.
 		void OnAssetMoved(const std::string& from, const std::string& to);
 
-		// Takes the edits as one undo step; the same edits record nothing.
+		// Takes the edits as one undo step; the same edits record nothing. Needs an open file.
 		void Record();
 		bool Undo();
 		bool Redo();
@@ -70,11 +73,25 @@ namespace Basalt {
 		// Gives `joint` the weight, adding its entry; false when the mask is full (AnimationLayer::MaxMaskJoints).
 		bool SetMaskWeight(AnimationMask& mask, const std::string& joint, float weight);
 		void RemoveMaskJoint(AnimationMask& mask, const std::string& joint);
+		// What AddMatchedPairs did with the automatic matches.
+		struct MatchedPairs
+		{
+			size_t Added = 0;
+			// Left out because a pair already names one of the joints (one that did not apply, for a joint missing from a
+			// model): a second entry would make the file invalid.
+			size_t PairedElsewhere = 0;
+			// Left out at AnimationClipLibrary::MaxJoints.
+			size_t OverLimit = 0;
+			// Left out because a name stands for the first node that has it, and this was not that node.
+			size_t SharedNames = 0;
+		};
 		// Lists what `retarget` (built for `map`'s pairs) matched by name or humanoid bone as pairs of `map`, in the target's
-		// node order, so the file no longer depends on automatic matching. Stops when the map is full
-		// (AnimationClipLibrary::MaxJoints), and skips nodes whose name would resolve to another node of that name. Returns how
-		// many pairs it added.
-		size_t AddMatchedPairs(AnimationJointMap& map, const RetargetMap& retarget, const MeshSource& target, const MeshSource& source);
+		// node order, so those joints no longer depend on automatic matching.
+		MatchedPairs AddMatchedPairs(AnimationJointMap& map, const RetargetMap& retarget, const MeshSource& target, const MeshSource& source);
+
+		// The project-relative path of a new asset called `name` in `directory`, or nullopt with the reason: a name that is
+		// no safe file name on every platform, or a file already there (asset.write would replace it).
+		std::optional<std::string> MakeNewAssetPath(const std::filesystem::path& directory, const std::string& name, const std::string& extension, std::string& outError);
 
 		// The model to show an asset's joints on: the Animator that uses it (the first in the scene), else the selected
 		// entity's. Empty when no Animator says.

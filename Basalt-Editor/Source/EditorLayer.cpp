@@ -688,7 +688,7 @@ namespace Basalt {
 								 return m_AnimationMaskPanel.Describe();
 							 } });
 
-		m_Commands.Register({ "editor.joint_map", "Opens a .bjointmap in the Joint Map window (as double-clicking it in the Content Browser does), between the models given by source and target or else those an Animator or the selection uses for it; listMatches adds the automatic matches to the unsaved draft, and close first closes the window, discarding unsaved edits. Opening another file with unsaved edits fails. Returns {open, path, dirty, valid, problem, externalChange, error, joints, source, target, sourceError, targetError} and, with both models, {mapped, unmatchedHumanoidBones, warnings}, read from the unsaved pairs. Joint maps are authored with asset.write; animator.match_joints reads the same report from saved files without the editor.", EditorCommandSchemas::JointMap(), [this](AutomationSession&, const nlohmann::json& params) {
+		m_Commands.Register({ "editor.joint_map", "Opens a .bjointmap in the Joint Map window (as double-clicking it in the Content Browser does), between the models given by source and target or else those an Animator or the selection uses for it; listMatches adds the automatic matches to the unsaved draft, and close first closes the window, discarding unsaved edits. Opening another file with unsaved edits fails. Returns {open, path, dirty, valid, problem, externalChange, error, joints (how many pairs), source, target, sourceError, targetError}; with both models {mapped, unmatchedHumanoidBones, warnings}, read from the unsaved pairs; and after listMatches {listed: {added, pairedElsewhere, overLimit, sharedNames}}, what it added and why it left others out. Joint maps are authored with asset.write; animator.match_joints reads the same report from saved files without the editor.", EditorCommandSchemas::JointMap(), [this](AutomationSession&, const nlohmann::json& params) {
 								 if (params.value("close", false))
 									 m_AnimationJointMapPanel.Reset();
 								 std::string error;
@@ -698,9 +698,14 @@ namespace Basalt {
 									 m_AnimationJointMapPanel.GetSourceModel().Set(source->get<std::string>());
 								 if (const auto target = params.find("target"); target != params.end())
 									 m_AnimationJointMapPanel.GetTargetModel().Set(target->get<std::string>());
-								 if (params.value("listMatches", false) && !m_AnimationJointMapPanel.AutoMatch())
+								 if (!params.value("listMatches", false))
+									 return m_AnimationJointMapPanel.Describe();
+								 const auto matched = m_AnimationJointMapPanel.ListMatches();
+								 if (!matched)
 									 throw CommandError("listMatches needs an open joint map and both models");
-								 return m_AnimationJointMapPanel.Describe();
+								 nlohmann::json state = m_AnimationJointMapPanel.Describe();
+								 state["listed"] = { { "added", matched->Added }, { "pairedElsewhere", matched->PairedElsewhere }, { "overLimit", matched->OverLimit }, { "sharedNames", matched->SharedNames } };
+								 return state;
 							 } });
 
 		m_Commands.Register({ "editor.material_editor", "Opens a material file in the Material Editor window (as double-clicking it in the Content Browser does); with close, first closes the window, discarding unsaved edits (both may be given). Opening fails while another material has unsaved edits. Returns {open, path, dirty, valid, problem, externalChange, error, warnings}: valid says whether the edited values form a material (problem says why not), externalChange that the file changed on disk under unsaved edits, error is the window's message (a failed save, an unreadable change on disk) and warnings what loading or the last save reported.", EditorCommandSchemas::MaterialEditor(), [this](AutomationSession&, const nlohmann::json& params) {
@@ -1192,9 +1197,12 @@ namespace Basalt {
 			m_MaterialEditorPanel.Open(path);
 		else if (AnimationMask::IsMaskFile(path) || AnimationJointMap::IsJointMapFile(path))
 		{
+			const bool mask = AnimationMask::IsMaskFile(path);
 			std::string error;
-			if (!(AnimationMask::IsMaskFile(path) ? m_AnimationMaskPanel.Open(path, error) : m_AnimationJointMapPanel.Open(path, error)))
-				m_Context.SetStatus(error, true);
+			if (mask ? m_AnimationMaskPanel.Open(path, error) : m_AnimationJointMapPanel.Open(path, error))
+				m_PendingFocus.emplace_back(mask ? EditorCommandSchemas::AnimationMaskTitle : EditorCommandSchemas::JointMapTitle);
+			else
+				m_Context.SetStatus("Cannot open " + path + ": " + error, true);
 		}
 		else
 		{
@@ -1668,9 +1676,12 @@ namespace Basalt {
 		m_MaterialEditorPanel.OnImGuiRender();
 		DockNextToOnFirstUse(EditorCommandSchemas::AnimationGraphTitle, EditorCommandSchemas::ViewportTitle);
 		m_AnimationGraphPanel.OnImGuiRender();
-		DockNextToOnFirstUse(EditorCommandSchemas::AnimationMaskTitle, EditorCommandSchemas::ViewportTitle);
+		// Only with a window to come: the request would go to the next window that begins.
+		if (m_AnimationMaskPanel.IsOpen())
+			DockNextToOnFirstUse(EditorCommandSchemas::AnimationMaskTitle, EditorCommandSchemas::ViewportTitle);
 		m_AnimationMaskPanel.OnImGuiRender();
-		DockNextToOnFirstUse(EditorCommandSchemas::JointMapTitle, EditorCommandSchemas::ViewportTitle);
+		if (m_AnimationJointMapPanel.IsOpen())
+			DockNextToOnFirstUse(EditorCommandSchemas::JointMapTitle, EditorCommandSchemas::ViewportTitle);
 		m_AnimationJointMapPanel.OnImGuiRender();
 		DockNextToOnFirstUse(EditorCommandSchemas::PropertyAnimationTitle, EditorCommandSchemas::InspectorTitle);
 		m_PropertyAnimationPanel.OnImGuiRender();

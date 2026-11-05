@@ -270,8 +270,8 @@ local function TestEntities(self)
 	Check("InverseKinematics lists", ikRig:GetComponent("InverseKinematics").Chains[3].Type == "LookAt")
 	Check("Fabrik and follow-target chains", ikRig:GetComponent("InverseKinematics").Chains[5].Type == "Fabrik" and ikRig:GetComponent("InverseKinematics").Chains[5].FollowTarget and ikRig:GetComponent("InverseKinematics").Target == Scene.FindEntityByName("IKHandle").ID)
 	local limited = ikRig:GetComponent("InverseKinematics").Chains[5]
-	Check("Fabrik joint limits", limited.ConeAngle == 150 and limited.MinTwist == -60 and limited.MaxTwist == 60 and limited.JointLimits[1].Joint == "RightForeArm" and limited.JointLimits[1].ConeAngle == 120 and limited.JointLimits[1].MaxTwist == 10)
-	ExpectError("IK joint limit validation", function() ikRig:SetComponent("InverseKinematics", { Chains = { { Type = "Fabrik", MinTwist = 20, MaxTwist = 10 } } }) end, "must not exceed MaxTwist")
+	Check("Fabrik joint limits", limited.SwingAngle == 150 and limited.TwistMin == -60 and limited.TwistMax == 60 and limited.JointLimits[1].Joint == "RightForeArm" and limited.JointLimits[1].SwingAngle == 120 and limited.JointLimits[1].TwistMax == 10)
+	ExpectError("IK joint limit validation", function() ikRig:SetComponent("InverseKinematics", { Chains = { { Type = "Fabrik", TwistMin = 20, TwistMax = 10 } } }) end, "must not exceed TwistMax")
 	Check("IsIKFootLocked", ikRig:IsIKFootLocked("LeftFoot") ~= nil and ikRig:IsIKFootLocked("Head") == false and ikRig:IsIKFootLocked("Missing") == nil)
 
 	-- Spring bones.

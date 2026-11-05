@@ -1,10 +1,15 @@
 #include "Panels/JointAssetPanel.h"
 
+#include "EditorColors.h"
 #include "FileDialogs.h"
 
 #include "Basalt/Asset/AssetManager.h"
+#include "Basalt/Automation/AutomationSession.h"
+#include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/Log.h"
+#include "Basalt/Project/Project.h"
 
+#include <imgui.h>
 #include <misc/cpp/imgui_stdlib.h>
 
 #include <algorithm>
@@ -13,12 +18,13 @@ namespace Basalt {
 
 	void PreviewModel::Set(const std::string& path)
 	{
-		m_Path = path;
-		m_Input = path;
+		// File changes and moves name files in this form.
+		m_Path = path.empty() ? std::string() : FileSystem::NormalizeGeneric(path);
+		m_Input = m_Path;
 		m_Error.clear();
-		m_Source = path.empty() ? nullptr : AssetManager::GetMesh(path);
-		if (!path.empty() && !m_Source)
-			m_Error = "Cannot load the model: " + AssetManager::GetError(path);
+		m_Source = m_Path.empty() ? nullptr : AssetManager::GetMesh(m_Path);
+		if (!m_Path.empty() && !m_Source)
+			m_Error = "Cannot load the model: " + AssetManager::GetError(m_Path);
 	}
 
 	void PreviewModel::OnFilesChanged(const std::vector<FileChange>& changes)
@@ -53,10 +59,11 @@ namespace Basalt {
 			if (ImGui::Button("..."))
 			{
 				std::string error;
+				m_Error.clear();
 				const auto path = FileDialogs::Browse(FileDialogs::Kind::Open, Project::ResolvePath(m_Path), { { "glTF models", "gltf,glb" } }, error);
 				if (path)
 					chosen = Project::MakeRelative(*path);
-				else if (!error.empty())
+				else
 					m_Error = error;
 			}
 			ImGui::SameLine();
@@ -70,5 +77,239 @@ namespace Basalt {
 		Set(chosen);
 		return true;
 	}
+
+	template<typename Asset>
+	JointAssetPanel<Asset>::JointAssetPanel(EditorContext& context, const char* title, std::vector<PreviewModel*> models)
+		: m_Context(context)
+		, m_Title(title)
+		, m_Models(std::move(models))
+	{
+	}
+
+	template<typename Asset>
+	bool JointAssetPanel<Asset>::Open(const std::string& requested, std::string& outError)
+	{
+		// Before the checks below: they read a draft that may belong to the project just left.
+		if (IsOpen() && m_Project.lock() != Project::GetActive())
+			CloseForOtherProject();
+		const std::filesystem::path given = FileSystem::PathFromUtf8(requested);
+		const std::string path = FileSystem::NormalizeGeneric(given.is_absolute() ? Project::MakeRelative(given) : requested);
+		if (!Project::GetActive() || !path.starts_with("Assets/") || FileSystem::GetLowercaseExtension(FileSystem::PathFromUtf8(path)) != Asset::Extension)
+		{
+			outError = "'" + requested + "' is not a " + Asset::Extension + " file under Assets/";
+			return false;
+		}
+		if (m_Draft.GetPath() == path)
+			return true;
+		if (m_Draft.IsDirty())
+		{
+			outError = "Save or Revert '" + m_Draft.GetPath() + "' before opening another file";
+			return false;
+		}
+		if (!m_Draft.Load(path, outError))
+			return false;
+		m_Project = Project::GetActive();
+		m_Error.clear();
+		OnOpened();
+		return true;
+	}
+
+	template<typename Asset>
+	void JointAssetPanel<Asset>::Reset()
+	{
+		m_Draft.Close();
+		m_Project.reset();
+		m_Error.clear();
+		m_PromptDiscard = false;
+		for (PreviewModel* model : m_Models)
+			model->Set({});
+	}
+
+	template<typename Asset>
+	void JointAssetPanel<Asset>::CloseForOtherProject()
+	{
+		if (m_Draft.IsDirty())
+		{
+			BS_WARN("Discarded the unsaved edits to '{}': its project closed", m_Draft.GetPath());
+			m_Context.SetStatus("Discarded the unsaved edits to " + m_Draft.GetPath() + ": its project closed", true);
+		}
+		Reset();
+	}
+
+	template<typename Asset>
+	void JointAssetPanel<Asset>::OnFilesChanged(const std::vector<FileChange>& changes)
+	{
+		for (PreviewModel* model : m_Models)
+			model->OnFilesChanged(changes);
+		const auto change = std::ranges::find(changes, m_Draft.GetPath(), &FileChange::Path);
+		if (!IsOpen() || change == changes.end())
+			return;
+		std::string error;
+		const bool followed = m_Draft.OnFileChanged(error);
+		if (!followed && change->Type == FileChangeType::Removed)
+			m_Error = "The file was deleted: Save writes it again.";
+		else if (!followed && !error.empty())
+			m_Error = "The file changed on disk and cannot be read: " + error;
+		else
+			m_Error.clear();
+	}
+
+	template<typename Asset>
+	void JointAssetPanel<Asset>::OnAssetMoved(const std::string& from, const std::string& to)
+	{
+		m_Draft.OnAssetMoved(from, to);
+		for (PreviewModel* model : m_Models)
+			model->OnAssetMoved(from, to);
+	}
+
+	template<typename Asset>
+	void JointAssetPanel<Asset>::OnImGuiRender()
+	{
+		if (IsOpen() && m_Project.lock() != Project::GetActive())
+			CloseForOtherProject();
+		if (!IsOpen())
+			return;
+		ImGui::SetNextWindowSize(ImVec2(520.0f, 640.0f), ImGuiCond_FirstUseEver);
+		bool keepOpen = true;
+		const bool dirty = m_Draft.IsDirty();
+		if (ImGui::Begin(m_Title, &keepOpen, dirty ? ImGuiWindowFlags_UnsavedDocument : ImGuiWindowFlags_None))
+		{
+			ImGui::TextUnformatted(m_Draft.GetPath().c_str());
+			DrawToolbar(dirty);
+			ImGui::Separator();
+			DrawBody();
+		}
+		ImGui::End();
+		if (!keepOpen)
+		{
+			if (dirty)
+				m_PromptDiscard = true;
+			else
+				Reset();
+		}
+		// Outside the window: Begin returns false for a tab behind another, whose X closes it all the same.
+		DrawDiscardPrompt();
+	}
+
+	template<typename Asset>
+	nlohmann::json JointAssetPanel<Asset>::Describe() const
+	{
+		std::string problem;
+		const bool valid = IsOpen() && m_Draft.Validate(problem);
+		nlohmann::json state = { { "open", IsOpen() }, { "path", m_Draft.GetPath() }, { "dirty", m_Draft.IsDirty() }, { "valid", valid }, { "problem", problem }, { "externalChange", m_Draft.HasExternalChange() }, { "error", m_Error }, { "joints", m_Draft.GetAsset().Joints.size() } };
+		state.update(DescribeBody());
+		return state;
+	}
+
+	template<typename Asset>
+	void JointAssetPanel<Asset>::RecordFinishedEdit()
+	{
+		if (ImGui::IsItemDeactivatedAfterEdit())
+			m_Draft.Record();
+	}
+
+	template<typename Asset>
+	void JointAssetPanel<Asset>::DrawListFooter(std::optional<size_t> removed, const char* addLabel, uint32_t maxEntries)
+	{
+		auto& joints = m_Draft.GetAsset().Joints;
+		if (removed)
+		{
+			joints.erase(joints.begin() + static_cast<std::ptrdiff_t>(*removed));
+			m_Draft.Record();
+		}
+		ImGui::BeginDisabled(joints.size() >= maxEntries);
+		if (ImGui::Button(addLabel))
+		{
+			joints.emplace_back();
+			m_Draft.Record();
+		}
+		ImGui::EndDisabled();
+	}
+
+	template<typename Asset>
+	void JointAssetPanel<Asset>::Save()
+	{
+		std::string problem;
+		if (!m_Draft.Validate(problem))
+		{
+			m_Error = "Not saved: " + problem;
+			return;
+		}
+		const auto result = m_Context.Execute("asset.write", { { "path", m_Draft.GetPath() }, { "content", m_Draft.MakeFileText() } });
+		if (!result)
+		{
+			// Execute reported the command's error in the status bar.
+			m_Error = "Not saved: " + m_Context.StatusMessage;
+			return;
+		}
+		m_Draft.MarkSaved();
+		m_Error.clear();
+		const std::string warnings = EditorContext::JoinWarnings(*result);
+		m_Context.SetStatus(warnings.empty() ? "Saved " + m_Draft.GetPath() : "Saved with warnings: " + warnings, !warnings.empty());
+	}
+
+	template<typename Asset>
+	void JointAssetPanel<Asset>::Revert()
+	{
+		if (std::string error; m_Draft.Revert(error))
+			m_Error.clear();
+		else
+			m_Error = "Cannot read the file: " + error;
+	}
+
+	template<typename Asset>
+	void JointAssetPanel<Asset>::DrawToolbar(bool dirty)
+	{
+		const auto button = [](const char* label, bool enabled) {
+			ImGui::BeginDisabled(!enabled);
+			const bool pressed = ImGui::Button(label);
+			ImGui::EndDisabled();
+			return pressed;
+		};
+		std::string problem;
+		const bool valid = m_Draft.Validate(problem);
+		const bool changed = dirty || m_Draft.HasExternalChange();
+		if (button("Save", changed && valid))
+			Save();
+		ImGui::SameLine();
+		if (button("Revert", changed))
+			Revert();
+		ImGui::SameLine();
+		if (button("Undo", m_Draft.CanUndo()))
+			m_Draft.Undo();
+		ImGui::SameLine();
+		if (button("Redo", m_Draft.CanRedo()))
+			m_Draft.Redo();
+		if (m_Draft.HasExternalChange())
+			ImGui::TextColored(EditorColors::Warning(), "The file changed on disk: Save replaces it, Revert loads it.");
+		if (!m_Error.empty())
+			ImGui::TextColored(EditorColors::Error(), "%s", m_Error.c_str());
+		if (!valid)
+			ImGui::TextColored(EditorColors::Warning(), "%s", problem.c_str());
+	}
+
+	template<typename Asset>
+	void JointAssetPanel<Asset>::DrawDiscardPrompt()
+	{
+		if (m_PromptDiscard)
+			ImGui::OpenPopup("Discard edits?");
+		m_PromptDiscard = false;
+		if (ImGui::BeginPopupModal("Discard edits?", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+		{
+			ImGui::Text("Discard the unsaved edits to %s?", m_Draft.GetPath().c_str());
+			if (ImGui::Button("Discard"))
+			{
+				ImGui::CloseCurrentPopup();
+				Reset();
+			}
+			ImGui::SameLine();
+			if (ImGui::Button("Cancel"))
+				ImGui::CloseCurrentPopup();
+			ImGui::EndPopup();
+		}
+	}
+
+	template class JointAssetPanel<AnimationMask>;
+	template class JointAssetPanel<AnimationJointMap>;
 
 }

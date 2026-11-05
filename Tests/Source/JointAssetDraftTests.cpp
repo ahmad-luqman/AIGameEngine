@@ -47,7 +47,8 @@ TEST_SUITE("Editor")
 		CHECK(draft.IsDirty());
 		REQUIRE(draft.Validate(error));
 
-		// The text a save writes reads back as the same mask, in the same form a layer loads.
+		// The text a save writes reads back as the same mask, in the same form a layer loads, and ends its last line.
+		CHECK(draft.MakeFileText().ends_with('\n'));
 		const auto written = AnimationMask::FromText(draft.MakeFileText(), error);
 		REQUIRE_MESSAGE(written, error);
 		CHECK(written->Joints == draft.GetAsset().Joints);
@@ -91,6 +92,7 @@ TEST_SUITE("Editor")
 		CHECK_FALSE(draft.CanUndo());
 
 		// Dirty: the edits stay, and the conflict shows until a save or a revert.
+		REQUIRE_FALSE(draft.GetAsset().Joints.empty());
 		draft.GetAsset().Joints[0].Source = "edited";
 		project.WriteFile(path, R"({ "Joints": [] })");
 		CHECK_FALSE(draft.OnFileChanged(error));
@@ -211,8 +213,9 @@ TEST_SUITE("Editor")
 		std::vector<std::string> warnings;
 		const RetargetMap before = Retargeting::BuildMap(*target, *source, map.Joints, warnings);
 		REQUIRE(warnings.empty());
-		const size_t added = JointAssetEdit::AddMatchedPairs(map, before, *target, *source);
-		CHECK(added == before.MappedCount() - 1);
+		const auto matched = JointAssetEdit::AddMatchedPairs(map, before, *target, *source);
+		CHECK(matched.Added == before.MappedCount() - 1);
+		CHECK(matched.PairedElsewhere + matched.OverLimit + matched.SharedNames == 0);
 		CHECK(map.Joints.size() == before.MappedCount());
 		// The pair already there keeps its offset, and the file still parses.
 		CHECK(map.Joints[0].Offset == glm::vec3(0, 0, 40));
@@ -224,14 +227,25 @@ TEST_SUITE("Editor")
 		CHECK(after.SourceOf == before.SourceOf);
 		CHECK(std::ranges::none_of(after.Matches, [](RetargetMatch match) { return match == RetargetMatch::Name || match == RetargetMatch::Humanoid; }));
 		// Running it again finds nothing more.
-		CHECK(JointAssetEdit::AddMatchedPairs(map, after, *target, *source) == 0);
+		CHECK(JointAssetEdit::AddMatchedPairs(map, after, *target, *source).Added == 0);
+
+		// A pair that did not apply leaves its joint to the automatic matching, but listing that match would name the joint
+		// twice: the draft stays valid, and says what it left out.
+		AnimationJointMap stale;
+		stale.Joints = { { .Source = "mixamorig:Hips", .Target = "renamed_away" }, { .Source = "gone", .Target = "pelvis_2" } };
+		const RetargetMap partial = Retargeting::BuildMap(*target, *source, stale.Joints, warnings);
+		const auto kept = JointAssetEdit::AddMatchedPairs(stale, partial, *target, *source);
+		CHECK(kept.PairedElsewhere == 1);
+		REQUIRE_MESSAGE(AnimationJointMap::FromJson(stale.ToJson(), error), error);
 
 		// A full map stops adding.
 		AnimationJointMap full;
 		for (uint32_t i = 0; i + 1 < AnimationClipLibrary::MaxJoints; i++)
 			full.Joints.push_back({ .Source = "s" + std::to_string(i), .Target = "t" + std::to_string(i) });
 		const RetargetMap automatic = Retargeting::BuildMap(*target, *source, {}, warnings);
-		CHECK(JointAssetEdit::AddMatchedPairs(full, automatic, *target, *source) == 1);
+		const auto limited = JointAssetEdit::AddMatchedPairs(full, automatic, *target, *source);
+		CHECK(limited.Added == 1);
+		CHECK(limited.OverLimit == automatic.MappedCount() - 1);
 		CHECK(full.Joints.size() == AnimationClipLibrary::MaxJoints);
 
 		// A second node of a name cannot be a pair: its name stands for the first.
@@ -242,8 +256,27 @@ TEST_SUITE("Editor")
 		RetargetMap forced = Retargeting::BuildMap(*twin, *source, {}, warnings);
 		forced.SourceOf[second] = 0;
 		forced.Matches[second] = RetargetMatch::Name;
-		JointAssetEdit::AddMatchedPairs(named, forced, *twin, *source);
+		CHECK(JointAssetEdit::AddMatchedPairs(named, forced, *twin, *source).SharedNames == 1);
 		CHECK(std::ranges::count_if(named.Joints, [](const AnimationRetargetJoint& pair) { return pair.Target == "upperarm_l"; }) == 1);
+	}
+
+	TEST_CASE("New joint assets take free, safe names, so creating one never replaces a file")
+	{
+		TempProject project("NewJointAsset");
+		const std::filesystem::path directory = Project::ResolvePath("Assets");
+		std::string error;
+		CHECK(JointAssetEdit::MakeNewAssetPath(directory, "Upper", ".banimmask", error) == "Assets/Upper.banimmask");
+		project.WriteFile("Assets/Upper.banimmask", R"({ "Joints": [ { "Joint": "Spine" } ] })");
+		CHECK_FALSE(JointAssetEdit::MakeNewAssetPath(directory, "Upper", ".banimmask", error));
+		CHECK(error == "'Upper.banimmask' already exists");
+		// Another kind of asset may share the name.
+		CHECK(JointAssetEdit::MakeNewAssetPath(directory, "Upper", ".bjointmap", error) == "Assets/Upper.bjointmap");
+		for (const char* bad : { "", "a/b", "a\\b", "a.b", "a:b", "NUL", "con", "a*b" })
+		{
+			CAPTURE(bad);
+			CHECK_FALSE(JointAssetEdit::MakeNewAssetPath(directory, bad, ".bjointmap", error));
+			CHECK(error.find("is not a safe file name") != std::string::npos);
+		}
 	}
 
 	TEST_CASE("Joint asset windows find their models from the Animators that use the file, else the selection")
@@ -275,5 +308,90 @@ TEST_SUITE("Editor")
 		CHECK(JointAssetEdit::FindMaskModel(scene, "Assets/New.banimmask", 0).empty());
 		picked.ClipLibraries.clear();
 		CHECK(JointAssetEdit::FindJointMapModels(scene, "Assets/New.bjointmap", selected.GetUUID()).Source.empty());
+	}
+}
+
+TEST_SUITE("Editor")
+{
+	TEST_CASE("An unrecorded edit is a new edit, which Redo must not overwrite")
+	{
+		TempProject project("DraftRedo");
+		const std::string path = project.WriteFile("Assets/Upper.banimmask", R"({ "Joints": [] })");
+		AnimationMaskDraft draft;
+		std::string error;
+		REQUIRE(draft.Load(path, error));
+		JointAssetEdit::SetMaskWeight(draft.GetAsset(), "A", 1);
+		draft.Record();
+		REQUIRE(draft.Undo());
+		JointAssetEdit::SetMaskWeight(draft.GetAsset(), "B", 1);
+		CHECK_FALSE(draft.Redo());
+		REQUIRE(draft.GetAsset().Joints.size() == 1);
+		CHECK(draft.GetAsset().Joints[0].Joint == "B");
+	}
+
+	TEST_CASE("The undo steps drop the oldest edits, and the newest are all there")
+	{
+		TempProject project("DraftLimit");
+		const std::string path = project.WriteFile("Assets/Upper.banimmask", R"({ "Joints": [] })");
+		AnimationMaskDraft draft;
+		std::string error;
+		REQUIRE(draft.Load(path, error));
+		for (int i = 1; i <= 100; i++)
+		{
+			JointAssetEdit::SetMaskWeight(draft.GetAsset(), "A", static_cast<float>(i));
+			draft.Record();
+		}
+		for (int i = 99; i > 37; i--)
+		{
+			REQUIRE(draft.Undo());
+			CHECK(draft.GetAsset().Joints[0].Weight == static_cast<float>(i));
+		}
+		CHECK(draft.Undo());
+		CHECK(draft.GetAsset().Joints[0].Weight == 37.0f);
+		CHECK_FALSE(draft.Undo());
+	}
+
+	TEST_CASE("A save ends the undo step, so the next edit undoes back to what was saved")
+	{
+		TempProject project("DraftSave");
+		const std::string path = project.WriteFile("Assets/Upper.banimmask", R"({ "Joints": [] })");
+		AnimationMaskDraft draft;
+		std::string error;
+		REQUIRE(draft.Load(path, error));
+		JointAssetEdit::SetMaskWeight(draft.GetAsset(), "A", 1);
+		draft.MarkSaved();
+		JointAssetEdit::SetMaskWeight(draft.GetAsset(), "B", 1);
+		REQUIRE(draft.Undo());
+		CHECK_FALSE(draft.IsDirty());
+		CHECK(draft.GetAsset().Joints.size() == 1);
+	}
+
+	TEST_CASE("A held slider's first edit can be undone")
+	{
+		TempProject project("DraftCanUndo");
+		const std::string path = project.WriteFile("Assets/Upper.banimmask", R"({ "Joints": [] })");
+		AnimationMaskDraft draft;
+		std::string error;
+		REQUIRE(draft.Load(path, error));
+		JointAssetEdit::SetMaskWeight(draft.GetAsset(), "A", 1);
+		CHECK(draft.CanUndo());
+	}
+
+	TEST_CASE("A second source node of a name cannot be a pair either")
+	{
+		const auto target = LoadModel(FixturePath("UnrealRig.gltf"));
+		const auto source = LoadModel(FixturePath("MixamoRig.gltf"));
+		auto twin = CreateRef<MeshSource>(*source);
+		const uint32_t second = AnimationTest::Node(*twin, "mixamorig:LeftForeArm");
+		twin->Nodes[second].Name = "mixamorig:LeftArm";
+		std::vector<std::string> warnings;
+		const RetargetMap forced = Retargeting::BuildMap(*target, *twin, {}, warnings);
+		RetargetMap map = forced;
+		const uint32_t node = AnimationTest::Node(*target, "lowerarm_l");
+		map.SourceOf[node] = static_cast<int32_t>(second);
+		map.Matches[node] = RetargetMatch::Name;
+		AnimationJointMap named;
+		JointAssetEdit::AddMatchedPairs(named, map, *target, *twin);
+		CHECK(std::ranges::none_of(named.Joints, [](const AnimationRetargetJoint& pair) { return pair.Target == "lowerarm_l"; }));
 	}
 }

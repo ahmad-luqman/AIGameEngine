@@ -61,6 +61,14 @@ namespace Basalt {
 
 		float Get() const { return m_Value; }
 		bool IsFading() const { return m_Rate > 0; }
+		// The share (0..1) of the next `seconds` the weight is above 0: all of them from the first instant of a fade in, as
+		// far as it lasts in a fade out to 0.
+		float ShownShare(float seconds) const
+		{
+			if (m_Rate <= 0 || m_Target > 0)
+				return m_Value > 0 || m_Target > 0 ? 1.0f : 0.0f;
+			return std::min(m_Value / (m_Rate * seconds), 1.0f);
+		}
 
 	private:
 		static float Clamp(float weight) { return std::isfinite(weight) ? std::clamp(weight, 0.0f, 1.0f) : 0.0f; }

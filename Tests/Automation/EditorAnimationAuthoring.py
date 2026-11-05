@@ -106,6 +106,7 @@ def check_joint_assets(call, require, output):
     require(state["mapped"] > 10 and not state["warnings"], f"The report did not read the models: {state}")
     listed = call("editor.joint_map", {"listMatches": True})
     require(listed["dirty"] and listed["joints"] == listed["mapped"], f"Automatic matches were not listed: {listed}")
+    require(listed["listed"]["added"] == listed["joints"] - 1 and not listed["listed"]["sharedNames"], f"listMatches did not say what it did: {listed}")
     call("editor.window_screenshot", {"path": str(Path(output, "joint-map.png"))})
     call("editor.joint_map", {"path": "Assets/Other.bjointmap"}, error="Save or Revert")
     call("editor.joint_map", {"close": True, "path": path})
@@ -113,6 +114,12 @@ def check_joint_assets(call, require, output):
     require("mapped" not in cleared, f"A report without both models: {cleared}")
     call("editor.joint_map", {"listMatches": True}, error="both models")
     require(not call("editor.joint_map", {"close": True})["open"], "The joint map window did not close")
+    # With no file open there is nothing to list into: the closed draft stays clean, and the next open works.
+    closed = {"source": "Assets/MixamoRig.gltf", "target": "Assets/UnrealRig.gltf", "listMatches": True}
+    call("editor.joint_map", closed, error="needs an open joint map")
+    require(not call("editor.joint_map", {"close": True})["dirty"], "listMatches dirtied a closed draft")
+    require(call("editor.joint_map", {"path": path})["open"], "A joint map did not open after a refused listMatches")
+    call("editor.joint_map", {"close": True})
 
     # The same report without the editor, from saved files.
     matched = call("animator.match_joints", {"source": "Assets/MixamoRig.gltf", "target": "Assets/UnrealRig.gltf", "jointMap": path})
