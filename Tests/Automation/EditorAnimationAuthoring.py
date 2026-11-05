@@ -51,6 +51,18 @@ def check_animation_authoring(call, require, output):
     call("assert.component", {"entity": entity, "component": "Transform", "fields": {"Translation": [8, 4, 2]}})
     call("editor.redo")
     call("assert.component", {"entity": entity, "component": "Transform", "fields": {"Translation": [4, 2, 1]}})
+    # A track on another entity: capture and scrubbing both change that entity, and both undo.
+    lamp = call("entity.create", {"name": "AuthoredLamp"})["id"]
+    call("component.set", {"entity": lamp, "component": "PointLight", "data": {"Intensity": 1}})
+    call("animation.key", {"entity": entity, "component": "PointLight", "field": "Intensity", "time": 0, "target": "AuthoredLamp"})
+    call("component.set", {"entity": lamp, "component": "PointLight", "data": {"Intensity": 3}})
+    call("animation.key", {"entity": entity, "component": "PointLight", "field": "Intensity", "time": 1, "target": lamp})
+    tracks = call("component.get", {"entity": entity, "component": "PropertyAnimation"})["Tracks"]
+    require(len(tracks) == 2 and tracks[1]["Target"] == lamp and len(tracks[1]["Keys"]) == 2, f"Target track was not captured: {tracks}")
+    call("animation.sample", {"entity": entity, "time": .5})
+    require(call("component.get", {"entity": lamp, "component": "PointLight"})["Intensity"] == 2, "A sample did not reach the target entity")
+    call("editor.undo")
+    require(call("component.get", {"entity": lamp, "component": "PointLight"})["Intensity"] == 3, "Undo did not restore the target entity")
     call("editor.panel", {"name": "Property Animation", "focus": True})
     call("editor.window_screenshot", {"path": str(Path(output, "property-animation.png"))})
     call("editor.animation_graph", {"close": True})
