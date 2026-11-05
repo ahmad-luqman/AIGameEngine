@@ -156,18 +156,6 @@ namespace Basalt {
 				return candidate.GetUUID() != body && HasPhysicsBody(candidate);
 			};
 		}
-
-		// What 0 means in a component's entity field: the entity itself for a joint's BodyEntity and a widget's Target, the
-		// world for a joint's ConnectedEntity, the parent for a BoneAttachment's Target, and spatial navigation for
-		// UINavigation's links.
-		const char* EntityReferenceNone(const std::string& component, const std::string& field)
-		{
-			if (component == "Joint")
-				return field == "BodyEntity" ? "Self" : "World";
-			if (component == "BoneAttachment")
-				return "Parent";
-			return component == "UINavigation" ? "Automatic" : "Self";
-		}
 	}
 
 	void InspectorPanel::DrawEntityReference(Entity entity, const std::string& component, const std::string& field, uint64_t current, const std::function<bool(Entity)>& filter, const char* noneLabel)

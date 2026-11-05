@@ -59,6 +59,11 @@ namespace Basalt {
 	// component's own entity fields each decide what 0 means, so their callers draw the picker themselves.
 	JsonFieldResult DrawJsonValue(const std::string& name, nlohmann::json& value, const ComponentFieldType& type, const std::map<std::string, std::vector<std::string>>& enumOptions, Scene& scene);
 
+	// What 0 means in a component's own entity field, as the picker's label for it: the entity itself for a joint's BodyEntity
+	// and a widget's Target, the world for a joint's ConnectedEntity, the parent for a BoneAttachment's Target and spatial
+	// navigation for UINavigation's links.
+	const char* EntityReferenceNone(const std::string& component, const std::string& field);
+
 	// A combo of the scene's entities `filter` accepts, labelled `name` and showing `current` (0 as noneLabel; an entity
 	// that is gone as missing, so it can be replaced). Returns the ID picked this frame, if it differs.
 	std::optional<uint64_t> DrawEntityPicker(Scene& scene, const std::string& name, uint64_t current, const std::function<bool(Entity)>& filter, const char* noneLabel);

@@ -584,7 +584,9 @@ namespace Basalt {
 			const bool newMass = record.Settings.Type == RigidBodyType::Dynamic && !reshaped && rigidBody->Mass != record.Settings.Mass;
 			if (newMass && !ApplyBodyMass(entity, record, rigidBody->Mass))
 				return false;
-			bodies.ActivateBody(record.ID);
+			// Activating a kinematic body wakes what it touches, which only a change that reaches them should.
+			if (touchChanged || record.Settings.Type == RigidBodyType::Dynamic)
+				bodies.ActivateBody(record.ID);
 		}
 		// What rests on a static or kinematic body sleeps on, not linked to it, while the ground changes under it: a
 		// floor turning to ice must set its crates sliding. A body that moves wakes what it touches by itself.

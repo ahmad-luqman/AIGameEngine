@@ -3,6 +3,7 @@
 #include "UITestUtils.h"
 
 #include <Basalt/Scene/ComponentRegistry.h>
+#include <Basalt/Scene/Entity.h>
 #include <Basalt/Scene/Scene.h>
 
 #include <doctest/doctest.h>
@@ -10,6 +11,8 @@
 #include <imgui_internal.h>
 
 #include <cmath>
+#include <optional>
+#include <string_view>
 
 using namespace Basalt;
 using json = nlohmann::json;
@@ -266,5 +269,63 @@ TEST_SUITE("Editor")
 		const json before = missing;
 		CHECK_FALSE(EditJsonList(missing, JsonListEdit::Duplicate, 0, type));
 		CHECK(missing == before);
+	}
+
+	TEST_CASE("The entity picker offers what its filter takes, and none")
+	{
+		BasaltTest::ImGuiTestContext context;
+		ImGuiIO& io = ImGui::GetIO();
+		Scene scene;
+		const Entity alpha = scene.CreateEntity("Alpha");
+		const Entity beta = scene.CreateEntity("Beta");
+		ImVec2 comboMin, comboMax;
+		const auto frame = [&](uint64_t current, bool skipAlpha) {
+			ImGui::NewFrame();
+			BasaltTest::ImGuiTestContext::MarkTexturesUploaded();
+			ImGui::SetNextWindowPos({ 0, 0 });
+			ImGui::SetNextWindowSize({ 600, 900 });
+			ImGui::Begin("Inspector");
+			const auto picked = DrawEntityPicker(scene, "Target", current, [&](Entity candidate) { return !skipAlpha || candidate != alpha; }, "None");
+			comboMin = ImGui::GetItemRectMin();
+			comboMax = ImGui::GetItemRectMax();
+			ImGui::End();
+			ImGui::Render();
+			return picked;
+		};
+		// Picks the combo's row-th entry from closed, and returns what the widget reported.
+		const auto pick = [&](uint64_t current, bool skipAlpha, int row) {
+			frame(current, skipAlpha);
+			const auto press = [&](ImVec2 position) {
+				std::optional<uint64_t> result;
+				io.AddMousePosEvent(position.x, position.y);
+				frame(current, skipAlpha);
+				io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+				frame(current, skipAlpha);
+				io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+				if (const auto picked = frame(current, skipAlpha))
+					result = picked;
+				return result;
+			};
+			press({ (comboMin.x + comboMax.x) / 2, (comboMin.y + comboMax.y) / 2 });
+			const ImGuiStyle& style = ImGui::GetStyle();
+			const float height = ImGui::GetFontSize() + style.ItemSpacing.y;
+			const ImVec2 entry = { comboMin.x + 20, comboMax.y + style.WindowPadding.y + height * (static_cast<float>(row) + 0.4f) };
+			return press(entry);
+		};
+		CHECK(pick(0, false, 1) == std::optional(static_cast<uint64_t>(alpha.GetUUID())));
+		CHECK(pick(0, true, 1) == std::optional(static_cast<uint64_t>(beta.GetUUID())));
+		CHECK(pick(static_cast<uint64_t>(beta.GetUUID()), false, 0) == std::optional(uint64_t{ 0 }));
+		// The entry already current reports nothing, and a stale current can be replaced.
+		CHECK(pick(static_cast<uint64_t>(beta.GetUUID()), false, 2) == std::nullopt);
+		CHECK(pick(424242, false, 2) == std::optional(static_cast<uint64_t>(beta.GetUUID())));
+	}
+
+	TEST_CASE("Each entity field's picker says what its 0 means")
+	{
+		CHECK(std::string_view(EntityReferenceNone("Joint", "BodyEntity")) == "Self");
+		CHECK(std::string_view(EntityReferenceNone("Joint", "ConnectedEntity")) == "World");
+		CHECK(std::string_view(EntityReferenceNone("BoneAttachment", "Target")) == "Parent");
+		CHECK(std::string_view(EntityReferenceNone("UIButton", "Target")) == "Self");
+		CHECK(std::string_view(EntityReferenceNone("UINavigation", "Up")) == "Automatic");
 	}
 }

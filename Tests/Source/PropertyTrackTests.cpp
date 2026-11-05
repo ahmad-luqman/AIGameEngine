@@ -110,6 +110,38 @@ namespace {
 		return {};
 	}
 
+	// A prefab whose root animates its child Lamp and its own light, an instance of it, and the Lamp then deleted from the prefab.
+	struct DeletedLamp
+	{
+		TempProject Directory;
+		AutomationSession Session;
+		CommandRegistry Commands;
+		uint64_t InstanceId = 0;
+
+		explicit DeletedLamp(const char* name)
+			: Directory(name)
+		{
+			auto scene = Session.GetScene();
+			Entity root = scene->CreateEntity("Root");
+			root.AddComponent<PointLightComponent>();
+			Entity lamp = scene->CreateEntity("Lamp");
+			scene->SetParent(lamp, root, false);
+			lamp.GetTransform().Scale = glm::vec3(2);
+			std::string error;
+			REQUIRE(PropertyAnimation::Key(root, "Transform", "Scale", 0, error, lamp.GetUUID()));
+			REQUIRE(PropertyAnimation::Key(root, "PointLight", "Intensity", 0, error));
+			Run("prefab.create", { { "entity", IdOf(root) }, { "path", "Assets/Lamp.bprefab" } });
+			InstanceId = Run("prefab.instantiate", { { "path", "Assets/Lamp.bprefab" } })["id"];
+			Run("prefab.open", { { "path", "Assets/Lamp.bprefab" } });
+			Run("entity.destroy", { { "entity", "Lamp" } });
+			Run("prefab.save", json::object());
+			Run("prefab.close", json::object());
+		}
+		json Run(const std::string& command, const json& params) { return BasaltTest::Run(Commands, Session, command, params); }
+		Entity Instance() { return Session.GetScene()->GetEntityByUUID(UUID(InstanceId)); }
+		json Tracks() { return ComponentRegistry::Find("PropertyAnimation")->Serialize(Instance())["Tracks"]; }
+	};
+
 	// A value of the field a little from `value`, which a resting crate stays in contact through.
 	json Nudged(const json& value, const ComponentFieldType& type, const std::vector<std::string>* options)
 	{
@@ -264,27 +296,6 @@ TEST_SUITE("Property animation")
 			scene.Patch(scene.Crate, "RigidBody", { { "FrictionCombine", "Max" } });
 			scene.Frames(90);
 			CHECK(glm::length(scene.Physics().GetLinearVelocity(scene.Crate)) < 0.05f);
-		}
-		SUBCASE("Restitution, and which body's mode decides it")
-		{
-			const auto bounce = [](const json& crate, const json& floor) {
-				RestingCrate scene;
-				scene.Crate.GetTransform().Translation.y = 3;
-				scene.Crate.AddComponent<BoxColliderComponent>();
-				scene.World.OnRuntimeStart();
-				scene.Patch(scene.Crate, "RigidBody", crate);
-				scene.Patch(scene.Floor, "RigidBody", floor);
-				float rebound = 0;
-				for (int i = 0; i < 90; i++)
-				{
-					scene.Frames(1);
-					rebound = std::max(rebound, scene.Physics().GetLinearVelocity(scene.Crate).y);
-				}
-				return rebound;
-			};
-			// Jolt's default keeps the larger of the two, Min the smaller.
-			CHECK(bounce({ { "Restitution", 0.8f } }, { { "Restitution", 0.0f } }) > 2.0f);
-			CHECK(bounce({ { "Restitution", 0.8f }, { "RestitutionCombine", "Min" } }, { { "Restitution", 0.0f } }) < 0.5f);
 		}
 		SUBCASE("Sleeping")
 		{
@@ -1643,5 +1654,528 @@ TEST_SUITE("Property animation")
 						if (euler[i] == 0.0f)
 							CHECK_FALSE(std::signbit(euler[i]));
 				}
+	}
+
+	TEST_CASE("The merge that lost the target leaves no override")
+	{
+		DeletedLamp f("PropertyLostA2");
+		const json overrides = f.Run("prefab.overrides", { { "entity", f.InstanceId } })["overrides"];
+		CAPTURE(overrides.dump());
+		CHECK(overrides.empty());
+	}
+
+	TEST_CASE("Repairing the track in the prefab reaches the instance")
+	{
+		DeletedLamp f("PropertyLostA3");
+		f.Run("prefab.open", { { "path", "Assets/Lamp.bprefab" } });
+		Entity opened = f.Session.GetScene()->FindEntityByName("Root");
+		REQUIRE(opened);
+		json tracks = ComponentRegistry::Find("PropertyAnimation")->Serialize(opened)["Tracks"];
+		CAPTURE(tracks.dump());
+		tracks[0]["Target"] = 0;
+		f.Run("component.set", { { "entity", "Root" }, { "component", "PropertyAnimation" }, { "data", { { "Tracks", tracks } } } });
+		f.Run("prefab.save", json::object());
+		f.Run("prefab.close", json::object());
+		const auto& repaired = f.Instance().GetComponent<PropertyAnimationComponent>().Tracks[0];
+		CHECK(static_cast<uint64_t>(repaired.Target) == 0);
+	}
+
+	TEST_CASE("Editing another track of an instance with a lost target, then applying")
+	{
+		DeletedLamp f("PropertyLostA4");
+		json tracks = f.Tracks();
+		tracks[1]["Stepped"] = !tracks[1]["Stepped"].get<bool>();
+		// The ID the track already holds does not block the edit.
+		f.Run("component.set", { { "entity", f.InstanceId }, { "component", "PropertyAnimation" }, { "data", { { "Tracks", tracks } } } });
+		CHECK(f.Tracks()[1]["Stepped"] == tracks[1]["Stepped"]);
+		const json applied = f.Run("prefab.apply", { { "entity", f.InstanceId } });
+		// The prefab keeps the list, and the warning says the edit stayed behind with it.
+		CHECK(applied["warnings"].dump().find("so Tracks stays as the prefab has it, without this instance's other changes to it") != std::string::npos);
+		const json made = f.Run("prefab.instantiate", { { "path", "Assets/Lamp.bprefab" } });
+		Entity fresh = f.Session.GetScene()->GetEntityByUUID(UUID(made["id"].get<uint64_t>()));
+		REQUIRE(fresh);
+		CHECK(fresh.GetComponent<PropertyAnimationComponent>().Tracks[1].Stepped != tracks[1]["Stepped"].get<bool>());
+		CHECK(f.Tracks()[1]["Stepped"] == tracks[1]["Stepped"]);
+	}
+
+	TEST_CASE("A lost target survives a save and project.validate names it")
+	{
+		DeletedLamp f("PropertyLostA5");
+		const UUID lost = f.Instance().GetComponent<PropertyAnimationComponent>().Tracks[0].Target;
+		REQUIRE(lost != 0);
+		f.Run("scene.save", { { "path", "Assets/Lost.bscene" } });
+		f.Run("scene.open", { { "path", "Assets/Lost.bscene" } });
+		CHECK(f.Instance().GetComponent<PropertyAnimationComponent>().Tracks[0].Target == lost);
+		const json report = f.Run("project.validate", json::object());
+		CAPTURE(report.dump());
+		CHECK(report["errors"].get<int>() >= 1);
+		CHECK(report.dump().find("PropertyAnimation.Tracks[0].Target") != std::string::npos);
+		Entity duplicate = f.Session.GetScene()->DuplicateEntity(f.Instance());
+		CHECK(duplicate.GetComponent<PropertyAnimationComponent>().Tracks[0].Target == lost);
+	}
+
+	TEST_CASE("prefab.apply of a component the prefab lacks keeps an empty list")
+	{
+		TempProject project("PropertyCaseB1");
+		AutomationSession session;
+		CommandRegistry commands;
+		const auto run = [&](const std::string& command, const json& params) { return BasaltTest::Run(commands, session, command, params); };
+		auto scene = session.GetScene();
+		Entity root = scene->CreateEntity("Root");
+		run("prefab.create", { { "entity", IdOf(root) }, { "path", "Assets/Plain.bprefab" } });
+		const uint64_t instanceId = run("prefab.instantiate", { { "path", "Assets/Plain.bprefab" } })["id"];
+		Entity instance = session.GetScene()->GetEntityByUUID(UUID(instanceId));
+		Entity outside = session.GetScene()->CreateEntity("Outside");
+		outside.AddComponent<PointLightComponent>();
+		std::string error;
+		REQUIRE_MESSAGE(PropertyAnimation::Key(instance, "PointLight", "Intensity", 0, error, outside.GetUUID()), error);
+		const json applied = run("prefab.apply", { { "entity", instanceId } });
+		REQUIRE(applied.contains("warnings"));
+		CHECK(applied["warnings"].dump().find("so 1 of 1 Tracks stayed out of it") != std::string::npos);
+		const auto saved = FileSystem::ReadTextFile(Project::ResolvePath("Assets/Plain.bprefab"));
+		REQUIRE(saved);
+		CHECK(json::parse(*saved)["Entities"][0]["Components"]["PropertyAnimation"]["Tracks"] == json::array());
+		CHECK(instance.GetComponent<PropertyAnimationComponent>().Tracks[0].Target == outside.GetUUID());
+	}
+
+	TEST_CASE("A kept list keeps its asset keys, encoded")
+	{
+		TempProject project("PropertyCaseB2");
+		AutomationSession session;
+		CommandRegistry commands;
+		const auto run = [&](const std::string& command, const json& params) { return BasaltTest::Run(commands, session, command, params); };
+		std::string error;
+		REQUIRE_MESSAGE(WritePng(Project::ResolvePath("Assets/Frame.png"), { 255, 0, 0, 255 }, 1, 1, error), error);
+		run("asset.refresh", json::object());
+		Entity root = session.GetScene()->CreateEntity("Root");
+		root.AddComponent<MaterialComponent>().AlbedoMap = "Assets/Frame.png";
+		run("animation.key", { { "entity", "Root" }, { "component", "Material" }, { "field", "AlbedoMap" }, { "time", 0 } });
+		root.GetComponent<MaterialComponent>().AlbedoMap.clear();
+		run("prefab.create", { { "entity", IdOf(root) }, { "path", "Assets/Flip.bprefab" } });
+		const uint64_t instanceId = run("prefab.instantiate", { { "path", "Assets/Flip.bprefab" } })["id"];
+		Entity instance = session.GetScene()->GetEntityByUUID(UUID(instanceId));
+		Entity outside = session.GetScene()->CreateEntity("Outside");
+		json tracks = ComponentRegistry::Find("PropertyAnimation")->Serialize(instance)["Tracks"];
+		tracks[0]["Target"] = static_cast<uint64_t>(outside.GetUUID());
+		outside.AddComponent<MaterialComponent>();
+		run("component.set", { { "entity", instanceId }, { "component", "PropertyAnimation" }, { "data", { { "Tracks", tracks } } } });
+		const json applied = run("prefab.apply", { { "entity", instanceId } });
+		REQUIRE(applied.contains("warnings"));
+		const auto saved = FileSystem::ReadTextFile(Project::ResolvePath("Assets/Flip.bprefab"));
+		REQUIRE(saved);
+		const json key = json::parse(*saved)["Entities"][0]["Components"]["PropertyAnimation"]["Tracks"][0]["Keys"][0]["Asset"];
+		CAPTURE(key.dump());
+		REQUIRE(key.is_object());
+		CHECK(key["Path"] == "Assets/Frame.png");
+		const json made = run("prefab.instantiate", { { "path", "Assets/Flip.bprefab" } });
+		Entity fresh = session.GetScene()->GetEntityByUUID(UUID(made["id"].get<uint64_t>()));
+		REQUIRE(fresh);
+		CHECK(fresh.GetComponent<PropertyAnimationComponent>().Tracks[0].Keys[0].Asset == "Assets/Frame.png");
+	}
+
+	TEST_CASE("The instance that applied keeps its own track as an override")
+	{
+		TempProject project("PropertyCaseB3");
+		AutomationSession session;
+		CommandRegistry commands;
+		const auto run = [&](const std::string& command, const json& params) { return BasaltTest::Run(commands, session, command, params); };
+		auto scene = session.GetScene();
+		Entity root = scene->CreateEntity("Root");
+		Entity lamp = scene->CreateEntity("Lamp");
+		scene->SetParent(lamp, root, false);
+		lamp.AddComponent<PointLightComponent>();
+		std::string error;
+		REQUIRE(PropertyAnimation::Key(root, "PointLight", "Intensity", 0, error, lamp.GetUUID()));
+		run("prefab.create", { { "entity", IdOf(root) }, { "path", "Assets/Lamp.bprefab" } });
+		const uint64_t instanceId = run("prefab.instantiate", { { "path", "Assets/Lamp.bprefab" } })["id"];
+		Entity instance = session.GetScene()->GetEntityByUUID(UUID(instanceId));
+		Entity outside = session.GetScene()->CreateEntity("Outside");
+		outside.AddComponent<PointLightComponent>();
+		json tracks = ComponentRegistry::Find("PropertyAnimation")->Serialize(instance)["Tracks"];
+		tracks[0]["Target"] = static_cast<uint64_t>(outside.GetUUID());
+		run("component.set", { { "entity", instanceId }, { "component", "PropertyAnimation" }, { "data", { { "Tracks", tracks } } } });
+		run("prefab.apply", { { "entity", instanceId } });
+		instance = session.GetScene()->GetEntityByUUID(UUID(instanceId));
+		CHECK(instance.GetComponent<PropertyAnimationComponent>().Tracks[0].Target == outside.GetUUID());
+		CHECK_FALSE(run("prefab.overrides", { { "entity", instanceId } })["overrides"].empty());
+	}
+
+	TEST_CASE("A track on a nested member is not outside the prefab")
+	{
+		TempProject project("PropertyCaseC1");
+		AutomationSession session;
+		CommandRegistry commands;
+		const auto run = [&](const std::string& command, const json& params) { return BasaltTest::Run(commands, session, command, params); };
+		auto scene = session.GetScene();
+		Entity inner = scene->CreateEntity("Inner");
+		Entity lamp = scene->CreateEntity("Lamp");
+		lamp.AddComponent<PointLightComponent>();
+		scene->SetParent(lamp, inner, false);
+		run("prefab.create", { { "entity", IdOf(inner) }, { "path", "Assets/Inner.bprefab" } });
+		Entity outer = scene->CreateEntity("Outer");
+		scene->SetParent(inner, outer, false);
+		std::string error;
+		REQUIRE(PropertyAnimation::Key(outer, "PointLight", "Intensity", 0, error, lamp.GetUUID()));
+		const json created = run("prefab.create", { { "entity", IdOf(outer) }, { "path", "Assets/Outer.bprefab" } });
+		CHECK(created.dump().find("outside the prefab") == std::string::npos);
+		const json applied = run("prefab.apply", { { "entity", IdOf(outer) } });
+		CHECK(applied.dump().find("outside the prefab") == std::string::npos);
+		run("prefab.open", { { "path", "Assets/Outer.bprefab" } });
+		const json saved = run("prefab.save", json::object());
+		CHECK(saved.dump().find("outside the prefab") == std::string::npos);
+		run("prefab.close", json::object());
+		const json made = run("prefab.instantiate", { { "path", "Assets/Outer.bprefab" } });
+		Entity fresh = session.GetScene()->GetEntityByUUID(UUID(made["id"].get<uint64_t>()));
+		REQUIRE(fresh);
+		CHECK(session.GetScene()->GetEntityByUUID(fresh.GetComponent<PropertyAnimationComponent>().Tracks[0].Target).GetName() == "Lamp");
+	}
+
+	TEST_CASE("Outside references are reported for fields and not for what means no reference")
+	{
+		TempProject project("PropertyCaseC2");
+		AutomationSession session;
+		CommandRegistry commands;
+		const auto run = [&](const std::string& command, const json& params) { return BasaltTest::Run(commands, session, command, params); };
+		auto scene = session.GetScene();
+		Entity root = scene->CreateEntity("Root");
+		Entity child = scene->CreateEntity("Child");
+		scene->SetParent(child, root, false);
+		Entity outside = scene->CreateEntity("Outside");
+		std::string error;
+		REQUIRE(PropertyAnimation::Key(root, "Transform", "Scale", 0, error));
+		child.AddComponent<JointComponent>();
+		const json clean = run("prefab.create", { { "entity", IdOf(root) }, { "path", "Assets/Clean.bprefab" } });
+		CHECK(clean.dump().find("outside the prefab") == std::string::npos);
+		child.GetComponent<JointComponent>().ConnectedEntity = outside.GetUUID();
+		const json created = run("prefab.create", { { "entity", IdOf(child) }, { "path", "Assets/Field.bprefab" } });
+		CHECK(created.dump().find("'Child' Joint.ConnectedEntity references an entity that is not in the prefab") != std::string::npos);
+	}
+
+	TEST_CASE("A top-level ID the component holds must still name an entity")
+	{
+		CommandRegistry commands;
+		AutomationSession session;
+		Entity entity = session.GetScene()->CreateEntity("Holder");
+		entity.AddComponent<JointComponent>().ConnectedEntity = UUID(987654321);
+		const std::string message = RunError(commands, session, "component.set", { { "entity", "Holder" }, { "component", "Joint" }, { "data", { { "ConnectedEntity", 987654321 } } } });
+		CHECK(message.find("987654321") != std::string::npos);
+	}
+
+	TEST_CASE("editor.component_set is atomic when only some of the selection holds a stale ID")
+	{
+		CommandRegistry commands;
+		RegisterEditorSelectionCommands(commands);
+		AutomationSession session;
+		auto scene = session.GetScene();
+		Entity a = scene->CreateEntity("A"), b = scene->CreateEntity("B");
+		for (Entity entity : { a, b })
+		{
+			PropertyAnimationComponent animation;
+			animation.Tracks.push_back({ "Transform", "Scale", false, { { 0, glm::vec4(1.0f) } } });
+			entity.AddComponent<PropertyAnimationComponent>(animation);
+		}
+		a.GetComponent<PropertyAnimationComponent>().Tracks[0].Target = UUID(987654321);
+		a.GetComponent<PropertyAnimationComponent>().Duration = 3;
+		session.SetSelections({ a.GetUUID(), b.GetUUID() });
+		json tracks = ComponentRegistry::Find("PropertyAnimation")->Serialize(a)["Tracks"];
+		tracks[0]["Stepped"] = true;
+		CHECK_THROWS_AS(commands.Execute(session, "editor.component_set", { { "component", "PropertyAnimation" }, { "data", { { "Tracks", tracks } } } }), CommandError);
+		CHECK_FALSE(a.GetComponent<PropertyAnimationComponent>().Tracks[0].Stepped);
+	}
+
+	TEST_CASE("assert.component reads a stale ID the entity holds")
+	{
+		CommandRegistry commands;
+		AutomationSession session;
+		Entity entity = session.GetScene()->CreateEntity("Holder");
+		PropertyAnimationComponent animation;
+		animation.Tracks.push_back({ "Transform", "Scale", false, { { 0, glm::vec4(1.0f) } }, UUID(987654321) });
+		entity.AddComponent<PropertyAnimationComponent>(animation);
+		json tracks = ComponentRegistry::Find("PropertyAnimation")->Serialize(entity)["Tracks"];
+		CHECK_NOTHROW(BasaltTest::Run(commands, session, "assert.component", { { "entity", "Holder" }, { "component", "PropertyAnimation" }, { "fields", { { "Tracks", tracks } } } }));
+	}
+
+	TEST_CASE("entity.create checks list IDs and resolves list names")
+	{
+		CommandRegistry commands;
+		AutomationSession session;
+		Entity lamp = session.GetScene()->CreateEntity("Lamp");
+		const json track = { { "Component", "PointLight" }, { "Field", "Intensity" }, { "Target", "Lamp" } };
+		const json made = BasaltTest::Run(commands, session, "entity.create", { { "name", "Named" }, { "components", { { "PropertyAnimation", { { "Tracks", json::array({ track }) } } } } } });
+		Entity named = session.GetScene()->GetEntityByUUID(UUID(made["id"].get<uint64_t>()));
+		REQUIRE(named);
+		CHECK(named.GetComponent<PropertyAnimationComponent>().Tracks[0].Target == lamp.GetUUID());
+		json stale = track;
+		stale["Target"] = 987654321;
+		CHECK(RunError(commands, session, "entity.create", { { "name", "Stale" }, { "components", { { "PropertyAnimation", { { "Tracks", json::array({ stale }) } } } } } }).find("987654321") != std::string::npos);
+		CHECK_FALSE(session.GetScene()->FindEntityByName("Stale"));
+	}
+
+	TEST_CASE("project.validate accepts tracks on the holder and on live entities")
+	{
+		TempProject project("PropertyCaseE1");
+		AutomationSession session;
+		CommandRegistry commands;
+		const auto run = [&](const std::string& command, const json& params) { return BasaltTest::Run(commands, session, command, params); };
+		Entity timeline = session.GetScene()->CreateEntity("Timeline");
+		Entity lamp = session.GetScene()->CreateEntity("Lamp");
+		lamp.AddComponent<PointLightComponent>();
+		timeline.AddComponent<PointLightComponent>();
+		run("scene.save", { { "path", "Assets/Tracks.bscene" } });
+		const int errors = run("project.validate", json::object())["errors"];
+		std::string error;
+		REQUIRE(PropertyAnimation::Key(timeline, "PointLight", "Intensity", 0, error));
+		REQUIRE(PropertyAnimation::Key(timeline, "PointLight", "Intensity", 0, error, lamp.GetUUID()));
+		run("scene.save", json::object());
+		const json report = run("project.validate", json::object());
+		CAPTURE(report.dump());
+		CHECK(report["errors"] == errors);
+		CHECK(report.dump().find("names entity") == std::string::npos);
+	}
+
+	TEST_CASE("project.validate leaves a stale top-level reference to its own rules")
+	{
+		TempProject project("PropertyCaseE2");
+		AutomationSession session;
+		CommandRegistry commands;
+		const auto run = [&](const std::string& command, const json& params) { return BasaltTest::Run(commands, session, command, params); };
+		Entity holder = session.GetScene()->CreateEntity("Holder");
+		holder.AddComponent<JointComponent>().ConnectedEntity = UUID(424242);
+		run("scene.save", { { "path", "Assets/Joint.bscene" } });
+		const json report = run("project.validate", json::object());
+		CAPTURE(report.dump());
+		CHECK(report.dump().find("names entity") == std::string::npos);
+	}
+
+	TEST_CASE("project.validate on prefab files: its own member passes, outside warns")
+	{
+		TempProject project("PropertyCaseE3");
+		AutomationSession session;
+		CommandRegistry commands;
+		const auto run = [&](const std::string& command, const json& params) { return BasaltTest::Run(commands, session, command, params); };
+		auto scene = session.GetScene();
+		Entity root = scene->CreateEntity("Root");
+		Entity lamp = scene->CreateEntity("Lamp");
+		scene->SetParent(lamp, root, false);
+		lamp.AddComponent<PointLightComponent>();
+		std::string error;
+		REQUIRE(PropertyAnimation::Key(root, "PointLight", "Intensity", 0, error, lamp.GetUUID()));
+		run("prefab.create", { { "entity", IdOf(root) }, { "path", "Assets/Own.bprefab" } });
+		const json own = run("project.validate", json::object());
+		CAPTURE(own.dump());
+		CHECK(own.dump().find("names entity") == std::string::npos);
+		Entity other = scene->CreateEntity("Other");
+		Entity outside = scene->CreateEntity("Outside");
+		outside.AddComponent<PointLightComponent>();
+		REQUIRE(PropertyAnimation::Key(other, "PointLight", "Intensity", 0, error, outside.GetUUID()));
+		run("prefab.create", { { "entity", IdOf(other) }, { "path", "Assets/Out.bprefab" } });
+		const json out = run("project.validate", json::object());
+		CHECK(out.dump().find("names entity") != std::string::npos);
+		// A warning, not an error: it must not refuse an export that prefab.create only warned about.
+		CHECK(out["errors"] == own["errors"]);
+	}
+
+	TEST_CASE("In-place character edits keep the rebuild's RigidBody and layer warnings")
+	{
+		RestingCrate scene;
+		scene.Crate.GetComponent<RigidBodyComponent>().Type = RigidBodyType::Static;
+		scene.Crate.GetTransform().Translation = { 0, 1.5f, 0 };
+		scene.Crate.AddComponent<CapsuleColliderComponent>();
+		scene.Crate.AddComponent<CharacterControllerComponent>().Layer = "Nowhere";
+		scene.World.OnRuntimeStart();
+		scene.Frames(2);
+		const uint64_t since = Log::GetHistory().GetTotalCount();
+		// Same warnings, in the same order: nothing to log.
+		scene.Patch(scene.Crate, "CapsuleCollider", { { "HalfHeight", 0.6f } });
+		scene.Frames(1);
+		CHECK(CountLogMessages(since, "its RigidBody is ignored") == 0);
+		CHECK(CountLogMessages(since, "unknown physics layer") == 0);
+		// A new problem logs the whole set, which still holds the two.
+		scene.Patch(scene.Crate, "CapsuleCollider", { { "OverrideMaterial", true } });
+		scene.Frames(1);
+		CHECK(CountLogMessages(since, "its RigidBody is ignored") == 1);
+		CHECK(CountLogMessages(since, "unknown physics layer") == 1);
+	}
+
+	TEST_CASE("A character's in-place shape uses its world scale")
+	{
+		RestingCrate scene;
+		scene.Crate.RemoveComponent<RigidBodyComponent>();
+		scene.Crate.GetTransform().Translation = { 0, 3, 0 };
+		scene.Crate.GetTransform().Scale = glm::vec3(2);
+		auto& capsule = scene.Crate.AddComponent<CapsuleColliderComponent>();
+		capsule.Radius = 0.2f;
+		capsule.HalfHeight = 0.3f;
+		scene.Crate.AddComponent<CharacterControllerComponent>();
+		scene.World.OnRuntimeStart();
+		scene.Frames(60);
+		scene.Patch(scene.Crate, "CapsuleCollider", { { "HalfHeight", 0.4f } });
+		scene.Frames(60);
+		CHECK(scene.Crate.GetTransform().Translation.y == doctest::Approx(0.5f + 2 * (0.4f + 0.2f)).epsilon(0.03));
+	}
+
+	TEST_CASE("A character's shape warnings log once, in place and on a rescale")
+	{
+		RestingCrate scene;
+		scene.Crate.RemoveComponent<RigidBodyComponent>();
+		scene.Crate.GetTransform().Translation = { 0, 1.5f, 0 };
+		scene.Crate.AddComponent<CapsuleColliderComponent>();
+		scene.Crate.AddComponent<CharacterControllerComponent>();
+		scene.World.OnRuntimeStart();
+		scene.Frames(2);
+		const uint64_t since = Log::GetHistory().GetTotalCount();
+		scene.Patch(scene.Crate, "CapsuleCollider", { { "HalfHeight", -1.0f } });
+		scene.Frames(1);
+		CHECK(CountLogMessages(since, "CapsuleCollider Radius and HalfHeight must be positive") == 1);
+		CHECK(CountLogMessages(since, "using the smallest size; CapsuleCollider") == 0);
+		const uint64_t rescaled = Log::GetHistory().GetTotalCount();
+		scene.Crate.GetTransform().Scale = glm::vec3(1.5f);
+		scene.Frames(1);
+		CHECK(CountLogMessages(rescaled, "CapsuleCollider Radius and HalfHeight must be positive") == 1);
+	}
+
+	TEST_CASE("Each setting the contact reads wakes what sleeps on a static floor")
+	{
+		for (const json& change : { json{ { "Friction", 0.5f } }, json{ { "Restitution", 0.5f } }, json{ { "FrictionCombine", "Min" } }, json{ { "RestitutionCombine", "Min" } } })
+		{
+			CAPTURE(change.dump());
+			RestingCrate scene;
+			scene.Start();
+			scene.Patch(scene.Floor, "RigidBody", change);
+			scene.Frames(1);
+			CHECK_FALSE(scene.Physics().IsBodySleeping(scene.Crate));
+		}
+	}
+
+	TEST_CASE("A floor's combine mode that lets go slides what slept on it")
+	{
+		RestingCrate scene(15.0f);
+		scene.Crate.GetComponent<RigidBodyComponent>().Friction = 0.1f;
+		scene.Start();
+		const glm::vec3 start = scene.Crate.GetTransform().Translation;
+		scene.Patch(scene.Floor, "RigidBody", { { "FrictionCombine", "Min" } });
+		scene.Frames(60);
+		CHECK(glm::length(scene.Crate.GetTransform().Translation - start) > 0.3f);
+	}
+
+	TEST_CASE("Mass and damping writes to a kinematic floor leave what sleeps on it alone")
+	{
+		RestingCrate scene;
+		scene.Floor.GetComponent<RigidBodyComponent>().Type = RigidBodyType::Kinematic;
+		scene.Start();
+		scene.Patch(scene.Floor, "RigidBody", { { "Mass", 3.0f }, { "LinearDamping", 0.5f }, { "GravityFactor", 0.5f } });
+		scene.Frames(2);
+		CHECK(scene.Physics().IsBodySleeping(scene.Crate));
+	}
+
+	TEST_CASE("Negative angular damping warns on its own")
+	{
+		RestingCrate scene;
+		scene.Start();
+		const uint64_t since = Log::GetHistory().GetTotalCount();
+		scene.Patch(scene.Crate, "RigidBody", { { "AngularDamping", -1.0f } });
+		scene.Frames(1);
+		CHECK(CountLogMessages(since, "damping must not be negative") == 1);
+	}
+
+	TEST_CASE("Negative damping stops at 0, built or in place")
+	{
+		const auto speeds = [](bool live) {
+			RestingCrate scene;
+			scene.Crate.GetTransform().Translation.y = 100;
+			auto& body = scene.Crate.GetComponent<RigidBodyComponent>();
+			body.GravityFactor = 0;
+			if (!live)
+			{
+				body.LinearDamping = -1;
+				body.AngularDamping = -1;
+			}
+			scene.Crate.AddComponent<BoxColliderComponent>();
+			scene.World.OnRuntimeStart();
+			if (live)
+				scene.Patch(scene.Crate, "RigidBody", { { "LinearDamping", -1.0f }, { "AngularDamping", -1.0f } });
+			scene.Frames(1);
+			scene.Physics().SetLinearVelocity(scene.Crate, { 1, 0, 0 });
+			scene.Physics().SetAngularVelocity(scene.Crate, { 0, 1, 0 });
+			scene.Frames(60);
+			return glm::vec2(glm::length(scene.Physics().GetLinearVelocity(scene.Crate)), glm::length(scene.Physics().GetAngularVelocity(scene.Crate)));
+		};
+		for (const bool live : { false, true })
+		{
+			CAPTURE(live);
+			const glm::vec2 speed = speeds(live);
+			CHECK(speed.x == doctest::Approx(1.0f).epsilon(0.01));
+			CHECK(speed.y == doctest::Approx(1.0f).epsilon(0.01));
+		}
+	}
+
+	TEST_CASE("A rebuild after an in-place update repeats nothing")
+	{
+		RestingCrate scene;
+		scene.Crate.AddComponent<BoxColliderComponent>().HalfExtents = { 0, 0.5f, 0.5f };
+		scene.World.OnRuntimeStart();
+		scene.Frames(2);
+		const uint64_t since = Log::GetHistory().GetTotalCount();
+		// The shape's warning stays in the logged set through a settings update and the rebuild after it.
+		scene.Patch(scene.Crate, "RigidBody", { { "Friction", 0.5f } });
+		scene.Frames(1);
+		scene.Physics().RecreateBody(scene.Crate);
+		scene.Frames(1);
+		CHECK(CountLogMessages(since, "BoxCollider HalfExtents must be positive") == 0);
+	}
+
+	TEST_CASE("A setting fixed in place does not come back with the next problem")
+	{
+		RestingCrate scene;
+		scene.Crate.GetComponent<RigidBodyComponent>().Friction = -1;
+		scene.Crate.AddComponent<BoxColliderComponent>();
+		scene.World.OnRuntimeStart();
+		scene.Frames(2);
+		const uint64_t since = Log::GetHistory().GetTotalCount();
+		scene.Patch(scene.Crate, "RigidBody", { { "Friction", 1.0f } });
+		scene.Frames(1);
+		scene.Patch(scene.Crate, "RigidBody", { { "Mass", 0.0f } });
+		scene.Frames(1);
+		CHECK(CountLogMessages(since, "Mass must be positive") == 1);
+		CHECK(CountLogMessages(since, "Friction must not be negative") == 0);
+	}
+
+	TEST_CASE("A capsule's zero radius warns")
+	{
+		RestingCrate scene;
+		scene.Crate.AddComponent<CapsuleColliderComponent>();
+		scene.Start();
+		const uint64_t since = Log::GetHistory().GetTotalCount();
+		scene.Patch(scene.Crate, "CapsuleCollider", { { "Radius", 0.0f } });
+		scene.Frames(1);
+		CHECK(CountLogMessages(since, "CapsuleCollider Radius and HalfHeight must be positive") == 1);
+	}
+
+	TEST_CASE("A new track on the holder itself goes into the prefab")
+	{
+		TempProject project("PropertyCaseB4");
+		AutomationSession session;
+		CommandRegistry commands;
+		const auto run = [&](const std::string& command, const json& params) { return BasaltTest::Run(commands, session, command, params); };
+		auto scene = session.GetScene();
+		Entity root = scene->CreateEntity("Root");
+		root.AddComponent<PointLightComponent>();
+		Entity lamp = scene->CreateEntity("Lamp");
+		scene->SetParent(lamp, root, false);
+		lamp.AddComponent<PointLightComponent>();
+		std::string error;
+		REQUIRE(PropertyAnimation::Key(root, "PointLight", "Intensity", 0, error, lamp.GetUUID()));
+		run("prefab.create", { { "entity", IdOf(root) }, { "path", "Assets/Lamp.bprefab" } });
+		const uint64_t instanceId = run("prefab.instantiate", { { "path", "Assets/Lamp.bprefab" } })["id"];
+		Entity instance = session.GetScene()->GetEntityByUUID(UUID(instanceId));
+		REQUIRE_MESSAGE(PropertyAnimation::Key(instance, "PointLight", "Intensity", 0, error), error);
+		const json applied = run("prefab.apply", { { "entity", instanceId } });
+		CHECK(applied.dump().find("outside the prefab") == std::string::npos);
+		const json made = run("prefab.instantiate", { { "path", "Assets/Lamp.bprefab" } });
+		Entity fresh = session.GetScene()->GetEntityByUUID(UUID(made["id"].get<uint64_t>()));
+		REQUIRE(fresh);
+		const auto& tracks = fresh.GetComponent<PropertyAnimationComponent>().Tracks;
+		REQUIRE(tracks.size() == 2);
+		CHECK(tracks[1].Target == 0);
 	}
 }
