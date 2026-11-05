@@ -1,5 +1,6 @@
 #include "Basalt/Math/Math.h"
 
+#include <glm/gtc/constants.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
 // Jolt.h must precede every other Jolt header.
@@ -145,7 +146,36 @@ namespace Basalt::Math {
 
 	glm::vec3 EulerFromQuat(const glm::quat& rotation)
 	{
-		return glm::eulerAngles(rotation);
+		// Doubles, so the float angles do not depend on how each platform's float atan2 rounds, and the rotation matrix
+		// entries near gimbal lock keep the digits that decide the result.
+		const double length = std::sqrt(static_cast<double>(rotation.w) * rotation.w + static_cast<double>(rotation.x) * rotation.x + static_cast<double>(rotation.y) * rotation.y + static_cast<double>(rotation.z) * rotation.z);
+		if (length == 0)
+			return glm::vec3(0.0f);
+		const double w = rotation.w / length, x = rotation.x / length, y = rotation.y / length, z = rotation.z / length;
+		const double m00 = 1 - 2 * (y * y + z * z), m01 = 2 * (x * y - w * z), m02 = 2 * (x * z + w * y);
+		const double m10 = 2 * (x * y + w * z), m11 = 1 - 2 * (x * x + z * z), m12 = 2 * (y * z - w * x);
+		const double sinYaw = 2 * (w * y - x * z);
+		// Taken from the first column rather than as asin(sinYaw), which loses half its digits near +-90 degrees.
+		const double cosYaw = std::hypot(m00, m10);
+		// Float rounding leaves about 2e-7 here at an exact lock, so this finds every one and nothing more than 2e-4
+		// degrees from it. Pitch and roll turn about one axis there: roll is 0, by the same convention glm used.
+		constexpr double LockCosine = 1e-6;
+		const bool locked = cosYaw < LockCosine;
+		const double roll = locked ? 0.0 : std::atan2(m10, m00);
+		// Pitch and roll each come from entries that shrink to rounding noise near lock, so read independently (as
+		// glm::eulerAngles does) they can be noise that does not add up: 180 degrees off at worst. Pitch here is what is
+		// left once this roll is undone, so whatever roll turned out to be, the two together are the rotation.
+		const double sinRoll = std::sin(roll), cosRoll = std::cos(roll);
+		double pitch = std::atan2(sinRoll * m02 - cosRoll * m12, cosRoll * m11 - sinRoll * m01);
+		// Adding 0 turns -0 into 0, or every unrotated entity would save a "-0.0".
+		if (!locked)
+			return glm::vec3(static_cast<float>(pitch + 0.0), static_cast<float>(std::atan2(sinYaw, cosYaw) + 0.0), static_cast<float>(roll + 0.0));
+		// A saved rotation must read back as the same text. A float quaternion holds pitch to about 3e-5 degrees, so a grid
+		// four times coarser always rounds back to the same step (a test runs this at many pitches).
+		constexpr double DegreesPerRadian = 180.0 / glm::pi<double>();
+		constexpr double PitchStepsPerDegree = 1e4;
+		pitch = std::round(pitch * DegreesPerRadian * PitchStepsPerDegree) / PitchStepsPerDegree / DegreesPerRadian;
+		return glm::vec3(static_cast<float>(pitch + 0.0), static_cast<float>(std::copysign(glm::half_pi<double>(), sinYaw)), 0.0f);
 	}
 
 	float Atan2(float y, float x)
