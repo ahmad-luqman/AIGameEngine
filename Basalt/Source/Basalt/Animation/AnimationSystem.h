@@ -40,6 +40,18 @@ namespace Basalt {
 		std::string Name;
 		// The clip whose playback crossed the marker (never empty, unlike AnimationEvent::Clip).
 		std::string Clip;
+		// The layer that played it; empty for the base playback.
+		std::string Layer;
+	};
+
+	// Where a playback's crossed markers go.
+	struct AnimationEventSink
+	{
+		UUID Entity = 0;
+		// What the Animator may still deliver this frame; null fires nothing.
+		size_t* Budget = nullptr;
+		// Empty for the base playback.
+		std::string_view Layer;
 	};
 
 	// Per-entity playback and poses for a playing/simulating scene. Asset data stays shared and immutable.
@@ -67,7 +79,7 @@ namespace Basalt {
 		// active graph declaring it). Each graph that declares the name and cannot take the value logs that once.
 		bool SetParameter(Entity entity, const std::string& name, float value);
 		bool SetParameter(Entity entity, const std::string& name, bool value);
-		// Latches a declared trigger, as SetParameter, on every graph that declares it; each graph's successful transition
+		// Latches a declared trigger, as SetParameter, on every graph that declares it (OwnParameters layers aside); each graph's successful transition
 		// consumes its own.
 		bool SetTrigger(Entity entity, const std::string& name);
 		// Current graph state; empty after Stop, direct playback, or a graph load failure.
@@ -118,6 +130,11 @@ namespace Basalt {
 		// while the layer shows no graph (one that cannot load, has no playable initial state, an unloadable mask or an
 		// Additive layer whose reference clip is missing). Nullopt for an unknown layer (logged as ReportCallProblem describes).
 		std::optional<std::string> GetLayerState(Entity entity, const std::string& layer);
+		// SetParameter and SetTrigger for one StateMachine layer's graph alone, OwnParameters or not. False for an unknown
+		// layer, a layer that runs no graph or a parameter the graph does not declare, logged as ReportCallProblem describes.
+		bool SetLayerParameter(Entity entity, const std::string& layer, const std::string& name, float value);
+		bool SetLayerParameter(Entity entity, const std::string& layer, const std::string& name, bool value);
+		bool SetLayerTrigger(Entity entity, const std::string& layer, const std::string& name);
 		// Inverse kinematics chains (InverseKinematics.Chains, found by name). A target is a world position (with an
 		// optional world rotation for a TwoBone or Fabrik chain's end joint) or an entity followed every frame; it replaces
 		// FollowTarget and ground placement until ClearIKTarget. False for a missing component or chain, an invalid value, or
@@ -302,8 +319,8 @@ namespace Basalt {
 		struct Playback
 		{
 			entt::entity Handle = entt::null;
-			// A StateMachine layer's graph (LayerState::Graph): no root motion, events, layers or overlays; Evaluate only
-			// samples Local, which the owning playback's Finish blends in.
+			// A StateMachine layer's graph (LayerState::Graph): no root motion, layers or overlays; Evaluate only samples Local,
+			// which the owning playback's Finish blends in.
 			bool IsLayer = false;
 			Ref<MeshSource> Source;
 			// Source's clips and the Animator's retargeted library clips; every clip index refers to it.
@@ -574,7 +591,9 @@ namespace Basalt {
 		// Matches layer states to the configuration (by name), resolves them and advances their clocks and fades.
 		// `transitions`: StateMachine layers also take their transitions (Update, unless the Animator is paused; never a
 		// script call's sync).
-		void AdvanceLayers(Playback& playback, const AnimatorComponent& component, double seconds, bool transitions);
+		// `events` is what the layers with AnimationLayer::Events fire into; the calls that only bring them up to date pass
+		// none.
+		void AdvanceLayers(Playback& playback, const AnimatorComponent& component, double seconds, bool transitions, const AnimationEventSink& events = {});
 		// Re-resolves the layer's clip or graph, mask and reference pose when what they depend on changed; returns them.
 		const LayerResolution& ResolveLayer(Playback& playback, const AnimationLayer& config, LayerState& state, const AnimatorComponent& component);
 		// A layer's graph (empty `stateMachine`: none) and mask assets, from the update's cache while Update runs.
@@ -584,7 +603,7 @@ namespace Basalt {
 		// of the same graph. The layer's graph playback; null when the layer shows no graph.
 		Playback* SyncLayerGraph(const Playback& playback, const AnimationLayer& config, LayerState& state, const AnimatorComponent& component, bool restart);
 		// Takes a layer graph's transitions (`transitions`) and advances its clocks and fade by `seconds` at `speed`.
-		void AdvanceLayerGraph(Playback& graph, const AnimatorComponent& component, double seconds, double speed, bool transitions);
+		void AdvanceLayerGraph(Playback& graph, const AnimatorComponent& component, double seconds, double speed, bool transitions, const AnimationEventSink& events);
 		// The layer named `layer` after syncing, or null (reported for `operation`).
 		LayerState* FindLayer(Entity entity, Playback& playback, const std::string& layer, const char* operation);
 		// Moves BoneAttachment entities to their joints once the rigs are placed (part of LateUpdate).
@@ -672,12 +691,18 @@ namespace Basalt {
 		// Starts `clip` (or a blend space whose dominant clip it is) from 0 after the caller set up the transition.
 		static void Start(Playback& playback, int32_t clip);
 		static void TakeDirectControl(Playback& playback, const AnimatorComponent& component);
-		void AdvanceSpace(Playback& playback, SpaceState& state, const AnimatorComponent& component, double advance, UUID id, size_t& budget);
+		void AdvanceSpace(Playback& playback, SpaceState& state, const AnimatorComponent& component, double advance, const AnimationEventSink& events);
 		// Queues the markers of `clip` that a clock moving from `from` by `advance` crosses, within `budget`.
-		void CollectEvents(Playback& playback, const AnimatorComponent& component, int32_t clip, double from, double advance, UUID id, size_t& budget, bool looping);
+		void CollectEvents(Playback& playback, const AnimatorComponent& component, int32_t clip, double from, double advance, const AnimationEventSink& events, bool looping);
 		bool EnterState(Playback& playback, size_t stateIndex, const AnimatorComponent& component, float fade);
 		void UpdateGraph(Playback& playback, const AnimatorComponent& component);
 		bool SetParameterValue(Entity entity, const std::string& name, float value, AnimationParameterType type);
+		bool SetLayerParameterValue(Entity entity, const std::string& layer, const std::string& name, float value, AnimationParameterType type);
+		// Takes a value into the parameter at `index` of a running graph, or says why not.
+		static std::string WriteParameter(Playback& graph, size_t index, float value, AnimationParameterType type);
+		// Logs a problem with `name` once per declared parameter and type (index) or unknown name (nullopt); an empty
+		// `problem` records success.
+		static void ReportParameter(Playback& graph, std::optional<size_t> index, const std::string& name, AnimationParameterType type, const std::string& problem);
 		static double CycleDuration(const Playback& playback);
 		static bool ResolveRootNode(Playback& playback, const AnimatorComponent& component);
 		static void ApplyStateAxes(const Playback& playback, const AnimationState& state, SpaceState& space);

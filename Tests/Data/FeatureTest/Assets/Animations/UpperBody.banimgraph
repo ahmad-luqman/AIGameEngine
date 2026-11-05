@@ -1,7 +1,8 @@
 {
 	"InitialState": "Rest",
 	"Parameters": [
-		{ "Name": "Waving", "Type": "Bool" }
+		{ "Name": "Waving", "Type": "Bool" },
+		{ "Name": "Flourish", "Type": "Trigger" }
 	],
 	"States": [
 		{ "Name": "Rest", "Clip": "Breathe" },

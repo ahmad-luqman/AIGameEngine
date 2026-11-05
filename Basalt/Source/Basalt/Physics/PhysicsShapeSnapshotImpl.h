@@ -12,6 +12,7 @@
 #include <Jolt/Physics/Collision/TransformedShape.h>
 
 #include <cmath>
+#include <optional>
 #include <vector>
 
 namespace Basalt {
@@ -39,6 +40,11 @@ namespace Basalt {
 		UUID Entity = 0;
 		JPH::TransformedShape Shape;
 	};
+
+	// Normalized cast direction, or nullopt when the direction or distance cannot describe a cast.
+	std::optional<glm::vec3> CastDirection(const glm::vec3& direction, float maxDistance);
+	// Keeps each entity's closest hit, ordered by distance and then UUID so results are deterministic.
+	std::vector<RaycastHit> SortHits(std::vector<RaycastHit> hits);
 
 	// Whether CollectShapes can gather from a region: finite, ordered bounds and a finite, nonnegative radius.
 	inline bool IsValidShapeRegion(const glm::vec3& min, const glm::vec3& max, float radius)

@@ -110,6 +110,16 @@ namespace Basalt::EditorCommandSchemas {
 	{
 		return Schema::Object({ { "path", Schema::String("Assets/...banimgraph", true) }, { "close", Schema::Boolean("discard the draft") } });
 	}
+	nlohmann::json AnimationMask()
+	{
+		return Schema::Object({ { "path", Schema::String("Project-relative .banimmask to open, optional", true) }, { "model", Schema::String("Project-relative model to show its joints on; empty clears it") }, { "close", Schema::Boolean("Close the window, discarding unsaved edits") } });
+	}
+
+	nlohmann::json JointMap()
+	{
+		return Schema::Object({ { "path", Schema::String("Project-relative .bjointmap to open, optional", true) }, { "source", Schema::String("Project-relative library model; empty clears it") }, { "target", Schema::String("Project-relative Animator model; empty clears it") }, { "listMatches", Schema::Boolean("Add the automatic matches of the two models to the unsaved draft, as the window's button does") }, { "close", Schema::Boolean("Close the window, discarding unsaved edits") } });
+	}
+
 	nlohmann::json MaterialEditor()
 	{
 		return Schema::Object({ { "path", Schema::String("Project-relative .bmaterial to open, optional", true) }, { "close", Schema::Boolean("Close the window, discarding unsaved edits") } });

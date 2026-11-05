@@ -56,7 +56,10 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   horizontal input), or updates the world transform. Attachments and events run after physics and
   LateUpdate, before particles.
 - **Animation authoring.** The editor's Animation Graph draft saves through `asset.write`; it preserves graph state/parameter
-  references on rename and prunes dependent edges on deletion. `PropertyAnimationComponent` stores same-entity
+  references on rename and prunes dependent edges on deletion. `.banimmask` and `.bjointmap` files share one headless
+  `JointAssetDraft<Asset>` (typed, validated by the parser that loads the file) and one `JointAssetPanel<Asset>` (windows that
+  show only with a file open, saved through `asset.write`); a preview model belongs to the window, never the file, and defaults
+  to an Animator using the asset. `PropertyAnimationComponent` stores same-entity
   registry-field tracks with normalized keys: numbers (registry-tagged quaternion rotations use slerp) and always-stepped
   integers, booleans, strings and enums (`Text` keys), top-level or through list elements picked by index or unique name
   (`PropertyAnimation::ResolveField`, shared by validation, sampling, capture and the editor's `ListFields`; each list is
@@ -68,13 +71,20 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   stripping use), then `Animator.Layers` in order (`Pose`; each layer's clip or graph, mask and reference pose are resolved
   again only when its clip, graph, blend, reference, mask or loaded `.banimgraph`/`.banimmask` (by identity, resolved once
   per update) changes, and the root-motion exclusion when the root-motion joint does), then the IK and spring bone
-  overlays, composed into `Globals`. A `StateMachine` layer runs a nested `Playback` (`IsLayer`: no root motion, events or
+  overlays, composed into `Globals`. A `StateMachine` layer runs a nested `Playback` (`IsLayer`: no root motion or
   overlays) in `LayerState::Graph`: transitions and clocks advance in `AdvanceLayers` on the main thread, and `Finish`
   only samples it (`SampleBase`), so pose jobs stay disjoint; parameters and triggers reach every graph declaring the
-  name. `InverseKinematicsComponent` chains solve in
+  name, except `OwnParameters` layers, which take `SetLayerParameter`/`SetLayerTrigger` (the same `WriteParameter`). A layer
+  with `Events` fires the Animator's markers through the base's `CollectEvents` and `AdvanceSpace` while its weight is above 0,
+  into the Animator's per-frame budget (`AnimationEventSink`; a null `Budget` fires nothing, which is what the zero-second
+  catch-up calls pass); the record names the layer. `InverseKinematicsComponent` chains solve in
   `AnimationSystem::LateUpdate` (after physics and OnLateUpdate, before attachments) from `Pose`, never from the last
   solution; the solved joints' local transforms are kept as an overlay so a pose evaluated again that frame (Play in a
-  callback) keeps the IK. Targets apply as script target, then the component's `Target` (FollowTarget chains), then
+  callback) keeps the IK. Fabrik limits (`ResolveFabrikLimits`, in radians, empty when nothing limits, so a free chain takes the
+  plain solver) are swing-twist about each joint's rest bone in its own space, measured from its rest rotation, not the
+  animation (the solver's shortest-arc turns add no twist, so only a rest frame gives a twist range meaning). Each pass places
+  bones backward against the next joint's cone and forward in rotations, limiting each joint; coordinate-descent sweeps follow,
+  as clamped passes stall against tight limits, and the closest pose wins. Targets apply as script target, then the component's `Target` (FollowTarget chains), then
   ground; FootLock chains hold a planted joint's position across the up axis (its height follows the animation and the
   ground) from when its target is slower than `LockSpeed` until a lift, a carry or leaving the ground, and release at once
   when another target applies, FootLock turns off, or the entity's IK does not run. Foot rays use
@@ -92,7 +102,8 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   shape cast, against bodies; sphere tracing, `SweepShape`, against colliders). The edit preview swings springs too, with
   `CollidePhysics` against the scene's static bodies:
   `StaticPhysicsShapes` builds them from the components (`BuildColliderShape`) with no world, which would write `BodyRecord`s
-  into the edit registry, and yields the same snapshots (`PhysicsShapeSnapshot::FromCandidates`).
+  into the edit registry, and yields the same snapshots (`PhysicsShapeSnapshot::FromCandidates`). Ground chains stand on the same
+  bodies in the preview through its `RaycastAll` (the one refresh per update lives in `LateUpdate`).
 - **Ragdolls.** `RagdollComponent` holds authored settings; `PhysicsWorld` owns the Jolt ragdoll, its selected skin
   joints and frozen recovery pose. Capsules and swing-twist frames derive from the rest skeleton, and activation starts
   on the current pose. Active ragdolls (other than `KinematicRoot` rigs, below) suspend the entity's body/controller and inherit the body's linear/angular motion (a controller's linear motion); live rebuilds preserve
@@ -136,7 +147,8 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   shared with the inspector warnings and `animator.retarget`; `Build` bakes) that the `AnimationSystem` caches by model
   and loaded libraries and joint maps (`.bjointmap`, `AnimationJointMap`, loaded like masks; inline `Joints` override its
   pairs), resolving both once per update; reference clips (`ReferenceClip`, `ModelReferenceClip`) replace a skeleton's rest
-  orientations, never its positions, and a missing reference or unloadable map adds no clips; every playback clip index refers to that set, never
+  orientations, never its positions, a pair's `Offset` turns the source's in model space on top of them (`ApplyRestOffsets`,
+  children along), and a missing reference or unloadable map adds no clips; every playback clip index refers to that set, never
   to `MeshSource::Animations` directly. List elements declare asset fields as `List[].Field` (`ForEachAssetValue`), which
   persistence, moves, validation and thumbnails share.
 - **Game UI geometry.** `UILayout` is shared by drawing, hit testing, `ui.layout` and viewport handles.

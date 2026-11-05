@@ -1,0 +1,1 @@
+{ "Joints": [ { "Source": "mixamorig:LeftArm", "Target": "upperarm_l", "Offset": [ 0, -12.5, 40 ] } ] }

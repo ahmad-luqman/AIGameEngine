@@ -21,7 +21,8 @@ namespace Basalt {
 		std::vector<AnimationRetargetJoint> Joints;
 
 		// Strict, bounded parser of {"Joints": [{"Source": "mixamorig:Hips", "Target": "pelvis"}, ...]}: at most
-		// AnimationClipLibrary::MaxJoints entries with nonempty names, each source and each target listed once.
+		// AnimationClipLibrary::MaxJoints entries with nonempty names, each source and each target listed once. An entry's
+		// Offset ([x, y, z], see AnimationRetargetJoint::Offset) is optional; ToJson leaves zero ones out.
 		static std::optional<AnimationJointMap> FromJson(const nlohmann::json& data, std::string& outError);
 		// ParseJson, then FromJson.
 		static std::optional<AnimationJointMap> FromText(std::string_view text, std::string& outError);

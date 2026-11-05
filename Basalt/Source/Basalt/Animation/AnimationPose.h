@@ -26,6 +26,8 @@ namespace Basalt {
 	// Weight 0 selects from; weight 1 selects target. Both poses must cover the same nodes.
 	void BlendAnimationPose(AnimationLocalPose& target, const AnimationLocalPose& from, float weight);
 	bool ComposeAnimationPose(const MeshSource& source, const AnimationLocalPose& pose, std::vector<glm::mat4>& globals);
+	// Recomposes one node from its pose and its parent's global: globals must be sized and hold the parent's.
+	void ComposeAnimationNode(const MeshSource& source, const AnimationLocalPose& pose, uint32_t node, std::vector<glm::mat4>& globals);
 	// Pose morph weight slots (MeshNode::MorphWeightOffset + target) of every node whose mesh has a target named `target`.
 	std::vector<uint32_t> FindMorphWeights(const MeshSource& source, const std::string& target);
 	// The first node named `name`, or -1.

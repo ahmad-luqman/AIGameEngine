@@ -67,7 +67,7 @@ namespace {
 			if (Callback)
 				Callback(type);
 		}
-		void OnAnimationEvent(Scene&, Entity, const std::string&, const std::string&) override {}
+		void OnAnimationEvent(Scene&, Entity, const std::string&, const std::string&, const std::string&) override {}
 		void OnScriptError(Scene&, const std::string&) override {}
 	};
 	Entity Zone(Scene& scene)

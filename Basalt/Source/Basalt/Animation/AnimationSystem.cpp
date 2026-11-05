@@ -815,8 +815,11 @@ namespace Basalt {
 				UpdateGraph(*playback, component);
 			// Layers play on while the base holds its pose.
 			const bool layered = !component.Layers.empty() || !playback->Layers.empty();
+			const UUID id = entity.GetUUID();
+			size_t budget = MaxEventsPerFrame;
+			const AnimationEventSink events{ .Entity = id, .Budget = &budget };
 			if (layered)
-				AdvanceLayers(*playback, component, playback->Paused ? 0.0 : static_cast<double>(seconds), !playback->Paused);
+				AdvanceLayers(*playback, component, playback->Paused ? 0.0 : static_cast<double>(seconds), !playback->Paused, events);
 			// Script morph weights fade like IK weights, also while the Animator is paused or stopped.
 			bool morphFading = false;
 			for (MorphOverride& entry : playback->MorphOverrides)
@@ -863,16 +866,14 @@ namespace Basalt {
 			const double shown = playback->FadeDuration > 0 ? std::min(static_cast<double>(seconds), playback->FadeDuration - playback->FadeTime) : seconds;
 			ResetRootIntervals(*playback);
 			const auto motion = FrameRootMotion(*playback, advance, shown, seconds, plainSpeed);
-			const UUID id = entity.GetUUID();
-			size_t budget = MaxEventsPerFrame;
 			if (playback->Space)
-				AdvanceSpace(*playback, *playback->Space, component, advance, id, budget);
+				AdvanceSpace(*playback, *playback->Space, component, advance, events);
 			else
 			{
 				// A two-clip blend's second clip fires only while it shows; a crossfade's target always does, from its
 				// first frame.
 				if (playback->BlendWeight > 0 || playback->FadeDuration > 0)
-					CollectEvents(*playback, component, playback->Clip, playback->Time, advance, id, budget, playback->Looping);
+					CollectEvents(*playback, component, playback->Clip, playback->Time, advance, events, playback->Looping);
 				playback->Time = WrapClock(playback->Time + advance, (*playback->Clips)[playback->Clip].Duration, playback->Looping);
 			}
 			if (playback->Outgoing.Clip >= 0)
@@ -883,7 +884,7 @@ namespace Basalt {
 				const double outgoingAdvance = static_cast<double>(seconds) * outgoingRate;
 				const double visibleAdvance = shown * outgoingRate;
 				if (playback->BlendWeight < 1)
-					CollectEvents(*playback, component, playback->Outgoing.Clip, playback->Outgoing.Time, visibleAdvance, id, budget, playback->Outgoing.Looping);
+					CollectEvents(*playback, component, playback->Outgoing.Clip, playback->Outgoing.Time, visibleAdvance, events, playback->Outgoing.Looping);
 				playback->Outgoing.Time = WrapClock(playback->Outgoing.Time + outgoingAdvance, (*playback->Clips)[playback->Outgoing.Clip].Duration, playback->Outgoing.Looping);
 			}
 			if (playback->Outgoing.Space)
@@ -965,6 +966,8 @@ namespace Basalt {
 		const float seconds = timestep.GetSeconds();
 		// Update already reported an invalid step; attachments still follow the rigs.
 		const bool validStep = std::isfinite(seconds) && seconds >= 0;
+		// IK and spring bones share one reading of a preview's static bodies per update.
+		m_StaticShapesFresh = false;
 		if (validStep)
 			SolveIK(seconds);
 		// Ragdolls and attachments wait for Play in a preview (attachments would move edit entities).
@@ -978,29 +981,30 @@ namespace Basalt {
 			UpdateAttachments();
 	}
 
-	void AnimationSystem::AdvanceSpace(Playback& playback, SpaceState& state, const AnimatorComponent& component, double advance, UUID id, size_t& budget)
+	void AnimationSystem::AdvanceSpace(Playback& playback, SpaceState& state, const AnimatorComponent& component, double advance, const AnimationEventSink& events)
 	{
 		if (state.Duration <= 0)
 		{
 			// Static poses have no cycle: a non-looping space of them is done at once.
 			if (!playback.Looping && advance > 0)
 				state.Phase = 1;
+			playback.Time = 0;
 			return;
 		}
 		// The heaviest sample alone fires events: the clips are in step, so each would fire its own copy.
 		const double phaseAdvance = advance / state.Duration;
 		const double dominantDuration = (*playback.Clips)[playback.Clip].Duration;
-		CollectEvents(playback, component, playback.Clip, state.Phase * dominantDuration, phaseAdvance * dominantDuration, id, budget, playback.Looping);
+		CollectEvents(playback, component, playback.Clip, state.Phase * dominantDuration, phaseAdvance * dominantDuration, events, playback.Looping);
 		state.Phase = WrapClock(state.Phase + phaseAdvance, 1.0, playback.Looping);
 		playback.Time = state.Phase * state.Duration;
 	}
 
-	void AnimationSystem::CollectEvents(Playback& playback, const AnimatorComponent& component, int32_t clip, double from, double advance, UUID id, size_t& budget, bool looping)
+	void AnimationSystem::CollectEvents(Playback& playback, const AnimatorComponent& component, int32_t clip, double from, double advance, const AnimationEventSink& events, bool looping)
 	{
-		BS_CORE_ASSERT(!playback.IsLayer, "layer graphs fire no events");
 		// A preview runs no scripts to receive events.
-		if (advance <= 0 || component.Events.empty() || m_Preview)
+		if (!events.Budget || advance <= 0 || component.Events.empty() || m_Preview)
 			return;
+		size_t& budget = *events.Budget;
 		const AnimationClip& animation = (*playback.Clips)[clip];
 		const double duration = animation.Duration;
 		m_Markers.clear();
@@ -1025,7 +1029,7 @@ namespace Basalt {
 					return false;
 				}
 				budget--;
-				m_PendingEvents.push_back({ id, marker->Name, animation.Name });
+				m_PendingEvents.push_back({ events.Entity, marker->Name, animation.Name, std::string(events.Layer) });
 			}
 			return true;
 		};
@@ -1476,49 +1480,34 @@ namespace Basalt {
 		}
 	}
 
+	namespace {
+		std::optional<size_t> FindParameter(const AnimationGraph& graph, const std::string& name)
+		{
+			const auto it = std::ranges::find(graph.Parameters, name, &AnimationParameter::Name);
+			if (it == graph.Parameters.end())
+				return std::nullopt;
+			return static_cast<size_t>(it - graph.Parameters.begin());
+		}
+	}
+
 	bool AnimationSystem::SetParameterValue(Entity entity, const std::string& name, float value, AnimationParameterType type)
 	{
 		auto* playback = EnsurePlayable(entity);
 		if (!playback)
 			return false;
-		const size_t typeIndex = static_cast<size_t>(type);
 		const auto& component = entity.GetComponent<AnimatorComponent>();
 		// StateMachine layers share the Animator's parameter names: the value reaches every graph that declares it, and each
-		// graph reports its own problem with it (in its own slot), whether or not another graph took the value.
+		// graph reports its own problem with it (in its own slot), whether or not another graph took the value. Layers with
+		// their own parameters stay out of it.
 		AdvanceLayers(*playback, component, 0, false);
-		const auto reportTo = [&](Playback& graph, std::optional<size_t> index, const std::string& problem) {
-			auto& reported = index ? graph.ParameterProblems[*index][typeIndex] : graph.UnknownParameterProblems[typeIndex];
-			// The unknown-name slot holds the last unknown name reported: only this name's success clears it, so a typo
-			// called between good calls stays logged once.
-			if (problem.empty())
-			{
-				if (index || reported.starts_with(name + ": "))
-					reported.clear();
-				return;
-			}
-			const std::string diagnostic = index ? problem : name + ": " + problem;
-			if (reported != diagnostic)
-				BS_CORE_ERROR("Animator '{}': parameter '{}': {}", graph.EntityName, name, problem);
-			reported = diagnostic;
-		};
-		const auto find = [&](const AnimationGraph& graph) -> std::optional<size_t> {
-			const auto it = std::ranges::find(graph.Parameters, name, &AnimationParameter::Name);
-			if (it == graph.Parameters.end())
-				return std::nullopt;
-			return static_cast<size_t>(it - graph.Parameters.begin());
-		};
+		const auto find = [&](const AnimationGraph& graph) { return FindParameter(graph, name); };
 		const bool finite = std::isfinite(value);
 		bool accepted = false;
 		// Takes the value into a graph that declares the name at `index`; the problem otherwise.
-		const auto take = [&](Playback& graph, size_t index) -> std::string {
-			const AnimationParameterType declaredType = graph.Graph->Parameters[index].Type;
-			if (!finite)
-				return "value must be finite";
-			if (declaredType != type)
-				return fmt::format("type mismatch: expected {}, got {}", ParameterTypeName(declaredType), ParameterTypeName(type));
-			graph.Parameters[index] = value;
-			accepted = true;
-			return {};
+		const auto take = [&](Playback& graph, size_t index) {
+			std::string problem = WriteParameter(graph, index, value, type);
+			accepted = accepted || problem.empty();
+			return problem;
 		};
 		bool declaredInLayer = false;
 		std::vector<std::string> declared;
@@ -1532,9 +1521,17 @@ namespace Basalt {
 		// A layer whose configured graph declares the name but is not running (a script clip replaces it, or it shows
 		// nothing), for a precise message when nothing takes the value.
 		std::string idleLayer;
+		// A running layer that keeps the name to itself, for the same reason.
+		std::string ownLayer;
 		for (size_t i = 0; i < playback->Layers.size() && i < component.Layers.size(); i++)
 		{
 			LayerState& layer = playback->Layers[i];
+			if (component.Layers[i].OwnParameters)
+			{
+				if (layer.Graph && ownLayer.empty() && find(*layer.Graph->Graph))
+					ownLayer = layer.Name;
+				continue;
+			}
 			if (!layer.Graph)
 			{
 				if (const std::string& configured = component.Layers[i].StateMachine; !configured.empty() && idleLayer.empty())
@@ -1547,7 +1544,7 @@ namespace Basalt {
 			if (const std::optional<size_t> index = find(*graph.Graph))
 			{
 				declaredInLayer = true;
-				reportTo(graph, index, take(graph, *index));
+				ReportParameter(graph, index, name, type, take(graph, *index));
 			}
 		}
 		// The base graph reports a problem with a name it declares even when a layer took the value; a name only layers
@@ -1569,6 +1566,8 @@ namespace Basalt {
 				problem = "value must be finite";
 			else if (!playback->ConfiguredGraph.empty() && !playback->Graph)
 				problem = "state machine is not loaded: " + AssetManager::GetError(playback->ConfiguredGraph);
+			else if (!ownLayer.empty())
+				problem = fmt::format("declared by layer '{}', which keeps its own parameters (see SetLayerParameter)", ownLayer);
 			else if (!idleLayer.empty())
 				problem = fmt::format("declared by layer '{}', whose state machine is not running (a script clip replaces it, or it shows nothing; see its warning)", idleLayer);
 			else if (!playback->Graph && std::ranges::none_of(playback->Layers, [](const LayerState& layer) { return layer.Graph.has_value(); }))
@@ -1580,8 +1579,79 @@ namespace Basalt {
 					problem += " " + parameter;
 			}
 		}
-		reportTo(*playback, index, problem);
+		ReportParameter(*playback, index, name, type, problem);
 		return accepted;
+	}
+
+	std::string AnimationSystem::WriteParameter(Playback& graph, size_t index, float value, AnimationParameterType type)
+	{
+		const AnimationParameterType declaredType = graph.Graph->Parameters[index].Type;
+		if (!std::isfinite(value))
+			return "value must be finite";
+		if (declaredType != type)
+			return fmt::format("type mismatch: expected {}, got {}", ParameterTypeName(declaredType), ParameterTypeName(type));
+		graph.Parameters[index] = value;
+		return {};
+	}
+
+	void AnimationSystem::ReportParameter(Playback& graph, std::optional<size_t> index, const std::string& name, AnimationParameterType type, const std::string& problem)
+	{
+		const auto typeIndex = static_cast<size_t>(type);
+		auto& reported = index ? graph.ParameterProblems[*index][typeIndex] : graph.UnknownParameterProblems[typeIndex];
+		// The unknown-name slot holds the last unknown name reported: only this name's success clears it, so a typo
+		// called between good calls stays logged once.
+		if (problem.empty())
+		{
+			if (index || reported.starts_with(name + ": "))
+				reported.clear();
+			return;
+		}
+		const std::string diagnostic = index ? problem : name + ": " + problem;
+		if (reported != diagnostic)
+			BS_CORE_ERROR("Animator '{}': parameter '{}': {}", graph.EntityName, name, problem);
+		reported = diagnostic;
+	}
+
+	bool AnimationSystem::SetLayerParameterValue(Entity entity, const std::string& layer, const std::string& name, float value, AnimationParameterType type)
+	{
+		constexpr const char* operation = "SetAnimationLayerParameter";
+		auto* playback = EnsurePlayable(entity);
+		LayerState* state = playback ? FindLayer(entity, *playback, layer, operation) : nullptr;
+		if (!state)
+			return false;
+		ReportLayerCall(entity, operation, {}, {});
+		if (!state->Graph)
+		{
+			ReportLayerCall(entity, operation, layer, fmt::format("layer '{}' runs no state machine (none configured, a script clip replaces it, or it shows nothing)", layer));
+			return false;
+		}
+		ReportLayerCall(entity, operation, layer, {});
+		Playback& graph = *state->Graph;
+		const std::optional<size_t> index = FindParameter(*graph.Graph, name);
+		std::string problem;
+		if (index)
+			problem = WriteParameter(graph, *index, value, type);
+		else
+		{
+			problem = "unknown name; declared parameters:";
+			for (const AnimationParameter& parameter : graph.Graph->Parameters)
+				problem += " " + parameter.Name;
+		}
+		ReportParameter(graph, index, name, type, problem);
+		return problem.empty();
+	}
+
+	bool AnimationSystem::SetLayerParameter(Entity entity, const std::string& layer, const std::string& name, float value)
+	{
+		return SetLayerParameterValue(entity, layer, name, value, AnimationParameterType::Float);
+	}
+	bool AnimationSystem::SetLayerParameter(Entity entity, const std::string& layer, const std::string& name, bool value)
+	{
+		return SetLayerParameterValue(entity, layer, name, value ? 1.0f : 0.0f, AnimationParameterType::Bool);
+	}
+	bool AnimationSystem::SetLayerTrigger(Entity entity, const std::string& layer, const std::string& name)
+	{
+		return SetLayerParameterValue(entity, layer, name, 1, AnimationParameterType::Trigger);
 	}
 
 	bool AnimationSystem::SetParameter(Entity entity, const std::string& name, float value)
@@ -2289,7 +2359,7 @@ namespace Basalt {
 		return &started;
 	}
 
-	void AnimationSystem::AdvanceLayerGraph(Playback& graph, const AnimatorComponent& component, double seconds, double speed, bool transitions)
+	void AnimationSystem::AdvanceLayerGraph(Playback& graph, const AnimatorComponent& component, double seconds, double speed, bool transitions, const AnimationEventSink& events)
 	{
 		// UpdateGraph also retries an initial state that could not play.
 		if (transitions)
@@ -2299,17 +2369,26 @@ namespace Basalt {
 		const double advance = seconds * speed;
 		if (graph.Space)
 		{
-			SpaceState& space = *graph.Space;
-			if (space.Resolved && space.Duration > 0)
-				space.Phase = WrapClock(space.Phase + advance / space.Duration, 1.0, graph.Looping);
-			else if (space.Resolved && !graph.Looping && advance > 0)
-				space.Phase = 1;
-			graph.Time = space.Phase * space.Duration;
+			if (graph.Space->Resolved)
+				AdvanceSpace(graph, *graph.Space, component, advance, events);
 		}
 		else if (graph.Clip >= 0)
+		{
+			// As for the base: a crossfade's target fires from its first frame.
+			if (graph.BlendWeight > 0 || graph.FadeDuration > 0)
+				CollectEvents(graph, component, graph.Clip, graph.Time, advance, events, graph.Looping);
 			graph.Time = WrapClock(graph.Time + advance, (*graph.Clips)[graph.Clip].Duration, graph.Looping);
+		}
 		if (graph.Outgoing.Clip >= 0)
+		{
+			// It stops firing where the fade ends, even within this update.
+			if (graph.BlendWeight < 1)
+			{
+				const double shown = graph.FadeDuration > 0 ? std::min(seconds, graph.FadeDuration - graph.FadeTime) : seconds;
+				CollectEvents(graph, component, graph.Outgoing.Clip, graph.Outgoing.Time, shown * speed, events, graph.Outgoing.Looping);
+			}
 			graph.Outgoing.Time = WrapClock(graph.Outgoing.Time + advance, (*graph.Clips)[graph.Outgoing.Clip].Duration, graph.Outgoing.Looping);
+		}
 		if (graph.FadeDuration > 0)
 		{
 			graph.FadeTime += seconds;
@@ -2326,7 +2405,7 @@ namespace Basalt {
 			graph.StatePhase = std::max(graph.StatePhase, 1.0);
 	}
 
-	void AnimationSystem::AdvanceLayers(Playback& playback, const AnimatorComponent& component, double seconds, bool transitions)
+	void AnimationSystem::AdvanceLayers(Playback& playback, const AnimatorComponent& component, double seconds, bool transitions, const AnimationEventSink& events)
 	{
 		std::vector<LayerState> layers;
 		layers.reserve(component.Layers.size());
@@ -2363,10 +2442,15 @@ namespace Basalt {
 				state.Time = 0;
 			}
 			const LayerResolution& resolved = ResolveLayer(playback, config, state, component);
+			// A layer at weight 0 fires nothing, as a blend's hidden clip does not.
+			const AnimationEventSink layerEvents = config.Events && state.Weight.Get() > 0 ? AnimationEventSink{ .Entity = events.Entity, .Budget = events.Budget, .Layer = config.Name } : AnimationEventSink{};
 			if (Playback* graph = SyncLayerGraph(playback, config, state, component, false))
-				AdvanceLayerGraph(*graph, component, seconds, speed, transitions);
+				AdvanceLayerGraph(*graph, component, seconds, speed, transitions, layerEvents);
 			else if (resolved.Source == LayerSource::Clip && seconds > 0)
+			{
+				CollectEvents(playback, component, resolved.Clip, state.Time, seconds * speed, layerEvents, config.Looping);
 				state.Time = WrapClock(state.Time + seconds * speed, (*playback.Clips)[resolved.Clip].Duration, config.Looping);
+			}
 			state.Weight.Advance(static_cast<float>(seconds));
 			layers.push_back(std::move(state));
 		}

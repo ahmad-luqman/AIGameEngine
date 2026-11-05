@@ -319,6 +319,8 @@ namespace Basalt {
 		, m_ContentBrowserPanel(m_Context)
 		, m_MaterialEditorPanel(m_Context)
 		, m_AnimationGraphPanel(m_Context)
+		, m_AnimationMaskPanel(m_Context)
+		, m_AnimationJointMapPanel(m_Context)
 		, m_PropertyAnimationPanel(m_Context)
 		, m_ConsolePanel(m_Context)
 		, m_ProjectSettingsPanel(m_Context)
@@ -348,6 +350,8 @@ namespace Basalt {
 				m_Thumbnails->OnFilesChanged(report.Changed);
 			m_MaterialEditorPanel.OnFilesChanged(report.Changed);
 			m_AnimationGraphPanel.OnFilesChanged(report.Changed);
+			m_AnimationMaskPanel.OnFilesChanged(report.Changed);
+			m_AnimationJointMapPanel.OnFilesChanged(report.Changed);
 			if (report.PrefabEditSceneChanges > 0)
 				m_Context.RecordExternalEdit("Merge Prefab Changes");
 			const bool openPrefabChanged = m_Session.IsEditingPrefab() && std::any_of(report.Changed.begin(), report.Changed.end(), [this](const FileChange& change) { return change.Path == m_Session.GetPrefabPath(); });
@@ -367,7 +371,12 @@ namespace Basalt {
 			else if (!report.Assets.empty())
 				m_Context.SetStatus(fmt::format("Reloading {} changed asset(s)", report.Assets.size()), false);
 		};
-		m_Session.OnAssetMoved = [this](const std::string& from, const std::string& to) { m_MaterialEditorPanel.OnAssetMoved(from, to); m_AnimationGraphPanel.OnAssetMoved(from, to); };
+		m_Session.OnAssetMoved = [this](const std::string& from, const std::string& to) {
+			m_MaterialEditorPanel.OnAssetMoved(from, to);
+			m_AnimationGraphPanel.OnAssetMoved(from, to);
+			m_AnimationMaskPanel.OnAssetMoved(from, to);
+			m_AnimationJointMapPanel.OnAssetMoved(from, to);
+		};
 		m_Session.OnSceneChanged = [this]() { OnSceneChanged(); };
 		// Scripts' OnCreate reads the Game view (its resolution even before the tab is first drawn), not the scene
 		// view's layout or the headless default.
@@ -666,6 +675,32 @@ namespace Basalt {
 								 const auto& draft = m_AnimationGraphPanel.GetDraft();
 								 const bool valid = !draft.Path.empty() && m_AnimationGraphPanel.Validate(error);
 								 return nlohmann::json{ { "open", !draft.Path.empty() }, { "path", draft.Path }, { "dirty", m_AnimationGraphPanel.IsDirty() }, { "valid", valid }, { "problem", error }, { "externalChange", draft.ExternalChange }, { "error", m_AnimationGraphPanel.GetError() } };
+							 } });
+
+		m_Commands.Register({ "editor.animation_mask", "Opens a .banimmask in the Animation Mask window (as double-clicking it in the Content Browser does), on a model given by model or else the one an Animator or the selection uses for it; with close, first closes the window, discarding unsaved edits (all may be given). Opening another file with unsaved edits fails. Returns {open, path, dirty, valid, problem, externalChange, error, joints, model, modelError, missing}: valid says whether the edits form a file (problem says why not), externalChange that the file changed on disk under unsaved edits, joints how many it lists, and missing those the model does not have. Mask files are authored with asset.write.", EditorCommandSchemas::AnimationMask(), [this](AutomationSession&, const nlohmann::json& params) {
+								 if (params.value("close", false))
+									 m_AnimationMaskPanel.Reset();
+								 std::string error;
+								 if (const auto path = params.find("path"); path != params.end() && !m_AnimationMaskPanel.Open(path->get<std::string>(), error))
+									 throw CommandError(error);
+								 if (const auto model = params.find("model"); model != params.end())
+									 m_AnimationMaskPanel.GetModel().Set(model->get<std::string>());
+								 return m_AnimationMaskPanel.Describe();
+							 } });
+
+		m_Commands.Register({ "editor.joint_map", "Opens a .bjointmap in the Joint Map window (as double-clicking it in the Content Browser does), between the models given by source and target or else those an Animator or the selection uses for it; listMatches adds the automatic matches to the unsaved draft, and close first closes the window, discarding unsaved edits. Opening another file with unsaved edits fails. Returns {open, path, dirty, valid, problem, externalChange, error, joints, source, target, sourceError, targetError} and, with both models, {mapped, unmatchedHumanoidBones, warnings}, read from the unsaved pairs. Joint maps are authored with asset.write; animator.match_joints reads the same report from saved files without the editor.", EditorCommandSchemas::JointMap(), [this](AutomationSession&, const nlohmann::json& params) {
+								 if (params.value("close", false))
+									 m_AnimationJointMapPanel.Reset();
+								 std::string error;
+								 if (const auto path = params.find("path"); path != params.end() && !m_AnimationJointMapPanel.Open(path->get<std::string>(), error))
+									 throw CommandError(error);
+								 if (const auto source = params.find("source"); source != params.end())
+									 m_AnimationJointMapPanel.GetSourceModel().Set(source->get<std::string>());
+								 if (const auto target = params.find("target"); target != params.end())
+									 m_AnimationJointMapPanel.GetTargetModel().Set(target->get<std::string>());
+								 if (params.value("listMatches", false) && !m_AnimationJointMapPanel.AutoMatch())
+									 throw CommandError("listMatches needs an open joint map and both models");
+								 return m_AnimationJointMapPanel.Describe();
 							 } });
 
 		m_Commands.Register({ "editor.material_editor", "Opens a material file in the Material Editor window (as double-clicking it in the Content Browser does); with close, first closes the window, discarding unsaved edits (both may be given). Opening fails while another material has unsaved edits. Returns {open, path, dirty, valid, problem, externalChange, error, warnings}: valid says whether the edited values form a material (problem says why not), externalChange that the file changed on disk under unsaved edits, error is the window's message (a failed save, an unreadable change on disk) and warnings what loading or the last save reported.", EditorCommandSchemas::MaterialEditor(), [this](AutomationSession&, const nlohmann::json& params) {
@@ -1155,6 +1190,12 @@ namespace Basalt {
 
 		else if (MaterialAsset::IsMaterialFile(path))
 			m_MaterialEditorPanel.Open(path);
+		else if (AnimationMask::IsMaskFile(path) || AnimationJointMap::IsJointMapFile(path))
+		{
+			std::string error;
+			if (!(AnimationMask::IsMaskFile(path) ? m_AnimationMaskPanel.Open(path, error) : m_AnimationJointMapPanel.Open(path, error)))
+				m_Context.SetStatus(error, true);
+		}
 		else
 		{
 			HandleAssetDrop(path);
@@ -1627,6 +1668,10 @@ namespace Basalt {
 		m_MaterialEditorPanel.OnImGuiRender();
 		DockNextToOnFirstUse(EditorCommandSchemas::AnimationGraphTitle, EditorCommandSchemas::ViewportTitle);
 		m_AnimationGraphPanel.OnImGuiRender();
+		DockNextToOnFirstUse(EditorCommandSchemas::AnimationMaskTitle, EditorCommandSchemas::ViewportTitle);
+		m_AnimationMaskPanel.OnImGuiRender();
+		DockNextToOnFirstUse(EditorCommandSchemas::JointMapTitle, EditorCommandSchemas::ViewportTitle);
+		m_AnimationJointMapPanel.OnImGuiRender();
 		DockNextToOnFirstUse(EditorCommandSchemas::PropertyAnimationTitle, EditorCommandSchemas::InspectorTitle);
 		m_PropertyAnimationPanel.OnImGuiRender();
 		m_ConsolePanel.OnImGuiRender();

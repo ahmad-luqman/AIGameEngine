@@ -1048,6 +1048,146 @@ TEST_SUITE("Retargeting")
 		CHECK(unloaded[0].Error == "cannot load: no model");
 	}
 
+	TEST_CASE("Pair offsets stand in for a reference pose a library has no frame of")
+	{
+		const Rigs rigs;
+		const AnimationClip& wave = Clip(*rigs.Source, "Wave");
+		const AnimationClip expected = Bake(*rigs.Target, *rigs.Source, wave);
+		const uint32_t upperArm = Node(*rigs.Target, "upperarm_l"), lowerArm = Node(*rigs.Target, "lowerarm_l");
+		const auto samePoses = [&](const AnimationClip& baked) {
+			for (const float time : { 0.0f, 0.3f, 0.7f })
+			{
+				std::vector<glm::mat4> poses, wanted;
+				REQUIRE(EvaluateAnimation(*rigs.Target, &baked, time, poses));
+				REQUIRE(EvaluateAnimation(*rigs.Target, &expected, time, wanted));
+				if (!NearRotation(GlobalRotation(poses, upperArm), GlobalRotation(wanted, upperArm), 1e-3f) || !NearRotation(GlobalRotation(poses, lowerArm), GlobalRotation(wanted, lowerArm), 1e-3f))
+					return false;
+			}
+			return true;
+		};
+
+		// A library whose left arm rests lowered, like the reference pose test's, with no frame that stands in the other style.
+		auto library = CreateRef<MeshSource>(*rigs.Source);
+		const uint32_t sourceArm = Node(*library, "mixamorig:LeftArm");
+		std::vector<glm::mat4> rest;
+		REQUIRE(EvaluateAnimation(*library, nullptr, 0, rest));
+		const glm::quat world = GlobalRotation(rest, sourceArm);
+		const glm::quat lowered = glm::angleAxis(glm::radians(40.0f), glm::vec3(0, 0, 1));
+		library->Nodes[sourceArm].Rotation = library->Nodes[sourceArm].Rotation * lowered;
+		std::vector<std::string> warnings;
+		AnimationClip baked;
+		std::string error;
+		const RetargetMap plain = Retargeting::BuildMap(*rigs.Target, *library, {}, warnings);
+		REQUIRE(Retargeting::BakeClip(*rigs.Target, *library, plain, wave, baked, warnings, error));
+		REQUIRE_FALSE(samePoses(baked));
+		// The offset undoes the lowering in model space, so the arm turns from the target's rest style again. Everything
+		// below the arm turns along: only the arm's pair needs one.
+		const glm::vec3 offset = glm::degrees(Math::EulerFromQuat(world * glm::inverse(lowered) * glm::inverse(world)));
+		const std::vector<AnimationRetargetJoint> pairs{ { .Source = "mixamorig:LeftArm", .Target = "upperarm_l", .Offset = offset } };
+		const RetargetMap offsetMap = Retargeting::BuildMap(*rigs.Target, *library, pairs, warnings);
+		REQUIRE_MESSAGE(Retargeting::BakeClip(*rigs.Target, *library, offsetMap, wave, baked, warnings, error), error);
+		CHECK(samePoses(baked));
+		CHECK(warnings.empty());
+		CHECK(offsetMap.Offsets[upperArm] == offset);
+		CHECK(offsetMap.Offsets[lowerArm] == glm::vec3(0));
+		// Rotations only: limb lengths and the root's scale keep the rest pose.
+		CHECK(offsetMap.RootScale == doctest::Approx(plain.RootScale));
+		CHECK(offsetMap.SourceRest.Positions == plain.SourceRest.Positions);
+
+		// A joint that turns with its parent keeps its own place in the sum: parent first, then the child, in fixed axes.
+		const uint32_t sourceHand = Node(*library, "mixamorig:LeftHand");
+		const glm::vec3 twist(0, 30, 0);
+		std::vector<AnimationRetargetJoint> nested = pairs;
+		nested.push_back({ .Source = "mixamorig:LeftHand", .Target = "hand_l", .Offset = twist });
+		const RetargetMap nestedMap = Retargeting::BuildMap(*rigs.Target, *library, nested, warnings);
+		const glm::quat parentTurn = Math::QuatFromEuler(glm::radians(offset));
+		CHECK(NearRotation(nestedMap.SourceRest.Rotations[sourceHand], Math::QuatFromEuler(glm::radians(twist)) * parentTurn * plain.SourceRest.Rotations[sourceHand], 1e-4f));
+
+		// Offsets add to a reference clip's pose: a clip holding half the correction needs an offset of the other half.
+		const glm::quat halfway = glm::angleAxis(glm::radians(20.0f), glm::vec3(0, 0, 1));
+		AnimationClip half{ .Name = "Half", .Duration = 1 };
+		const glm::quat clipRotation = library->Nodes[sourceArm].Rotation * glm::inverse(halfway);
+		half.Tracks.push_back({ .Node = sourceArm, .Path = AnimationPath::Rotation, .Interpolation = AnimationInterpolation::Linear, .Times = { 0 }, .Values = { glm::vec4(clipRotation.x, clipRotation.y, clipRotation.z, clipRotation.w) } });
+		library->Animations.push_back(std::move(half));
+		const glm::vec3 remainder = glm::degrees(Math::EulerFromQuat(world * glm::inverse(halfway) * glm::inverse(world)));
+		const RetargetMap both = Retargeting::BuildMap(*rigs.Target, *library, { { .Source = "mixamorig:LeftArm", .Target = "upperarm_l", .Offset = remainder } }, warnings, { .Source = &library->Animations.back() });
+		REQUIRE_MESSAGE(Retargeting::BakeClip(*rigs.Target, *library, both, wave, baked, warnings, error), error);
+		CHECK(samePoses(baked));
+
+		// A pair that does not apply leaves its offset unused; automatic matches have none.
+		std::vector<std::string> notes;
+		const RetargetMap unused = Retargeting::BuildMap(*rigs.Target, *library, { { .Source = "mixamorig:Nope", .Target = "upperarm_l", .Offset = glm::vec3(45) } }, notes);
+		CHECK(HasText(notes, "Source 'mixamorig:Nope' is not in"));
+		CHECK(unused.Offsets[upperArm] == glm::vec3(0));
+		CHECK(unused.SourceRest.Rotations[sourceArm] == plain.SourceRest.Rotations[sourceArm]);
+
+		// A joint the clip leaves alone gets a correction track when its pair's offset moves it.
+		AnimationClip still{ .Name = "Still", .Duration = 1 };
+		auto stiff = CreateRef<MeshSource>(*rigs.Source);
+		stiff->Animations.push_back(still);
+		const RetargetMap corrected = Retargeting::BuildMap(*rigs.Target, *stiff, { { .Source = "mixamorig:LeftArm", .Target = "upperarm_l", .Offset = { 0, 0, 25 } } }, notes);
+		REQUIRE_MESSAGE(Retargeting::BakeClip(*rigs.Target, *stiff, corrected, stiff->Animations.back(), baked, notes, error), error);
+		CHECK(std::ranges::any_of(baked.Tracks, [&](const AnimationTrack& track) { return track.Node == upperArm && track.RestCorrection; }));
+	}
+
+	TEST_CASE("Pair offsets reach Animators through Joints and joint maps, and are validated")
+	{
+		ClearAssetCache clear;
+		TempProject project("RetargetOffsets");
+		// The offset round-trips in a map file, leaving zero ones out so existing files keep their text.
+		std::string error;
+		const auto map = AnimationJointMap::FromText(R"({ "Joints": [ { "Source": "mixamorig:LeftArm", "Target": "upperarm_l", "Offset": [ 0, 0, 40 ] }, { "Source": "mixamorig:Head", "Target": "head" } ] })", error);
+		REQUIRE_MESSAGE(map, error);
+		CHECK(map->Joints[0].Offset == glm::vec3(0, 0, 40));
+		CHECK(map->Joints[1].Offset == glm::vec3(0));
+		const nlohmann::json written = map->ToJson();
+		CHECK(written["Joints"][0]["Offset"] == nlohmann::json::array({ 0.0, 0.0, 40.0 }));
+		CHECK_FALSE(written["Joints"][1].contains("Offset"));
+		REQUIRE(AnimationJointMap::FromJson(written, error));
+		CHECK(AnimationJointMap::FromJson(written, error)->Joints == map->Joints);
+		for (const char* bad : { R"([ 1, 2 ])", R"("up")", R"([ 1, 2, "x" ])", R"([ 1, 2, 1e999 ])" })
+		{
+			CAPTURE(bad);
+			const std::string text = std::string(R"({ "Joints": [ { "Source": "a", "Target": "b", "Offset": )") + bad + " } ] }";
+			CHECK_FALSE(AnimationJointMap::FromText(text, error));
+			CHECK_MESSAGE((error.find("Joints[0].Offset must be three numbers") != std::string::npos || bad == std::string(R"([ 1, 2, 1e999 ])")), error);
+		}
+		// An inline pair overrides a map pair, offset included.
+		const AnimationClipLibrary library{ .Joints = { { .Source = "mixamorig:LeftArm", .Target = "upperarm_l" } } };
+		CHECK(CombineJointPairs(library, &*map)[0].Offset == glm::vec3(0));
+
+		// A changed offset rebuilds the Animator's set, and animator.retarget shows it.
+		Scene scene;
+		auto hero = scene.CreateEntity("Hero");
+		auto& animator = AddHero(hero, { { .Source = "mixamorig:LeftArm", .Target = "upperarm_l", .Offset = { 0, 0, 10 } } });
+		scene.OnRuntimeStart();
+		auto& system = *scene.GetAnimationSystem();
+		system.Update(0.1f);
+		const auto pose = [&] { return *system.GetPose(hero); };
+		const auto first = pose();
+		animator.ClipLibraries[0].Joints[0].Offset = { 0, 0, 60 };
+		system.Update(0);
+		CHECK_FALSE(AnimationTest::NearPose(first, pose(), 1e-3f));
+		scene.OnRuntimeStop();
+
+		// A saved scene keeps the offset.
+		const nlohmann::json saved = ComponentRegistry::Find("Animator")->Serialize(hero);
+		CHECK(saved["ClipLibraries"][0]["Joints"][0]["Offset"] == nlohmann::json::array({ 0.0, 0.0, 60.0 }));
+		Scene copy;
+		auto restored = copy.CreateEntity("Hero");
+		std::string restoreError;
+		REQUIRE_MESSAGE(ComponentRegistry::AddOrPatch(restored, "Animator", saved, restoreError), restoreError);
+		CHECK(restored.GetComponent<AnimatorComponent>().ClipLibraries[0].Joints[0].Offset == glm::vec3(0, 0, 60));
+
+		std::string problem;
+		for (const nlohmann::json& bad : { nlohmann::json{ 0, 0, "x" }, nlohmann::json{ 0, 0, std::numeric_limits<float>::infinity() }, nlohmann::json{ 0, 0 } })
+		{
+			CAPTURE(bad.dump());
+			CHECK_FALSE(ComponentRegistry::AddOrPatch(hero, "Animator", { { "ClipLibraries", { { { "Mesh", "a.glb" }, { "Joints", { { { "Source", "a" }, { "Target", "b" }, { "Offset", bad } } } } } } } }, problem));
+			CHECK_MESSAGE(problem.find("Offset") != std::string::npos, problem);
+		}
+	}
+
 	TEST_CASE("Reference corrections of joints a clip leaves alone are baked, at the reference time")
 	{
 		const Rigs rigs;
@@ -1296,6 +1436,47 @@ TEST_SUITE("Retargeting")
 		Run(registry, session, "scene.save", { { "path", "Assets/Scenes/Maps.bscene" } });
 		report = ValidateProject(*Project::GetActive());
 		CHECK(std::ranges::any_of(report.GetIssues(), [](const ValidationIssue& issue) { return issue.File == "Assets/Scenes/Maps.bscene" && issue.Message.find("the missing file 'Assets/Shared/Gone.bjointmap'") != std::string::npos; }));
+	}
+
+	TEST_CASE("animator.match_joints reads two models without an Animator, joint map first")
+	{
+		ClearAssetCache clear;
+		BasaltTest::TempProject project("MatchJoints");
+		AutomationSession session;
+		CommandRegistry registry;
+		RegisterBuiltinCommands(registry);
+		for (const char* name : { "UnrealRig.gltf", "MixamoRig.gltf" })
+		{
+			const auto text = FileSystem::ReadTextFile(FixturePath(name));
+			REQUIRE(text);
+			REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath(std::string("Assets/Models/") + name), *text));
+		}
+		const std::string map = project.WriteFile("Assets/Rig.bjointmap", R"({ "Joints": [ { "Source": "mixamorig:LeftArm", "Target": "clavicle_l", "Offset": [ 0, 0, 30 ] }, { "Source": "mixamorig:Nope", "Target": "head" } ] })");
+		Run(registry, session, "scene.new", { { "name", "Library" }, { "empty", true } });
+		const nlohmann::json models = { { "source", "Assets/Models/MixamoRig.gltf" }, { "target", "Assets/Models/UnrealRig.gltf" } };
+		const auto plain = Run(registry, session, "animator.match_joints", models);
+		CHECK(std::ranges::count(plain["joints"], nlohmann::json{ { "target", "pelvis" }, { "source", "mixamorig:Hips" }, { "match", "humanoid" } }) == 1);
+		CHECK(plain["unmatchedHumanoidBones"] == nlohmann::json{ "clavicle_l", "clavicle_r" });
+		CHECK(plain["root"]["target"] == "pelvis");
+		CHECK(plain["root"]["scale"].get<float>() == doctest::Approx(1.4f));
+		CHECK(plain["warnings"].empty());
+
+		nlohmann::json withMap = models;
+		withMap["jointMap"] = map;
+		const auto mapped = Run(registry, session, "animator.match_joints", withMap);
+		CHECK(std::ranges::count(mapped["joints"], nlohmann::json{ { "target", "clavicle_l" }, { "source", "mixamorig:LeftArm" }, { "match", "joint map" }, { "offset", { 0.0, 0.0, 30.0 } } }) == 1);
+		REQUIRE(mapped["warnings"].size() == 1);
+		CHECK(mapped["warnings"][0].get<std::string>().find("Source 'mixamorig:Nope' is not in") != std::string::npos);
+
+		const auto errorFor = [&](const nlohmann::json& patch) {
+			nlohmann::json params = models;
+			params.update(patch);
+			return BasaltTest::RunError(registry, session, "animator.match_joints", params);
+		};
+		CHECK(errorFor({ { "source", "Assets/Gone.gltf" } }).find("cannot load model 'Assets/Gone.gltf'") != std::string::npos);
+		CHECK(errorFor({ { "target", "Assets/Gone.gltf" } }).find("cannot load model 'Assets/Gone.gltf'") != std::string::npos);
+		CHECK(errorFor({ { "jointMap", "Assets/Gone.bjointmap" } }).find("cannot load joint map 'Assets/Gone.bjointmap'") != std::string::npos);
+		CHECK(BasaltTest::RunError(registry, session, "animator.match_joints", { { "source", "a.gltf" } }).find("target") != std::string::npos);
 	}
 
 	TEST_CASE("Clip libraries that fail to load are logged as errors")

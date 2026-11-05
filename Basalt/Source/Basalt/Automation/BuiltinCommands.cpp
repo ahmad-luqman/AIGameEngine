@@ -87,6 +87,26 @@ namespace Basalt {
 			return value.get<std::string>();
 		}
 
+		// A retarget map as animator.retarget and animator.match_joints show it. `source` may be null with an empty map (a
+		// library that did not load).
+		json DescribeRetargetJoints(const MeshSource& model, const MeshSource* source, const RetargetMap& map)
+		{
+			json joints = json::array(), unmatched = json::array();
+			for (size_t node = 0; node < map.SourceOf.size(); node++)
+			{
+				if (map.SourceOf[node] >= 0)
+				{
+					joints.push_back({ { "target", model.Nodes[node].Name }, { "source", source->Nodes[map.SourceOf[node]].Name }, { "match", ToString(map.Matches[node]) } });
+					if (const glm::vec3& offset = map.Offsets[node]; offset != glm::vec3(0))
+						joints.back()["offset"] = { offset.x, offset.y, offset.z };
+				}
+				else if (!Retargeting::HumanoidBone(model.Nodes[node].Name).empty())
+					unmatched.push_back(model.Nodes[node].Name);
+			}
+			const bool rooted = map.TargetRoot >= 0;
+			return { { "joints", std::move(joints) }, { "unmatchedHumanoidBones", std::move(unmatched) }, { "root", rooted ? json{ { "target", model.Nodes[map.TargetRoot].Name }, { "source", source->Nodes[map.SourceRoot].Name }, { "scale", map.RootScale } } : json() } };
+		}
+
 		std::string OptionalString(const json& params, const char* name, const std::string& fallback = "")
 		{
 			auto it = params.find(name);
@@ -1263,7 +1283,7 @@ namespace Basalt {
 				};
 			});
 
-			Add(registry, "animator.retarget", "How an Animator's named ClipLibraries map onto its model, resolved as playback resolves them but without baking (a listed clip can still be left out when it fails to bake or passes the 256 MiB per-Animator budget; the log reports it): per library its index in ClipLibraries, why it adds no clips (error: also a joint map that does not load or a reference clip that is not there), its joint map file (jointMap) and reference poses (reference, modelReference: {clip, time}, or null for the rest pose), the joint pairs (target, source, matched by joint map (Joints or the jointMap file), name or humanoid bone), the model's humanoid bones left unmatched, the root pair with its leg-length scale, the clips it adds, the clips earlier clips hide, and warnings. Read-only; works in edit mode.", Schema::Object({ { "entity", Schema::Entity("ID or name of an entity with an Animator") } }, { "entity" }), [](AutomationSession& session, const json& params) {
+			Add(registry, "animator.retarget", "How an Animator's named ClipLibraries map onto its model, resolved as playback resolves them but without baking (a listed clip can still be left out when it fails to bake or passes the 256 MiB per-Animator budget; the log reports it): per library its index in ClipLibraries, why it adds no clips (error: also a joint map that does not load or a reference clip that is not there), its joint map file (jointMap) and reference poses (reference, modelReference: {clip, time}, or null for the rest pose), the joint pairs (target, source, matched by joint map (Joints or the jointMap file), name or humanoid bone, and offset when the pair has one), the model's humanoid bones left unmatched, the root pair with its leg-length scale, the clips it adds, the clips earlier clips hide, and warnings. Read-only; works in edit mode.", Schema::Object({ { "entity", Schema::Entity("ID or name of an entity with an Animator") } }, { "entity" }), [](AutomationSession& session, const json& params) {
 				Entity entity = RequireEntity(session, params);
 				const auto* animator = entity.TryGetComponent<AnimatorComponent>();
 				if (!animator)
@@ -1277,15 +1297,7 @@ namespace Basalt {
 				const auto reference = [](const std::string& clip, float time) { return clip.empty() ? json() : json{ { "clip", clip }, { "time", time } }; };
 				for (const AnimationClipSet::Library& library : resolved)
 				{
-					json joints = json::array(), unmatched = json::array();
-					for (size_t node = 0; node < library.Map.SourceOf.size(); node++)
-					{
-						if (library.Map.SourceOf[node] >= 0)
-							joints.push_back({ { "target", model->Nodes[node].Name }, { "source", library.Source->Nodes[library.Map.SourceOf[node]].Name }, { "match", ToString(library.Map.Matches[node]) } });
-						else if (!Retargeting::HumanoidBone(model->Nodes[node].Name).empty())
-							unmatched.push_back(model->Nodes[node].Name);
-					}
-					const bool rooted = library.Map.TargetRoot >= 0;
+					json matched = DescribeRetargetJoints(*model, library.Source.get(), library.Map);
 					libraries.push_back({
 						{ "index", library.Index },
 						{ "mesh", library.Entry.Mesh },
@@ -1293,15 +1305,40 @@ namespace Basalt {
 						{ "jointMap", library.Entry.JointMap.empty() ? json() : json(library.Entry.JointMap) },
 						{ "reference", reference(library.Entry.ReferenceClip, library.Entry.ReferenceTime) },
 						{ "modelReference", reference(library.Entry.ModelReferenceClip, library.Entry.ModelReferenceTime) },
-						{ "joints", std::move(joints) },
-						{ "unmatchedHumanoidBones", std::move(unmatched) },
-						{ "root", rooted ? json{ { "target", model->Nodes[library.Map.TargetRoot].Name }, { "source", library.Source->Nodes[library.Map.SourceRoot].Name }, { "scale", library.Map.RootScale } } : json() },
+						{ "joints", std::move(matched["joints"]) },
+						{ "unmatchedHumanoidBones", std::move(matched["unmatchedHumanoidBones"]) },
+						{ "root", std::move(matched["root"]) },
 						{ "clips", library.Clips },
 						{ "hiddenClips", library.Shadowed },
 						{ "warnings", library.Warnings },
 					});
 				}
 				return json{ { "entity", static_cast<uint64_t>(entity.GetUUID()) }, { "mesh", animator->Mesh }, { "libraries", std::move(libraries) } };
+			});
+
+			Add(registry, "animator.match_joints", "How a library model's skeleton maps onto a model's, for authoring a .bjointmap: the same matching as animator.retarget, on two models with no Animator (the pairs of jointMap come first, then equal names and humanoid bones). Returns {joints: [{target, source, match, offset}], unmatchedHumanoidBones, root, warnings}. The automatic matches of joints can go into a joint map as they are. Read-only.", Schema::Object({ { "source", Schema::String("Project-relative model the clips come from") }, { "target", Schema::String("Project-relative model an Animator plays them on") }, { "jointMap", Schema::String("Project-relative .bjointmap, optional") } }, { "source", "target" }), [](AutomationSession& session, const json& params) {
+				RequireScene(session);
+				const auto load = [](const std::string& path) {
+					const auto model = AssetManager::GetMesh(path);
+					if (!model)
+						throw CommandError("cannot load model '" + path + "': " + AssetManager::GetError(path));
+					return model;
+				};
+				const auto source = load(params["source"].get<std::string>());
+				const auto target = load(params["target"].get<std::string>());
+				std::vector<AnimationRetargetJoint> pairs;
+				if (const std::string path = OptionalString(params, "jointMap"); !path.empty())
+				{
+					const auto map = AssetManager::GetAnimationJointMap(path);
+					if (!map)
+						throw CommandError("cannot load joint map '" + path + "': " + AssetManager::GetError(path));
+					pairs = map->Joints;
+				}
+				std::vector<std::string> warnings;
+				const RetargetMap map = Retargeting::BuildMap(*target, *source, pairs, warnings);
+				json result = DescribeRetargetJoints(*target, source.get(), map);
+				result["warnings"] = std::move(warnings);
+				return result;
 			});
 
 			Add(registry, "scene.settings", "Patches scene-level settings: {Renderer: {...}, Physics: {...}, Name}.", Schema::Object({ { "Renderer", json{ { "type", "object" }, { "description", "object, e.g. {Exposure, Tonemapper, FSR1Enabled, FSR1Sharpness, SSAOEnabled, ShadowDistance}; FSR1Sharpness: " + Fsr1SharpnessRange() } } }, { "Physics", json{ { "type", "object" }, { "description", "object, e.g. {Gravity: [0,-9.81,0], MaxStepsPerFrame: 8, FixedTimestep: 0.01}; FixedTimestep overrides the project's step for this scene, null removes the override" } } }, { "Name", Schema::String("string") } }), [](AutomationSession& session, const json& params) {

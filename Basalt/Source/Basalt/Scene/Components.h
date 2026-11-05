@@ -184,6 +184,10 @@ namespace Basalt {
 
 		std::string Source;
 		std::string Target;
+		// A reference pose without a clip: how the Source joint turns (Euler degrees, in its model's space) so the library
+		// stands like the Animator's model at rest, e.g. lifting an A-pose arm to a T-pose. Joints below it turn along;
+		// offsets lower down apply after it, in the same fixed axes. On top of ReferenceClip's pose when there is one.
+		glm::vec3 Offset = { 0.0f, 0.0f, 0.0f };
 
 		bool operator==(const AnimationRetargetJoint&) const = default;
 	};
@@ -207,7 +211,8 @@ namespace Basalt {
 		// of the library whose pose at ReferenceTime seconds stands like the model's rest pose, and a clip of the model
 		// whose pose at ModelReferenceTime stands like the library's rest pose. Either replaces its skeleton's rest
 		// orientations when joints turn (positions, and so limb lengths and the root's scale, keep the rest pose). Empty:
-		// the rest pose. A clip that is not there makes the library add no clips.
+		// the rest pose. A clip that is not there makes the library add no clips. A library with no such frame turns its
+		// joints with their pairs' Offset instead.
 		std::string ReferenceClip;
 		float ReferenceTime = 0.0f;
 		std::string ModelReferenceClip;
@@ -229,8 +234,15 @@ namespace Basalt {
 		// Empty: the layer shows nothing until a script plays a clip on it.
 		std::string Clip;
 		// A project-relative .banimgraph the layer runs on its own (an upper-body graph), replacing Clip; empty plays Clip.
-		// Its parameters and triggers share the Animator's names: setting one reaches every graph that declares it.
+		// Its parameters and triggers share the Animator's names: setting one reaches every graph that declares it, unless
+		// OwnParameters.
 		std::string StateMachine;
+		// StateMachine layers: SetParameter and SetTrigger pass this layer by, so its graph holds its own values of the
+		// names it shares with the others and only SetLayerParameter and SetLayerTrigger reach it.
+		bool OwnParameters = false;
+		// Animator.Events fire for this layer's clips too, while it shows (a weight above 0) and names it in the event. Off
+		// by default: a marker without a Clip would fire once for the base and again for the layer.
+		bool Events = false;
 		AnimationLayerBlend Blend = AnimationLayerBlend::Override;
 		// 0..1. The starting weight of the layer; a changed value applies at once.
 		float Weight = 1.0f;
@@ -325,8 +337,8 @@ namespace Basalt {
 		// need a reference pose (AnimationClipLibrary::ReferenceClip or ModelReferenceClip).
 		std::vector<AnimationClipLibrary> ClipLibraries;
 		// Edit mode only: plays the Animator in the scene view (its clip or state machine, layers, inverse kinematics and
-		// spring bones), regardless of PlayOnStart, without moving the entity. Events, root-motion displacement, spring
-		// bone collisions with bodies that move, ragdolls and attachments wait for Play.
+		// spring bones), regardless of PlayOnStart, without moving the entity. Feet and spring bones meet the scene's static
+		// bodies; events, root-motion displacement, bodies that move, ragdolls and attachments wait for Play.
 		bool Preview = false;
 	};
 
@@ -363,6 +375,18 @@ namespace Basalt {
 		return type == IKChainType::TwoBone || type == IKChainType::Fabrik;
 	}
 
+	// Overrides a Fabrik chain's limits for one of its joints (see IKChain::ConeAngle).
+	struct IKJointLimit
+	{
+		static constexpr const char* TypeName = "IKJointLimit";
+
+		// A joint the chain turns: an ancestor of the chain's Joint. Entries without a name are the inspector's additions.
+		std::string Joint;
+		float ConeAngle = 180.0f;
+		float MinTwist = -180.0f;
+		float MaxTwist = 180.0f;
+	};
+
 	// One inverse kinematics chain of an InverseKinematics component. Targets come from scripts (SetIKTarget), then from
 	// the component's Target entity (FollowTarget chains), then for Ground chains from the surface under the joint.
 	struct IKChain
@@ -371,6 +395,8 @@ namespace Basalt {
 		// Chains are found by name.
 		static constexpr const char* UniqueField = "Name";
 		static constexpr uint32_t MaxChainLength = 16;
+		static constexpr float MaxConeAngle = 180.0f;
+		static constexpr float MaxTwistAngle = 180.0f;
 
 		std::string Name = "Chain";
 		IKChainType Type = IKChainType::TwoBone;
@@ -397,7 +423,24 @@ namespace Basalt {
 		bool FootLock = false;
 		// 0..1. The starting weight of the chain; a changed value applies at once.
 		float Weight = 1.0f;
+		// Fabrik: what each joint the chain turns may do, measured from its rest rotation (the model's, not the animated one).
+		// ConeAngle (degrees, 0..180) bounds how far its bone swings away from where the rest pose points it, as seen from
+		// its parent; MinTwist..MaxTwist (degrees, -180..180) bound the turn about the bone itself. 180 and -180..180 leave
+		// it free. A solved chain keeps them even where that leaves the target out of reach, and turns an animated pose
+		// outside them back inside; while the chain has no target the animation plays untouched. Chain's Joint is the end,
+		// not a turned joint: its target rotation stays exact.
+		float ConeAngle = MaxConeAngle;
+		float MinTwist = -MaxTwistAngle;
+		float MaxTwist = MaxTwistAngle;
+		// Fabrik: per-joint overrides of the three above, at most MaxChainLength.
+		std::vector<IKJointLimit> JointLimits;
 	};
+
+	// Whether a chain's settings limit any joint, whatever its Type does with them.
+	inline bool HasIKJointLimits(const IKChain& chain)
+	{
+		return chain.ConeAngle != IKChain::MaxConeAngle || chain.MinTwist != -IKChain::MaxTwistAngle || chain.MaxTwist != IKChain::MaxTwistAngle || !chain.JointLimits.empty();
+	}
 
 	// Inverse kinematics applied to the Animator on the same entity after physics and OnLateUpdate, before
 	// attachments and drawing. Chains reach for script targets, the Target entity (FollowTarget chains) or the ground:

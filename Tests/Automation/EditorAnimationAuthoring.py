@@ -1,6 +1,7 @@
 """Graph documents and property key authoring through the editor's public automation paths."""
 import json
 from pathlib import Path
+import shutil
 
 
 def check_animation_authoring(call, require, output):
@@ -53,3 +54,66 @@ def check_animation_authoring(call, require, output):
     call("editor.panel", {"name": "Property Animation", "focus": True})
     call("editor.window_screenshot", {"path": str(Path(output, "property-animation.png"))})
     call("editor.animation_graph", {"close": True})
+    check_joint_assets(call, require, output)
+
+
+def check_joint_assets(call, require, output):
+    """The mask and joint map windows: what they open, what they read, and that they follow their files."""
+    project = Path(call("project.info")["directory"])
+    data = Path(__file__).resolve().parents[1] / "Data/Animation"
+    for name in ("Biped.gltf", "UnrealRig.gltf", "MixamoRig.gltf"):
+        shutil.copyfile(data / name, project / "Assets" / name)
+    call("asset.refresh", {})
+    call("scene.new", {"empty": True})
+
+    # Masks: the Animator that uses the file names its model.
+    mask = "Assets/Upper.banimmask"
+    call("asset.write", {"path": mask, "content": json.dumps({"Joints": [{"Joint": "Spine", "Weight": 0.75}, {"Joint": "Gone"}]})})
+    rig = call("entity.create", {"name": "MaskRig"})["id"]
+    call("component.set", {"entity": rig, "component": "Animator", "data": {"Mesh": "Assets/Biped.gltf", "Layers": [{"Name": "Upper", "MaskAsset": mask}]}})
+    state = call("editor.animation_mask", {"path": mask})
+    require(state["open"] and state["valid"] and not state["dirty"] and state["joints"] == 2 and state["model"] == "Assets/Biped.gltf", f"Mask did not open: {state}")
+    require(state["missing"] == ["Gone"], f"A joint the model lacks was not reported: {state}")
+    call("editor.window_screenshot", {"path": str(Path(output, "animation-mask.png"))})
+    call("editor.animation_mask", {"path": "../Upper.banimmask"}, error="is not a .banimmask file under Assets/")
+    call("editor.animation_mask", {"path": "Assets/Upper.bjointmap"}, error="is not a .banimmask file under Assets/")
+    require(not call("editor.animation_mask", {"model": ""})["model"], "The model did not clear")
+    bad_model = call("editor.animation_mask", {"model": "Assets/Gone.gltf"})
+    require("Cannot load the model" in bad_model["modelError"], f"A bad model was not reported: {bad_model}")
+    call("editor.animation_mask", {"model": "Assets/Biped.gltf"})
+    call("asset.move", {"from": mask, "to": "Assets/Moved.banimmask"})
+    require(call("editor.animation_mask", {})["path"] == "Assets/Moved.banimmask", "Open mask did not follow asset.move")
+    call("asset.move", {"from": "Assets/Biped.gltf", "to": "Assets/Hero.gltf"})
+    require(call("editor.animation_mask", {})["model"] == "Assets/Hero.gltf", "The mask's model did not follow asset.move")
+    mask_file = project / "Assets/Moved.banimmask"
+    mask_file.write_text("{}", encoding="utf-8")
+    call("asset.refresh", {"paths": ["Assets/Moved.banimmask"]})
+    broken = call("editor.animation_mask", {})
+    require(broken["error"] and broken["externalChange"], f"An invalid reload was not reported: {broken}")
+    mask_file.write_text(json.dumps({"Joints": [{"Joint": "Chest"}]}), encoding="utf-8")
+    call("asset.refresh", {"paths": ["Assets/Moved.banimmask"]})
+    fixed = call("editor.animation_mask", {})
+    require(not fixed["error"] and not fixed["externalChange"] and fixed["joints"] == 1 and not fixed["missing"], f"A fixed mask kept a stale state: {fixed}")
+    require(not call("editor.animation_mask", {"close": True})["open"], "The mask window did not close")
+
+    # Joint maps: the library that names the file gives both models, and the report reads the unsaved pairs.
+    path = "Assets/Rig.bjointmap"
+    call("asset.write", {"path": path, "content": json.dumps({"Joints": [{"Source": "mixamorig:LeftArm", "Target": "clavicle_l", "Offset": [0, 0, 25]}]})})
+    hero = call("entity.create", {"name": "MapRig"})["id"]
+    call("component.set", {"entity": hero, "component": "Animator", "data": {"Mesh": "Assets/UnrealRig.gltf", "ClipLibraries": [{"Mesh": "Assets/MixamoRig.gltf", "JointMap": path}]}})
+    state = call("editor.joint_map", {"path": path})
+    require(state["open"] and state["valid"] and state["source"] == "Assets/MixamoRig.gltf" and state["target"] == "Assets/UnrealRig.gltf", f"Joint map did not open: {state}")
+    require(state["mapped"] > 10 and not state["warnings"], f"The report did not read the models: {state}")
+    listed = call("editor.joint_map", {"listMatches": True})
+    require(listed["dirty"] and listed["joints"] == listed["mapped"], f"Automatic matches were not listed: {listed}")
+    call("editor.window_screenshot", {"path": str(Path(output, "joint-map.png"))})
+    call("editor.joint_map", {"path": "Assets/Other.bjointmap"}, error="Save or Revert")
+    call("editor.joint_map", {"close": True, "path": path})
+    cleared = call("editor.joint_map", {"source": ""})
+    require("mapped" not in cleared, f"A report without both models: {cleared}")
+    call("editor.joint_map", {"listMatches": True}, error="both models")
+    require(not call("editor.joint_map", {"close": True})["open"], "The joint map window did not close")
+
+    # The same report without the editor, from saved files.
+    matched = call("animator.match_joints", {"source": "Assets/MixamoRig.gltf", "target": "Assets/UnrealRig.gltf", "jointMap": path})
+    require(any(joint["target"] == "clavicle_l" and joint["match"] == "joint map" and joint["offset"] == [0, 0, 25] for joint in matched["joints"]), f"animator.match_joints missed the pair: {matched}")

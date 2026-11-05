@@ -286,6 +286,15 @@ costs one view.
   the draft. Agents edit graph data with `asset.read`/`asset.write`; clean drafts follow reloads and moves.
   The Property Animation panel uses `animation.key`, `animation.sample`, `animation.control` and the
   component registry, so the same authoring operations work headlessly.
+- `editor.animation_mask {"path":"Assets/Masks/Upper.banimmask","model":"Assets/Models/Hero.gltf"}` opens a mask in the
+  Animation Mask window, and `editor.joint_map {"path":"Assets/Rigs/Mixamo.bjointmap","source":"Assets/Models/Mixamo.gltf","target":"Assets/Models/Hero.gltf"}`
+  a joint map in the Joint Map window. Without a model they take those of the first Animator using the file, else the
+  selection's. Both return `{open, path, dirty, valid, problem, externalChange, error, joints}`; the first adds
+  `{model, modelError, missing}` (listed joints the model lacks), the second `{source, target, sourceError, targetError}` and,
+  with both models, `{mapped, unmatchedHumanoidBones, warnings}` read from the unsaved pairs. `{"listMatches":true}` adds the
+  automatic matches to the draft. `{"close":true}` discards the draft. Agents edit these files with `asset.write`; a clean draft
+  follows reloads and moves. Without the editor, `animator.match_joints {"source":...,"target":...,"jointMap":...}` reads the
+  same matching from saved files.
 - `editor.material_editor {"path":"Assets/Materials/Brick.bmaterial"}` opens a material file in the Material Editor
   window (`{"close":true}` closes it, discarding unsaved edits) and returns `{open, path, dirty, valid, error}`. Opening
   fails while another material has unsaved edits. Agents edit material files with `asset.write`; an open editor without

@@ -30,9 +30,11 @@
 				"BlendSpaces": [ { "Name": "Locomotion", "Samples": [ { "Clip": "Step", "X": 0 }, { "Clip": "Cubic", "X": 1 } ] } ] } } },
 		{ "ID": 914, "Name": "IKRig", "Components": {
 			"Transform": { "Translation": [1000, 0, 20] },
-			"Animator": { "Mesh": "Assets/Models/Biped.gltf", "Clip": "Lean",
-				"Layers": [ { "Name": "Wave", "Clip": "Wave", "Mask": [ { "Joint": "RightUpperArm" } ] }, { "Name": "Breathe", "Clip": "Breathe", "Blend": "Additive" },
-					{ "Name": "Upper", "StateMachine": "Assets/Animations/UpperBody.banimgraph", "Weight": 0.5, "MaskAsset": "Assets/Animations/UpperBody.banimmask" } ],
+			"Script": { "Script": "Assets/Scripts/Probe.lua" },
+			"Animator": { "Mesh": "Assets/Models/Biped.gltf", "Clip": "Lean", "Events": [ { "Clip": "Wave", "Time": 0.1, "Name": "LayerWave" } ],
+				"Layers": [ { "Name": "Wave", "Clip": "Wave", "Events": true, "Mask": [ { "Joint": "RightUpperArm" } ] }, { "Name": "Breathe", "Clip": "Breathe", "Blend": "Additive" },
+					{ "Name": "Upper", "StateMachine": "Assets/Animations/UpperBody.banimgraph", "Weight": 0.5, "MaskAsset": "Assets/Animations/UpperBody.banimmask" },
+					{ "Name": "Own", "StateMachine": "Assets/Animations/UpperBody.banimgraph", "OwnParameters": true, "Weight": 0.25, "MaskAsset": "Assets/Animations/UpperBody.banimmask" } ],
 				"Preview": true },
 			"PropertyAnimation": { "Looping": false, "PlayOnStart": false, "Tracks": [{ "Component": "Animator", "Field": "Layers[Upper].Weight", "Keys": [{"Time": 0, "Value": [0.5,0,0,0]}, {"Time": 1, "Value": [0.25,0,0,0]}] },
 				{ "Component": "Animator", "Field": "LODInterval", "Stepped": true, "Keys": [{"Time": 0, "Value": [1,0,0,0]}, {"Time": 1, "Value": [3,0,0,0]}] },
@@ -41,7 +43,8 @@
 			"InverseKinematics": { "Pelvis": "Hips", "Smoothing": 0.05, "Target": 917, "LockSpeed": 0.4,
 				"Chains": [ { "Name": "LeftFoot", "Joint": "LeftFoot", "Ground": true, "FootLock": true }, { "Name": "RightFoot", "Joint": "RightFoot", "Ground": true },
 					{ "Name": "Head", "Type": "LookAt", "Joint": "Head" }, { "Name": "LeftArm", "Joint": "LeftHand" },
-					{ "Name": "Reach", "Type": "Fabrik", "Joint": "RightHand", "ChainLength": 2, "FollowTarget": true, "Weight": 0.5 } ] } } },
+					{ "Name": "Reach", "Type": "Fabrik", "Joint": "RightHand", "ChainLength": 2, "FollowTarget": true, "Weight": 0.5,
+						"ConeAngle": 150, "MinTwist": -60, "MaxTwist": 60, "JointLimits": [ { "Joint": "RightForeArm", "ConeAngle": 120, "MinTwist": -10, "MaxTwist": 10 } ] } ] } } },
 		{ "ID": 915, "Name": "IKFloor", "Components": {
 			"Transform": { "Translation": [1000, -0.5, 20] },
 			"RigidBody": {}, "BoxCollider": { "HalfExtents": [1, 0.5, 1] } } },
@@ -68,7 +71,7 @@
 		{ "ID": 928, "Name": "RetargetHero", "Components": {
 			"Transform": { "Translation": [1000, 0, 50] },
 			"Animator": { "Mesh": "Assets/Models/UnrealRig.gltf", "Clip": "Wave",
-				"ClipLibraries": [ { "Mesh": "Assets/Models/MixamoRig.gltf", "Joints": [ { "Source": "mixamorig:Spine1", "Target": "spine_02" } ], "JointMap": "Assets/Animations/Humanoid.bjointmap", "ReferenceClip": "Idle" } ] } } },
+				"ClipLibraries": [ { "Mesh": "Assets/Models/MixamoRig.gltf", "Joints": [ { "Source": "mixamorig:Spine1", "Target": "spine_02", "Offset": [ 0, 5, 0 ] } ], "JointMap": "Assets/Animations/Humanoid.bjointmap", "ReferenceClip": "Idle" } ] } } },
 		{ "ID": 100, "Name": "FeatureTestDriver", "Components": {
 			"Script": { "Script": "Assets/Scripts/FeatureTest.lua", "Properties": { "Duration": 4.5, "Note": "from scene", "Offset": [1, 2, 3] } } } },
 

@@ -196,6 +196,10 @@ namespace Basalt {
 				warnings.emplace_back("Animator MatchVelocity has no effect: no blend space sample has a Speed");
 			for (const AnimationLayer& layer : animator.Layers)
 			{
+				if (layer.OwnParameters && layer.StateMachine.empty())
+					warnings.push_back(fmt::format("Animator layer '{}': OwnParameters has no effect without a StateMachine", layer.Name));
+				if (layer.Events && animator.Events.empty())
+					warnings.push_back(fmt::format("Animator layer '{}': Events has no effect: the Animator has no Events", layer.Name));
 				if (!layer.StateMachine.empty())
 				{
 					if (!layer.Clip.empty())
@@ -256,6 +260,8 @@ namespace Basalt {
 					warnings.push_back(fmt::format("InverseKinematics chain '{}': FootLock has no effect while FollowTarget reaches for the Target", chain.Name));
 				if (chain.Type == IKChainType::LookAt && chain.MaxAngle == 0)
 					warnings.push_back(fmt::format("InverseKinematics chain '{}': MaxAngle 0 never turns the chain", chain.Name));
+				if (chain.Type != IKChainType::Fabrik && HasIKJointLimits(chain))
+					warnings.push_back(fmt::format("InverseKinematics chain '{}': ConeAngle, MinTwist, MaxTwist and JointLimits only apply to Fabrik chains", chain.Name));
 			}
 			if (ik.Target != 0)
 			{
@@ -282,6 +288,14 @@ namespace Basalt {
 				{
 					warnings.push_back(fmt::format("InverseKinematics chain '{}': {}", chain.Name, problem));
 					continue;
+				}
+				if (chain.Type == IKChainType::Fabrik)
+				{
+					std::vector<FabrikJointLimit> limits;
+					std::vector<std::string> problems;
+					ResolveFabrikLimits(*source, chain, joints, limits, problems);
+					for (const std::string& problem : problems)
+						warnings.push_back(fmt::format("InverseKinematics chain '{}': {}", chain.Name, problem));
 				}
 				if (chain.Ground && IKChainReaches(chain.Type))
 					groundUppers.push_back(joints.front());
