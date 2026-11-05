@@ -21,19 +21,15 @@ namespace Basalt {
 			if (entity)
 			{
 				ImGui::TextUnformatted(entity.GetName().c_str());
-				// Another selection, or a deleted target, falls back to the selected entity.
-				Entity target = PropertyAnimation::ResolveTarget(entity, m_Target);
-				if (!target || target == entity)
-				{
+				// A deleted target, or selecting the target itself, falls back to the selected entity.
+				if (const Entity current = PropertyAnimation::ResolveTarget(entity, m_Target); !current || current == entity)
 					m_Target = 0;
-					target = entity;
-				}
 				if (const auto picked = DrawEntityPicker(*scene, "Target", m_Target, [&](Entity candidate) { return candidate != entity; }, "Self"))
 				{
 					m_Target = *picked;
-					target = PropertyAnimation::ResolveTarget(entity, m_Target);
 					m_Field.clear();
 				}
+				const Entity target = PropertyAnimation::ResolveTarget(entity, m_Target);
 				if (ImGui::BeginCombo("Component", m_Component.c_str()))
 				{
 					for (const auto& info : ComponentRegistry::GetAll())
@@ -95,7 +91,7 @@ namespace Basalt {
 					ImGui::TextWrapped("Capture fields above. Edit duration, interpolation, key times and values below. Values use X for scalars, integers and booleans (0 or 1) and the first N lanes for vectors; strings and enums use Text and asset references use Asset. Integer, boolean, string, enum and asset tracks always step. Target is the entity a track animates. Scrubbing changes the scene and supports Undo.");
 					for (const auto& field : info->Fields)
 					{
-						const auto edit = DrawJsonValue(field, data[field], info->FieldTypes.at(field), info->EnumOptions, scene.get());
+						const auto edit = DrawJsonValue(field, data[field], info->FieldTypes.at(field), info->EnumOptions, *scene);
 						m_Context.EditField("component.set", { { "entity", id }, { "component", "PropertyAnimation" }, { "data", { { field, data[field] } } } }, edit.Changed, edit.Committed);
 					}
 				}

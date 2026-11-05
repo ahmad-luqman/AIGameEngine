@@ -159,6 +159,17 @@ namespace Basalt {
 
 	}
 
+	namespace {
+		// What 0 means in a component's entity field: the entity itself for a joint's BodyEntity, the world for its
+		// ConnectedEntity and the parent for a BoneAttachment's Target.
+		const char* EntityReferenceNone(const std::string& component, const std::string& field)
+		{
+			if (component == "Joint")
+				return field == "BodyEntity" ? "Self" : "World";
+			return component == "BoneAttachment" ? "Parent" : "None";
+		}
+	}
+
 	void InspectorPanel::DrawEntityReference(Entity entity, const std::string& component, const std::string& field, uint64_t current, const std::function<bool(Entity)>& filter, const char* noneLabel)
 	{
 		if (const auto selected = DrawEntityPicker(*entity.GetScene(), field, current, filter, noneLabel))
@@ -207,7 +218,15 @@ namespace Basalt {
 						}
 						ImGui::TextDisabled("%s (mixed)", field.c_str());
 					}
-					const auto result = DrawJsonValue(field, data[field], type->second, info.EnumOptions, m_Context.Session.GetScene().get());
+					// As in the single selection, but a filter that fits one entity of the selection may not fit another.
+					if (type->second.Kind == ComponentFieldKind::Entity)
+					{
+						const auto picked = DrawEntityPicker(scene, field, data[field].get<uint64_t>(), [&](Entity candidate) { return std::ranges::find(selection, candidate.GetUUID()) == selection.end(); }, EntityReferenceNone(info.Name, field));
+						if (picked && m_Context.Execute("editor.component_set", { { "component", info.Name }, { "data", { { field, *picked } } } }))
+							m_Context.CommitHistory();
+						continue;
+					}
+					const auto result = DrawJsonValue(field, data[field], type->second, info.EnumOptions, scene);
 					m_Context.EditField("editor.component_set", { { "component", info.Name }, { "data", { { field, data[field] } } } }, result.Changed, result.Committed);
 				}
 			}
@@ -291,22 +310,15 @@ namespace Basalt {
 						continue;
 					if (std::find(info.EntityFields.begin(), info.EntityFields.end(), field) != info.EntityFields.end())
 					{
-						// 0 is the entity itself for a joint's BodyEntity, the world for its ConnectedEntity and the parent
-						// for a BoneAttachment's Target.
-						const char* noneLabel = "None";
 						std::function<bool(Entity)> filter = [entity](Entity candidate) { return candidate != entity; };
 						if (isJoint)
-						{
-							noneLabel = field == "BodyEntity" ? "Self" : "World";
 							filter = JointReferenceFilter(entity, joint, field);
-						}
 						else if (info.Name == "BoneAttachment")
 						{
-							noneLabel = "Parent";
 							// A descendant would move with the entity it holds (UpdateAttachments rejects it).
 							filter = [entity](Entity candidate) { return candidate != entity && !entity.GetScene()->IsDescendantOf(candidate, entity); };
 						}
-						DrawEntityReference(entity, info.Name, field, data[field].get<uint64_t>(), filter, noneLabel);
+						DrawEntityReference(entity, info.Name, field, data[field].get<uint64_t>(), filter, EntityReferenceNone(info.Name, field));
 						continue;
 					}
 					if (const auto type = info.FieldTypes.find(field); type != info.FieldTypes.end() && type->second.Kind == ComponentFieldKind::List)
@@ -314,7 +326,7 @@ namespace Basalt {
 						ComponentFieldType listType = type->second;
 						if (info.Name == "SpringBone" && field == "Chains")
 							listType.Element = WithChainLayers(*listType.Element, data[field]);
-						const JsonFieldResult result = DrawJsonList(field, data[field], listType, entity.GetScene());
+						const JsonFieldResult result = DrawJsonList(field, data[field], listType, *scene);
 						m_Context.EditField("component.set", { { "entity", id }, { "component", info.Name }, { "data", { { field, data[field] } } } }, result.Changed, result.Committed);
 						continue;
 					}

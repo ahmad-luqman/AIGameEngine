@@ -138,7 +138,7 @@ TEST_SUITE("Animation authoring")
 		REQUIRE(PropertyAnimation::Sample(entity, animation, 0, error));
 		CHECK(entity.GetTransform().Translation.x == 0);
 		for (const auto& info : ComponentRegistry::GetAll())
-			if (!info.SupportsPropertyAnimation)
+			if (!info.SupportsPropertyAnimation())
 				for (const auto& field : info.Fields)
 					CHECK_FALSE(PropertyAnimation::ResolveField(info.Name, field));
 		entity.AddComponent<RigidBodyComponent>();
@@ -385,7 +385,7 @@ TEST_SUITE("Animation authoring")
 		{
 			const auto* info = ComponentRegistry::Find(name);
 			REQUIRE(info);
-			CHECK_FALSE(info->SupportsPropertyAnimation);
+			CHECK_FALSE(info->SupportsPropertyAnimation());
 			for (const auto& field : info->Fields)
 				CHECK_FALSE(PropertyAnimation::ResolveField(name, field));
 		}
@@ -393,10 +393,10 @@ TEST_SUITE("Animation authoring")
 		{
 			const auto* info = ComponentRegistry::Find(name);
 			REQUIRE(info);
-			CHECK(info->SupportsPropertyAnimation);
-			CHECK_FALSE(info->LiveFields.empty());
+			CHECK(info->SupportsPropertyAnimation());
+			REQUIRE(info->AnimatableFields);
 			for (const auto& field : info->Fields)
-				if (std::ranges::find(info->LiveFields, field) == info->LiveFields.end())
+				if (std::ranges::find(*info->AnimatableFields, field) == info->AnimatableFields->end())
 				{
 					CAPTURE(field);
 					CHECK_FALSE(PropertyAnimation::ResolveField(name, field));
@@ -410,7 +410,7 @@ TEST_SUITE("Animation authoring")
 		CHECK(PropertyAnimation::ResolveField("Camera", "FOV"));
 		// Everything the registry lists as live is one a component really has.
 		for (const ComponentInfo& info : ComponentRegistry::GetAll())
-			for (const std::string& field : info.LiveFields)
+			for (const std::string& field : info.AnimatableFields.value_or(std::vector<std::string>{}))
 				if (const size_t list = field.find("[]."); list == std::string::npos)
 				{
 					CAPTURE(field);

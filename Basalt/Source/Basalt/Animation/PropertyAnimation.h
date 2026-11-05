@@ -63,7 +63,7 @@ namespace Basalt {
 		// an index). The field must be a number (up to four lanes; quaternion rotations as their three Euler degrees),
 		// integer, boolean, string, enum or asset reference (single values), other than the name that identifies a list
 		// element. Components that are not animatable (ComponentInfo::SupportsPropertyAnimation) and fields outside a
-		// component's ComponentInfo::LiveFields are refused. nullopt, with the reason in outError, otherwise.
+		// component's ComponentInfo::AnimatableFields are refused. nullopt, with the reason in outError, otherwise.
 		static std::optional<PropertyAnimationField> ResolveField(const std::string& component, const std::string& field, std::string* outError = nullptr);
 		// Every field path of `component` on the entity that ResolveField accepts, in declaration order, with list elements
 		// picked by their unique name where it is a usable selector (nonempty, not only digits, without ']', used once),
@@ -72,6 +72,8 @@ namespace Basalt {
 		// The entity a timeline's track with this Target animates: `timeline` for 0, otherwise that entity of its scene,
 		// which is an invalid Entity when it is not there.
 		static Entity ResolveTarget(Entity timeline, UUID target);
+		// Why ResolveTarget found no entity, for messages.
+		static std::string DescribeMissingTarget(UUID target);
 		// Samples normalized time in [0,1]. A missing entity, component or list element fails before anything changes; when
 		// a component rejects its patch, components patched before it (in order of target UUID, then name) stay changed.
 		// Tracks reaching the same field of the same entity (also through different spellings) apply in order, so the last
@@ -85,7 +87,7 @@ namespace Basalt {
 	};
 
 	// Session-owned property clocks. PropertyAnimation component updates restart a timeline; clocks never serialize. A new
-	// clock starts loading what its asset tracks name, so a flipbook does not show a placeholder per frame in renderers that
+	// clock starts loading what its asset tracks name, so a flipbook's textures load ahead of their keys in renderers that
 	// stream.
 	class PropertyAnimationSystem
 	{

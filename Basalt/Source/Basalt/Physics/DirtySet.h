@@ -10,7 +10,7 @@
 
 namespace Basalt::PhysicsInternal {
 
-	// Entities waiting to be rebuilt, in the order they were first marked. Rebuilds create and activate Jolt
+	// Entities waiting to be updated or rebuilt, in the order they were first marked. Rebuilds create and activate Jolt
 	// bodies, and that order steers the simulation, so it must never follow hash order (which differs between
 	// standard libraries). Members may have been destroyed since they were marked; consumers skip those.
 	class DirtySet

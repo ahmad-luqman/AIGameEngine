@@ -67,7 +67,7 @@ namespace Basalt {
 				if (auto* body = FindBody(uuid); body != nullptr)
 				{
 					bodies.InvalidateContactCache(body->ID);
-					if (body->Type == RigidBodyType::Dynamic)
+					if (body->Settings.Type == RigidBodyType::Dynamic)
 						bodies.ActivateBody(body->ID);
 				}
 				if (const auto character = Characters.find(uuid); character != Characters.end())
@@ -99,7 +99,7 @@ namespace Basalt {
 		std::vector<UUID> holders;
 		for (const auto& [holder, joint] : Joints)
 		{
-			if (joint.Body == uuid || joint.Settings.ConnectedEntity == uuid)
+			if (joint.Touches(uuid))
 				holders.push_back(holder);
 		}
 		std::ranges::sort(holders);
@@ -491,10 +491,10 @@ namespace Basalt {
 				return;
 			}
 			bodyIDs[0] = other->ID;
-			connectedType = other->Type;
+			connectedType = other->Settings.Type;
 		}
 		// Jolt only moves dynamic bodies; a constraint between static and kinematic bodies does nothing.
-		if (self->Type != RigidBodyType::Dynamic && connectedType != RigidBodyType::Dynamic)
+		if (self->Settings.Type != RigidBodyType::Dynamic && connectedType != RigidBodyType::Dynamic)
 		{
 			warnings.emplace_back("not built: it connects no dynamic body (only static, kinematic or the world) and would have no effect");
 			return;

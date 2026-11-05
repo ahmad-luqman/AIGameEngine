@@ -55,21 +55,17 @@ namespace Basalt {
 		struct BodyRecord
 		{
 			JPH::BodyID ID;
-			RigidBodyType Type = RigidBodyType::Static;
-			bool IsTrigger = false;
-			// The MeshComponent mesh a MeshCollider without its own Mesh was built from, so edits to the
-			// MeshComponent's other fields (e.g. CastShadows) do not rebuild the body.
-			std::optional<std::pair<std::string, uint32_t>> BorrowedMesh;
 			// Pose last written to / read from the entity, used to detect transforms changed by scripts.
 			glm::vec3 LastPosition = { 0.0f, 0.0f, 0.0f };
 			glm::quat LastRotation = { 1.0f, 0.0f, 0.0f, 0.0f };
 			// The world scale the colliders were built with (see ApplyScaleChanges).
 			glm::vec3 BuiltScale = { 1.0f, 1.0f, 1.0f };
-			// What the body was built from (plus later in-place updates), and the warnings about its shape and layer, which
-			// an update that keeps them adds back to keep the logged set the same.
+			// What the body was built from (plus later in-place updates): what needs a rebuild (BodyNeedsRebuild) never differs
+			// from the entity's. The warnings about its shape are added back by an update that keeps it, to keep the logged
+			// set the same.
 			RigidBodyComponent Settings;
 			PhysicsInternal::ColliderSettings Colliders;
-			std::vector<std::string> BuildWarnings;
+			std::vector<std::string> ShapeWarnings;
 			// Set while the entity's transform cannot be decomposed (e.g. a zero scale): the body keeps its shape
 			// and simulates on, but its pose is not written back (warned once per episode).
 			bool Degenerate = false;
@@ -88,6 +84,8 @@ namespace Basalt {
 			// Warnings found while building the constraint (e.g. a zero axis). In-place updates only re-check
 			// the other settings, so these are added back to keep the logged set the same.
 			std::vector<std::string> BuildWarnings;
+			// Whether the joint moves or connects to the entity's body.
+			bool Touches(UUID uuid) const { return Body == uuid || Settings.ConnectedEntity == uuid; }
 			// The second body's joint frame seen from the first's when the joint was built. Six-DOF frames
 			// coincide there (identity), but Jolt picks each cone frame's Y and Z per body, so they can differ
 			// by a twist; GetJointRotation measures from this.
@@ -262,8 +260,7 @@ namespace Basalt {
 			JPH::AABox Bounds;
 			// Set while the entity's transform cannot be decomposed (e.g. a zero scale); the character waits.
 			bool Degenerate = false;
-			// As BodyRecord::BorrowedMesh and BuiltScale.
-			std::optional<std::pair<std::string, uint32_t>> BorrowedMesh;
+			// As BodyRecord::BuiltScale.
 			glm::vec3 BuiltScale = { 1.0f, 1.0f, 1.0f };
 		};
 
@@ -411,24 +408,29 @@ namespace Basalt {
 		// place, applies changed character settings, resizes rescaled ones and rebuilds dirty joints (the start of every
 		// Step, and OnSceneLoaded).
 		void ApplyPendingChanges();
-		// Applies a dirty entity's changed RigidBody and collider settings to its body or character, keeping contacts, joints
-		// and sleep when nothing changed. False when only a rebuild can: nothing changed yet then.
+		// Applies a dirty entity's changed RigidBody and collider settings to its body or character, keeping contacts and
+		// joints; values that did not change do nothing, not even wake it. False when only a rebuild can apply them.
 		bool UpdateInPlace(Entity entity);
 		bool UpdateBody(Entity entity, BodyRecord& record, const PhysicsInternal::ColliderSettings& colliders);
+		bool UpdateCharacter(Entity entity, CharacterRecord& record, const PhysicsInternal::ColliderSettings& colliders);
+		bool ReplaceBodyColliders(Entity entity, BodyRecord& record, const PhysicsInternal::ColliderSettings& colliders);
 		// Gives the body the new shape and its materials and (when dynamic) inertia at the component's mass. Jolt keeps the
 		// body's origin and re-evaluates its contacts without ending them. Its center of mass can move, which joints must be
 		// told of (or be gone).
 		void SwapBodyShape(Entity entity, BodyRecord& record, const PhysicsInternal::ColliderShape& colliders);
-		void ApplyBodyMass(BodyRecord& record, const JPH::Shape& shape, float mass);
+		// The body's inertia from its shape at the mass. False, logged, when the body cannot be locked.
+		bool ApplyBodyMass(const BodyRecord& record, float mass);
 		// Colliders are sized by the entity's world scale, which a script, an animation or a parent can change
 		// without touching a physics component. Once per Step (and on a scene load), after dirty entities are
-		// rebuilt, bodies and characters whose scale differs from the one they were built with get a new shape in
+		// applied, bodies and characters whose scale differs from the one they were built with get a new shape in
 		// place, keeping their contacts (so an animated scale does not end and restart every overlap each frame);
 		// a body's joints are rebuilt from the current poses, since their anchors scale with it.
 		// Entities left without a body by a degenerate transform are built once it decomposes again.
 		void ApplyScaleChanges();
 		void ResizeBody(Entity entity, const glm::vec3& scale);
 		void ResizeCharacter(Entity entity, const glm::vec3& scale);
+		// Gives the character new shapes for the scale; false with nothing changed when they cannot be built.
+		bool ReshapeCharacter(Entity entity, CharacterRecord& record, const glm::vec3& scale, std::vector<std::string>& warnings);
 		// What the character touches now, for a step that must not start from what it touched before a new shape.
 		void RefreshCharacterContacts(Entity entity);
 		// Applies changed CharacterController settings in place, rebuilding only when the layer changed.

@@ -48,29 +48,6 @@ namespace Basalt::PhysicsInternal {
 		return !Mesh || (Mesh->Mesh == other.Mesh->Mesh && Mesh->MeshIndex == other.Mesh->MeshIndex && Mesh->Convex == other.Mesh->Convex && BorrowedMesh == other.BorrowedMesh);
 	}
 
-	bool BodyNeedsRebuild(const RigidBodyComponent& built, const RigidBodyComponent& current)
-	{
-		return built.Type != current.Type || built.IsTrigger != current.IsTrigger || built.FixedRotation != current.FixedRotation || built.Layer != current.Layer;
-	}
-
-	BodySettings CheckBodySettings(const RigidBodyComponent& rigidBody, std::vector<std::string>& warnings)
-	{
-		BodySettings settings;
-		settings.Surface = SanitizeSurface(rigidBody.Friction, rigidBody.Restitution, "", warnings);
-		// Static bodies never sleep or wake and Jolt never puts a sensor to sleep, so turning sleeping off there has no effect.
-		if (!rigidBody.AllowSleeping && (rigidBody.Type == RigidBodyType::Static || rigidBody.IsTrigger))
-			warnings.emplace_back("AllowSleeping only affects dynamic and kinematic bodies that are not triggers");
-		// Jolt only sweeps dynamic, non-sensor bodies.
-		if (rigidBody.Continuous)
-		{
-			if (rigidBody.Type == RigidBodyType::Dynamic && !rigidBody.IsTrigger)
-				settings.Quality = JPH::EMotionQuality::LinearCast;
-			else
-				warnings.emplace_back("Continuous only affects dynamic bodies that are not triggers");
-		}
-		return settings;
-	}
-
 	ColliderShape BuildColliderShape(Entity entity, const glm::vec3& signedScale, float sizeFraction, const char* convexReason, bool isTrigger, bool useMaterials, std::vector<std::string>& warnings)
 	{
 		const glm::vec3 scale = glm::abs(signedScale) * sizeFraction;
@@ -106,17 +83,23 @@ namespace Basalt::PhysicsInternal {
 
 		if (const auto* box = entity.TryGetComponent<BoxColliderComponent>())
 		{
+			if (glm::any(glm::lessThanEqual(box->HalfExtents, glm::vec3(0.0f))))
+				warnings.emplace_back("BoxCollider HalfExtents must be positive, using the smallest size");
 			const glm::vec3 halfExtents = glm::max(box->HalfExtents * scale, glm::vec3(MinExtent));
 			const float convexRadius = std::min(JPH::cDefaultConvexRadius, glm::min(halfExtents.x, glm::min(halfExtents.y, halfExtents.z)) * 0.5f);
 			addShape(JPH::BoxShapeSettings(ToJolt(halfExtents), convexRadius).Create(), box->Offset, materialOf(*box, "BoxCollider"));
 		}
 		if (const auto* sphere = entity.TryGetComponent<SphereColliderComponent>())
 		{
+			if (sphere->Radius <= 0.0f)
+				warnings.emplace_back("SphereCollider Radius must be positive, using the smallest size");
 			const float radius = std::max(sphere->Radius * glm::max(scale.x, glm::max(scale.y, scale.z)), MinExtent);
 			addShape(JPH::SphereShapeSettings(radius).Create(), sphere->Offset, materialOf(*sphere, "SphereCollider"));
 		}
 		if (const auto* capsule = entity.TryGetComponent<CapsuleColliderComponent>())
 		{
+			if (capsule->Radius <= 0.0f || capsule->HalfHeight <= 0.0f)
+				warnings.emplace_back("CapsuleCollider Radius and HalfHeight must be positive, using the smallest size");
 			const float radius = std::max(capsule->Radius * glm::max(scale.x, scale.z), MinExtent);
 			const float halfHeight = std::max(capsule->HalfHeight * scale.y, MinExtent);
 			addShape(JPH::CapsuleShapeSettings(halfHeight, radius).Create(), capsule->Offset, materialOf(*capsule, "CapsuleCollider"));
@@ -133,7 +116,6 @@ namespace Basalt::PhysicsInternal {
 					warnings.emplace_back("MeshCollider MeshIndex is ignored without its own Mesh (the MeshComponent's is used)");
 				key = meshComponent->Mesh;
 				meshIndex = meshComponent->MeshIndex;
-				result.BorrowedMesh.emplace(key, meshIndex);
 			}
 			bool convex = meshCollider->Convex;
 			if (!convex && convexReason)

@@ -6,6 +6,7 @@
 
 #include <functional>
 #include <map>
+#include <optional>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -89,12 +90,12 @@ namespace Basalt {
 		std::string Name;
 		// Core components (Tag, Transform) exist on every entity and cannot be added or removed.
 		bool IsCore = false;
-		// Whether property tracks may animate the component: not PropertyAnimation itself, a Prefab's tracking or a Script.
-		bool SupportsPropertyAnimation = true;
-		// When not empty, the only fields tracks may animate ("List[].Field" as in AssetFields): for physics configuration,
-		// those physics applies in place. Any other field rebuilds the body, character, joint or ragdoll when it changes,
-		// which ends its contacts or resets its rest pose.
-		std::vector<std::string> LiveFields;
+		// The only fields property tracks may animate ("List[].Field" as in AssetFields); nullopt is all of them. Physics
+		// configuration lists what physics applies in place: any other field rebuilds the body, character or joint when it
+		// changes (ending its contacts or resetting its rest pose) or starts or ends a ragdoll. Empty for what tracks must
+		// not touch: PropertyAnimation itself, a Prefab's tracking and a Script.
+		std::optional<std::vector<std::string>> AnimatableFields;
+		bool SupportsPropertyAnimation() const { return !AnimatableFields || !AnimatableFields->empty(); }
 
 		std::function<bool(Entity)> Has;
 		// Adds a default-constructed component if missing.
@@ -113,13 +114,18 @@ namespace Basalt {
 		// field of every element of a list field, at any depth (see ForEachFieldValue).
 		std::vector<std::string> AssetFields;
 		// Fields that hold an entity UUID (collected from the field list; "List[].Field" as above). Tools may let users
-		// name entities there (see component.set), and inspectors show an entity picker.
+		// name entities there (see component.set), and inspectors show an entity picker. What 0 means is each field's own:
+		// in a list element it is the entity holding the list, so a lost reference there is MissingEntity, never 0.
 		std::vector<std::string> EntityFields;
 		// Rewrites the component's entity references (e.g. Joint "ConnectedEntity") through the map;
 		// references not in the map are kept, except that a copied prefab instance gives members it did not copy
 		// fresh IDs. Empty for components without EntityFields, except Prefab, which remaps its Members.
 		std::function<void(Entity, const std::unordered_map<UUID, UUID>&)> RemapEntityReferences;
 	};
+
+	// What a list element's entity field holds once its entity is gone for good. No entity ever has this ID, so the reference
+	// fails where it is used rather than turn into 0, the entity holding the list.
+	inline constexpr uint64_t MissingEntity = ~uint64_t{ 0 };
 
 	// Visits the values a ComponentInfo::AssetFields or EntityFields entry names in a component's JSON: the top-level field,
 	// or for "List[].Field" that field of every object element of the list, at any depth ("Tracks[].Keys[].Asset"), with a
