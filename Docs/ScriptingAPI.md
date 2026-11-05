@@ -1437,8 +1437,8 @@ playback; a layer with `Events` on fires these markers for what it plays, as des
   the target. With `BlendAnimations` each clip fires while its weight is above 0. In a blend space only the heaviest sample's clip
   fires, because its clips run in step and would repeat each marker; when the parameter makes another sample the
   heaviest, a marker near that moment can be skipped or repeated once.
-- At most 64 events per Animator and frame are delivered, and 64 more from its layers together; the rest are dropped with a warning (once per
-  animation started). A marker past the end of the playing clip does not fire for it (an empty-`Clip` marker still
+- At most 64 events per Animator and frame are delivered, and 64 more from its layers together; the rest are dropped with a warning (for
+  the base once per animation started, for a layer once until `PlayAnimationLayer`, naming the layer). A marker past the end of the playing clip does not fire for it (an empty-`Clip` marker still
   fires for longer clips); markers naming a missing or zero-length clip never fire. The inspector and `scene.info`
   warn about markers that can never fire.
 - Events are delivered after `OnLateUpdate` and after this frame's pose and attachments are computed, before
