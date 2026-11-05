@@ -360,7 +360,8 @@ TEST_SUITE("Property animation")
 		{
 			RestingCrate scene;
 			scene.Crate.AddComponent<BoxColliderComponent>();
-			scene.Crate.AddComponent<SphereColliderComponent>().Radius = 0.2f;
+			// The sphere stays on the floor, so only a rebuild, not a fall, can end the contact.
+			scene.Crate.AddComponent<SphereColliderComponent>().Radius = 0.5f;
 			scene.Start();
 			scene.Crate.RemoveComponent<BoxColliderComponent>();
 			scene.Frames(2);
@@ -526,6 +527,18 @@ TEST_SUITE("Property animation")
 		scene.Patch(scene.Crate, "BoxCollider", { { "HalfExtents", { 0, 0.5f, 0.5f } } });
 		scene.Frames(1);
 		CHECK(CountLogMessages(since, "BoxCollider HalfExtents must be positive") == 1);
+		scene.Crate.RemoveComponent<BoxColliderComponent>();
+		scene.Crate.AddComponent<SphereColliderComponent>();
+		scene.Frames(1);
+		scene.Patch(scene.Crate, "SphereCollider", { { "Radius", 0.0f } });
+		scene.Frames(1);
+		CHECK(CountLogMessages(since, "SphereCollider Radius must be positive") == 1);
+		scene.Crate.RemoveComponent<SphereColliderComponent>();
+		scene.Crate.AddComponent<CapsuleColliderComponent>();
+		scene.Frames(1);
+		scene.Patch(scene.Crate, "CapsuleCollider", { { "HalfHeight", -1.0f } });
+		scene.Frames(1);
+		CHECK(CountLogMessages(since, "CapsuleCollider Radius and HalfHeight must be positive") == 1);
 	}
 
 	TEST_CASE("Mass and damping writes to a static floor leave what sleeps on it alone")
@@ -571,6 +584,20 @@ TEST_SUITE("Property animation")
 		CHECK(timeline.GetComponent<PointLightComponent>().Intensity == 2);
 		const auto warnings = GetAnimationWarnings(timeline);
 		CHECK(std::ranges::any_of(warnings, [](const std::string& warning) { return warning.find("reaches the same field") != std::string::npos; }));
+	}
+
+	TEST_CASE("A value another entity's component rejects names that entity")
+	{
+		Scene scene;
+		Entity timeline = scene.CreateEntity("Timeline");
+		Entity panel = scene.CreateEntity("Panel");
+		panel.AddComponent<MaterialComponent>();
+		PropertyAnimationComponent animation;
+		animation.Tracks.push_back({ "Material", "Material", true, { { 0, glm::vec4(0.0f), "", "Assets/NotAMaterial.png" } }, panel.GetUUID() });
+		std::string error;
+		CHECK_FALSE(PropertyAnimation::Sample(timeline, animation, 0, error));
+		CHECK(error.find("entity 'Panel'") != std::string::npos);
+		CHECK(error.find("must be a .bmaterial") != std::string::npos);
 	}
 
 	TEST_CASE("A track's missing target fails, warns and suspends the timeline until repaired")
@@ -776,6 +803,16 @@ TEST_SUITE("Property animation")
 		const json created = BasaltTest::Run(commands, session, "prefab.create", { { "entity", IdOf(root) }, { "path", "Assets/Root.bprefab" } });
 		REQUIRE(created.contains("warnings"));
 		CHECK(created["warnings"].dump().find("'Root' PropertyAnimation.Tracks[0].Target references an entity outside the prefab") != std::string::npos);
+
+		// Applying what the file already says is no news.
+		const json applied = BasaltTest::Run(commands, session, "prefab.apply", { { "entity", IdOf(root) } });
+		CHECK(applied.dump().find("the prefab keeps") == std::string::npos);
+
+		// Saving from an open prefab says the same.
+		BasaltTest::Run(commands, session, "prefab.open", { { "path", "Assets/Root.bprefab" } });
+		const json saved = BasaltTest::Run(commands, session, "prefab.save", json::object());
+		CHECK(saved.dump().find("references an entity outside the prefab") != std::string::npos);
+		BasaltTest::Run(commands, session, "prefab.close", json::object());
 	}
 
 	TEST_CASE("project.validate reports a track whose entity is not in its scene")
