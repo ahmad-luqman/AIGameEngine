@@ -59,24 +59,22 @@ The features most games need, roughly in order of impact.
 
 Skeletal playback, crossfades, two-clip blends, 1D/2D blend spaces with phase sync and velocity matching,
 animation events, bone attachments, data-driven state machines and per-state root motion, layers with joint masks,
-shared mask assets, additive clips and their own state machines, inverse kinematics (two-bone, look-at and FABRIK chains,
-foot placement and foot locking), spring bones (angle limits, per-chain colliders, physics-body collisions with layers,
+shared mask assets and a mask editor, additive clips and their own state machines with events and private parameters,
+inverse kinematics (two-bone, look-at and FABRIK chains with joint limits, foot placement and foot locking, in the edit
+preview too), spring bones (angle limits, per-chain colliders, physics-body collisions with layers,
 continuous collision and edit-mode static bodies), powered ragdolls (per-bone strengths, partial rigs on a kinematic root,
-active balance), morph targets, retargeted clip libraries (shared joint maps, reference poses for other rest styles), property
+active balance), morph targets, retargeted clip libraries (shared joint maps with an editor, reference poses from clips or per-joint offsets), property
 animation of numeric and discrete fields (nested in lists too) and an edit-mode preview (`AnimationSystem`) are implemented;
 physics provides character controllers (`MoveCharacter`, `IsCharacterGrounded`, ground normal) and raycasts. The items
 below extend character movement, in order of impact.
 
-- **IK and layer follow-ups II — S each.** Joint limits for FABRIK chains (cones and twist ranges), a mask editor in the
-  editor (masks are authored as `.banimmask` JSON through `asset.write` today), layer graph events and per-layer
-  parameters that the base graph does not share, and edit-mode ground placement against static colliders.
+- **IK and retargeting follow-ups III — S.** Cone and twist gizmos in the viewport, joint limits for TwoBone chains and the end
+  joint's target rotation, and a live skeleton preview of the Animation Mask and Joint Map windows (their offsets and
+  weights are read from Animators in the scene view today).
 - **Spring bone follow-ups III — S.** Sweeping whole bones as well as their points, and kinematic bodies in the edit preview
   where they stay at their authored place.
 - **Powered ragdoll follow-ups II — M.** Balance that steps (replanting feet toward the center of mass after a push), and
   several kinematic roots (both legs walking and a free spine between them).
-- **Retargeting follow-ups II — S.** A joint map editor in the editor (`.bjointmap` files are authored as JSON through
-  `asset.write` today) and reference poses built from per-joint rotation offsets, for libraries without a frame in the
-  model's rest style.
 - **Property animation follow-ups — S.** Stable Euler serialization at exact gimbal lock, physics configuration tracks
   that preserve contacts, asset reference tracks (texture flipbooks), and tracks on other entities; current authoring
   covers numeric, integer, boolean, string and enum fields of the same entity, including fields inside list elements.

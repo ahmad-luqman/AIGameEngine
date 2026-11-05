@@ -45,6 +45,8 @@ namespace Basalt {
 			None,
 			Script,
 			Material,
+			AnimationMask,
+			JointMap,
 			Folder
 		};
 		NewItem m_NewItem = NewItem::None;

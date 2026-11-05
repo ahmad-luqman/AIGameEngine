@@ -54,7 +54,6 @@ namespace Basalt {
 	void AnimationSystem::SolveSprings(float seconds)
 	{
 		BS_PROFILE_SCOPE("Spring bones");
-		m_StaticShapesFresh = false;
 		for (auto handle : m_Scene.GetAllEntitiesWith<SpringBoneComponent>())
 		{
 			Entity entity(handle, &m_Scene);

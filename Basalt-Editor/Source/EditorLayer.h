@@ -9,6 +9,8 @@
 #include "Panels/InspectorPanel.h"
 #include "Panels/MaterialEditorPanel.h"
 #include "Panels/AnimationGraphPanel.h"
+#include "Panels/AnimationJointMapPanel.h"
+#include "Panels/AnimationMaskPanel.h"
 #include "Panels/PropertyAnimationPanel.h"
 #include "Panels/ProjectSettingsPanel.h"
 #include "Panels/SceneHierarchyPanel.h"
@@ -189,6 +191,8 @@ namespace Basalt {
 		ContentBrowserPanel m_ContentBrowserPanel;
 		MaterialEditorPanel m_MaterialEditorPanel;
 		AnimationGraphPanel m_AnimationGraphPanel;
+		AnimationMaskPanel m_AnimationMaskPanel;
+		AnimationJointMapPanel m_AnimationJointMapPanel;
 		PropertyAnimationPanel m_PropertyAnimationPanel;
 		// The path typed into the inspector's "Save as Material Asset" prompt.
 		std::string m_SaveMaterialPath;

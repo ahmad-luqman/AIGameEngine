@@ -11,6 +11,9 @@
 #include "Basalt/Scene/Scene.h"
 
 #include <Jolt/Geometry/AABox.h>
+#include <Jolt/Physics/Collision/CastResult.h>
+#include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
+#include <Jolt/Physics/Collision/RayCast.h>
 
 #include <cmath>
 #include <map>
@@ -180,6 +183,32 @@ namespace Basalt {
 			candidates.push_back(PhysicsShapeSnapshot::Candidate::At(uuid, body.Placed, center));
 		}
 		return PhysicsShapeSnapshot::FromCandidates(std::move(candidates), radius);
+	}
+
+	std::vector<RaycastHit> StaticPhysicsShapes::RaycastAll(const glm::vec3& origin, const glm::vec3& direction, float maxDistance, const PhysicsQueryFilter& filter) const
+	{
+		const auto unitDirection = CastDirection(direction, maxDistance);
+		if (!unitDirection || !IsFiniteVec(origin))
+			return {};
+		const JPH::RRayCast ray(ToJolt(origin), ToJolt(*unitDirection * maxDistance));
+		const JPH::AABox swept(ToJolt(glm::min(origin, origin + *unitDirection * maxDistance)), ToJolt(glm::max(origin, origin + *unitDirection * maxDistance)));
+		std::vector<RaycastHit> hits;
+		for (const auto& [uuid, body] : m_Impl->Bodies)
+		{
+			if (!body.Shape || (filter.LayerMask & (1u << body.Layer)) == 0 || uuid == filter.IgnoreEntity || !body.Bounds.Overlaps(swept))
+				continue;
+			JPH::AllHitCollisionCollector<JPH::CastRayCollector> collector;
+			body.Placed.CastRay(ray, JPH::RayCastSettings(), collector);
+			for (const JPH::RayCastResult& result : collector.mHits)
+			{
+				RaycastHit& hit = hits.emplace_back();
+				hit.EntityID = uuid;
+				hit.Distance = result.mFraction * maxDistance;
+				hit.Point = origin + *unitDirection * hit.Distance;
+				hit.Normal = FromJolt(body.Placed.GetWorldSpaceSurfaceNormal(result.mSubShapeID2, ToJolt(hit.Point)));
+			}
+		}
+		return SortHits(std::move(hits));
 	}
 
 }

@@ -5,6 +5,7 @@
 #include "Basalt/Core/Profiler.h"
 #include "Basalt/Math/Math.h"
 #include "Basalt/Physics/PhysicsWorld.h"
+#include "Basalt/Physics/StaticPhysicsShapes.h"
 #include "Basalt/Scene/Entity.h"
 #include "Basalt/Scene/Scene.h"
 
@@ -33,6 +34,8 @@ namespace Basalt {
 			// TwoBone: upper, middle, end. LookAt: the aiming joint, then its ancestors. Fabrik: the chain root first, down to
 			// the end joint.
 			std::vector<uint32_t> Joints;
+			// Fabrik: one per turned joint, or empty.
+			std::vector<FabrikJointLimit> Limits;
 			// World space while resolving; model space once in the solve list. nullopt: nothing to reach for.
 			std::optional<glm::vec3> Target;
 			std::optional<glm::quat> Rotation;
@@ -56,6 +59,8 @@ namespace Basalt {
 				problems.emplace_back("Pole is not finite; keeping the animated bend");
 			if (!Math::IsFinite(chain.Axis) || glm::length(chain.Axis) <= 0)
 				problems.emplace_back("Axis must be finite and nonzero");
+			if (chain.Type != IKChainType::Fabrik && HasIKJointLimits(chain))
+				problems.emplace_back("joint limits only apply to Fabrik chains; ignoring them");
 		}
 	}
 
@@ -174,6 +179,8 @@ namespace Basalt {
 		const glm::vec3 origin = glm::vec3(world[3]);
 
 		PhysicsWorld* physics = m_Scene.GetPhysicsWorld();
+		// A preview has no world: the static bodies stand where they will when the game runs, so feet can stand on them.
+		const StaticPhysicsShapes* staticBodies = m_Preview && groundChains && !physics ? &GetStaticShapes() : nullptr;
 		// Feet follow the ground only while the character stands on it, so a jump keeps its animated legs. The
 		// character's bodies (on the entity or the controller's entity above it, and below either) are not ground;
 		// other ancestors (a moving platform the character is parented to) are.
@@ -220,6 +227,8 @@ namespace Basalt {
 				ReportProblem(chain.Problem, JoinProblems(chainProblems), entity, Owner, &config.Name);
 				continue;
 			}
+			if (config.Type == IKChainType::Fabrik)
+				ResolveFabrikLimits(source, config, resolved.Joints, resolved.Limits, chainProblems);
 			if (const auto* position = std::get_if<IKChainState::PositionTarget>(&chain.Target))
 			{
 				resolved.Target = position->Position;
@@ -253,11 +262,13 @@ namespace Basalt {
 				const glm::vec3 base = foot - up * glm::dot(foot - origin, up);
 				float offset = 0;
 				glm::vec3 normal = up;
-				if (physics && !airborne && rayHeight + rayDepth > 0)
+				if ((physics || staticBodies) && !airborne && rayHeight + rayDepth > 0)
 				{
 					const PhysicsQueryFilter filter{ .IgnoreEntity = body.GetUUID() };
+					const glm::vec3 rayStart = base + up * rayHeight;
+					const std::vector<RaycastHit> hits = physics ? physics->RaycastAll(rayStart, -up, rayHeight + rayDepth, filter) : staticBodies->RaycastAll(rayStart, -up, rayHeight + rayDepth, filter);
 					float nearest = std::numeric_limits<float>::max();
-					for (const RaycastHit& hit : physics->RaycastAll(base + up * rayHeight, -up, rayHeight + rayDepth, filter))
+					for (const RaycastHit& hit : hits)
 					{
 						// `body` is the entity or an ancestor of it, so the entity's descendants are below it.
 						const Entity hitEntity = m_Scene.GetEntityByUUID(hit.EntityID);
@@ -374,7 +385,7 @@ namespace Basalt {
 			if (config.Type == IKChainType::TwoBone)
 				result = SolveTwoBoneIK(source, pose, globals, { .Upper = chain.Joints[0], .Middle = chain.Joints[1], .End = chain.Joints[2], .Target = *chain.Target, .Pole = pole, .EndRotation = chain.Rotation, .Weight = chain.Weight });
 			else if (config.Type == IKChainType::Fabrik)
-				result = SolveFabrikIK(source, pose, globals, { .Joints = chain.Joints, .Target = *chain.Target, .Pole = pole, .EndRotation = chain.Rotation, .Weight = chain.Weight });
+				result = SolveFabrikIK(source, pose, globals, { .Joints = chain.Joints, .Target = *chain.Target, .Pole = pole, .EndRotation = chain.Rotation, .Weight = chain.Weight, .Limits = chain.Limits });
 			else
 			{
 				const float maxAngle = std::isfinite(config.MaxAngle) ? std::clamp(config.MaxAngle, 0.0f, 180.0f) : 0.0f;

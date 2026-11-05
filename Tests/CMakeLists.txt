@@ -2,7 +2,7 @@
 
 file(GLOB_RECURSE TEST_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/Source/*.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/Source/*.h")
 
-add_executable(BasaltTests ${TEST_SOURCES} "${PROJECT_SOURCE_DIR}/Basalt-Editor/Source/EditorContext.cpp" "${PROJECT_SOURCE_DIR}/Basalt-Editor/Source/Panels/JsonWidgets.cpp" "${PROJECT_SOURCE_DIR}/Basalt-Editor/Source/MaterialAssetDraft.cpp" "${PROJECT_SOURCE_DIR}/Basalt-Editor/Source/AnimationGraphDraft.cpp")
+add_executable(BasaltTests ${TEST_SOURCES} "${PROJECT_SOURCE_DIR}/Basalt-Editor/Source/EditorContext.cpp" "${PROJECT_SOURCE_DIR}/Basalt-Editor/Source/Panels/JsonWidgets.cpp" "${PROJECT_SOURCE_DIR}/Basalt-Editor/Source/MaterialAssetDraft.cpp" "${PROJECT_SOURCE_DIR}/Basalt-Editor/Source/AnimationGraphDraft.cpp" "${PROJECT_SOURCE_DIR}/Basalt-Editor/Source/JointAssetDraft.cpp")
 target_include_directories(BasaltTests PRIVATE "${PROJECT_SOURCE_DIR}/Basalt-Editor/Source")
 basalt_set_warnings(BasaltTests)
 target_link_libraries(BasaltTests PRIVATE Basalt doctest::doctest BasaltStb BasaltMiniaudio)
@@ -17,7 +17,7 @@ target_compile_definitions(BasaltTests PRIVATE BASALT_TEST_DATA_DIR="${CMAKE_CUR
 # rebalance when any entry clearly outlasts the rest. BasaltTests itself fails a run whose filters select no test case
 # (TestMain.cpp), and the BasaltTestShards test checks that every test case runs exactly once.
 set(basaltTestShards Editor Physics Animation Core)
-set(basaltTestShard_Editor EditorHistoryTests EditorReviewTests)
+set(basaltTestShard_Editor EditorHistoryTests EditorReviewTests JointAssetDraftTests)
 set(basaltTestShard_Physics PhysicsTests CharacterControllerTests RagdollTests BenchmarkTests)
 set(basaltTestShard_Animation AnimationTests SpringBoneTests MorphTargetTests InverseKinematicsTests RetargetingTests AnimationLayerTests)
 set(basaltTestShard_Core CoreTests ScriptingTests AudioTests ProjectTests)

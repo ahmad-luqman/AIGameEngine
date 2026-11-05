@@ -8,6 +8,8 @@
 #include "Basalt/Automation/EditorCommandSchemas.h"
 #include "Basalt/Asset/AssetKey.h"
 #include "Basalt/Asset/AssetManager.h"
+#include "Basalt/Animation/AnimationJointMap.h"
+#include "Basalt/Animation/AnimationMask.h"
 #include "Basalt/Asset/MaterialAsset.h"
 #include "Basalt/Asset/MeshSource.h"
 #include "Basalt/Core/FileSystem.h"
@@ -147,6 +149,16 @@ return %s
 				m_NewItem = NewItem::Material;
 				m_NewItemName = "NewMaterial";
 			}
+			if (ImGui::MenuItem("New Animation Mask..."))
+			{
+				m_NewItem = NewItem::AnimationMask;
+				m_NewItemName = "NewMask";
+			}
+			if (ImGui::MenuItem("New Joint Map..."))
+			{
+				m_NewItem = NewItem::JointMap;
+				m_NewItemName = "NewJointMap";
+			}
 			if (ImGui::MenuItem("New Folder..."))
 			{
 				m_NewItem = NewItem::Folder;
@@ -171,6 +183,10 @@ return %s
 				label = "Script name:";
 			else if (m_NewItem == NewItem::Material)
 				label = "Material name:";
+			else if (m_NewItem == NewItem::AnimationMask)
+				label = "Animation mask name:";
+			else if (m_NewItem == NewItem::JointMap)
+				label = "Joint map name:";
 			ImGui::TextUnformatted(label);
 			ImGui::InputText("##ItemName", &m_NewItemName);
 			// A material's name must already be a safe file name on every platform (no device names such as CON).
@@ -187,6 +203,16 @@ return %s
 					{
 						const std::string path = Project::MakeRelative(m_CurrentDirectory / FileSystem::PathFromUtf8(m_NewItemName + std::string(MaterialAsset::Extension)));
 						if (m_Context.Execute("material.create", { { "path", path } }) && OnOpenAsset)
+							OnOpenAsset(path);
+						break;
+					}
+					case NewItem::AnimationMask:
+					case NewItem::JointMap:
+					{
+						// An empty list is a valid file of either kind.
+						const std::string extension = m_NewItem == NewItem::AnimationMask ? AnimationMask::Extension : AnimationJointMap::Extension;
+						const std::string path = Project::MakeRelative(m_CurrentDirectory / FileSystem::PathFromUtf8(m_NewItemName + extension));
+						if (m_Context.Execute("asset.write", { { "path", path }, { "content", "{ \"Joints\": [] }\n" } }) && OnOpenAsset)
 							OnOpenAsset(path);
 						break;
 					}

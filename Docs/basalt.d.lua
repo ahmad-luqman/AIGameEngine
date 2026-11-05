@@ -521,6 +521,20 @@ function Entity:GetAnimationLayerWeight(layer) end
 ---@return string?
 function Entity:GetAnimationLayerState(layer) end
 
+---Sets a parameter of one StateMachine layer's graph alone, OwnParameters or not. False for an unknown layer, a layer
+---running no graph or a name its graph does not declare.
+---@param layer string
+---@param name string
+---@param value number|boolean
+---@return boolean
+function Entity:SetAnimationLayerParameter(layer, name, value) end
+
+---Latches a trigger of one StateMachine layer's graph alone, as SetAnimationLayerParameter.
+---@param layer string
+---@param name string
+---@return boolean
+function Entity:SetAnimationLayerTrigger(layer, name) end
+
 ---Sets an InverseKinematics chain's target until ClearIKTarget: a world position (with an optional world rotation
 ---for a TwoBone chain's end joint), or an entity followed every frame (matchRotation also takes its rotation for a
 ---TwoBone or Fabrik chain). Replaces FollowTarget and ground placement. False (logged once until the call succeeds) for an unknown chain, a
@@ -1396,7 +1410,7 @@ function Storage.Load() end
 ---@field OnTriggerEnter? fun(self: BasaltScript, other: Entity, contact: ContactInfo?)
 ---@field OnTriggerExit? fun(self: BasaltScript, other: Entity, contact: ContactInfo?)
 ---@field OnJointBreak? fun(self: BasaltScript, other: Entity?)
----@field OnAnimationEvent? fun(self: BasaltScript, name: string, clip: string)
+---@field OnAnimationEvent? fun(self: BasaltScript, name: string, clip: string, layer: string?)
 ---@field OnGamepadConnected? fun(self: BasaltScript, index: integer)
 ---@field OnGamepadDisconnected? fun(self: BasaltScript, index: integer)
 ---@field OnReload? fun(self: BasaltScript) After a hot reload moved the instance onto the new class
@@ -1968,6 +1982,8 @@ function BasaltScript:StopAllCoroutines() end
 ---@field Name string
 ---@field Clip string
 ---@field StateMachine string
+---@field OwnParameters boolean
+---@field Events boolean
 ---@field Blend "Override"|"Additive"
 ---@field Weight number
 ---@field Speed number
@@ -1996,6 +2012,7 @@ function BasaltScript:StopAllCoroutines() end
 ---@class AnimationRetargetJoint
 ---@field Source string
 ---@field Target string
+---@field Offset number[]
 
 ---An element of a component list field.
 ---@class PropertyAnimationTrack
@@ -2023,6 +2040,17 @@ function BasaltScript:StopAllCoroutines() end
 ---@field FollowTarget boolean
 ---@field FootLock boolean
 ---@field Weight number
+---@field ConeAngle number
+---@field MinTwist number
+---@field MaxTwist number
+---@field JointLimits IKJointLimit[]
+
+---An element of a component list field.
+---@class IKJointLimit
+---@field Joint string
+---@field ConeAngle number
+---@field MinTwist number
+---@field MaxTwist number
 
 ---An element of a component list field.
 ---@class SpringChain

@@ -127,7 +127,7 @@ namespace {
 	public:
 		void OnContact(Scene&, ContactEventType, Entity, Entity, const std::optional<ContactInfo>&) override {}
 		void OnScriptError(Scene&, const std::string&) override {}
-		void OnAnimationEvent(Scene&, Entity entity, const std::string& name, const std::string& clip) override { Events.push_back(entity.GetName() + ":" + name + "@" + clip); }
+		void OnAnimationEvent(Scene&, Entity entity, const std::string& name, const std::string& clip, const std::string& layer) override { Events.push_back(entity.GetName() + ":" + name + "@" + clip + (layer.empty() ? "" : "/" + layer)); }
 		Names Events;
 	};
 

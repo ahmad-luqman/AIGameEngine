@@ -190,7 +190,7 @@ Fields: `Clip` (string), `X` (number), `Y` (number), `Speed` (number)
 
 ### AnimationLayer
 
-Fields: `Name` (string), `Clip` (string), `StateMachine` (string), `Blend` (enum: Override, Additive), `Weight` (number), `Speed` (number), `Looping` (boolean), `ReferenceClip` (string), `ReferenceTime` (number), `Mask` (list of [AnimationMaskJoint](#animationmaskjoint), at most 64), `MaskAsset` (string)
+Fields: `Name` (string), `Clip` (string), `StateMachine` (string), `OwnParameters` (boolean), `Events` (boolean), `Blend` (enum: Override, Additive), `Weight` (number), `Speed` (number), `Looping` (boolean), `ReferenceClip` (string), `ReferenceTime` (number), `Mask` (list of [AnimationMaskJoint](#animationmaskjoint), at most 64), `MaskAsset` (string)
 
 ### AnimationMaskJoint
 
@@ -202,7 +202,7 @@ Fields: `Mesh` (string), `Joints` (list of [AnimationRetargetJoint](#animationre
 
 ### AnimationRetargetJoint
 
-Fields: `Source` (string), `Target` (string)
+Fields: `Source` (string), `Target` (string), `Offset` (number[3])
 
 ### PropertyAnimationTrack
 
@@ -214,7 +214,11 @@ Fields: `Time` (number), `Value` (number[4]), `Text` (string)
 
 ### IKChain
 
-Fields: `Name` (string), `Type` (enum: TwoBone, LookAt, Fabrik), `Joint` (string), `ChainLength` (integer), `Axis` (number[3]), `MaxAngle` (number), `Pole` (number[3]), `Ground` (boolean), `FollowTarget` (boolean), `FootLock` (boolean), `Weight` (number)
+Fields: `Name` (string), `Type` (enum: TwoBone, LookAt, Fabrik), `Joint` (string), `ChainLength` (integer), `Axis` (number[3]), `MaxAngle` (number), `Pole` (number[3]), `Ground` (boolean), `FollowTarget` (boolean), `FootLock` (boolean), `Weight` (number), `ConeAngle` (number), `MinTwist` (number), `MaxTwist` (number), `JointLimits` (list of [IKJointLimit](#ikjointlimit), at most 16)
+
+### IKJointLimit
+
+Fields: `Joint` (string), `ConeAngle` (number), `MinTwist` (number), `MaxTwist` (number)
 
 ### SpringChain
 

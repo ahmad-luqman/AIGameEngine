@@ -176,9 +176,48 @@ Scrubs this entity's PropertyAnimation at normalized time [0,1] through the comp
 
 ## animator
 
+### `animator.match_joints`
+
+How a library model's skeleton maps onto a model's, for authoring a .bjointmap: the same matching as animator.retarget, on two models with no Animator (the pairs of jointMap come first, then equal names and humanoid bones). Returns {joints: [{target, source, match, offset}], unmatchedHumanoidBones, root, warnings}. The automatic matches of joints can go into a joint map as they are. Read-only.
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `jointMap` | Project-relative .bjointmap, optional |
+| `source` | Project-relative model the clips come from |
+| `target` | Project-relative model an Animator plays them on |
+
+<details><summary>Parameter JSON Schema</summary>
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "jointMap": {
+      "description": "Project-relative .bjointmap, optional",
+      "type": "string"
+    },
+    "source": {
+      "description": "Project-relative model the clips come from",
+      "type": "string"
+    },
+    "target": {
+      "description": "Project-relative model an Animator plays them on",
+      "type": "string"
+    }
+  },
+  "required": [
+    "source",
+    "target"
+  ],
+  "type": "object"
+}
+```
+
+</details>
+
 ### `animator.retarget`
 
-How an Animator's named ClipLibraries map onto its model, resolved as playback resolves them but without baking (a listed clip can still be left out when it fails to bake or passes the 256 MiB per-Animator budget; the log reports it): per library its index in ClipLibraries, why it adds no clips (error: also a joint map that does not load or a reference clip that is not there), its joint map file (jointMap) and reference poses (reference, modelReference: {clip, time}, or null for the rest pose), the joint pairs (target, source, matched by joint map (Joints or the jointMap file), name or humanoid bone), the model's humanoid bones left unmatched, the root pair with its leg-length scale, the clips it adds, the clips earlier clips hide, and warnings. Read-only; works in edit mode.
+How an Animator's named ClipLibraries map onto its model, resolved as playback resolves them but without baking (a listed clip can still be left out when it fails to bake or passes the 256 MiB per-Animator budget; the log reports it): per library its index in ClipLibraries, why it adds no clips (error: also a joint map that does not load or a reference clip that is not there), its joint map file (jointMap) and reference poses (reference, modelReference: {clip, time}, or null for the rest pose), the joint pairs (target, source, matched by joint map (Joints or the jointMap file), name or humanoid bone, and offset when the pair has one), the model's humanoid bones left unmatched, the root pair with its leg-length scale, the clips it adds, the clips earlier clips hide, and warnings. Read-only; works in edit mode.
 
 | Parameter | Type / description |
 |-----------|--------------------|

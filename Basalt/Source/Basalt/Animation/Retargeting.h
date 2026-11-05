@@ -54,8 +54,11 @@ namespace Basalt {
 		// Target over source leg length (the root's rest height above the lowest mapped joint), which scales the root's
 		// displacement; 1 when either skeleton has no such height (BuildMap warns when the root is the humanoid hips).
 		float RootScale = 1.0f;
-		// Each skeleton's rest pose (its orientations from its reference pose, if any); both empty when either is not finite.
+		// Each skeleton's rest pose (its orientations from its reference pose, if any, then the pairs' offsets); both empty
+		// when either is not finite.
 		RestPose TargetRest, SourceRest;
+		// Per target node: the Offset of the explicit pair that mapped it, zero otherwise.
+		std::vector<glm::vec3> Offsets;
 
 		size_t MappedCount() const;
 	};
@@ -77,7 +80,8 @@ namespace Basalt {
 		// a missing joint, are half filled or reuse a paired joint, paired joints given as matrices, rest (or reference)
 		// poses that are not finite or have joints whose transform is not affine, and humanoid hips whose leg length cannot
 		// be measured. `references` replace the rest orientations the joints turn from (sampled as playback samples, so a
-		// time past the clip's end takes its last pose).
+		// time past the clip's end takes its last pose). The Offset of each pair that applies then turns the source joint and
+		// everything below it, parents first; a pair that does not apply leaves its Offset unused.
 		RetargetMap BuildMap(const MeshSource& target, const MeshSource& source, const std::vector<AnimationRetargetJoint>& joints, std::vector<std::string>& outWarnings, const RetargetReferences& references = {});
 
 		// Whether baking `clip` fits MaxClipBakedFloats; the reason otherwise. Cheap (no allocation) for clips well inside

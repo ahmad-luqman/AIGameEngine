@@ -21,7 +21,7 @@ namespace Basalt {
 		{
 			const nlohmann::json& entry = (*joints)[i];
 			const std::string location = fmt::format("Joints[{}]", i);
-			if (!RequireEntryObject(entry, { "Source", "Target" }, location, outError))
+			if (!RequireEntryObject(entry, { "Source", "Target", "Offset" }, location, outError))
 				return std::nullopt;
 			const std::string* source = ReadNonemptyString(entry, "Source", location, outError);
 			if (!source)
@@ -39,7 +39,16 @@ namespace Basalt {
 				outError = fmt::format("{}.Target '{}' is listed twice", location, *target);
 				return std::nullopt;
 			}
-			map.Joints.push_back({ .Source = *source, .Target = *target });
+			glm::vec3 offset(0);
+			if (const auto value = entry.find("Offset"); value != entry.end())
+			{
+				if (!value->is_array() || value->size() != 3 || !JsonToFloat((*value)[0], offset.x) || !JsonToFloat((*value)[1], offset.y) || !JsonToFloat((*value)[2], offset.z))
+				{
+					outError = location + ".Offset must be three numbers";
+					return std::nullopt;
+				}
+			}
+			map.Joints.push_back({ .Source = *source, .Target = *target, .Offset = offset });
 		}
 		return map;
 	}
@@ -54,7 +63,12 @@ namespace Basalt {
 	{
 		nlohmann::json joints = nlohmann::json::array();
 		for (const AnimationRetargetJoint& joint : Joints)
-			joints.push_back({ { "Source", joint.Source }, { "Target", joint.Target } });
+		{
+			nlohmann::json entry = { { "Source", joint.Source }, { "Target", joint.Target } };
+			if (joint.Offset != glm::vec3(0))
+				entry["Offset"] = { joint.Offset.x, joint.Offset.y, joint.Offset.z };
+			joints.push_back(std::move(entry));
+		}
 		return { { "Joints", std::move(joints) } };
 	}
 

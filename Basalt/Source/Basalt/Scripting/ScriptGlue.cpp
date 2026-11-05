@@ -750,6 +750,18 @@ namespace Basalt {
 			entityType["GetAnimationLayerState"] = [&context](const ScriptEntity& self, const std::string& layer) {
 				return RequireAnimations(context).GetLayerState(RequireAnimator(self, "GetAnimationLayerState"), layer);
 			};
+			entityType["SetAnimationLayerParameter"] = [&context](const ScriptEntity& self, const std::string& layer, const std::string& name, const sol::object& value) {
+				Entity entity = RequireAnimator(self, "SetAnimationLayerParameter");
+				auto& animations = RequireAnimations(context);
+				if (IsNil(value) || (!value.is<bool>() && value.get_type() != sol::type::number))
+					throw std::runtime_error("SetAnimationLayerParameter: value must be a number or boolean");
+				if (value.is<bool>())
+					return animations.SetLayerParameter(entity, layer, name, value.as<bool>());
+				return animations.SetLayerParameter(entity, layer, name, OptionalNumber(value, "SetAnimationLayerParameter: value", 0.0f));
+			};
+			entityType["SetAnimationLayerTrigger"] = [&context](const ScriptEntity& self, const std::string& layer, const std::string& name) {
+				return RequireAnimations(context).SetLayerTrigger(RequireAnimator(self, "SetAnimationLayerTrigger"), layer, name);
+			};
 			entityType["SetIKTarget"] = [&context](const ScriptEntity& self, const std::string& chain, const sol::object& target, const sol::object& extra) {
 				Entity entity = RequireInverseKinematics(self, "SetIKTarget");
 				AnimationSystem& animations = RequireAnimations(context);

@@ -810,9 +810,9 @@ namespace Basalt {
 			if (!entity || IsEntityPendingDestruction(entity))
 				continue;
 			if (m_EventListener)
-				m_EventListener->OnAnimationEvent(*this, entity, record.Name, record.Clip);
+				m_EventListener->OnAnimationEvent(*this, entity, record.Name, record.Clip, record.Layer);
 			if (m_ScriptEngine)
-				m_ScriptEngine->OnAnimationEvent(entity, record.Name, record.Clip);
+				m_ScriptEngine->OnAnimationEvent(entity, record.Name, record.Clip, record.Layer);
 		}
 	}
 

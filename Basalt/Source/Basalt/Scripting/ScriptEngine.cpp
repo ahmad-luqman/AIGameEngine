@@ -1204,9 +1204,9 @@ namespace Basalt {
 		}
 	}
 
-	void ScriptEngine::OnAnimationEvent(Entity entity, const std::string& name, const std::string& clip)
+	void ScriptEngine::OnAnimationEvent(Entity entity, const std::string& name, const std::string& clip, const std::string& layer)
 	{
-		ScriptEngineAccess::Call(*this, entity.GetUUID(), "OnAnimationEvent", name, clip);
+		ScriptEngineAccess::Call(*this, entity.GetUUID(), "OnAnimationEvent", name, clip, layer.empty() ? std::nullopt : std::make_optional(layer));
 	}
 
 	void ScriptEngine::OnJointBroken(Entity holder, Entity body, Entity connected)

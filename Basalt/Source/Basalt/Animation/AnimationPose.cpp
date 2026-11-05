@@ -150,6 +150,14 @@ namespace Basalt {
 			target.MorphWeights[i] = from.MorphWeights[i] + (target.MorphWeights[i] - from.MorphWeights[i]) * weight;
 	}
 
+	void ComposeAnimationNode(const MeshSource& source, const AnimationLocalPose& pose, uint32_t node, std::vector<glm::mat4>& globals)
+	{
+		const MeshNode& mesh = source.Nodes[node];
+		const AnimationNodePose& local = pose.Nodes[node];
+		const glm::mat4 transform = mesh.HasMatrix ? mesh.Matrix : Math::ComposeTransform(local.Translation, local.Rotation, local.Scale);
+		globals[node] = mesh.Parent >= 0 ? globals[mesh.Parent] * transform : transform;
+	}
+
 	bool ComposeAnimationPose(const MeshSource& source, const AnimationLocalPose& pose, std::vector<glm::mat4>& globals)
 	{
 		BS_CORE_ASSERT(source.NodeOrder.size() == source.Nodes.size());
@@ -157,8 +165,7 @@ namespace Basalt {
 		globals.resize(source.Nodes.size());
 		for (uint32_t i : source.NodeOrder)
 		{
-			const glm::mat4 local = source.Nodes[i].HasMatrix ? source.Nodes[i].Matrix : Math::ComposeTransform(pose.Nodes[i].Translation, pose.Nodes[i].Rotation, pose.Nodes[i].Scale);
-			globals[i] = source.Nodes[i].Parent >= 0 ? globals[source.Nodes[i].Parent] * local : local;
+			ComposeAnimationNode(source, pose, i, globals);
 			if (!Math::IsFinite(globals[i]))
 				return false;
 		}

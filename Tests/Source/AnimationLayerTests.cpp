@@ -1124,3 +1124,256 @@ TEST_SUITE("Animation")
 		scene.OnRuntimeStop();
 	}
 }
+
+TEST_SUITE("Animation")
+{
+	TEST_CASE("Layers with Events fire the Animator's markers for what they play, and only then")
+	{
+		ClearAssetCache clear;
+		Scene scene;
+		auto biped = AddBiped(scene, "Lean");
+		auto& animator = biped.GetComponent<AnimatorComponent>();
+		animator.Events = { { .Clip = "Wave", .Time = 0.25f, .Name = "Hit" }, { .Clip = "", .Time = 0.1f, .Name = "Any" } };
+		animator.Layers = { Layer("Upper", "Wave") };
+		scene.OnRuntimeStart();
+		auto& system = *scene.GetAnimationSystem();
+		const auto names = [&] {
+			std::vector<std::string> fired;
+			for (const AnimationEventRecord& record : system.TakeEvents())
+				fired.push_back(record.Name + "@" + record.Clip + "/" + record.Layer);
+			return fired;
+		};
+		const std::vector<std::string> baseOnly{ "Any@Lean/" };
+		// By default a layer stays silent, as it always was: a marker without a Clip fires once, for the base.
+		system.Update(0.2f);
+		CHECK(names() == baseOnly);
+		system.Seek(biped, 0);
+		// With Events it fires its own clip's markers, and the record names it. The base's own marker comes after.
+		animator.Layers[0].Events = true;
+		system.PlayLayer(biped, "Upper", std::nullopt);
+		system.Update(0.3f);
+		CHECK(names() == std::vector<std::string>{ "Any@Wave/Upper", "Hit@Wave/Upper", "Any@Lean/" });
+
+		// A layer that does not show fires nothing, though its clock runs.
+		REQUIRE(system.PlayLayer(biped, "Upper", std::nullopt));
+		REQUIRE(system.SetLayerWeight(biped, "Upper", 0, 0));
+		system.Update(0.3f);
+		for (const std::string& name : names())
+			CHECK(name.find("/Upper") == std::string::npos);
+		REQUIRE(system.SetLayerWeight(biped, "Upper", 1, 0));
+		// Nor does a clock that did not move.
+		REQUIRE(system.PlayLayer(biped, "Upper", std::nullopt));
+		system.Update(0);
+		CHECK(names().empty());
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Layer graphs fire events as the base does, across fades and blend spaces")
+	{
+		ClearAssetCache clear;
+		TempProject project("LayerGraphEvents");
+		const std::string graph = project.WriteFile("Assets/Animations/Upper.banimgraph", UpperBodyGraph(0.5f).dump());
+		Scene scene;
+		auto biped = AddBiped(scene, "Breathe");
+		auto& animator = biped.GetComponent<AnimatorComponent>();
+		animator.Events = { { .Clip = "Lean", .Time = 0.05f, .Name = "Leaning" }, { .Clip = "Lean", .Time = 0.35f, .Name = "LateLean" }, { .Clip = "Lean", .Time = 0.65f, .Name = "PastFade" }, { .Clip = "Wave", .Time = 0.05f, .Name = "Waving" } };
+		animator.Layers = { GraphLayer("Upper", graph) };
+		animator.Layers[0].Events = true;
+		scene.OnRuntimeStart();
+		auto& system = *scene.GetAnimationSystem();
+		const auto names = [&] {
+			std::vector<std::string> fired;
+			for (const AnimationEventRecord& record : system.TakeEvents())
+				fired.push_back(record.Name + "/" + record.Layer);
+			return fired;
+		};
+		system.Update(0.1f);
+		CHECK(names() == std::vector<std::string>{ "Leaning/Upper" });
+		// The crossfade's target fires from its first frame; the outgoing clip fires only as far as the fade shows it, so a
+		// marker past the fade's end stays quiet.
+		REQUIRE(system.SetParameter(biped, "Waving", true));
+		system.Update(0.1f);
+		CHECK(names() == std::vector<std::string>{ "Waving/Upper" });
+		system.Update(0.2f);
+		CHECK(names() == std::vector<std::string>{ "LateLean/Upper" });
+		// The fade ends at Lean's 0.6 s, though this update's clock runs on to 0.7 s.
+		system.Update(0.3f);
+		CHECK(names().empty());
+		scene.OnRuntimeStop();
+
+		// A blend space state fires its heaviest sample's markers, once.
+		const json spaces = {
+			{ "InitialState", "Move" },
+			{ "Parameters", json::array({ { { "Name", "Speed" }, { "Type", "Float" } } }) },
+			{ "States", json::array({ { { "Name", "Move" }, { "BlendSpace", "Space" }, { "ParameterX", "Speed" } } }) },
+		};
+		Scene other;
+		auto rig = AddBiped(other, "Breathe");
+		auto& config = rig.GetComponent<AnimatorComponent>();
+		config.BlendSpaces = { { .Name = "Space", .Samples = { { .Clip = "Lean", .X = 0 }, { .Clip = "Wave", .X = 1 } } } };
+		config.Events = { { .Clip = "Lean", .Time = 0.05f, .Name = "L" }, { .Clip = "Wave", .Time = 0.05f, .Name = "W" } };
+		config.Layers = { GraphLayer("Upper", project.WriteFile("Assets/Animations/Spaces.banimgraph", spaces.dump())) };
+		config.Layers[0].Events = true;
+		other.OnRuntimeStart();
+		auto& spaced = *other.GetAnimationSystem();
+		spaced.Update(0.1f);
+		const auto events = spaced.TakeEvents();
+		REQUIRE(events.size() == 1);
+		CHECK(events[0].Name == "L");
+		CHECK(events[0].Layer == "Upper");
+		other.OnRuntimeStop();
+	}
+
+	TEST_CASE("Layers share the Animator's event budget and warn through their own name")
+	{
+		ClearAssetCache clear;
+		Scene scene;
+		auto biped = AddBiped(scene, "Lean");
+		auto& animator = biped.GetComponent<AnimatorComponent>();
+		for (size_t i = 0; i < AnimationSystem::MaxEventsPerFrame; i++)
+			animator.Events.push_back({ .Clip = "Wave", .Time = 0.01f, .Name = "E" + std::to_string(i) });
+		animator.Events.push_back({ .Clip = "Lean", .Time = 0.01f, .Name = "Base" });
+		animator.Layers = { Layer("Upper", "Wave") };
+		animator.Layers[0].Events = true;
+		scene.OnRuntimeStart();
+		auto& system = *scene.GetAnimationSystem();
+		const auto since = Log::GetHistory().GetTotalCount();
+		system.Update(0.02f);
+		const auto events = system.TakeEvents();
+		CHECK(events.size() == AnimationSystem::MaxEventsPerFrame);
+		CHECK(std::ranges::none_of(events, [](const AnimationEventRecord& record) { return record.Name == "Base"; }));
+		CHECK(CountLogMessages(since, "more than 64 animation events in one frame") == 1);
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("OwnParameters keeps a layer's graph out of SetParameter and SetLayerParameter reaches one layer alone")
+	{
+		ClearAssetCache clear;
+		TempProject project("LayerParameters");
+		const std::string graph = project.WriteFile("Assets/Animations/Upper.banimgraph", UpperBodyGraph().dump());
+		Scene scene;
+		auto biped = AddBiped(scene);
+		auto& animator = biped.GetComponent<AnimatorComponent>();
+		animator.Layers = { GraphLayer("Own", graph), GraphLayer("Shared", graph), Layer("Clip", "Breathe") };
+		animator.Layers[0].OwnParameters = true;
+		scene.OnRuntimeStart();
+		auto& system = *scene.GetAnimationSystem();
+
+		// The shared write skips the layer that keeps its own parameters.
+		REQUIRE(system.SetParameter(biped, "Waving", true));
+		system.Update(Step);
+		CHECK(system.GetLayerState(biped, "Own") == "Lean");
+		CHECK(system.GetLayerState(biped, "Shared") == "Wave");
+		// A layer write reaches that layer alone, whichever kind.
+		REQUIRE(system.SetLayerParameter(biped, "Own", "Waving", true));
+		system.Update(Step);
+		CHECK(system.GetLayerState(biped, "Own") == "Wave");
+		REQUIRE(system.SetLayerTrigger(biped, "Shared", "Nod"));
+		REQUIRE(system.SetParameter(biped, "Waving", false));
+		system.Update(Step);
+		CHECK(system.GetLayerState(biped, "Shared") == "Lean");
+		CHECK(system.GetLayerState(biped, "Own") == "Wave");
+		REQUIRE(system.SetLayerTrigger(biped, "Own", "Nod"));
+		REQUIRE(system.SetLayerParameter(biped, "Own", "Waving", false));
+		system.Update(Step);
+		CHECK(system.GetLayerState(biped, "Own") == "Lean");
+
+		// Each failure says what is wrong, once, and changes nothing.
+		const auto since = Log::GetHistory().GetTotalCount();
+		const auto twice = [](const auto& call) {
+			CHECK_FALSE(call());
+			CHECK_FALSE(call());
+		};
+		twice([&] { return system.SetLayerParameter(biped, "Nowhere", "Waving", true); });
+		twice([&] { return system.SetLayerParameter(biped, "Clip", "Waving", true); });
+		twice([&] { return system.SetLayerParameter(biped, "Own", "Missing", true); });
+		twice([&] { return system.SetLayerParameter(biped, "Own", "Waving", 1.0f); });
+		twice([&] { return system.SetLayerTrigger(biped, "Own", "Waving"); });
+		CHECK_FALSE(system.SetLayerParameter(biped, "Own", "Nod", std::numeric_limits<float>::quiet_NaN()));
+		CHECK(CountLogMessages(since, "no layer named 'Nowhere'") == 1);
+		CHECK(CountLogMessages(since, "layer 'Clip' runs no state machine") == 1);
+		CHECK(CountLogMessages(since, "layer 'Own': parameter 'Missing': unknown name; declared parameters: Waving Nod") == 1);
+		CHECK(CountLogMessages(since, "layer 'Own': parameter 'Waving': type mismatch: expected Bool, got Float") == 1);
+		CHECK(CountLogMessages(since, "layer 'Own': parameter 'Waving': type mismatch: expected Bool, got Trigger") == 1);
+		CHECK(CountLogMessages(since, "layer 'Own': parameter 'Nod': value must be finite") == 1);
+		system.Update(Step);
+		CHECK(system.GetLayerState(biped, "Own") == "Lean");
+
+		// A name only such a layer declares is not the shared write's to take, and the message says where it lives.
+		animator.Layers[1].OwnParameters = true;
+		const auto later = Log::GetHistory().GetTotalCount();
+		CHECK_FALSE(system.SetParameter(biped, "Waving", true));
+		CHECK_FALSE(system.SetParameter(biped, "Waving", true));
+		CHECK(CountLogMessages(later, "parameter 'Waving': declared by layer 'Own', which keeps its own parameters") == 1);
+		// A restart of the layer's graph keeps what a script set.
+		REQUIRE(system.SetLayerParameter(biped, "Own", "Waving", true));
+		REQUIRE(system.PlayLayer(biped, "Own", std::nullopt));
+		system.Update(Step);
+		CHECK(system.GetLayerState(biped, "Own") == "Wave");
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Lua sets one layer's parameters and hears which layer fired an event")
+	{
+		ClearAssetCache clear;
+		TempProject project("LayerLua");
+		const std::string graph = project.WriteFile("Assets/Animations/Upper.banimgraph", UpperBodyGraph().dump());
+		const std::string script = project.WriteFile("Assets/Scripts/Rig.lua", R"(
+			local Rig = {}
+			function Rig:OnAnimationEvent(name, clip, layer)
+				Fired = (Fired or "") .. name .. "/" .. tostring(layer) .. ";"
+			end
+			return Rig
+		)");
+		Scene scene;
+		auto biped = AddBiped(scene, "Breathe");
+		auto& animator = biped.GetComponent<AnimatorComponent>();
+		animator.Events = { { .Clip = "Lean", .Time = 0.01f, .Name = "Lean" }, { .Clip = "Breathe", .Time = 0.01f, .Name = "Base" } };
+		animator.Layers = { GraphLayer("Upper", graph) };
+		animator.Layers[0].OwnParameters = true;
+		animator.Layers[0].Events = true;
+		biped.AddComponent<ScriptComponent>().Script = script;
+		scene.CreateEntity("Plain");
+		scene.OnRuntimeStart();
+		scene.OnUpdate(Step);
+		const auto run = [&](const std::string& code) { return Eval(scene, "local e = Scene.FindEntityByName('Biped'); " + code); };
+		// The layer's name for its clip's marker, nil for the base's.
+		CHECK(run("return Fired") == "Lean/Upper;Base/nil;");
+		CHECK(run("return tostring(e:SetAnimationParameter('Waving', true))") == "false");
+		CHECK(run("return tostring(e:SetAnimationLayerParameter('Upper', 'Waving', 1))") == "false");
+		CHECK(run("return tostring(e:SetAnimationLayerParameter('Upper', 'Missing', true))") == "false");
+		CHECK(run("return tostring(e:SetAnimationLayerTrigger('Upper', 'Nod'))") == "true");
+		CHECK(run("return tostring(e:SetAnimationLayerParameter('Upper', 'Waving', true))") == "true");
+		scene.OnUpdate(Step);
+		CHECK(run("return e:GetAnimationLayerState('Upper')") == "Wave");
+		const std::pair<const char*, const char*> errors[] = {
+			{ "Scene.FindEntityByName('Biped'):SetAnimationLayerParameter('Upper', 'Waving')", "value must be a number or boolean" },
+			{ "Scene.FindEntityByName('Biped'):SetAnimationLayerParameter('Upper', 'Waving', 'on')", "value must be a number or boolean" },
+			{ "Scene.FindEntityByName('Plain'):SetAnimationLayerParameter('Upper', 'Waving', true)", "needs the Animator component" },
+			{ "Scene.FindEntityByName('Plain'):SetAnimationLayerTrigger('Upper', 'Nod')", "needs the Animator component" },
+		};
+		CheckLuaErrors(*scene.GetScriptEngine(), errors);
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Layer warnings name settings that do nothing")
+	{
+		ClearAssetCache clear;
+		Scene scene;
+		auto biped = AddBiped(scene);
+		auto& animator = biped.GetComponent<AnimatorComponent>();
+		animator.Layers = { Layer("Upper", "Wave") };
+		animator.Layers[0].OwnParameters = true;
+		animator.Layers[0].Events = true;
+		const auto warnings = GetAnimationWarnings(biped);
+		CHECK(std::ranges::find(warnings, "Animator layer 'Upper': OwnParameters has no effect without a StateMachine") != warnings.end());
+		CHECK(std::ranges::find(warnings, "Animator layer 'Upper': Events has no effect: the Animator has no Events") != warnings.end());
+		json written = ComponentRegistry::Find("Animator")->Serialize(biped);
+		CHECK(written["Layers"][0]["OwnParameters"] == true);
+		CHECK(written["Layers"][0]["Events"] == true);
+		written["Layers"][0]["Events"] = false;
+		std::string error;
+		REQUIRE_MESSAGE(ComponentRegistry::AddOrPatch(biped, "Animator", written, error), error);
+		CHECK_FALSE(animator.Layers[0].Events);
+	}
+}

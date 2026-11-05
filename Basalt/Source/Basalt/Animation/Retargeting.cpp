@@ -181,6 +181,25 @@ namespace Basalt {
 			return {};
 		}
 
+		// Turns a rest pose's rotations by the offsets (per target node, as RetargetMap::Offsets) of the nodes the map pairs
+		// with them. Only rotations: limb lengths and the root's scale keep the rest pose. An offset is a turn in model space
+		// about the joint, so it carries everything below the joint.
+		void ApplyRestOffsets(const MeshSource& source, const RetargetMap& map, RestPose& rest)
+		{
+			std::vector<glm::quat> own(source.Nodes.size(), glm::quat(1, 0, 0, 0));
+			for (size_t node = 0; node < map.Offsets.size(); node++)
+				if (map.Offsets[node] != glm::vec3(0))
+					own[map.SourceOf[node]] = Math::QuatFromEuler(glm::radians(map.Offsets[node]));
+			// What all the joints above a node (and the node) turn it by, parents first.
+			std::vector<glm::quat> turns(source.Nodes.size(), glm::quat(1, 0, 0, 0));
+			for (uint32_t node : source.NodeOrder)
+			{
+				const int32_t parent = source.Nodes[node].Parent;
+				turns[node] = parent >= 0 ? own[node] * turns[parent] : own[node];
+				rest.Rotations[node] = glm::normalize(turns[node] * rest.Rotations[node]);
+			}
+		}
+
 		// The root's rest height above the lowest of `mapped`, in model space (glTF is Y-up).
 		float LegLength(const std::vector<glm::vec3>& positions, int32_t root, const std::vector<int32_t>& mapped)
 		{
@@ -338,6 +357,7 @@ namespace Basalt {
 			RetargetMap map;
 			map.SourceOf.assign(target.Nodes.size(), -1);
 			map.Matches.assign(target.Nodes.size(), RetargetMatch::None);
+			map.Offsets.assign(target.Nodes.size(), glm::vec3(0));
 			std::vector<bool> used(source.Nodes.size(), false);
 			auto pair = [&](size_t targetNode, size_t sourceNode, RetargetMatch match) {
 				if (map.SourceOf[targetNode] >= 0 || used[sourceNode])
@@ -368,6 +388,8 @@ namespace Basalt {
 					outWarnings.push_back(fmt::format("joint map entry '{}' -> '{}': {}", joint.Source, joint.Target, fmt::join(missing, "; ")));
 				else if (!pair(static_cast<size_t>(targetNode), static_cast<size_t>(sourceNode), RetargetMatch::JointMap))
 					outWarnings.push_back(fmt::format("joint map entry '{}' -> '{}' is skipped: an earlier entry already pairs one of the joints", joint.Source, joint.Target));
+				else
+					map.Offsets[targetNode] = joint.Offset;
 			}
 			std::map<std::string_view, size_t> sourceNames;
 			std::map<std::string, size_t> sourceBones;
@@ -415,6 +437,7 @@ namespace Basalt {
 				map.SourceRest = {};
 				return map;
 			}
+			ApplyRestOffsets(source, map, map.SourceRest);
 			// A joint without a rest rotation has no orientation to correct from; its children still pose, but it turns from
 			// identity.
 			const auto warnDegenerate = [&](const MeshSource& mesh, const std::vector<uint32_t>& nodes, const AnimationClip* reference, const auto& paired) {

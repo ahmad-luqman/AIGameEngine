@@ -1445,7 +1445,38 @@ TEST_SUITE("Animation")
 					REQUIRE(expectedHit.has_value() == actualHit.has_value());
 					if (expectedHit)
 						CHECK(expectedHit->Fraction == doctest::Approx(actualHit->Fraction).epsilon(1e-4));
+					// Rays start inside bodies too; both report them the same way, and hit each body once.
+					const glm::vec3 ray = glm::normalize(glm::vec3(0.8f, -1, 0.3f));
+					const auto worldHits = physics.RaycastAll(point, ray, 6);
+					const auto editHits = shapes.RaycastAll(point, ray, 6);
+					REQUIRE(worldHits.size() == editHits.size());
+					for (size_t i = 0; i < worldHits.size(); i++)
+					{
+						CHECK(worldHits[i].EntityID == editHits[i].EntityID);
+						CHECK(worldHits[i].Distance == doctest::Approx(editHits[i].Distance).epsilon(1e-4));
+						CHECK(Near(worldHits[i].Point, editHits[i].Point, 1e-3f));
+						CHECK(Near(worldHits[i].Normal, editHits[i].Normal, 1e-3f));
+					}
 				}
+		// Filters and arguments read the same too.
+		const glm::vec3 above(3, 4, 0), down(0, -1, 0);
+		const auto hitsOf = [&](const PhysicsQueryFilter& filter) {
+			std::vector<UUID> inWorld, inEdit;
+			for (const RaycastHit& hit : physics.RaycastAll(above, down, 9, filter))
+				inWorld.push_back(hit.EntityID);
+			for (const RaycastHit& hit : shapes.RaycastAll(above, down, 9, filter))
+				inEdit.push_back(hit.EntityID);
+			CHECK(inWorld == inEdit);
+			return inEdit;
+		};
+		REQUIRE_FALSE(hitsOf({}).empty());
+		const UUID first = hitsOf({}).front();
+		const std::vector<UUID> others = hitsOf({ .IgnoreEntity = first });
+		CHECK(std::ranges::find(others, first) == others.end());
+		CHECK(hitsOf({ .LayerMask = 0 }).empty());
+		CHECK(shapes.RaycastAll(above, glm::vec3(0), 9).empty());
+		CHECK(shapes.RaycastAll(above, down, 0).empty());
+		CHECK(shapes.RaycastAll(glm::vec3(std::numeric_limits<float>::quiet_NaN()), down, 9).empty());
 		scene.OnSimulationStop();
 	}
 

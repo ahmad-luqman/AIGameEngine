@@ -85,10 +85,10 @@ namespace Basalt {
 			m_Hub.Publish(AutomationEventType::Collision, std::move(event));
 		}
 
-		void OnAnimationEvent(Scene& scene, Entity entity, const std::string& name, const std::string& clip) override
+		void OnAnimationEvent(Scene& scene, Entity entity, const std::string& name, const std::string& clip, const std::string& layer) override
 		{
 			if (m_Hub.Wants(AutomationEventType::Animation))
-				m_Hub.Publish(AutomationEventType::Animation, { { "name", name }, { "clip", clip }, { "entity", EntityRef(entity) }, { "frame", scene.GetFrameCount() } });
+				m_Hub.Publish(AutomationEventType::Animation, { { "name", name }, { "clip", clip }, { "layer", layer.empty() ? nlohmann::json() : nlohmann::json(layer) }, { "entity", EntityRef(entity) }, { "frame", scene.GetFrameCount() } });
 		}
 
 		void OnScriptError(Scene& scene, const std::string& message) override

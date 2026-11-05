@@ -24,6 +24,27 @@ namespace Basalt {
 
 	using namespace PhysicsInternal;
 
+	std::optional<glm::vec3> CastDirection(const glm::vec3& direction, float maxDistance)
+	{
+		const float length = glm::length(direction);
+		if (!IsFiniteVec(direction) || !std::isfinite(length) || length <= 0.0f || !std::isfinite(maxDistance) || maxDistance <= 0.0f)
+			return std::nullopt;
+		return direction / length;
+	}
+
+	std::vector<RaycastHit> SortHits(std::vector<RaycastHit> hits)
+	{
+		std::ranges::sort(hits, [](const RaycastHit& a, const RaycastHit& b) {
+			return a.EntityID != b.EntityID ? a.EntityID < b.EntityID : a.Distance < b.Distance;
+		});
+		const auto duplicates = std::ranges::unique(hits, [](const RaycastHit& a, const RaycastHit& b) { return a.EntityID == b.EntityID; });
+		hits.erase(duplicates.begin(), duplicates.end());
+		std::ranges::sort(hits, [](const RaycastHit& a, const RaycastHit& b) {
+			return a.Distance != b.Distance ? a.Distance < b.Distance : a.EntityID < b.EntityID;
+		});
+		return hits;
+	}
+
 	namespace {
 
 		// Query filters: the layer mask, then triggers and the ignored entity (see PhysicsQueryFilter).
@@ -63,29 +84,6 @@ namespace Basalt {
 			uint64_t m_Ignore = 0;
 			bool m_IncludeTriggers = false;
 		};
-
-		// Normalized cast direction, or nullopt when the direction or distance cannot describe a cast.
-		std::optional<glm::vec3> CastDirection(const glm::vec3& direction, float maxDistance)
-		{
-			const float length = glm::length(direction);
-			if (!IsFiniteVec(direction) || !std::isfinite(length) || length <= 0.0f || !std::isfinite(maxDistance) || maxDistance <= 0.0f)
-				return std::nullopt;
-			return direction / length;
-		}
-
-		// Keeps each entity's closest hit, ordered by distance and then UUID so results are deterministic.
-		std::vector<RaycastHit> SortHits(std::vector<RaycastHit> hits)
-		{
-			std::ranges::sort(hits, [](const RaycastHit& a, const RaycastHit& b) {
-				return a.EntityID != b.EntityID ? a.EntityID < b.EntityID : a.Distance < b.Distance;
-			});
-			const auto duplicates = std::ranges::unique(hits, [](const RaycastHit& a, const RaycastHit& b) { return a.EntityID == b.EntityID; });
-			hits.erase(duplicates.begin(), duplicates.end());
-			std::ranges::sort(hits, [](const RaycastHit& a, const RaycastHit& b) {
-				return a.Distance != b.Distance ? a.Distance < b.Distance : a.EntityID < b.EntityID;
-			});
-			return hits;
-		}
 
 		std::vector<RaycastHit> CastRay(const JPH::PhysicsSystem& system, const glm::vec3& origin, const glm::vec3& direction, float maxDistance, const PhysicsQueryFilter& filter, bool all)
 		{

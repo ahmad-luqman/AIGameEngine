@@ -32,7 +32,7 @@ namespace Basalt {
 	//   function Player:OnCollisionEnd(other, contact) end  -- likewise OnTriggerEnter/Exit; end and exit
 	//                                                       -- contacts may be nil (see ContactInfo)
 	//   function Player:OnJointBreak(other) end    -- other is the far body; nil for a joint to the world
-	//   function Player:OnAnimationEvent(name, clip) end  -- an Animator event marker on this entity was crossed
+	//   function Player:OnAnimationEvent(name, clip, layer) end  -- an Animator event marker on this entity was crossed
 	//   function Player:OnGamepadConnected(index) end  -- also for gamepads connected before the instance started;
 	//                                                  -- likewise OnGamepadDisconnected
 	//   function Player:OnReload() end             -- after a hot reload replaced the class (ReloadScripts)
@@ -75,8 +75,9 @@ namespace Basalt {
 		// and once on the entity holding the JointComponent when it is neither (with the connected entity, or
 		// nil for the world).
 		void OnJointBroken(Entity holder, Entity body, Entity connected);
-		// Calls OnAnimationEvent(name, clip) on the entity whose Animator crossed the marker.
-		void OnAnimationEvent(Entity entity, const std::string& name, const std::string& clip);
+		// Calls OnAnimationEvent(name, clip, layer) on the entity whose Animator crossed the marker; layer is the name of the
+		// layer that played the clip, nil for the base playback.
+		void OnAnimationEvent(Entity entity, const std::string& name, const std::string& clip, const std::string& layer);
 
 		// Creates the entity's script instance now (and calls OnCreate) if it has a ScriptComponent and no
 		// instance yet. Used after spawning entities so they are initialized immediately.
