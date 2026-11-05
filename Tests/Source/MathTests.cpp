@@ -178,12 +178,12 @@ TEST_SUITE("Math")
 		}
 		// Pitch +-180 is one orientation, whose sign is rounding noise: it must not alternate from save to save.
 		for (const float yaw : { 90.0f, -90.0f })
-			for (float pitch = -180.0f; pitch <= 180.0f; pitch += 1.0f)
-				for (float roll = -180.0f; roll <= 180.0f; roll += 15.0f)
+			for (int pitch = -180; pitch <= 180; pitch++)
+				for (int roll = -180; roll <= 180; roll += 15)
 				{
 					CAPTURE(pitch);
 					CAPTURE(roll);
-					const glm::vec3 first = ToDegrees(FromDegrees({ pitch, yaw, roll }));
+					const glm::vec3 first = ToDegrees(FromDegrees({ static_cast<float>(pitch), yaw, static_cast<float>(roll) }));
 					const glm::vec3 second = ToDegrees(FromDegrees(first));
 					REQUIRE(second.x == first.x);
 					REQUIRE(first.x > -180.0f);
@@ -197,6 +197,20 @@ TEST_SUITE("Math")
 			REQUIRE(euler.z == 0.0f);
 			REQUIRE(AngleBetween(rotation, FromDegrees(euler)) < 2e-4);
 		}
+		// A chain of turns that add up to the lock leaves more rounding than one product: the threshold must hold for it.
+		double largest = 0;
+		for (int i = 0; i < 100000; i++)
+		{
+			const float first = std::uniform_real_distribution<float>(5.0f, 85.0f)(random);
+			glm::quat rotation = glm::angleAxis(glm::radians(angle(random)), glm::vec3(0, 0, 1)) * glm::angleAxis(glm::radians(first), glm::vec3(0, 1, 0));
+			rotation = glm::normalize(rotation * glm::angleAxis(glm::radians(90.0f - first), glm::vec3(0, 1, 0)) * glm::angleAxis(glm::radians(angle(random)), glm::vec3(1, 0, 0)));
+			const glm::vec3 euler = ToDegrees(rotation);
+			largest = std::max(largest, static_cast<double>(std::abs(euler.y) - 90.0f));
+			if (euler.z != 0.0f)
+				largest = 1;
+		}
+		// Rotations a few float steps from the lock must also count as it, or their roll is noise.
+		CHECK(largest <= 1e-3);
 		// Only pitch minus roll (plus roll, below) matters at the lock.
 		CHECK(ToDegrees(FromDegrees({ 30.0f, 90.0f, 10.0f })).x == doctest::Approx(20.0f).epsilon(1e-4));
 		CHECK(ToDegrees(FromDegrees({ 30.0f, -90.0f, 10.0f })).x == doctest::Approx(40.0f).epsilon(1e-4));
