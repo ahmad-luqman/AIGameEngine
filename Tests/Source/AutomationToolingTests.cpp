@@ -640,6 +640,89 @@ TEST_SUITE("Automation")
 		server.Stop();
 	}
 
+	TEST_CASE("A first frame that cannot open JSON closes the connection before any handler sees a frame")
+	{
+		CommandRegistry registry;
+		AutomationSession session;
+		Run(registry, session, "scene.new", { { "empty", true } });
+		AutomationServer server;
+		std::string error;
+		std::atomic<int> requests = 0;
+		REQUIRE(server.StartWithFactory(0, [&]() {
+			auto connection = std::make_shared<AutomationConnection>();
+			return AutomationServer::ClientHandler{ [&, connection](const std::string& request) {
+				requests++;
+				return connection->HandleRequest(registry, session, request); }, nullptr }; }, error));
+
+		for (const char* requestLine : { "POST / HTTP/1.1", "PUT /run HTTP/1.1", "GET / HTTP/1.1" })
+		{
+			CAPTURE(requestLine);
+			std::string request = requestLine;
+			request += "\r\nHost: 127.0.0.1:7420\r\nOrigin: https://example.com\r\nContent-Type: text/plain\r\n\r\n";
+			request += R"({"command":"entity.create","params":{"name":"FromAWebPage"}})";
+			BasaltTest::LineClient client(server.GetPort());
+			REQUIRE(client.Send(request));
+			// The refusal itself can be lost: closing with the body unread may reset the connection.
+			while (!client.ReadLine().empty())
+				;
+			CHECK(requests == 0);
+		}
+		CHECK(Run(registry, session, "entity.list")["entities"].empty());
+
+		for (const std::string& frame : { std::string("hello"), std::string("123"), std::string("\"text\""), std::string("null"), std::string("  POST / HTTP/1.1"), std::string("\xEF\xBB\xBFhello") })
+		{
+			CAPTURE(frame);
+			BasaltTest::LineClient client(server.GetPort());
+			REQUIRE(client.Send(frame));
+			CHECK(ParseJson(client.ReadLine())["error"] == "this port speaks newline-delimited JSON");
+			CHECK(client.ReadLine().empty());
+			CHECK(requests == 0);
+		}
+
+		// Anything an automation client can send still gets through, whatever came first.
+		const std::string info = R"({"command":"scene.info"})";
+		for (const std::string& opening : { std::string(), std::string("\r") })
+		{
+			CAPTURE(opening);
+			BasaltTest::LineClient client(server.GetPort());
+			REQUIRE(client.Send(opening));
+			REQUIRE(client.Send(info));
+			CHECK(ParseJson(client.ReadLine())["ok"] == true);
+		}
+		for (const std::string& opening : { std::string("  \t"), std::string("\xEF\xBB\xBF") })
+		{
+			CAPTURE(opening);
+			BasaltTest::LineClient client(server.GetPort());
+			REQUIRE(client.Send(opening));
+			CHECK(ParseJson(client.ReadLine())["error"] == "invalid JSON");
+			REQUIRE(client.Send(info));
+			CHECK(ParseJson(client.ReadLine())["ok"] == true);
+		}
+		{
+			BasaltTest::LineClient client(server.GetPort());
+			REQUIRE(client.Send("\xEF\xBB\xBF" + info));
+			CHECK(ParseJson(client.ReadLine())["ok"] == true);
+		}
+		{
+			// Malformed JSON stays an answered mistake, and only a first frame is judged.
+			BasaltTest::LineClient client(server.GetPort());
+			REQUIRE(client.Send("{bad}"));
+			CHECK(ParseJson(client.ReadLine())["error"] == "invalid JSON");
+			REQUIRE(client.Send("not json either"));
+			CHECK(ParseJson(client.ReadLine())["error"] == "invalid JSON");
+			REQUIRE(client.Send(info));
+			CHECK(ParseJson(client.ReadLine())["ok"] == true);
+		}
+		{
+			BasaltTest::LineClient client(server.GetPort());
+			REQUIRE(client.Send("[1,2]"));
+			CHECK(ParseJson(client.ReadLine()).is_array());
+			REQUIRE(client.Send(info));
+			CHECK(ParseJson(client.ReadLine())["ok"] == true);
+		}
+		server.Stop();
+	}
+
 	TEST_CASE("A connection attributes subscriptions only while it handles a request, and ends them when it goes")
 	{
 		CommandRegistry registry;

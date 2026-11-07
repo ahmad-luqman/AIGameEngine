@@ -24,6 +24,7 @@ static const SocketHandle s_InvalidSocket = -1;
 
 #include <cerrno>
 #include <cstring>
+#include <string_view>
 #include <system_error>
 
 namespace Basalt {
@@ -33,6 +34,16 @@ namespace Basalt {
 		SocketHandle ToSocket(intptr_t value)
 		{
 			return static_cast<SocketHandle>(value);
+		}
+
+		// Spaces around a frame, which the JSON parser skips. It skips the byte order mark some Windows tools write too.
+		std::string_view TrimFrame(std::string_view frame)
+		{
+			constexpr std::string_view ByteOrderMark = "\xEF\xBB\xBF";
+			if (frame.starts_with(ByteOrderMark))
+				frame.remove_prefix(ByteOrderMark.size());
+			const size_t first = frame.find_first_not_of(" \t");
+			return first == std::string_view::npos ? std::string_view() : frame.substr(first);
 		}
 
 		void CloseSocket(SocketHandle socket)
@@ -223,6 +234,8 @@ namespace Basalt {
 		const SocketHandle client = ToSocket(clientHandle);
 		std::string buffer;
 		char chunk[4096];
+		// Until a frame that is not blank arrives.
+		bool awaitingFirstFrame = true;
 		BS_CORE_ASSERT(handler.OnRequest, "a client handler needs OnRequest");
 		const auto send = [&](const std::string& data, const char* what) {
 			std::string error;
@@ -267,6 +280,21 @@ namespace Basalt {
 				buffer.erase(0, newline + 1);
 				if (!line.empty() && line.back() == '\r')
 					line.pop_back();
+				if (const std::string_view frame = TrimFrame(line); awaitingFirstFrame && !frame.empty())
+				{
+					awaitingFirstFrame = false;
+					// A web page can reach this port: browsers send cross-origin POSTs without asking. It chooses the body
+					// of its request but not the request line, which fails here, so nothing behind that line reaches a
+					// handler. Every automation client opens with an object or, at worst, malformed JSON that does.
+					if (frame.front() != '{' && frame.front() != '[')
+					{
+						BS_CORE_WARN("Automation: closing connection; its first frame does not open JSON (an HTTP request from a web page looks like this)");
+						send(R"({"ok":false,"error":"this port speaks newline-delimited JSON"})"
+							 "\n",
+							 "a refusal");
+						return;
+					}
+				}
 				const std::string response = handler.OnRequest(line);
 				if (!response.empty() && !send(response + "\n", "a response"))
 					return;
