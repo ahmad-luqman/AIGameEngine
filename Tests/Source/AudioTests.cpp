@@ -354,7 +354,11 @@ TEST_SUITE("Audio")
 		CHECK_FALSE(error.empty());
 		// A real header can promise audio that is not there, and an empty file should say so.
 		const std::string headerOnly = wav.substr(0, 44);
-		const std::pair<std::string, const char*> refused[] = { { "", "the file is empty" }, { "not audio at all", "" }, { headerOnly, "it holds no audio" } };
+		const std::vector<uint8_t> flac = read("Long.flac");
+		std::string noisyFlac(flac.begin(), flac.begin() + 8192);
+		for (size_t i = 42; i < noisyFlac.size(); i++)
+			noisyFlac[i] = static_cast<char>(i * 2654435761u >> 24);
+		const std::pair<std::string, const char*> refused[] = { { "", "the file is empty" }, { "not audio at all", "" }, { headerOnly, "it holds no audio" }, { noisyFlac, "" } };
 		for (const auto& [file, reason] : refused)
 		{
 			CAPTURE(file.size());

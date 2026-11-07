@@ -220,11 +220,13 @@ namespace Basalt {
 			return nullptr;
 		}
 		for (const auto& [key, field] : { std::pair{ "RandomSeed", &config.RandomSeed }, std::pair{ "ScriptInstructionLimit", &config.ScriptInstructionLimit } })
+		{
 			if (const auto value = data.find(key); value != data.end() && !JsonToUInt32(*value, *field))
 			{
 				outError = fmt::format("invalid project file '{}': {} must be an integer between 0 and {}", fileText, key, UINT32_MAX);
 				return nullptr;
 			}
+		}
 		// The window size reaches the runtime's window unchecked otherwise (a negative value would wrap around).
 		for (const auto& [key, size] : { std::pair{ "WindowWidth", &config.WindowWidth }, std::pair{ "WindowHeight", &config.WindowHeight } })
 		{

@@ -3029,7 +3029,7 @@ Changes project settings and saves the project file.
 | `physicsLayers` | object {Names: ["Default", ...], IgnoredPairs: [[a, b], ...]}, replaces all layers; applies from the next play |
 | `randomSeed` | integer in [0, 4294967295], seeds Lua's random numbers, particle emitters and runtime entity UUIDs; applies from the next play |
 | `renderScale` | number in [0.25, 2], fraction of the window resolution the scene renders at (the highest scale with dynamic resolution) |
-| `scriptInstructionLimit` | integer in [0, 4294967295], how many VM instructions one call into Lua may run before it fails with an error, in the editor and the CLI (never in the runtime); 0 removes the limit, and the overhead of checking it; applies from the next play |
+| `scriptInstructionLimit` | integer in [0, 4294967295], how many VM instructions one call into Lua may run, and how many more bytes it may keep on the Lua heap (64 MiB at least), before it fails with an error, in the editor and the CLI (never in the runtime); 0 removes the limit, and the overhead of checking it; applies from the next play |
 | `startScene` | string, project-relative scene |
 | `targetFrameRate` | number in [10, 1000]; dynamic resolution keeps the scene's GPU time within this frame rate's frame time |
 | `version` | string, MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH.BUILD (each 0-65535, no leading zeros): the version packaged exports carry |
@@ -3229,7 +3229,7 @@ Changes project settings and saves the project file.
     "scriptInstructionLimit": {
       "anyOf": [
         {
-          "description": "integer in [0, 4294967295], how many VM instructions one call into Lua may run before it fails with an error, in the editor and the CLI (never in the runtime); 0 removes the limit, and the overhead of checking it; applies from the next play",
+          "description": "integer in [0, 4294967295], how many VM instructions one call into Lua may run, and how many more bytes it may keep on the Lua heap (64 MiB at least), before it fails with an error, in the editor and the CLI (never in the runtime); 0 removes the limit, and the overhead of checking it; applies from the next play",
           "maximum": 4294967295,
           "minimum": 0,
           "type": "integer"
@@ -3238,7 +3238,7 @@ Changes project settings and saves the project file.
           "type": "null"
         }
       ],
-      "description": "integer in [0, 4294967295], how many VM instructions one call into Lua may run before it fails with an error, in the editor and the CLI (never in the runtime); 0 removes the limit, and the overhead of checking it; applies from the next play"
+      "description": "integer in [0, 4294967295], how many VM instructions one call into Lua may run, and how many more bytes it may keep on the Lua heap (64 MiB at least), before it fails with an error, in the editor and the CLI (never in the runtime); 0 removes the limit, and the overhead of checking it; applies from the next play"
     },
     "startScene": {
       "anyOf": [

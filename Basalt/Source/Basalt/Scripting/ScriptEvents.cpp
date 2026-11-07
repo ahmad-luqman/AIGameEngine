@@ -106,16 +106,15 @@ namespace Basalt {
 			called++;
 			ScriptOwnerScope scope(m_Context, owner, "event handler");
 			const sol::protected_function_result result = handler(args);
-			if (!result.valid())
+			if (std::string error; scope.Failed(result, error))
 			{
-				const sol::error error = result;
 				// A shared owner's handler (the session's, a script's or module's top level) would fail again on every
 				// emit; an instance's ends with its instance.
 				if (m_Host.IsSharedOwner(owner))
 					Cancel(id);
 				else if (owner == emitter)
 					emitterFailed = true;
-				m_Host.FailOwner(owner, error.what(), "a handler of event '" + name + "'");
+				m_Host.FailOwner(owner, error, "a handler of event '" + name + "'");
 			}
 		}
 

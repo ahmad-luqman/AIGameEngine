@@ -119,9 +119,6 @@ namespace Basalt {
 
 		// Records a script error (logged, and returned by GetErrors, e.g. play.step's scriptErrors).
 		void ReportError(const std::string& message);
-		// Fails the owners of calls that ran out and hid it (ScriptContext::SwallowedStops): nothing else would, and each
-		// frame would spend the budget again.
-		void ReportSwallowedStops();
 		const std::vector<std::string>& GetErrors() const { return m_Errors; }
 		void ClearErrors() { m_Errors.clear(); }
 
@@ -134,6 +131,7 @@ namespace Basalt {
 	private:
 		// Creates the instance (properties applied) without calling OnCreate. False if none was created.
 		bool CreateInstance(Entity entity);
+		void StartOrDefer(UUID uuid);
 		// ReloadScripts' work, which may throw sol2 errors (ReloadScripts catches them).
 		void ReloadClasses(const std::vector<std::string>& changedFiles, ScriptReloadResult& result);
 		void DispatchGamepadConnections();

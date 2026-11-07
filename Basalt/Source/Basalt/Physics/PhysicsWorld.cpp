@@ -230,14 +230,13 @@ namespace Basalt {
 			BS_CORE_ERROR("Physics: the update failed in a way Basalt does not know (Jolt error bits {:#x})", unseen);
 	}
 
-	PhysicsWorld::PhysicsWorld(Scene* scene, const PhysicsCapacity& requested)
+	PhysicsWorld::PhysicsWorld(Scene* scene, PhysicsCapacity capacity)
 		: m_Impl(CreateScope<Impl>(scene))
 	{
 		AcquireJolt();
 
 		// What Jolt will keep, so the rest is sized from that and messages say it. It asserts on more, and raises less.
 		constexpr uint32_t SmallestTable = 4;
-		PhysicsCapacity capacity = requested;
 		capacity.MaxBodies = std::min(capacity.MaxBodies, static_cast<uint32_t>(JPH::PhysicsSystem::cMaxBodiesLimit));
 		capacity.MaxBodyPairs = std::clamp(capacity.MaxBodyPairs, SmallestTable, static_cast<uint32_t>(JPH::PhysicsSystem::cMaxBodyPairsLimit));
 		capacity.MaxContactConstraints = std::clamp(capacity.MaxContactConstraints, SmallestTable, static_cast<uint32_t>(JPH::PhysicsSystem::cMaxContactConstraintsLimit));

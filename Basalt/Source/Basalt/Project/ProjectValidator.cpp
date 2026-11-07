@@ -406,7 +406,7 @@ namespace Basalt {
 
 			// A path a scene, prefab or the project refers to: it must name an existing file inside Assets/, spelled
 			// with the file's exact letter case (the game may run on a case-sensitive file system).
-			// True when it holds up.
+			// False when the reference itself is refused; a sub-asset it names reports for itself.
 			bool CheckReference(const std::string& reference, const std::string& file, const char* role, ValidationSeverity severity = ValidationSeverity::Error)
 			{
 				if (AssetRegistry::IsUnresolvedKey(reference))

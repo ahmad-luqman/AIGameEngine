@@ -9,6 +9,7 @@
 
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <unordered_set>
 
@@ -68,18 +69,21 @@ namespace Basalt {
 	};
 
 	// What one call into Lua has spent: the outermost ScriptOwnerScope (a callback, a timer, one resume of a coroutine), with
-	// any it nests sharing its budget. Past the project's ScriptInstructionLimit, or once it has grown the Lua heap by as many
-	// bytes, a count hook raises an ordinary Lua error, so a script that never returns fails instead of hanging its host, and
-	// one appending to a table forever fails before it takes the machine's memory.
+	// any it nests sharing its budget. Past the project's ScriptInstructionLimit, or once it has kept that many more bytes on
+	// the Lua heap (64 MiB at least), a count hook raises an ordinary Lua error, so a script that never returns fails instead of
+	// hanging its host, and one appending to a table forever fails before it takes the machine's memory. A call that ran out
+	// has failed even if it caught that error: ScriptOwnerScope::Failed says so where the call was made.
 	//
 	// A count hook sends every instruction through Lua's trace function, whatever the count: tight Lua runs up to 2.7 times
 	// slower, a script moving entities through bindings about 5%, hence ScriptEngine::DisableInstructionLimit for games. It counts
 	// instructions rather than time so that it never depends on the machine, on a blocking binding or on a debugger, and it
-	// reaches every coroutine, which a watchdog thread could not see.
+	// reaches coroutines, which a watchdog thread could not see.
 	//
-	// Not stopped: C functions (a slow string.find), which run no instructions; __gc finalizers, where Lua turns hooks off; and,
-	// since a hook's error leaves them off until a pcall restores them, an xpcall message handler the stop itself calls and the
-	// __close of a coroutine it ended.
+	// Not stopped: C functions (a slow string.find), which run no instructions, and a single one can pass the heap limit by any
+	// amount; __gc finalizers, where Lua turns hooks off; since a hook's error leaves them off until a pcall restores them, an
+	// xpcall message handler the stop itself calls and the __close of a coroutine it ended. A coroutine ending within the
+	// hook's period (256 instructions at most) charges nothing, as a new thread starts a new count, so loops of those run longer
+	// than the limit says, though not without end, as the loop that starts them counts.
 	class ScriptCallBudget
 	{
 	public:
@@ -91,38 +95,36 @@ namespace Basalt {
 		// outlive the state.
 		void Install(sol::state& lua, uint32_t limit);
 
-		// True once the current call has run out: everything it nests fails, so a caller stops running more of it.
+		// True once the current call has run out: everything it nests fails, so a caller stops running more of it. Never true
+		// outside a call.
 		bool IsSpent() const { return m_Stop != nullptr; }
-		// The stop reached a report as a script error. A script can swallow one: ScriptOwnerScope reports those.
-		void MarkReported() { m_Reported = true; }
+		// Why it ran out; null while it has not.
+		const char* GetStop() const { return m_Stop; }
 
 	private:
 		BS_NOINLINE static void OnInstructions(lua_State* state, lua_Debug* debug);
 		void Enter();
-		// Why the outermost call stopped, as it ends, if nothing reported that; else null.
-		const char* Leave();
+		void Leave();
+		// Sets the stop, if the call has gone past a limit, given what the last firing charged.
+		void Charge(lua_State* state, int instructions);
 
 		// Lua's state, for its heap size; null with no limit.
 		lua_State* m_State = nullptr;
 		uint64_t m_InstructionLimit = 0;
-		int64_t m_HeapLimitKilobytes = 0;
+		int m_HeapLimitKilobytes = 0;
 		int m_HookPeriod = 0;
 		uint32_t m_Depth = 0;
 		uint64_t m_Instructions = 0;
-		int64_t m_HeapAtEntryKilobytes = 0;
+		int m_HeapAtEntryKilobytes = 0;
+		// Heap size at which to look closer: garbage counts until a collection says otherwise.
+		int m_HeapCheckKilobytes = 0;
 		// One of the two below, or null.
 		const char* m_Stop = nullptr;
-		bool m_Reported = false;
 		std::string m_InstructionStop;
 		std::string m_HeapStop;
 
 		friend class ScriptOwnerScope;
 	};
-
-	// table[key] with its metamethods, in a protected call, for C++ reading a table a script controls: an __index that
-	// raises would otherwise end the process, and one that never returns would hang it. Call inside a ScriptOwnerScope, so
-	// the budget applies. nullopt, with the error, when the lookup failed.
-	std::optional<sol::object> ProtectedIndex(const sol::table& table, const char* key, std::string& outError);
 
 	// State shared between the bindings and the ScriptEngine.
 	class ScriptContext
@@ -153,15 +155,6 @@ namespace Basalt {
 		UUID GetCurrentOwner() const { return m_CurrentOwner; }
 		// See ScriptCallBudget.
 		ScriptCallBudget Budget;
-		// A stop the script swallowed, until the engine fails its owner (ScriptEngine::ReportSwallowedStops): the scope that
-		// sees it may still be inside the task or instance failing would destroy.
-		struct SwallowedStop
-		{
-			UUID Owner = 0;
-			std::string Message;
-			std::string Where;
-		};
-		std::vector<SwallowedStop> SwallowedStops;
 
 		static constexpr size_t MaxClipLeakWarnings = 1024;
 		// A reload makes repaired callbacks eligible for a fresh diagnostic.
@@ -184,9 +177,9 @@ namespace Basalt {
 	// after a protected call fails. Unbalanced clips warn once per owner/callback until scripts reload.
 	// After 1024 distinct pairs per ScriptContext, one limit warning suppresses further leak diagnostics
 	// (see ScriptContext::GetCurrentOwner).
-	// Rule: only wrap protected calls (pcall, lua_resume), and be the only way C++ reaches Lua code: the budget's hook raises
-	// inside a scope and never outside one. Lua is compiled as C, so an error raised through an unprotected scope would
-	// longjmp past its destructor and leave the wrong owner current, or end the process.
+	// Rule: only wrap protected calls (pcall, lua_resume), and be how C++ reaches a script's code: the budget's hook raises inside
+	// a scope and never outside one. Lua is compiled as C, so an error raised through an unprotected scope would longjmp past
+	// its destructor and leave the wrong owner current, or end the process.
 	class ScriptOwnerScope
 	{
 	public:
@@ -195,6 +188,14 @@ namespace Basalt {
 
 		ScriptOwnerScope(const ScriptOwnerScope&) = delete;
 		ScriptOwnerScope& operator=(const ScriptOwnerScope&) = delete;
+
+		// Whether a protected call made in this scope failed, or ran out and caught that, which fails it all the same (it would
+		// pay the budget again on every call); outError says why. Call it before anything else runs in the scope.
+		bool Failed(const sol::protected_function_result& result, std::string& outError) const;
+		// table[key] with its metamethods, in a protected call, for C++ reading a table a script controls: an __index that
+		// raises would otherwise end the process, and one that never returns would hang it. nullopt, with the error, when the
+		// lookup failed.
+		std::optional<sol::object> Index(const sol::table& table, std::string_view key, std::string& outError);
 
 	private:
 		ScriptContext& m_Context;
@@ -210,7 +211,8 @@ namespace Basalt {
 	// Registers the complete Basalt Lua API (see Docs/ScriptingAPI.md) into the state.
 	void RegisterScriptBindings(sol::state& lua, ScriptContext& context);
 	// The metatable shared by a script class's instances: keys resolve in the class (and its own metatable
-	// chain), then in the methods every instance has (StartCoroutine, ...). Needs RegisterScriptBindings.
-	sol::table MakeInstanceMetatable(const sol::state_view& lua, const sol::table& scriptClass);
+	// chain), then in the methods every instance has (StartCoroutine, ...). Needs RegisterScriptBindings. nullopt, with the
+	// error, only when the call it runs inside has run out.
+	std::optional<sol::table> MakeInstanceMetatable(const sol::state_view& lua, const sol::table& scriptClass, std::string& outError);
 
 }

@@ -516,12 +516,15 @@ TEST_SUITE("Project")
 		writeScene("AlsoBad", { "Assets/Audio/Music.ogg" });
 		writeScene("Wrong", { "Assets/audio/broken.wav", "../Outside.wav", "builtin://Cube" });
 		temp.WriteFile("Outside.wav", "not audio at all");
+		temp.WriteFile("Assets/Prefabs/Radio.bprefab", R"({"Format": "BasaltPrefab", "Version": 4, "Entities": [
+			{"ID": 1, "Name": "Root", "Parent": 0, "Components": {"AudioSource": {"Clip": "Assets/Audio/Music.ogg"}}}]})");
 		project->GetConfig().StartScene = "Assets/Scenes/Good.bscene";
 
 		const ValidationReport report = ValidateProject(*project);
 		const auto errors = Messages(report, ValidationSeverity::Error);
 		INFO(nlohmann::json(errors).dump(1));
-		CHECK(errors.size() == 7);
+		CHECK(errors.size() == 8);
+		CHECK(Contains(errors, "Assets/Prefabs/Radio.bprefab: references the audio clip 'Assets/Audio/Music.ogg', but the engine cannot decode it"));
 		CHECK(Contains(errors, "Assets/Scenes/Bad.bscene: references the audio clip 'Assets/Audio/Music.ogg', but the engine cannot decode it"));
 		CHECK(Contains(errors, "Assets/Scenes/AlsoBad.bscene: references the audio clip 'Assets/Audio/Music.ogg', but the engine cannot decode it"));
 		CHECK(Contains(errors, "Assets/Scenes/Bad.bscene: references the audio clip 'Assets/Audio/Broken.wav', but the engine cannot decode it"));

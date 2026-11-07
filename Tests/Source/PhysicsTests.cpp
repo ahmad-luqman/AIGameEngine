@@ -476,7 +476,7 @@ TEST_SUITE("Physics")
 
 	TEST_CASE("A floor covered in boxes keeps every contact")
 	{
-		// Each box touches only the floor: as many contacts as boxes, past the 16384 the limit once was, at the least cost.
+		// Each box touches only the floor: as many contacts as boxes, which is the cheapest way past the capacity tests start with.
 		constexpr int Side = 129;
 		Scene scene;
 		CreateGround(scene).GetComponent<BoxColliderComponent>().HalfExtents = { 500.0f, 0.5f, 500.0f };
