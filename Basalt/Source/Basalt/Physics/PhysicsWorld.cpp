@@ -10,9 +10,12 @@
 #include <Jolt/Physics/Body/BodyLock.h>
 #include <Jolt/Physics/Body/MassProperties.h>
 #include <Jolt/Physics/Collision/CollideShape.h>
+#include <Jolt/Physics/Constraints/ContactConstraintManager.h>
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -194,26 +197,41 @@ namespace Basalt {
 		}
 	}
 
-	PhysicsWorld::PhysicsWorld(Scene* scene)
+	void PhysicsWorld::Impl::ReportUpdateErrors(JPH::EPhysicsUpdateError errors)
+	{
+		// Once per kind: a scene over a limit stays over it, and this runs every fixed step.
+		const uint32_t unseen = static_cast<uint32_t>(errors) & ~ReportedUpdateErrors;
+		ReportedUpdateErrors |= unseen;
+		const auto report = [unseen](JPH::EPhysicsUpdateError error, std::string_view what, uint32_t limit) {
+			if (unseen & static_cast<uint32_t>(error))
+				BS_CORE_ERROR("Physics: too many {} at once (the limit is {}); contacts were dropped, so bodies pass through what they touch", what, limit);
+		};
+		report(JPH::EPhysicsUpdateError::BodyPairCacheFull, "body pairs", Capacity.MaxBodyPairs);
+		report(JPH::EPhysicsUpdateError::ManifoldCacheFull, "contact manifolds", Capacity.MaxContactConstraints);
+		report(JPH::EPhysicsUpdateError::ContactConstraintsFull, "contact constraints", Capacity.MaxContactConstraints);
+	}
+
+	PhysicsWorld::PhysicsWorld(Scene* scene, const PhysicsCapacity& capacity)
 		: m_Impl(CreateScope<Impl>(scene))
 	{
 		AcquireJolt();
 
-		constexpr uint32_t MaxBodies = 65536;
 		constexpr uint32_t NumBodyMutexes = 0; // Jolt default
-		constexpr uint32_t MaxBodyPairs = 65536;
-		constexpr uint32_t MaxContactConstraints = 16384;
+		// On top of what the contact constraints take, for everything else a step allocates.
+		constexpr uint64_t TempHeadroomBytes = uint64_t{ 16 } * 1024 * 1024;
+		const uint64_t tempBytes = capacity.TempMemoryBytes != 0 ? capacity.TempMemoryBytes : capacity.MaxContactConstraints * uint64_t{ JPH::ContactConstraintManager::cMaxConstraintSize } + TempHeadroomBytes;
 
-		m_Impl->TempAllocator = CreateScope<JPH::TempAllocatorImpl>(16 * 1024 * 1024);
+		m_Impl->Capacity = capacity;
+		m_Impl->TempAllocator = CreateScope<JPH::TempAllocatorImplWithMallocFallback>(static_cast<JPH::uint>(std::min<uint64_t>(tempBytes, std::numeric_limits<JPH::uint>::max())));
 		m_Impl->JobSystem = &PhysicsJobs::Get();
 
 		m_Impl->Layers = scene->ResolvePhysicsLayers();
 		m_Impl->ObjectLayerPairFilter.SetLayers(m_Impl->Layers);
 
 		m_Impl->System = CreateScope<JPH::PhysicsSystem>();
-		m_Impl->System->Init(MaxBodies, NumBodyMutexes, MaxBodyPairs, MaxContactConstraints,
+		m_Impl->System->Init(capacity.MaxBodies, NumBodyMutexes, capacity.MaxBodyPairs, capacity.MaxContactConstraints,
 							 m_Impl->BroadPhaseLayerInterface, m_Impl->ObjectVsBroadPhaseLayerFilter, m_Impl->ObjectLayerPairFilter);
-		m_Impl->ContactListener.Materials.resize(MaxBodies);
+		m_Impl->ContactListener.Materials.resize(capacity.MaxBodies);
 		m_Impl->ContactListener.MinVelocityForRestitution = m_Impl->System->GetPhysicsSettings().mMinVelocityForRestitution;
 		m_Impl->System->SetContactListener(&m_Impl->ContactListener);
 		// Bodies joined by a joint do not collide with each other unless the joint asks for it.
@@ -769,7 +787,7 @@ namespace Basalt {
 			impl.UpdateCharacters(fixedStep);
 			impl.StepRagdolls(fixedStep, std::max(plannedSteps - steps, 1u));
 
-			impl.System->Update(fixedStep, 1, impl.TempAllocator.get(), impl.JobSystem);
+			impl.ReportUpdateErrors(impl.System->Update(fixedStep, 1, impl.TempAllocator.get(), impl.JobSystem));
 			impl.ValidateRagdollOutput();
 			m_Accumulator -= fixedStep;
 			m_StepCount++;

@@ -8,6 +8,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <mutex>
+#include <string_view>
 
 namespace Basalt::PhysicsInternal {
 
@@ -34,6 +35,10 @@ namespace Basalt::PhysicsInternal {
 		// Basalt's Release keeps BS_CORE_ASSERT but has no Jolt asserts.
 		bool JoltAssertFailed(const char* expression, const char* message, const char* file, JPH::uint line)
 		{
+			// The one that is no misuse: a scene over the world's limits. PhysicsWorld reports it, as in Release, from the
+			// result of the update this ends, which Debug must reach.
+			if (message && std::string_view(message).starts_with("An error occurred during the physics update"))
+				return false;
 			if (message)
 				BS_CORE_CRITICAL("[Jolt] Assertion '{}' failed at {}:{}: {}", expression, file, line, message);
 			else

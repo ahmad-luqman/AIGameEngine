@@ -264,7 +264,13 @@ namespace Basalt {
 			glm::vec3 BuiltScale = { 1.0f, 1.0f, 1.0f };
 		};
 
-		Scope<JPH::TempAllocatorImpl> TempAllocator;
+		PhysicsCapacity Capacity;
+		// The EPhysicsUpdateError bits already logged.
+		uint32_t ReportedUpdateErrors = 0;
+		// Logs what a step's System->Update dropped, which would otherwise show only as bodies falling through floors.
+		void ReportUpdateErrors(JPH::EPhysicsUpdateError errors);
+
+		Scope<JPH::TempAllocatorImplWithMallocFallback> TempAllocator;
 		PhysicsJobs* JobSystem = nullptr; // Engine-owned; queued references may outlive this world.
 		PhysicsInternal::BroadPhaseLayerInterfaceImpl BroadPhaseLayerInterface;
 		PhysicsInternal::ObjectVsBroadPhaseLayerFilterImpl ObjectVsBroadPhaseLayerFilter;

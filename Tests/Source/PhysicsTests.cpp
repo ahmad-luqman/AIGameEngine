@@ -442,6 +442,78 @@ TEST_SUITE("Physics")
 	}
 #endif
 
+	TEST_CASE("A scene over a world's limits logs each limit once and keeps stepping")
+	{
+		const uint64_t since = Log::GetHistory().GetTotalCount();
+		const auto run = [](const PhysicsCapacity& capacity) {
+			// A scene of its own: which boxes keep their contacts depends on the workers, and the others fall out of it.
+			Scene scene;
+			CreateGround(scene);
+			for (int x = 0; x < 8; x++)
+				for (int z = 0; z < 5; z++)
+					CreateBox(scene, { static_cast<float>(x) * 1.5f, 0.5f, static_cast<float>(z) * 1.5f });
+			// Runs in every configuration: Debug must reach the log, not stop at the assert Jolt ends its update with.
+			PhysicsWorld world(&scene, capacity);
+			world.Start();
+			for (int i = 0; i < 30; i++)
+				world.Step(Step);
+		};
+		// Jolt keeps pairs in one pool with manifolds, sized from both limits.
+		PhysicsCapacity fewPairs;
+		fewPairs.MaxBodyPairs = 4;
+		fewPairs.MaxContactConstraints = 4;
+		run(fewPairs);
+		CHECK(BasaltTest::CountLogMessages(since, "too many body pairs at once (the limit is 4)") == 1);
+
+		PhysicsCapacity fewContacts;
+		fewContacts.MaxContactConstraints = 4;
+		run(fewContacts);
+		CHECK(BasaltTest::CountLogMessages(since, "too many contact constraints at once (the limit is 4)") == 1);
+		// Each world reports for itself.
+		run(fewContacts);
+		CHECK(BasaltTest::CountLogMessages(since, "too many contact constraints at once (the limit is 4)") == 2);
+	}
+
+	TEST_CASE("A floor covered in boxes keeps every contact")
+	{
+		// Each box touches only the floor: as many contacts as boxes, past the 16384 the limit once was, at the least cost.
+		constexpr int Side = 129;
+		Scene scene;
+		Entity floor = scene.CreateEntity("Floor");
+		floor.GetTransform().Translation = { 0.0f, -0.5f, 0.0f };
+		floor.GetTransform().Scale = { 1000.0f, 1.0f, 1000.0f };
+		floor.AddComponent<RigidBodyComponent>();
+		floor.AddComponent<BoxColliderComponent>();
+		std::vector<Entity> boxes;
+		boxes.reserve(size_t{ Side } * Side);
+		for (int x = 0; x < Side; x++)
+			for (int z = 0; z < Side; z++)
+				boxes.push_back(CreateBox(scene, { static_cast<float>(x) * 2.0f - Side, 0.51f, static_cast<float>(z) * 2.0f - Side }));
+
+		const uint64_t since = Log::GetHistory().GetTotalCount();
+		scene.OnSimulationStart();
+		Simulate(scene, 0.1f);
+		CHECK(BasaltTest::CountLogMessages(since, "too many") == 0);
+		// 0.05 m below where they rest by now, had they lost the floor.
+		const bool held = std::ranges::all_of(boxes, [](Entity box) { return box.GetTransform().Translation.y > 0.48f; });
+		CHECK(held);
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("A step that outgrows its working memory block carries on with malloc")
+	{
+		Scene scene;
+		CreateGround(scene);
+		Entity box = CreateBox(scene, { 0.0f, 1.0f, 0.0f });
+		PhysicsCapacity capacity;
+		capacity.TempMemoryBytes = 1024;
+		PhysicsWorld world(&scene, capacity);
+		world.Start();
+		for (int i = 0; i < 120; i++)
+			world.Step(Step);
+		CHECK(box.GetTransform().Translation.y == doctest::Approx(0.5f).epsilon(0.02));
+	}
+
 	TEST_CASE("Physics warnings are logged once per distinct set and again after they clear")
 	{
 		Scene scene;
