@@ -4,6 +4,8 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <span>
+#include <string>
 #include <vector>
 
 struct ma_engine;
@@ -55,6 +57,10 @@ namespace Basalt {
 		// unchanged) when a device is present, the engine is not initialized, seconds is not finite or exceeds an
 		// hour, or the mix fails; true with nothing appended for seconds <= 0.
 		static bool ReadDeviceless(float seconds, std::vector<float>& output);
+
+		// Whether the decoders the engine plays with read this file (WAV, FLAC or MP3, whatever it is named), from its
+		// first frames; false, with the reason, when not. Needs no engine.
+		static bool CanDecode(std::span<const uint8_t> file, std::string& outError);
 	};
 
 }

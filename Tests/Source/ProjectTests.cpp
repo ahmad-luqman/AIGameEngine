@@ -493,6 +493,37 @@ TEST_SUITE("Project")
 		CHECK(report.GetIssues().empty());
 	}
 
+	TEST_CASE("Validation asks the decoders about audio clips, whatever the file is called")
+	{
+		BasaltTest::TempProject temp("ClipValidation");
+		const Ref<Project>& project = Project::GetActive();
+		const auto vorbis = FileSystem::ReadBinaryFile(std::filesystem::path(BASALT_TEST_DATA_DIR) / "Audio" / "Vorbis.ogg");
+		REQUIRE(vorbis);
+		temp.WriteFile("Assets/Audio/Music.ogg", std::string(vorbis->begin(), vorbis->end()));
+		temp.WriteFile("Assets/Audio/Beep.WAV", BasaltTest::MakeWav(0.1f));
+		temp.WriteFile("Assets/Audio/Beep.sound", BasaltTest::MakeWav(0.1f));
+		temp.WriteFile("Assets/Audio/Broken.wav", "not audio at all");
+		temp.WriteFile("Assets/Audio/Unused.ogg", "nothing refers to this");
+		const auto entity = [](int id, const std::string& clip) {
+			return nlohmann::json{ { "ID", id }, { "Name", "E" }, { "Components", { { "AudioSource", { { "Clip", clip } } } } } };
+		};
+		temp.WriteFile("Assets/Scenes/Good.bscene", nlohmann::json{ { "Entities", { entity(1, "Assets/Audio/Beep.WAV"), entity(2, "Assets/Audio/Beep.sound") } } }.dump());
+		temp.WriteFile("Assets/Scenes/Bad.bscene", nlohmann::json{ { "Entities", { entity(1, "Assets/Audio/Music.ogg"), entity(2, "Assets/Audio/Broken.wav"), entity(3, "Assets/Audio/Gone.wav") } } }.dump());
+		temp.WriteFile("Assets/Scenes/AlsoBad.bscene", nlohmann::json{ { "Entities", { entity(1, "Assets/Audio/Music.ogg") } } }.dump());
+		project->GetConfig().StartScene = "Assets/Scenes/Good.bscene";
+
+		const ValidationReport report = ValidateProject(*project);
+		const auto errors = Messages(report, ValidationSeverity::Error);
+		INFO(nlohmann::json(errors).dump(1));
+		CHECK(errors.size() == 4);
+		CHECK(Contains(errors, "Assets/Scenes/Bad.bscene: references the audio clip 'Assets/Audio/Music.ogg', but the engine cannot decode it"));
+		CHECK(Contains(errors, "Assets/Scenes/AlsoBad.bscene: references the audio clip 'Assets/Audio/Music.ogg', but the engine cannot decode it"));
+		CHECK(Contains(errors, "Assets/Scenes/Bad.bscene: references the audio clip 'Assets/Audio/Broken.wav', but the engine cannot decode it"));
+		// A missing clip is said once, as missing.
+		CHECK(Contains(errors, "Assets/Scenes/Bad.bscene: references the missing file 'Assets/Audio/Gone.wav'"));
+		CHECK_FALSE(Contains(errors, "Unused.ogg"));
+	}
+
 	TEST_CASE("Project validation reports what would break the exported game")
 	{
 		BasaltTest::TempProject temp("ValidateProblems");

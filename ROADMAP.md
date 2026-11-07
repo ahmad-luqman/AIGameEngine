@@ -81,6 +81,13 @@ below extend character movement, in order of impact.
 
 ---
 
+### Audio
+
+- **Ogg Vorbis and Opus playback — M.** Clips are WAV, FLAC or MP3; `project.validate` refuses others. Use miniaudio's
+  libvorbis and libopus backends (`extras/decoders`), which need those libraries pinned, and fuzz them through `FuzzAudio`.
+  Not its bundled `stb_vorbis.c` 1.22: a 666-byte file stalled it for over a minute in `start_decoder`, and CVE-2023-45675
+  names that function.
+
 ## P2 — Editor and asset pipeline
 
 ### Editor feel and visual quality

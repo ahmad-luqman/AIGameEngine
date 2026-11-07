@@ -331,6 +331,36 @@ TEST_SUITE("Audio")
 		scene.OnRuntimeStop();
 	}
 
+	TEST_CASE("CanDecode answers from a file's bytes, as the decoders that play it do")
+	{
+		const auto read = [](const char* name) {
+			const auto bytes = FileSystem::ReadBinaryFile(std::filesystem::path(BASALT_TEST_DATA_DIR) / "Audio" / name);
+			REQUIRE(bytes);
+			return *bytes;
+		};
+		const auto bytesOf = [](const std::string& text) { return std::span(reinterpret_cast<const uint8_t*>(text.data()), text.size()); };
+		const std::string wav = MakeWav(0.25f);
+		std::string error;
+		CHECK(AudioEngine::CanDecode(bytesOf(wav), error));
+		for (const char* name : { "Long.flac", "Long.mp3" })
+		{
+			CAPTURE(name);
+			CHECK(AudioEngine::CanDecode(read(name), error));
+		}
+		CHECK(error.empty());
+
+		// A real file: no decoder here reads Vorbis, though its container looks like one FLAC can come in.
+		CHECK_FALSE(AudioEngine::CanDecode(read("Vorbis.ogg"), error));
+		CHECK_FALSE(error.empty());
+		for (const std::string& file : { std::string(), std::string("not audio at all") })
+		{
+			CAPTURE(file);
+			error.clear();
+			CHECK_FALSE(AudioEngine::CanDecode(bytesOf(file), error));
+			CHECK_FALSE(error.empty());
+		}
+	}
+
 	TEST_CASE("AudioSource Bus and Stream fields round-trip through the component registry")
 	{
 		Scene scene;
