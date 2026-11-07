@@ -511,10 +511,6 @@ namespace Basalt {
 		template<typename... Args>
 		static bool Invoke(ScriptEngine& engine, UUID id, const sol::table& self, const char* name, Args&&... args)
 		{
-			// The enclosing call ran out, not this instance, which is left alone: that call stops at its next instruction. So
-			// true means nothing failed, not that the callback ran.
-			if (engine.m_Impl->Context.Budget.IsSpent())
-				return true;
 			ScriptOwnerScope scope(engine.m_Impl->Context, id, name);
 			std::string error;
 			const std::optional<sol::object> callback = scope.Index(self, name, error);
@@ -1010,11 +1006,6 @@ namespace Basalt {
 			return false;
 		const UUID uuid = entity.GetUUID();
 		impl.Pending.erase(uuid);
-		if (impl.Context.Budget.IsSpent())
-		{
-			impl.Pending.insert(uuid);
-			return false;
-		}
 
 		// Copy the component: Lua run below (OnDestroy, the script chunk) may remove or move it in storage.
 		const auto* liveComponent = entity.TryGetComponent<ScriptComponent>();

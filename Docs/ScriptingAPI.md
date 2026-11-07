@@ -115,8 +115,8 @@ the line it reached.
 
 - A call that ran out has failed, even if it caught the error: `pcall` does not outlast the limit, an instance is disabled,
   and a timer, handler or coroutine ends.
-- What a call nests shares its budget, so the call that ran out takes the blame. Callbacks, handlers and scripts it would still
-  have started do not run: instances wait for the next frame, and their own budget.
+- What a call nests shares its budget, so the call that ran out takes the blame. Event handlers left do not run, and scripts
+  it would still have started wait for the next frame, and a budget of their own.
 - Each stopped instance pays the budget once, so an endless loop in a script that 100 entities use stops the game for 100 limits.
 - Instructions count rather than seconds, so the outcome is the same on every machine, and time spent in bindings does not count.
 - Set the limit with `project.set scriptInstructionLimit`, from the next play (reading a script's properties uses it at once). 0
