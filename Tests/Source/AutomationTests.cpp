@@ -154,9 +154,9 @@ TEST_SUITE("Automation")
 		}
 	}
 
-	TEST_CASE("The random seed is a validated project setting that survives save and load")
+	TEST_CASE("The script instruction limit is a validated project setting")
 	{
-		BasaltTest::TempProject temp("RandomSeedProject");
+		BasaltTest::TempProject temp("InstructionLimitProject");
 		REQUIRE(temp.IsValid());
 		CommandRegistry registry;
 		AutomationSession session;
@@ -169,7 +169,14 @@ TEST_SUITE("Automation")
 		CHECK(Project::GetActiveScriptInstructionLimit() == 0);
 		for (const json& bad : { json(-1), json(4294967296), json(1.5), json("7") })
 			CHECK(RunError(registry, session, "project.set", { { "scriptInstructionLimit", bad } }).find("scriptInstructionLimit") != std::string::npos);
-		Run(registry, session, "project.set", { { "scriptInstructionLimit", DefaultScriptInstructionLimit } });
+	}
+
+	TEST_CASE("The random seed is a validated project setting that survives save and load")
+	{
+		BasaltTest::TempProject temp("RandomSeedProject");
+		REQUIRE(temp.IsValid());
+		CommandRegistry registry;
+		AutomationSession session;
 		CHECK(Run(registry, session, "project.info")["randomSeed"] == Random::DefaultSeed);
 		CHECK(Project::GetActiveRandomSeed() == Random::DefaultSeed);
 		Run(registry, session, "project.set", { { "randomSeed", 4294967295u } });

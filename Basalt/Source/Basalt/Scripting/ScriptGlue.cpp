@@ -43,35 +43,101 @@
 
 namespace Basalt {
 
-	void ScriptContext::LimitInstructions(lua_State* state, uint32_t limit)
+	void ScriptCallBudget::Install(sol::state& lua, uint32_t limit)
 	{
 		if (limit == 0)
 			return;
-		// The hook's count runs on across calls, so each firing charges the running call a whole period it may have only
-		// finished: a short period keeps that error small, and the period is free, as the hook costs the same at any count.
+		// Past these a coroutine's count: one that ends before its first firing charges nothing, as a new thread starts a new
+		// count, so a short period keeps what escapes small. The period costs nothing, as tracing every instruction is the
+		// cost, whatever the count. Each firing also charges a whole period the call may have only partly run, which the
+		// fraction of the limit keeps small.
 		constexpr uint32_t PeriodsPerLimit = 64;
+		constexpr uint32_t LongestPeriod = 256;
+		// So that limits for tests, which stop loops within moments, do not take every allocation for one.
+		constexpr int64_t SmallestHeapLimitKilobytes = int64_t{ 64 } * 1024;
+		m_State = lua.lua_state();
 		m_InstructionLimit = limit;
-		m_HookPeriod = static_cast<int>(std::clamp(limit / PeriodsPerLimit, 1u, 1u << 20));
-		// Coroutines copy this space from the main state, so the hook reaches the context from any of them.
-		*static_cast<ScriptContext**>(lua_getextraspace(state)) = this;
-		lua_sethook(state, &OnInstructions, LUA_MASKCOUNT, m_HookPeriod);
+		m_HeapLimitKilobytes = std::max<int64_t>(limit / 1024, SmallestHeapLimitKilobytes);
+		m_HookPeriod = static_cast<int>(std::clamp(limit / PeriodsPerLimit, 1u, LongestPeriod));
+		constexpr std::string_view Advice = "without returning (an endless loop?); project.set scriptInstructionLimit changes the limit, 0 removes it";
+		m_InstructionStop = fmt::format("ran {} instructions {}", limit, Advice);
+		m_HeapStop = fmt::format("grew the Lua heap by {} MiB {}", m_HeapLimitKilobytes / 1024, Advice);
+		// Coroutines copy this space from the main state, so the hook reaches the budget from any of them.
+		*static_cast<ScriptCallBudget**>(lua_getextraspace(m_State)) = this;
+		lua_sethook(m_State, &OnInstructions, LUA_MASKCOUNT, m_HookPeriod);
 	}
 
-	void ScriptContext::OnInstructions(lua_State* state, lua_Debug*)
+	void ScriptCallBudget::Enter()
 	{
-		ScriptContext& context = **static_cast<ScriptContext**>(lua_getextraspace(state));
+		if (m_Depth++ != 0 || m_State == nullptr)
+			return;
+		m_Instructions = 0;
+		m_HeapAtEntryKilobytes = lua_gc(m_State, LUA_GCCOUNT);
+		m_Reported = false;
+	}
+
+	const char* ScriptCallBudget::Leave()
+	{
+		if (--m_Depth != 0)
+			return nullptr;
+		const char* unreported = m_Reported ? nullptr : m_Stop;
+		m_Stop = nullptr;
+		return unreported;
+	}
+
+	// Raising longjmps out of this frame, which must hold no C++ object (on MSVC that runs their destructors twice).
+	void ScriptCallBudget::OnInstructions(lua_State* state, lua_Debug*)
+	{
+		ScriptCallBudget& budget = **static_cast<ScriptCallBudget**>(lua_getextraspace(state));
 		const int period = lua_gethookcount(state);
-		if (period != context.m_HookPeriod)
-			lua_sethook(state, &OnInstructions, LUA_MASKCOUNT, context.m_HookPeriod);
-		if (context.m_ScopeDepth == 0)
+		if (period != budget.m_HookPeriod)
+			lua_sethook(state, &OnInstructions, LUA_MASKCOUNT, budget.m_HookPeriod);
+		// Lua code outside a scope has no handler, so an error there would end the process.
+		if (budget.m_Depth == 0)
 			return;
-		context.m_InstructionsUsed += static_cast<uint64_t>(period);
-		if (context.m_InstructionsUsed < context.m_InstructionLimit)
+		budget.m_Instructions += static_cast<uint64_t>(period);
+		if (!budget.m_Stop && budget.m_Instructions >= budget.m_InstructionLimit)
+			budget.m_Stop = budget.m_InstructionStop.c_str();
+		else if (!budget.m_Stop && lua_gc(state, LUA_GCCOUNT) - budget.m_HeapAtEntryKilobytes >= budget.m_HeapLimitKilobytes)
+			budget.m_Stop = budget.m_HeapStop.c_str();
+		if (!budget.m_Stop)
 			return;
-		// Now at every instruction, until the scope ends: a pcall in the script catches one error, and the next instruction
-		// outside it raises the next, so a loop around pcall cannot outlast the limit.
+		// This thread now stops at every instruction until the call ends, and another at its next firing: a pcall in the
+		// script catches one error, and the next instruction outside it raises the next, so a loop around pcall cannot outlast
+		// the limit. Level 0: a hook has no frame of its own, so that is the running function.
 		lua_sethook(state, &OnInstructions, LUA_MASKCOUNT, 1);
-		luaL_error(state, "ran %I instructions without returning (an endless loop?); project.set scriptInstructionLimit changes the limit, 0 removes it", static_cast<LUAI_UACINT>(context.m_InstructionLimit));
+		luaL_where(state, 0);
+		lua_pushstring(state, budget.m_Stop);
+		lua_concat(state, 2);
+		lua_error(state);
+	}
+
+	namespace {
+
+		int IndexFirstArgument(lua_State* state)
+		{
+			lua_gettable(state, 1);
+			return 1;
+		}
+
+	}
+
+	std::optional<sol::object> ProtectedIndex(const sol::table& table, const char* key, std::string& outError)
+	{
+		lua_State* state = table.lua_state();
+		lua_pushcfunction(state, &IndexFirstArgument);
+		table.push(state);
+		lua_pushstring(state, key);
+		if (lua_pcall(state, 2, 1, 0) != LUA_OK)
+		{
+			const char* text = lua_tostring(state, -1);
+			outError = text ? text : "a metamethod raised an error that is not text";
+			lua_pop(state, 1);
+			return std::nullopt;
+		}
+		sol::object value(state, -1);
+		lua_pop(state, 1);
+		return value;
 	}
 
 	ScriptOwnerScope::ScriptOwnerScope(ScriptContext& context, UUID owner, const char* callback)
@@ -83,14 +149,14 @@ namespace Basalt {
 	{
 		context.m_CurrentOwner = owner;
 		// A handler that a script's Events.Emit runs nests in that script's call, and shares its budget.
-		if (context.m_ScopeDepth++ == 0)
-			context.m_InstructionsUsed = 0;
+		context.Budget.Enter();
 	}
 
 	ScriptOwnerScope::~ScriptOwnerScope()
 	{
 		m_Context.m_CurrentOwner = m_Previous;
-		m_Context.m_ScopeDepth--;
+		if (const char* stop = m_Context.Budget.Leave())
+			m_Context.SwallowedStops.push_back({ m_Owner, stop, m_Callback });
 		if (!GameUI::RestoreClipStack(std::move(m_Clips)))
 			return;
 		auto& reported = m_Context.m_ReportedClipLeaks;
@@ -172,7 +238,7 @@ namespace Basalt {
 					stream << ' ';
 				first = false;
 				sol::state_view lua(args.lua_state());
-				const sol::protected_function toString = lua["tostring"];
+				const sol::protected_function toString = lua.registry()[ToStringRegistryKey];
 				const sol::protected_function_result result = toString(argument.get<sol::object>());
 				stream << (result.valid() ? result.get<std::string>() : std::string("?"));
 			}

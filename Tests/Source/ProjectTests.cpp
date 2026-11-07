@@ -496,32 +496,82 @@ TEST_SUITE("Project")
 	TEST_CASE("Validation asks the decoders about audio clips, whatever the file is called")
 	{
 		BasaltTest::TempProject temp("ClipValidation");
+		REQUIRE(temp.IsValid());
 		const Ref<Project>& project = Project::GetActive();
-		const auto vorbis = FileSystem::ReadBinaryFile(std::filesystem::path(BASALT_TEST_DATA_DIR) / "Audio" / "Vorbis.ogg");
-		REQUIRE(vorbis);
-		temp.WriteFile("Assets/Audio/Music.ogg", std::string(vorbis->begin(), vorbis->end()));
+		std::error_code copyError;
+		std::filesystem::copy_file(std::filesystem::path(BASALT_TEST_DATA_DIR) / "Audio" / "Vorbis.ogg", temp.GetDirectory() / "Assets" / "Audio" / "Music.ogg", copyError);
+		REQUIRE_FALSE(copyError);
 		temp.WriteFile("Assets/Audio/Beep.WAV", BasaltTest::MakeWav(0.1f));
 		temp.WriteFile("Assets/Audio/Beep.sound", BasaltTest::MakeWav(0.1f));
 		temp.WriteFile("Assets/Audio/Broken.wav", "not audio at all");
 		temp.WriteFile("Assets/Audio/Unused.ogg", "nothing refers to this");
-		const auto entity = [](int id, const std::string& clip) {
-			return nlohmann::json{ { "ID", id }, { "Name", "E" }, { "Components", { { "AudioSource", { { "Clip", clip } } } } } };
+		const auto writeScene = [&](const std::string& name, const std::vector<std::string>& clips) {
+			nlohmann::json entities = nlohmann::json::array();
+			for (size_t i = 0; i < clips.size(); i++)
+				entities.push_back(nlohmann::json{ { "ID", i + 1 }, { "Name", "E" }, { "Components", { { "AudioSource", { { "Clip", clips[i] } } } } } });
+			temp.WriteFile("Assets/Scenes/" + name + ".bscene", nlohmann::json{ { "Entities", entities } }.dump());
 		};
-		temp.WriteFile("Assets/Scenes/Good.bscene", nlohmann::json{ { "Entities", { entity(1, "Assets/Audio/Beep.WAV"), entity(2, "Assets/Audio/Beep.sound") } } }.dump());
-		temp.WriteFile("Assets/Scenes/Bad.bscene", nlohmann::json{ { "Entities", { entity(1, "Assets/Audio/Music.ogg"), entity(2, "Assets/Audio/Broken.wav"), entity(3, "Assets/Audio/Gone.wav") } } }.dump());
-		temp.WriteFile("Assets/Scenes/AlsoBad.bscene", nlohmann::json{ { "Entities", { entity(1, "Assets/Audio/Music.ogg") } } }.dump());
+		writeScene("Good", { "Assets/Audio/Beep.WAV", "Assets/Audio/Beep.sound" });
+		writeScene("Bad", { "Assets/Audio/Music.ogg", "Assets/Audio/Broken.wav", "Assets/Audio/Gone.wav" });
+		writeScene("AlsoBad", { "Assets/Audio/Music.ogg" });
+		writeScene("Wrong", { "Assets/audio/broken.wav", "../Outside.wav", "builtin://Cube" });
+		temp.WriteFile("Outside.wav", "not audio at all");
 		project->GetConfig().StartScene = "Assets/Scenes/Good.bscene";
 
 		const ValidationReport report = ValidateProject(*project);
 		const auto errors = Messages(report, ValidationSeverity::Error);
 		INFO(nlohmann::json(errors).dump(1));
-		CHECK(errors.size() == 4);
+		CHECK(errors.size() == 7);
 		CHECK(Contains(errors, "Assets/Scenes/Bad.bscene: references the audio clip 'Assets/Audio/Music.ogg', but the engine cannot decode it"));
 		CHECK(Contains(errors, "Assets/Scenes/AlsoBad.bscene: references the audio clip 'Assets/Audio/Music.ogg', but the engine cannot decode it"));
 		CHECK(Contains(errors, "Assets/Scenes/Bad.bscene: references the audio clip 'Assets/Audio/Broken.wav', but the engine cannot decode it"));
 		// A missing clip is said once, as missing.
 		CHECK(Contains(errors, "Assets/Scenes/Bad.bscene: references the missing file 'Assets/Audio/Gone.wav'"));
 		CHECK_FALSE(Contains(errors, "Unused.ogg"));
+		// What a reference check already refused is not opened as well, and a mesh key is no clip.
+		CHECK(Contains(errors, "'Assets/audio/broken.wav', but the file on disk is 'Assets/Audio/Broken.wav'"));
+		CHECK(Contains(errors, "'../Outside.wav', which is outside Assets/"));
+		CHECK(Contains(errors, "references the audio clip 'builtin://Cube', but it cannot be read"));
+		CHECK_FALSE(Contains(errors, "audio clip 'Assets/audio/broken.wav'"));
+		CHECK_FALSE(Contains(errors, "audio clip '../Outside.wav'"));
+	}
+
+	TEST_CASE("The project file keeps the script instruction limit and refuses a bad one")
+	{
+		BasaltTest::TempProject temp("InstructionLimitFile");
+		REQUIRE(temp.IsValid());
+		const std::filesystem::path file = temp.GetDirectory() / Project::FileName;
+		CHECK(Project::GetActive()->GetConfig().ScriptInstructionLimit == DefaultScriptInstructionLimit);
+		Project::GetActive()->GetConfig().ScriptInstructionLimit = 12345;
+		std::string error;
+		REQUIRE_MESSAGE(Project::GetActive()->Save(error), error);
+		const auto saved = FileSystem::ReadTextFile(file);
+		REQUIRE(saved);
+		nlohmann::json data = nlohmann::json::parse(*saved);
+		CHECK(data["ScriptInstructionLimit"] == 12345);
+
+		const auto load = [&](const nlohmann::json& value) {
+			FileSystem::WriteTextFile(file, value.dump());
+			return Project::Load(temp.GetDirectory(), error);
+		};
+		const Ref<Project> kept = load(data);
+		REQUIRE_MESSAGE(kept, error);
+		CHECK(kept->GetConfig().ScriptInstructionLimit == 12345);
+
+		for (const nlohmann::json& bad : { nlohmann::json(-1), nlohmann::json(4294967296), nlohmann::json("7") })
+		{
+			CAPTURE(bad);
+			data["ScriptInstructionLimit"] = bad;
+			error.clear();
+			CHECK_FALSE(load(data));
+			CHECK(error.find("ScriptInstructionLimit must be an integer") != std::string::npos);
+		}
+
+		// Projects from before the setting get the default.
+		data.erase("ScriptInstructionLimit");
+		const Ref<Project> older = load(data);
+		REQUIRE_MESSAGE(older, error);
+		CHECK(older->GetConfig().ScriptInstructionLimit == DefaultScriptInstructionLimit);
 	}
 
 	TEST_CASE("Project validation reports what would break the exported game")

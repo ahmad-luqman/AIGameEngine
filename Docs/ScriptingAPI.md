@@ -105,13 +105,17 @@ with `asset.write` or `asset.refresh` (which also reloads models and textures ch
   A disabled instance's timers and handlers were cancelled when it failed.
 - **A script that never returns fails instead of hanging.** In the editor and the CLI, one call into Lua (a callback, a
   timer, a handler, one resume of a coroutine, a file's top level) may run `ScriptInstructionLimit` VM instructions, by
-  default 2 billion, about 3 seconds of tight Lua in Release (longer in Debug, or where the loop allocates). Past that it
-  raises an ordinary script error, naming the line it reached, and a `pcall` in the script does not outlast it. Instructions
-  count rather than seconds, so the outcome is the same on every machine and time spent in bindings does not count. Set
-  the limit with `project.set scriptInstructionLimit`, from the next play. 0 removes it and its overhead, which depends on
-  the script: about 5% for one moving 2,000 entities through bindings, and up to 2.7 times for tight arithmetic, so profile
-  with it off. `BasaltRuntime`, and so every exported game, never applies the limit. Time spent inside a C function (a slow
-  `string.find` pattern) and in `__gc` finalizers is not limited.
+  default 2 billion, some seconds of tight Lua in Release (longer in Debug, or where the loop allocates). Past that, or
+  once the call has grown the Lua heap by as many bytes, it raises an ordinary script error naming the line it reached,
+  which disables the instance as any error does. A `pcall` in the script does not outlast it, and if the script swallows
+  it anyway the instance is disabled all the same. What a call nests shares its budget, so the call that ran out takes the
+  blame, and any event handlers left do not run. Instructions count rather than seconds, so the outcome is the same on
+  every machine and time spent in bindings does not count. Set the limit with `project.set scriptInstructionLimit`, from
+  the next play (reading a script's properties uses it at once). 0 removes it and its overhead, which depends on the
+  script: about 5% for one moving 2,000 entities through bindings, and up to 2.7 times for tight arithmetic, so profile
+  with it off. `BasaltRuntime`, and so every exported game, never applies the limit, and can hang. Also not limited: time
+  inside a C function (a slow `string.find` pattern), `__gc` finalizers, and, as Lua keeps hooks off after this error
+  until a `pcall` restores them, an `xpcall` message handler the stop itself calls and the `__close` of a coroutine it ended.
 - Deleting a script leaves its running version in place until play stops.
 
 ## Math types

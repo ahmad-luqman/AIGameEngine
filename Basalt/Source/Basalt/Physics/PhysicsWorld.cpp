@@ -197,24 +197,50 @@ namespace Basalt {
 		}
 	}
 
+	namespace {
+
+		PhysicsCapacity s_DefaultCapacity;
+
+	}
+
+	const PhysicsCapacity& PhysicsWorld::GetDefaultCapacity()
+	{
+		return s_DefaultCapacity;
+	}
+
+	void PhysicsWorld::SetDefaultCapacity(const PhysicsCapacity& capacity)
+	{
+		s_DefaultCapacity = capacity;
+	}
+
 	void PhysicsWorld::Impl::ReportUpdateErrors(JPH::EPhysicsUpdateError errors)
 	{
 		// Once per kind: a scene over a limit stays over it, and this runs every fixed step.
-		const uint32_t unseen = static_cast<uint32_t>(errors) & ~ReportedUpdateErrors;
+		uint32_t unseen = static_cast<uint32_t>(errors) & ~ReportedUpdateErrors;
 		ReportedUpdateErrors |= unseen;
-		const auto report = [unseen](JPH::EPhysicsUpdateError error, std::string_view what, uint32_t limit) {
+		const auto report = [&unseen](JPH::EPhysicsUpdateError error, std::string_view what, std::string_view limit, uint32_t value) {
 			if (unseen & static_cast<uint32_t>(error))
-				BS_CORE_ERROR("Physics: too many {} at once (the limit is {}); contacts were dropped, so bodies pass through what they touch", what, limit);
+				BS_CORE_ERROR("Physics: too many {} touching at once ({} is {}); contacts were dropped, so bodies pass through what they touch until fewer of them touch", what, limit, value);
+			unseen &= ~static_cast<uint32_t>(error);
 		};
-		report(JPH::EPhysicsUpdateError::BodyPairCacheFull, "body pairs", Capacity.MaxBodyPairs);
-		report(JPH::EPhysicsUpdateError::ManifoldCacheFull, "contact manifolds", Capacity.MaxContactConstraints);
-		report(JPH::EPhysicsUpdateError::ContactConstraintsFull, "contact constraints", Capacity.MaxContactConstraints);
+		report(JPH::EPhysicsUpdateError::BodyPairCacheFull, "body pairs", "MaxBodyPairs", Capacity.MaxBodyPairs);
+		report(JPH::EPhysicsUpdateError::ManifoldCacheFull, "contact manifolds", "MaxContactConstraints", Capacity.MaxContactConstraints);
+		report(JPH::EPhysicsUpdateError::ContactConstraintsFull, "contact constraints", "MaxContactConstraints", Capacity.MaxContactConstraints);
+		if (unseen != 0)
+			BS_CORE_ERROR("Physics: the update failed in a way Basalt does not know (Jolt error bits {:#x})", unseen);
 	}
 
-	PhysicsWorld::PhysicsWorld(Scene* scene, const PhysicsCapacity& capacity)
+	PhysicsWorld::PhysicsWorld(Scene* scene, const PhysicsCapacity& requested)
 		: m_Impl(CreateScope<Impl>(scene))
 	{
 		AcquireJolt();
+
+		// What Jolt will keep, so the rest is sized from that and messages say it. It asserts on more, and raises less.
+		constexpr uint32_t SmallestTable = 4;
+		PhysicsCapacity capacity = requested;
+		capacity.MaxBodies = std::min(capacity.MaxBodies, static_cast<uint32_t>(JPH::PhysicsSystem::cMaxBodiesLimit));
+		capacity.MaxBodyPairs = std::clamp(capacity.MaxBodyPairs, SmallestTable, static_cast<uint32_t>(JPH::PhysicsSystem::cMaxBodyPairsLimit));
+		capacity.MaxContactConstraints = std::clamp(capacity.MaxContactConstraints, SmallestTable, static_cast<uint32_t>(JPH::PhysicsSystem::cMaxContactConstraintsLimit));
 
 		constexpr uint32_t NumBodyMutexes = 0; // Jolt default
 		// On top of what the contact constraints take, for everything else a step allocates.

@@ -5,10 +5,10 @@
 #include "Basalt/Animation/PropertyAnimation.h"
 #include "Basalt/Asset/AssetKey.h"
 #include "Basalt/Asset/AssetManager.h"
-#include "Basalt/Audio/AudioEngine.h"
 #include "Basalt/Asset/MaterialAsset.h"
 #include "Basalt/Asset/MeshImporter.h"
 #include "Basalt/Asset/MeshSource.h"
+#include "Basalt/Audio/AudioEngine.h"
 #include "Basalt/Core/FileSystem.h"
 #include "Basalt/Core/JsonUtils.h"
 #include "Basalt/Project/Packaging.h"
@@ -339,7 +339,7 @@ namespace Basalt {
 			void CheckEntities(Scene& scene, const std::string& file)
 			{
 				const nlohmann::json data = SceneSerializer::SerializeScene(scene);
-				std::set<std::string> paths, assetLike, clips;
+				std::set<std::string> paths, assetLike;
 				if (const auto entities = data.find("Entities"); entities != data.end())
 					for (const auto& entity : *entities)
 					{
@@ -353,11 +353,8 @@ namespace Basalt {
 							if (const auto* info = ComponentRegistry::Find(component))
 								for (const auto& assetField : info->AssetFields)
 									ForEachFieldValue(fields, assetField, [&](const nlohmann::json& value, const std::string&) {
-										if (!value.is_string() || value.get_ref<const std::string&>().empty())
-											return;
-										paths.insert(value.get<std::string>());
-										if (component == "AudioSource")
-											clips.insert(value.get<std::string>());
+										if (value.is_string() && !value.get_ref<const std::string&>().empty())
+											paths.insert(value.get<std::string>());
 									});
 							// Strings outside the asset fields that look like paths only warn (paths found above are skipped).
 							for (const auto& [field, value] : fields.items())
@@ -365,10 +362,12 @@ namespace Basalt {
 									CollectAssetLikeStrings(value, assetLike);
 						}
 					}
+				std::set<std::string> clips;
+				for (auto handle : scene.GetAllEntitiesWith<AudioSourceComponent>())
+					clips.insert(scene.GetRegistry().get<AudioSourceComponent>(handle).Clip);
 				for (const std::string& path : paths)
-					CheckReference(path, file, "references", ValidationSeverity::Error);
-				for (const std::string& clip : clips)
-					CheckAudioClip(clip, file);
+					if (CheckReference(path, file, "references", ValidationSeverity::Error) && clips.contains(path))
+						CheckAudioClip(path, file);
 				for (const std::string& path : assetLike)
 					if (!paths.contains(path))
 						CheckReference(path, file, "has a value naming", ValidationSeverity::Warning);
@@ -383,62 +382,68 @@ namespace Basalt {
 			}
 
 			// A clip that exists but will not play fails only at runtime, and only in a log line. The decoders decide, not the
-			// name: they read a file's format from its bytes, so a .ogg holding FLAC plays and one holding Vorbis does not.
+			// name: they read a file's format from its bytes, so a .ogg holding FLAC plays and one holding Vorbis does not. They
+			// see the whole file, as a tag ahead of the audio can be any size.
 			void CheckAudioClip(const std::string& clip, const std::string& file)
 			{
-				const std::filesystem::path path = m_Directory / FileSystem::PathFromUtf8(GetAssetSource(clip));
-				if (!FileSystem::Exists(path))
-					return; // CheckReference said so.
-				auto [problem, unread] = m_ClipProblems.try_emplace(Normalized(clip));
-				if (unread)
-				{
-					std::string error;
-					const auto bytes = FileSystem::ReadBinaryFile(path, &error);
-					if (bytes && !AudioEngine::CanDecode(*bytes, error))
-						problem->second = fmt::format("the engine cannot decode it ({}); it plays WAV, FLAC and MP3", error);
-					else if (!bytes)
-						problem->second = "it cannot be read (" + error + ")";
-				}
+				auto [problem, inserted] = m_ClipProblems.try_emplace(Normalized(clip));
+				if (inserted)
+					problem->second = FindClipProblem(m_Directory / FileSystem::PathFromUtf8(GetAssetSource(clip)));
 				if (!problem->second.empty())
 					m_Report.Add(ValidationSeverity::Error, file, fmt::format("references the audio clip '{}', but {}", clip, problem->second));
 			}
 
+			static std::string FindClipProblem(const std::filesystem::path& path)
+			{
+				std::string error;
+				const auto bytes = FileSystem::ReadBinaryFile(path, &error);
+				if (!bytes)
+					return "it cannot be read (" + error + ")";
+				if (!AudioEngine::CanDecode(*bytes, error))
+					return fmt::format("the engine cannot decode it ({}); it plays WAV, FLAC and MP3", error);
+				return {};
+			}
+
 			// A path a scene, prefab or the project refers to: it must name an existing file inside Assets/, spelled
 			// with the file's exact letter case (the game may run on a case-sensitive file system).
-			void CheckReference(const std::string& reference, const std::string& file, const char* role, ValidationSeverity severity = ValidationSeverity::Error)
+			// True when it holds up.
+			bool CheckReference(const std::string& reference, const std::string& file, const char* role, ValidationSeverity severity = ValidationSeverity::Error)
 			{
 				if (AssetRegistry::IsUnresolvedKey(reference))
 				{
 					m_Report.Add(ValidationSeverity::Error, file, fmt::format("{} an {}", role, m_Assets.DescribeUnresolved(reference)));
-					return;
+					return false;
 				}
 
 				if (Primitives::IsBuiltinKey(reference))
 				{
 					// Created, not looked up: AssetManager would log the failure and cache it, and validation changes nothing.
 					if (!Primitives::CreateFromKey(reference))
+					{
 						m_Report.Add(severity, file, fmt::format("{} the unknown built-in mesh '{}'", role, reference));
-					return;
+						return false;
+					}
+					return true;
 				}
 				// A backslash separates folders on Windows only: the same game would not find the file on Linux or macOS.
 				if (reference.find('\\') != std::string::npos)
 				{
 					m_Report.Add(severity, file, fmt::format("{} '{}', which uses backslashes; separate folders with / so it loads on every platform", role, reference));
-					return;
+					return false;
 				}
 				const std::filesystem::path path = FileSystem::PathFromUtf8(GetAssetSource(reference)).lexically_normal();
 				const auto first = path.begin();
 				if (path.is_absolute() || path.has_root_name() || first == path.end() || *first != Project::AssetDirectoryName)
 				{
 					m_Report.Add(severity, file, fmt::format("{} '{}', which is outside Assets/ and will not be exported", role, reference));
-					return;
+					return false;
 				}
 				std::string actual, problem;
 				switch (FileSystem::FindExactCase(m_Directory, path, actual, problem, &m_Listings))
 				{
 					case FileSystem::PathMatch::Exact:
 						CheckSubAsset(reference, file, role, severity);
-						break;
+						return true;
 					case FileSystem::PathMatch::DifferentCase:
 						m_Report.Add(severity, file, fmt::format("{} '{}', but the file on disk is '{}' (letter case matters on Linux and in archived exports)", role, reference, actual));
 						break;
@@ -449,6 +454,7 @@ namespace Basalt {
 						m_Report.Add(severity, file, fmt::format("{} '{}', which cannot be checked: {}", role, reference, problem));
 						break;
 				}
+				return false;
 			}
 
 			// A "#image/<n>" or "#material/<n>" reference names a model's embedded image or imported material: the model must

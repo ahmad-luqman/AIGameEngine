@@ -7,6 +7,7 @@
 #include <Basalt/Core/JobSystem.h>
 #include <Basalt/Core/Log.h>
 #include <Basalt/Core/Platform.h>
+#include <Basalt/Physics/PhysicsWorld.h>
 
 #include "TestUtils.h"
 
@@ -413,6 +414,12 @@ int main(int argc, char** argv)
 		BS_CORE_CRITICAL("Tests: cannot set {}", Basalt::Platform::UserDataDirectoryVariable);
 		return 1;
 	}
+
+	// Tests start thousands of worlds, which in Debug costs in proportion to what each reserves. What games get has its own test.
+	Basalt::PhysicsCapacity capacity;
+	capacity.MaxBodyPairs = 65536;
+	capacity.MaxContactConstraints = 16384;
+	Basalt::PhysicsWorld::SetDefaultCapacity(capacity);
 
 	doctest::Context context;
 	context.applyCommandLine(argc, argv);

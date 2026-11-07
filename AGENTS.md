@@ -262,12 +262,15 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   `OnReload`; Play only). The editor scans on a worker thread and applies the results each frame on the main thread
   (while autoReload is on); agents call `asset.refresh`; files the session writes itself (`OnFileWritten`) are
   acknowledged and never reported.
-- **Stopping scripts.** The project's `ScriptInstructionLimit` bounds one call into Lua (`ScriptContext::LimitInstructions`), by
-  a count hook that every coroutine inherits and that raises only inside a `ScriptOwnerScope`, so every entry into Lua that
-  can run long needs one around a protected call. A count hook slows Lua whatever its count (up to 2.7 times in tight code), so
-  the runtime turns it off (`ScriptEngine::DisableInstructionLimit`); the editor and the CLI keep it. It counts instructions, not time,
-  as a watchdog thread would need `lua_sethook` from another thread, could not see a script's own coroutines and would
-  count blocking bindings. `sol::lib::debug` stays closed: `debug.sethook` would remove it.
+- **Stopping scripts.** The project's `ScriptInstructionLimit` bounds one call into Lua (`ScriptCallBudget`), by a count hook
+  that every coroutine inherits and that raises only inside a `ScriptOwnerScope`. So every way C++ reaches Lua code goes through a
+  scope around a protected call: reading a table a script controls takes `ProtectedIndex` (metamethods, which a plain read
+  runs unprotected, would hang the host or abort it), or raw access, and globals come from the registry (`ToStringRegistryKey`).
+  A stop a script swallows is reported anyway (`ScriptContext::SwallowedStops`, `ReportSwallowedStops`). A count hook slows Lua
+  whatever its count (up to 2.7 times in tight code), so the runtime turns it off (`ScriptEngine::DisableInstructionLimit`); the
+  editor and the CLI keep it. It counts instructions, not time, as a watchdog thread would need `lua_sethook` from another
+  thread, could not see a script's own coroutines and would count blocking bindings. `sol::lib::debug` stays closed:
+  `debug.sethook` would remove it.
 - **Input: host reads vs game reads.** `Input` holds every event (editor shortcuts and camera read it); the game
   (Lua's `Input`, input actions) reads `GameInput`, which sees only what the host routes to it: `Input::SetGameFocus`
   (keyboard, gamepads) and `SetGamePointer` (mouse), the same flags as `GameUI`'s navigation and pointer (the editor
@@ -287,7 +290,8 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   survive.
 - **Automation first.** `CommandRegistry` (Automation/BuiltinCommands.cpp) is the API for tools and AI
   agents. The editor performs its edits through the same commands, so the GUI cannot do anything the
-  API cannot. `AutomationServer` closes a connection whose first frame cannot open JSON, before a handler sees it, so an HTTP request from a web page runs nothing; there is no authentication. Edit-mode scene mutations must call `AutomationSession::MarkDirty` (or `MarkEdited` in
+  API cannot. `AutomationServer` closes a connection whose first non-blank frame cannot open JSON, before a handler
+  sees it, so an HTTP request from a web page runs nothing; there is no authentication. Edit-mode scene mutations must call `AutomationSession::MarkDirty` (or `MarkEdited` in
   built-in commands); its revision counter tells editor history which commands need capture, including
   partial edits before a failure. Commands that save/replace edit state or start/restart Play declare
   `CommandPolicy::EditBoundary`; undo/redo/transaction commands declare `HistoryControl`. Hosts:

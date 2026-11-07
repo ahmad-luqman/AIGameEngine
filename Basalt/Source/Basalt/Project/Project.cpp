@@ -219,16 +219,12 @@ namespace Basalt {
 			outError = fmt::format("invalid project file '{}': {}", fileText, outError);
 			return nullptr;
 		}
-		if (const auto seed = data.find("RandomSeed"); seed != data.end() && !JsonToUInt32(*seed, config.RandomSeed))
-		{
-			outError = fmt::format("invalid project file '{}': RandomSeed must be an integer between 0 and {}", fileText, UINT32_MAX);
-			return nullptr;
-		}
-		if (const auto limit = data.find("ScriptInstructionLimit"); limit != data.end() && !JsonToUInt32(*limit, config.ScriptInstructionLimit))
-		{
-			outError = fmt::format("invalid project file '{}': ScriptInstructionLimit must be an integer between 0 and {}", fileText, UINT32_MAX);
-			return nullptr;
-		}
+		for (const auto& [key, field] : { std::pair{ "RandomSeed", &config.RandomSeed }, std::pair{ "ScriptInstructionLimit", &config.ScriptInstructionLimit } })
+			if (const auto value = data.find(key); value != data.end() && !JsonToUInt32(*value, *field))
+			{
+				outError = fmt::format("invalid project file '{}': {} must be an integer between 0 and {}", fileText, key, UINT32_MAX);
+				return nullptr;
+			}
 		// The window size reaches the runtime's window unchecked otherwise (a negative value would wrap around).
 		for (const auto& [key, size] : { std::pair{ "WindowWidth", &config.WindowWidth }, std::pair{ "WindowHeight", &config.WindowHeight } })
 		{

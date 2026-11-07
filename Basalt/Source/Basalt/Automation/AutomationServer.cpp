@@ -22,6 +22,7 @@ using SocketHandle = int;
 static const SocketHandle s_InvalidSocket = -1;
 #endif
 
+#include <algorithm>
 #include <cerrno>
 #include <cstring>
 #include <string_view>
@@ -36,14 +37,25 @@ namespace Basalt {
 			return static_cast<SocketHandle>(value);
 		}
 
-		// Spaces around a frame, which the JSON parser skips. It skips the byte order mark some Windows tools write too.
-		std::string_view TrimFrame(std::string_view frame)
+		// A frame without what the JSON parser skips before a value: white space, and the byte order mark some Windows tools write.
+		std::string_view SkipToFrameStart(std::string_view frame)
 		{
 			constexpr std::string_view ByteOrderMark = "\xEF\xBB\xBF";
 			if (frame.starts_with(ByteOrderMark))
 				frame.remove_prefix(ByteOrderMark.size());
-			const size_t first = frame.find_first_not_of(" \t");
-			return first == std::string_view::npos ? std::string_view() : frame.substr(first);
+			frame.remove_prefix(std::min(frame.find_first_not_of(" \t\r"), frame.size()));
+			return frame;
+		}
+
+		// The start of a refused frame for the log: it came from anyone, so only plain text, and not much of it.
+		std::string DescribeRefusedFrame(std::string_view frame)
+		{
+			constexpr size_t MaxLength = 40;
+			std::string text(frame.substr(0, MaxLength));
+			for (char& character : text)
+				if (character < ' ' || character > '~')
+					character = '?';
+			return text;
 		}
 
 		void CloseSocket(SocketHandle socket)
@@ -280,18 +292,18 @@ namespace Basalt {
 				buffer.erase(0, newline + 1);
 				if (!line.empty() && line.back() == '\r')
 					line.pop_back();
-				if (const std::string_view frame = TrimFrame(line); awaitingFirstFrame && !frame.empty())
+				if (const std::string_view frame = awaitingFirstFrame ? SkipToFrameStart(line) : std::string_view(); !frame.empty())
 				{
 					awaitingFirstFrame = false;
-					// A web page can reach this port: browsers send cross-origin POSTs without asking. It chooses the body
-					// of its request but not the request line, which fails here, so nothing behind that line reaches a
-					// handler. Every automation client opens with an object or, at worst, malformed JSON that does.
+					// A web page can reach this port: a browser sends a cross-origin POST without a preflight, unless it blocks
+					// local network access. The page chooses the body of its request but not the request line, which fails
+					// here, so nothing behind that line reaches a handler. Every automation client opens with an object or an
+					// array, or malformed JSON that starts like one.
 					if (frame.front() != '{' && frame.front() != '[')
 					{
-						BS_CORE_WARN("Automation: closing connection; its first frame does not open JSON (an HTTP request from a web page looks like this)");
-						send(R"({"ok":false,"error":"this port speaks newline-delimited JSON"})"
-							 "\n",
-							 "a refusal");
+						BS_CORE_WARN("Automation: closing connection; its first frame does not open JSON (an HTTP request from a web page looks like this): '{}'", DescribeRefusedFrame(frame));
+						const std::string refusal = R"({"ok":false,"error":"this port speaks newline-delimited JSON"})";
+						send(refusal + "\n", "a refusal");
 						return;
 					}
 				}

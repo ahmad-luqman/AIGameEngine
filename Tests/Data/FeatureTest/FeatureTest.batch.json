@@ -151,6 +151,7 @@
 	{ "id": "target-frame-rate-range", "command": "project.set", "params": { "targetFrameRate": 5 }, "expectError": "'targetFrameRate' must be in" },
 	{ "id": "min-render-scale-range", "command": "project.set", "params": { "minRenderScale": 0.1 }, "expectError": "'minRenderScale' must be in" },
 	{ "id": "random-seed-range", "command": "project.set", "params": { "randomSeed": -1 }, "expectError": "'randomSeed' must be in" },
+	{ "id": "script-instruction-limit-range", "command": "project.set", "params": { "scriptInstructionLimit": -1 }, "expectError": "'scriptInstructionLimit' must be in" },
 	{ "id": "fixed-timestep-range", "command": "project.set", "params": { "fixedTimestep": 0 }, "expectError": "fixedTimestep" },
 	{ "id": "version-format", "command": "project.set", "params": { "version": "1.2" }, "expectError": "parameter 'version' must be MAJOR.MINOR.PATCH" },
 	{ "id": "icon-outside-assets", "command": "project.set", "params": { "icon": "Project.bproject" }, "expectError": "the icon must be under Assets/" },
@@ -187,5 +188,8 @@
 	{ "id": "hash-mismatch", "command": "scene.hash", "params": { "expectHash": "0000000000000000" }, "expectError": "differs from the expected 0000000000000000" },
 	{ "id": "hash-empty", "command": "play.step", "params": { "expectHash": "" }, "expectError": "must be a non-empty string" },
 	{ "id": "hash-misspelled", "command": "scene.hash", "params": { "expect": "0000000000000000" }, "expectError": "unknown parameter 'expect'" },
+	{ "id": "script-limit-stops", "command": "lua.exec", "params": { "code": "while true do end" }, "expectError": "ran 50000000 instructions without returning" },
+	{ "id": "script-limit-pcall", "command": "lua.exec", "params": { "code": "return pcall(function() while true do end end)" }, "expectError": "ran 50000000 instructions without returning" },
+	{ "id": "script-limit-continues", "command": "lua.exec", "params": { "code": "return 1 + 1" } },
 	{ "id": "hash-stop", "command": "play.stop" }
 ]

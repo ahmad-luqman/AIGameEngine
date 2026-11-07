@@ -18,7 +18,7 @@
 
 namespace Basalt {
 
-	// About 3 seconds of tight Lua on an M4 Max in Release, and longer in Debug or where the loop allocates.
+	// Some seconds of tight Lua in Release; ScriptingAPI.md has what it means in practice.
 	constexpr uint32_t DefaultScriptInstructionLimit = 2000000000;
 
 	// Saved project defaults shared by the editor, runtime and authoring tools.
@@ -64,7 +64,7 @@ namespace Basalt {
 		// it changes the gameplay of scripts that use randomness.
 		uint32_t RandomSeed = Random::DefaultSeed;
 		// How many VM instructions one call into Lua may run before it fails with an error, in the editor and the CLI (see
-		// ScriptContext::LimitInstructions); 0: no limit. Applies from the next Play.
+		// ScriptCallBudget); 0: no limit. Applies from the next Play, and at once to reading a script's Properties.
 		uint32_t ScriptInstructionLimit = DefaultScriptInstructionLimit;
 	};
 

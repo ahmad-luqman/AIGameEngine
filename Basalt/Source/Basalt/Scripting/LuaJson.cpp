@@ -81,7 +81,7 @@ namespace Basalt {
 					{
 						for (size_t i = 1; i <= count; i++)
 						{
-							if (table[i].get_type() == sol::type::lua_nil)
+							if (table.raw_get<sol::object>(i).get_type() == sol::type::lua_nil)
 								sequence = false;
 						}
 					}
@@ -90,7 +90,7 @@ namespace Basalt {
 					{
 						nlohmann::json array = nlohmann::json::array();
 						for (size_t i = 1; i <= count; i++)
-							array.push_back(LuaToJsonImpl(table[i], depth + 1));
+							array.push_back(LuaToJsonImpl(table.raw_get<sol::object>(i), depth + 1));
 						return array;
 					}
 

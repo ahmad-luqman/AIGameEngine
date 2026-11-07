@@ -92,6 +92,9 @@ namespace Basalt {
 			// Cancelled by an earlier handler.
 			if (it == m_Subscriptions.end())
 				continue;
+			// The caller ran out: it stops at its next instruction, and the rest would only fail with it, through no fault of theirs.
+			if (m_Context.Budget.IsSpent())
+				break;
 			const UUID owner = it->second.Owner;
 			if (!m_Host.IsOwnerActive(owner))
 				continue;

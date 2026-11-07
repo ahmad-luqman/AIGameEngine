@@ -55,6 +55,15 @@ namespace {
 		return scene.GetScriptEngine()->GetInstanceField(entity, name).value_or(nlohmann::json());
 	}
 
+	// For tests of the instruction limit, which stops a loop within moments.
+	constexpr uint32_t TestInstructionLimit = 200000;
+	constexpr const char* TestLimitMessage = "ran 200000 instructions without returning";
+
+	bool AnyErrorContains(Scene& scene, std::string_view text)
+	{
+		return std::ranges::any_of(scene.GetScriptEngine()->GetErrors(), [text](const std::string& error) { return error.find(text) != std::string::npos; });
+	}
+
 }
 
 TEST_SUITE("Scripting")
@@ -218,7 +227,7 @@ TEST_SUITE("Scripting")
 	{
 		BasaltTest::TempProject project("EndlessLoops");
 		REQUIRE(project.IsValid());
-		Project::GetActive()->GetConfig().ScriptInstructionLimit = 200000;
+		Project::GetActive()->GetConfig().ScriptInstructionLimit = TestInstructionLimit;
 
 		const std::string healthy = project.WriteFile("Assets/Scripts/Healthy.lua", R"(
 			local Healthy = {}
@@ -237,11 +246,15 @@ TEST_SUITE("Scripting")
 			{ "after a yield", "local S = {} function S:OnCreate() self:StartCoroutine(function() Wait(0) while true do end end) end return S" },
 			{ "an event handler", "local S = {} function S:OnCreate() Events.On('go', function() while true do end end) end function S:OnUpdate(dt) Events.Emit('go') end return S" },
 			{ "coroutine.wrap", "local S = {} function S:OnUpdate(dt) coroutine.wrap(function() while true do end end)() end return S" },
-			{ "coroutine.resume", "local S = {} function S:OnUpdate(dt) local co = coroutine.create(function() while true do end end) while true do coroutine.resume(co) end end return S" },
+			{ "coroutine.resume in a loop", "local S = {} function S:OnUpdate(dt) local co = coroutine.create(function() while true do end end) while true do coroutine.resume(co) end end return S" },
 			{ "pcall", "local S = {} function S:OnUpdate(dt) while true do pcall(function() while true do end end) end end return S" },
 			{ "xpcall", "local S = {} function S:OnUpdate(dt) while true do xpcall(function() while true do end end, function(e) return e end) end end return S" },
 			{ "require", "local S = {} function S:OnCreate() require('Assets.Scripts.EndlessModule') end return S" },
-			{ "__index", "local S = {} function S:OnUpdate(dt) local t = setmetatable({}, { __index = function() while true do end end }) return t.x end return S" },
+			{ "__index from a callback", "local S = {} function S:OnUpdate(dt) local t = setmetatable({}, { __index = function() while true do end end }) return t.x end return S" },
+			{ "the class's __index, which finding a callback runs", "return setmetatable({}, { __index = function() while true do end end })" },
+			{ "the Properties' __index, which reading them runs", "local S = setmetatable({}, { __index = function(t, k) if k == 'Properties' then while true do end end end }) return S" },
+			{ "a swallowed stop in a tail call", "local S = {} function S:OnUpdate(dt) return pcall(function() while true do end end) end return S" },
+			{ "a stopped coroutine nobody looks at", "local S = {} function S:OnUpdate(dt) coroutine.resume(coroutine.create(function() while true do end end)) end return S" },
 		};
 		for (const auto& [name, source] : cases)
 		{
@@ -253,10 +266,149 @@ TEST_SUITE("Scripting")
 			scene.OnRuntimeStart();
 			for (int i = 0; i < 3; i++)
 				scene.OnUpdate(Step);
-			const auto& errors = scene.GetScriptEngine()->GetErrors();
-			REQUIRE_FALSE(errors.empty());
-			CHECK(std::ranges::any_of(errors, [](const std::string& error) { return error.find("ran 200000 instructions without returning") != std::string::npos; }));
+			CHECK(AnyErrorContains(scene, TestLimitMessage));
 			CHECK(Field(scene, good, "Updates") == 3);
+			scene.OnRuntimeStop();
+		}
+	}
+
+	TEST_CASE("A call the limit stopped is reported once and not run again, even when the script swallowed the error")
+	{
+		BasaltTest::TempProject project("SwallowedStops");
+		REQUIRE(project.IsValid());
+		Project::GetActive()->GetConfig().ScriptInstructionLimit = TestInstructionLimit;
+		for (const char* body : { "return pcall(function() while true do end end)", "coroutine.resume(coroutine.create(function() while true do end end))" })
+		{
+			CAPTURE(body);
+			const std::string script = project.WriteFile("Assets/Scripts/Swallowing.lua", std::string("Calls = 0 local S = {} function S:OnUpdate(dt) Calls = Calls + 1 ") + body + " end return S");
+			Scene scene;
+			AddScripted(scene, "Swallowing", script);
+			scene.OnRuntimeStart();
+			for (int i = 0; i < 4; i++)
+				scene.OnUpdate(Step);
+			CHECK(scene.GetScriptEngine()->GetErrors().size() == 1);
+			CHECK(AnyErrorContains(scene, TestLimitMessage));
+			std::string calls;
+			REQUIRE(scene.GetScriptEngine()->ExecuteString("return Calls", calls));
+			CHECK(calls == "1");
+			scene.OnRuntimeStop();
+		}
+	}
+
+	TEST_CASE("The limit's error names the line the script had reached")
+	{
+		BasaltTest::TempProject project("StopLocation");
+		REQUIRE(project.IsValid());
+		Project::GetActive()->GetConfig().ScriptInstructionLimit = TestInstructionLimit;
+		const std::string script = project.WriteFile("Assets/Scripts/Far.lua", "local S = {}\nlocal function Spin()\n\twhile true do end\nend\nfunction S:OnUpdate(dt)\n\tSpin()\nend\nreturn S\n");
+		Scene scene;
+		AddScripted(scene, "Far", script);
+		scene.OnRuntimeStart();
+		scene.OnUpdate(Step);
+		CHECK(AnyErrorContains(scene, "Far.lua:3: ran 200000"));
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("An event handler after the one that spent the budget neither runs nor takes the blame")
+	{
+		BasaltTest::TempProject project("SpentBudgetInEmit");
+		REQUIRE(project.IsValid());
+		Project::GetActive()->GetConfig().ScriptInstructionLimit = TestInstructionLimit;
+		const std::string emitter = project.WriteFile("Assets/Scripts/Emitter.lua", R"(
+			local Emitter = {}
+			function Emitter:OnCreate() Events.On('go', function() while true do end end) end
+			function Emitter:OnUpdate(dt) Events.Emit('go') end
+			return Emitter
+		)");
+		const std::string innocent = project.WriteFile("Assets/Scripts/Innocent.lua", R"(
+			local Innocent = {}
+			function Innocent:OnCreate()
+				self.Calls = 0
+				Events.On('go', function() self.Calls = self.Calls + 1 end)
+			end
+			function Innocent:OnUpdate(dt) self.Updates = (self.Updates or 0) + 1 end
+			return Innocent
+		)");
+		Scene scene;
+		AddScripted(scene, "Emitter", emitter);
+		Entity bystander = AddScripted(scene, "Innocent", innocent);
+		scene.OnRuntimeStart();
+		for (int i = 0; i < 3; i++)
+			scene.OnUpdate(Step);
+		CHECK(AnyErrorContains(scene, TestLimitMessage));
+		CHECK_FALSE(AnyErrorContains(scene, "Innocent"));
+		CHECK(Field(scene, bystander, "Calls") == 0);
+		CHECK(Field(scene, bystander, "Updates") == 3);
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Short coroutines are charged: a new thread's count cannot hide their work")
+	{
+		BasaltTest::TempProject project("ShortCoroutines");
+		REQUIRE(project.IsValid());
+		// The hook's period stops growing with the limit, so what a coroutine under a period hides stays small.
+		Project::GetActive()->GetConfig().ScriptInstructionLimit = 1000000;
+		const std::string script = project.WriteFile("Assets/Scripts/Short.lua", R"(
+			Rounds = 0
+			local S = {}
+			function S:OnUpdate(dt)
+				while true do
+					Rounds = Rounds + 1
+					coroutine.wrap(function() for i = 1, 1000 do end end)()
+				end
+			end
+			return S
+		)");
+		Scene scene;
+		AddScripted(scene, "Short", script);
+		scene.OnRuntimeStart();
+		scene.OnUpdate(Step);
+		CHECK(AnyErrorContains(scene, "ran 1000000 instructions without returning"));
+		std::string rounds;
+		REQUIRE(scene.GetScriptEngine()->ExecuteString("return Rounds", rounds));
+		// 1,000 instructions each, nearly all of which count; the parent's own dozen alone would allow some 100,000 rounds.
+		CHECK(std::stoi(rounds) < 3000);
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("A call that grows the Lua heap without end stops before it takes the machine's memory")
+	{
+		BasaltTest::TempProject project("HeapGrowth");
+		REQUIRE(project.IsValid());
+		Project::GetActive()->GetConfig().ScriptInstructionLimit = TestInstructionLimit;
+		const std::string growing = project.WriteFile("Assets/Scripts/Growing.lua", R"(
+			Kept = {}
+			local S = {}
+			function S:OnUpdate(dt)
+				while true do Kept[#Kept + 1] = string.rep('x', 1024 * 1024) end
+			end
+			return S
+		)");
+		const std::string churning = project.WriteFile("Assets/Scripts/Churning.lua", R"(
+			Kept = {}
+			local S = {}
+			function S:OnUpdate(dt)
+				for i = 1, 8 do Kept[i] = string.rep('x', 1024 * 1024) end
+				if #Kept > 200 then Kept = {} end
+			end
+			return S
+		)");
+		{
+			Scene scene;
+			AddScripted(scene, "Growing", growing);
+			scene.OnRuntimeStart();
+			scene.OnUpdate(Step);
+			CHECK(AnyErrorContains(scene, "grew the Lua heap by 64 MiB without returning"));
+			scene.OnRuntimeStop();
+		}
+		{
+			// Each call starts its own count, so what is kept from call to call does not add up to a stop.
+			Scene scene;
+			AddScripted(scene, "Churning", churning);
+			scene.OnRuntimeStart();
+			for (int i = 0; i < 12; i++)
+				scene.OnUpdate(Step);
+			CHECK(scene.GetScriptEngine()->GetErrors().empty());
 			scene.OnRuntimeStop();
 		}
 	}
@@ -265,7 +417,7 @@ TEST_SUITE("Scripting")
 	{
 		BasaltTest::TempProject project("InstructionBudget");
 		REQUIRE(project.IsValid());
-		Project::GetActive()->GetConfig().ScriptInstructionLimit = 200000;
+		Project::GetActive()->GetConfig().ScriptInstructionLimit = TestInstructionLimit;
 		const std::string script = project.WriteFile("Assets/Scripts/Busy.lua", R"(
 			local Busy = {}
 			local function Spin() for i = 1, 20000 do end end
@@ -298,27 +450,20 @@ TEST_SUITE("Scripting")
 	{
 		BasaltTest::TempProject project("InstructionLimitReset");
 		REQUIRE(project.IsValid());
-		Project::GetActive()->GetConfig().ScriptInstructionLimit = 200000;
-		const std::string script = project.WriteFile("Assets/Scripts/Twice.lua", R"(
-			local Twice = {}
-			Twice.Spin = function(count) for i = 1, count do end end
-			function Twice:OnUpdate(dt) end
-			return Twice
-		)");
+		Project::GetActive()->GetConfig().ScriptInstructionLimit = TestInstructionLimit;
 		const std::string endless = project.WriteFile("Assets/Scripts/Endless.lua", "local S = {} function S:OnUpdate(dt) while true do end end return S");
 		{
 			Scene scene;
 			AddScripted(scene, "Endless", endless);
-			AddScripted(scene, "Twice", script);
 			scene.OnRuntimeStart();
 			scene.OnUpdate(Step);
 			CHECK(scene.GetScriptEngine()->GetErrors().size() == 1);
-			// Near the limit, right after the same state stopped at it: the hook went back to its period, and the count to 0.
+			// Just under the limit, right after the same state stopped at it: the hook went back to its period, and the count to 0.
 			std::string result;
-			CHECK(scene.GetScriptEngine()->ExecuteString("for i = 1, 40000 do end return 'finished'", result));
+			CHECK(scene.GetScriptEngine()->ExecuteString("for i = 1, 190000 do end return 'finished'", result));
 			CHECK(result == "finished");
 			CHECK_FALSE(scene.GetScriptEngine()->ExecuteString("while true do end", result));
-			CHECK(result.find("ran 200000 instructions without returning") != std::string::npos);
+			CHECK(result.find(TestLimitMessage) != std::string::npos);
 			CHECK(scene.GetScriptEngine()->ExecuteString("return 'still here'", result));
 			CHECK(result == "still here");
 			scene.OnRuntimeStop();
@@ -326,7 +471,6 @@ TEST_SUITE("Scripting")
 		Project::GetActive()->GetConfig().ScriptInstructionLimit = 0;
 		{
 			Scene scene;
-			AddScripted(scene, "Twice", script);
 			scene.OnRuntimeStart();
 			std::string result;
 			CHECK(scene.GetScriptEngine()->ExecuteString("for i = 1, 1000000 do end return 'finished'", result));
@@ -335,24 +479,79 @@ TEST_SUITE("Scripting")
 		}
 	}
 
+	TEST_CASE("The console stops what it runs, and what it runs cannot break the console")
+	{
+		BasaltTest::TempProject project("ConsoleStops");
+		REQUIRE(project.IsValid());
+		Project::GetActive()->GetConfig().ScriptInstructionLimit = TestInstructionLimit;
+		Scene scene;
+		scene.OnRuntimeStart();
+		ScriptEngine& engine = *scene.GetScriptEngine();
+		std::string result;
+		// A result whose __tostring never returns is a failure, not the text "?".
+		CHECK_FALSE(engine.ExecuteString("return setmetatable({}, { __tostring = function() while true do end end })", result));
+		CHECK(result.find(TestLimitMessage) != std::string::npos);
+		CHECK_FALSE(engine.ExecuteString("return pcall(function() while true do end end)", result));
+		CHECK(result.find(TestLimitMessage) != std::string::npos);
+		// The console reads no global: this one, stopped inside a scope with nothing to catch it, would end the process.
+		CHECK(engine.ExecuteString("tostring = nil; setmetatable(_G, { __index = function() while true do end end }); return 1", result));
+		CHECK(result == "1");
+		CHECK(engine.ExecuteString("return 2", result));
+		CHECK(result == "2");
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("C++ reads a script's tables under the limit, and survives what their metamethods raise")
+	{
+		BasaltTest::TempProject project("TableReads");
+		REQUIRE(project.IsValid());
+		Project::GetActive()->GetConfig().ScriptInstructionLimit = TestInstructionLimit;
+		std::string error;
+		const std::string endless = project.WriteFile("Assets/Scripts/EndlessClass.lua", "return setmetatable({}, { __index = function() while true do end end })");
+		CHECK_FALSE(ScriptEngine::LoadScriptProperties(endless, error));
+		CHECK(error.find(TestLimitMessage) != std::string::npos);
+
+		error.clear();
+		const std::string raising = project.WriteFile("Assets/Scripts/RaisingClass.lua", "return setmetatable({}, { __index = function() error('boom') end })");
+		CHECK_FALSE(ScriptEngine::LoadScriptProperties(raising, error));
+		CHECK(error.find("boom") != std::string::npos);
+
+		// Reads inside the JSON conversion are raw, so a list's __index never runs.
+		const std::string list = project.WriteFile("Assets/Scripts/List.lua", "return { Properties = { Items = setmetatable({ 1, 2 }, { __index = function() while true do end end }) } }");
+		const auto properties = ScriptEngine::LoadScriptProperties(list, error);
+		REQUIRE(properties);
+		CHECK((*properties)["Items"] == nlohmann::json::array({ 1, 2 }));
+
+		Scene scene;
+		Entity entity = AddScripted(scene, "Raising", raising);
+		Entity looping = AddScripted(scene, "Looping", project.WriteFile("Assets/Scripts/Fields.lua", R"(
+			local Fields = {}
+			setmetatable(Fields, { __index = function(t, k) if k == 'Spin' then while true do end end end })
+			function Fields:OnUpdate(dt) end
+			return Fields
+		)"));
+		scene.OnRuntimeStart();
+		scene.OnUpdate(Step);
+		CHECK(AnyErrorContains(scene, "boom"));
+		CHECK_FALSE(scene.GetScriptEngine()->GetInstanceField(entity, "Anything"));
+		CHECK_FALSE(scene.GetScriptEngine()->GetInstanceField(looping, "Spin"));
+		scene.OnRuntimeStop();
+	}
+
 	TEST_CASE("Finding a script's properties stops a top level that never returns")
 	{
 		BasaltTest::TempProject project("EndlessProperties");
 		REQUIRE(project.IsValid());
-		Project::GetActive()->GetConfig().ScriptInstructionLimit = 200000;
+		Project::GetActive()->GetConfig().ScriptInstructionLimit = TestInstructionLimit;
 		const std::string script = project.WriteFile("Assets/Scripts/Endless.lua", "while true do end");
 		std::string error;
 		CHECK_FALSE(ScriptEngine::LoadScriptProperties(script, error));
-		CHECK(error.find("ran 200000 instructions without returning") != std::string::npos);
+		CHECK(error.find(TestLimitMessage) != std::string::npos);
 	}
 
 	TEST_CASE("Scripts cannot reach the debug library that would remove the instruction limit")
 	{
-		BasaltTest::TempProject project("NoDebugLibrary");
-		REQUIRE(project.IsValid());
-		const std::string script = project.WriteFile("Assets/Scripts/Empty.lua", "return {}");
 		Scene scene;
-		AddScripted(scene, "Empty", script);
 		scene.OnRuntimeStart();
 		std::string result;
 		REQUIRE(scene.GetScriptEngine()->ExecuteString("return debug == nil and package.loaded.debug == nil", result));
