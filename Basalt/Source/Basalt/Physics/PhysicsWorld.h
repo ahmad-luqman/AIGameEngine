@@ -143,6 +143,19 @@ namespace Basalt {
 		ContactInfo Flipped() const { return { Point, -Normal, Impulse }; }
 	};
 
+	// What one world can hold, fixed when it starts. The defaults fit a pile of as many boxes as MaxBodies allows, and cost a
+	// small scene next to nothing: Jolt sizes its tables to the scene on each step, and never touches the rest. Past a limit
+	// contacts are dropped, which PhysicsWorld logs.
+	struct PhysicsCapacity
+	{
+		uint32_t MaxBodies = 65536;
+		uint32_t MaxBodyPairs = 1u << 20;
+		uint32_t MaxContactConstraints = 1u << 19;
+		// The block a step's working memory comes from. 0 sizes it to MaxContactConstraints, which Jolt reserves in full on
+		// every step; working memory past the block comes from malloc, so a block too small is slow, never fatal.
+		uint32_t TempMemoryBytes = 0;
+	};
+
 	// Jolt-backed physics simulation for one running scene.
 	//
 	// Bodies are created for every entity with a RigidBodyComponent and at least one collider (box, sphere,
@@ -172,7 +185,7 @@ namespace Basalt {
 	class PhysicsWorld
 	{
 	public:
-		explicit PhysicsWorld(Scene* scene);
+		explicit PhysicsWorld(Scene* scene, const PhysicsCapacity& capacity = {});
 		~PhysicsWorld();
 
 		PhysicsWorld(const PhysicsWorld&) = delete;
