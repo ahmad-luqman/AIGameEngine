@@ -6,6 +6,7 @@
 #include "Basalt/Project/Packaging.h"
 #include "Basalt/Project/Project.h"
 #include "Basalt/Renderer/RenderMath.h"
+#include "Basalt/Scripting/ScriptEngine.h"
 
 #include "RuntimeLayer.h"
 
@@ -89,6 +90,7 @@ namespace Basalt {
 
 	Application* CreateApplication(const ApplicationCommandLineArgs& args)
 	{
+		ScriptEngine::DisableInstructionLimit();
 		const CommandLine commandLine(args.Arguments, { "project", "scene", "frames", "screenshot", "width", "height", "debug-view", "gpu", "render-scale", "dynamic-resolution", "min-render-scale" });
 		// An option without its value would otherwise run with the default silently (a test passing vacuously).
 		for (const std::string& error : commandLine.GetErrors())

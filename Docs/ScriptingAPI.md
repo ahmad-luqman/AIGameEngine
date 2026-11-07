@@ -103,6 +103,15 @@ with `asset.write` or `asset.refresh` (which also reloads models and textures ch
 - Not carried over: module-level `local` variables start afresh, and functions instances already handed to timers,
   coroutines or event handlers keep running the old code until they are created again (`OnReload` can restart them).
   A disabled instance's timers and handlers were cancelled when it failed.
+- **A script that never returns fails instead of hanging.** In the editor and the CLI, one call into Lua (a callback, a
+  timer, a handler, one resume of a coroutine, a file's top level) may run `ScriptInstructionLimit` VM instructions, by
+  default 2 billion, about 3 seconds of tight Lua in Release (longer in Debug, or where the loop allocates). Past that it
+  raises an ordinary script error, naming the line it reached, and a `pcall` in the script does not outlast it. Instructions
+  count rather than seconds, so the outcome is the same on every machine and time spent in bindings does not count. Set
+  the limit with `project.set scriptInstructionLimit`, from the next play. 0 removes it and its overhead, which depends on
+  the script: about 5% for one moving 2,000 entities through bindings, and up to 2.7 times for tight arithmetic, so profile
+  with it off. `BasaltRuntime`, and so every exported game, never applies the limit. Time spent inside a C function (a slow
+  `string.find` pattern) and in `__gc` finalizers is not limited.
 - Deleting a script leaves its running version in place until play stops.
 
 ## Math types

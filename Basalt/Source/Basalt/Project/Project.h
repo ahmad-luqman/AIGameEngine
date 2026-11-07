@@ -18,6 +18,9 @@
 
 namespace Basalt {
 
+	// About 3 seconds of tight Lua on an M4 Max in Release, and longer in Debug or where the loop allocates.
+	constexpr uint32_t DefaultScriptInstructionLimit = 2000000000;
+
 	// Saved project defaults shared by the editor, runtime and authoring tools.
 	struct ProjectConfig
 	{
@@ -60,6 +63,9 @@ namespace Basalt {
 		// and runtime entity UUIDs), so a session replays identically. Applies from the next play; changing
 		// it changes the gameplay of scripts that use randomness.
 		uint32_t RandomSeed = Random::DefaultSeed;
+		// How many VM instructions one call into Lua may run before it fails with an error, in the editor and the CLI (see
+		// ScriptContext::LimitInstructions); 0: no limit. Applies from the next Play.
+		uint32_t ScriptInstructionLimit = DefaultScriptInstructionLimit;
 	};
 
 	// The form of ProjectConfig::Version, for messages.
@@ -108,6 +114,8 @@ namespace Basalt {
 		static const ProjectConfig* GetActiveConfig() { return s_ActiveProject ? &s_ActiveProject->m_Config : nullptr; }
 		// The active project's RandomSeed, or Random::DefaultSeed without an active project (tests, tools).
 		static uint32_t GetActiveRandomSeed() { return s_ActiveProject ? s_ActiveProject->m_Config.RandomSeed : Random::DefaultSeed; }
+		// The active project's ScriptInstructionLimit, or the default without an active project.
+		static uint32_t GetActiveScriptInstructionLimit() { return s_ActiveProject ? s_ActiveProject->m_Config.ScriptInstructionLimit : DefaultScriptInstructionLimit; }
 		// The active project's input actions, or an empty map without an active project.
 		static InputActionMap GetActiveInputActions() { return s_ActiveProject ? s_ActiveProject->m_Config.InputActions : InputActionMap{}; }
 		// The active project's FixedTimestep, or DefaultFixedTimestep without an active project.

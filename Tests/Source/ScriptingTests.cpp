@@ -214,6 +214,152 @@ TEST_SUITE("Scripting")
 		scene.OnRuntimeStop();
 	}
 
+	TEST_CASE("A script that never returns fails with an error wherever it runs, and the rest of the scene carries on")
+	{
+		BasaltTest::TempProject project("EndlessLoops");
+		REQUIRE(project.IsValid());
+		Project::GetActive()->GetConfig().ScriptInstructionLimit = 200000;
+
+		const std::string healthy = project.WriteFile("Assets/Scripts/Healthy.lua", R"(
+			local Healthy = {}
+			function Healthy:OnCreate() self.Updates = 0 end
+			function Healthy:OnUpdate(dt) self.Updates = self.Updates + 1 end
+			return Healthy
+		)");
+		project.WriteFile("Assets/Scripts/EndlessModule.lua", "while true do end");
+		const std::pair<const char*, std::string> cases[] = {
+			{ "top level", "while true do end" },
+			{ "OnCreate", "local S = {} function S:OnCreate() while true do end end return S" },
+			{ "OnUpdate", "local S = {} function S:OnUpdate(dt) while true do end end return S" },
+			{ "an allocating loop", "local S = {} function S:OnUpdate(dt) local t = {} while true do t[#t % 8 + 1] = {} end end return S" },
+			{ "a timer", "local S = {} function S:OnCreate() Timer.After(0, function() while true do end end) end return S" },
+			{ "an engine coroutine", "local S = {} function S:OnCreate() self:StartCoroutine(function() while true do end end) end return S" },
+			{ "after a yield", "local S = {} function S:OnCreate() self:StartCoroutine(function() Wait(0) while true do end end) end return S" },
+			{ "an event handler", "local S = {} function S:OnCreate() Events.On('go', function() while true do end end) end function S:OnUpdate(dt) Events.Emit('go') end return S" },
+			{ "coroutine.wrap", "local S = {} function S:OnUpdate(dt) coroutine.wrap(function() while true do end end)() end return S" },
+			{ "coroutine.resume", "local S = {} function S:OnUpdate(dt) local co = coroutine.create(function() while true do end end) while true do coroutine.resume(co) end end return S" },
+			{ "pcall", "local S = {} function S:OnUpdate(dt) while true do pcall(function() while true do end end) end end return S" },
+			{ "xpcall", "local S = {} function S:OnUpdate(dt) while true do xpcall(function() while true do end end, function(e) return e end) end end return S" },
+			{ "require", "local S = {} function S:OnCreate() require('Assets.Scripts.EndlessModule') end return S" },
+			{ "__index", "local S = {} function S:OnUpdate(dt) local t = setmetatable({}, { __index = function() while true do end end }) return t.x end return S" },
+		};
+		for (const auto& [name, source] : cases)
+		{
+			CAPTURE(name);
+			const std::string script = project.WriteFile("Assets/Scripts/Endless.lua", source);
+			Scene scene;
+			AddScripted(scene, "Endless", script);
+			Entity good = AddScripted(scene, "Healthy", healthy);
+			scene.OnRuntimeStart();
+			for (int i = 0; i < 3; i++)
+				scene.OnUpdate(Step);
+			const auto& errors = scene.GetScriptEngine()->GetErrors();
+			REQUIRE_FALSE(errors.empty());
+			CHECK(std::ranges::any_of(errors, [](const std::string& error) { return error.find("ran 200000 instructions without returning") != std::string::npos; }));
+			CHECK(Field(scene, good, "Updates") == 3);
+			scene.OnRuntimeStop();
+		}
+	}
+
+	TEST_CASE("The instruction limit is per call: work spread over calls never reaches it")
+	{
+		BasaltTest::TempProject project("InstructionBudget");
+		REQUIRE(project.IsValid());
+		Project::GetActive()->GetConfig().ScriptInstructionLimit = 200000;
+		const std::string script = project.WriteFile("Assets/Scripts/Busy.lua", R"(
+			local Busy = {}
+			local function Spin() for i = 1, 20000 do end end
+			function Busy:OnCreate()
+				self.Updates = 0
+				self:StartCoroutine(function()
+					while true do
+						Spin()
+						WaitFrames(1)
+					end
+				end)
+			end
+			function Busy:OnUpdate(dt)
+				Spin()
+				self.Updates = self.Updates + 1
+			end
+			return Busy
+		)");
+		Scene scene;
+		Entity busy = AddScripted(scene, "Busy", script);
+		scene.OnRuntimeStart();
+		for (int i = 0; i < 40; i++)
+			scene.OnUpdate(Step);
+		CHECK(scene.GetScriptEngine()->GetErrors().empty());
+		CHECK(Field(scene, busy, "Updates") == 40);
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("A stopped script leaves the next call a full budget, and 0 removes the limit")
+	{
+		BasaltTest::TempProject project("InstructionLimitReset");
+		REQUIRE(project.IsValid());
+		Project::GetActive()->GetConfig().ScriptInstructionLimit = 200000;
+		const std::string script = project.WriteFile("Assets/Scripts/Twice.lua", R"(
+			local Twice = {}
+			Twice.Spin = function(count) for i = 1, count do end end
+			function Twice:OnUpdate(dt) end
+			return Twice
+		)");
+		const std::string endless = project.WriteFile("Assets/Scripts/Endless.lua", "local S = {} function S:OnUpdate(dt) while true do end end return S");
+		{
+			Scene scene;
+			AddScripted(scene, "Endless", endless);
+			AddScripted(scene, "Twice", script);
+			scene.OnRuntimeStart();
+			scene.OnUpdate(Step);
+			CHECK(scene.GetScriptEngine()->GetErrors().size() == 1);
+			// Near the limit, right after the same state stopped at it: the hook went back to its period, and the count to 0.
+			std::string result;
+			CHECK(scene.GetScriptEngine()->ExecuteString("for i = 1, 40000 do end return 'finished'", result));
+			CHECK(result == "finished");
+			CHECK_FALSE(scene.GetScriptEngine()->ExecuteString("while true do end", result));
+			CHECK(result.find("ran 200000 instructions without returning") != std::string::npos);
+			CHECK(scene.GetScriptEngine()->ExecuteString("return 'still here'", result));
+			CHECK(result == "still here");
+			scene.OnRuntimeStop();
+		}
+		Project::GetActive()->GetConfig().ScriptInstructionLimit = 0;
+		{
+			Scene scene;
+			AddScripted(scene, "Twice", script);
+			scene.OnRuntimeStart();
+			std::string result;
+			CHECK(scene.GetScriptEngine()->ExecuteString("for i = 1, 1000000 do end return 'finished'", result));
+			CHECK(result == "finished");
+			scene.OnRuntimeStop();
+		}
+	}
+
+	TEST_CASE("Finding a script's properties stops a top level that never returns")
+	{
+		BasaltTest::TempProject project("EndlessProperties");
+		REQUIRE(project.IsValid());
+		Project::GetActive()->GetConfig().ScriptInstructionLimit = 200000;
+		const std::string script = project.WriteFile("Assets/Scripts/Endless.lua", "while true do end");
+		std::string error;
+		CHECK_FALSE(ScriptEngine::LoadScriptProperties(script, error));
+		CHECK(error.find("ran 200000 instructions without returning") != std::string::npos);
+	}
+
+	TEST_CASE("Scripts cannot reach the debug library that would remove the instruction limit")
+	{
+		BasaltTest::TempProject project("NoDebugLibrary");
+		REQUIRE(project.IsValid());
+		const std::string script = project.WriteFile("Assets/Scripts/Empty.lua", "return {}");
+		Scene scene;
+		AddScripted(scene, "Empty", script);
+		scene.OnRuntimeStart();
+		std::string result;
+		REQUIRE(scene.GetScriptEngine()->ExecuteString("return debug == nil and package.loaded.debug == nil", result));
+		CHECK(result == "true");
+		scene.OnRuntimeStop();
+	}
+
 	TEST_CASE("Script errors are isolated to the failing instance")
 	{
 		BasaltTest::TempProject project("ScriptErrors");

@@ -160,6 +160,16 @@ TEST_SUITE("Automation")
 		REQUIRE(temp.IsValid());
 		CommandRegistry registry;
 		AutomationSession session;
+		CHECK(Run(registry, session, "project.info")["scriptInstructionLimit"] == DefaultScriptInstructionLimit);
+		Run(registry, session, "project.set", { { "scriptInstructionLimit", 5000 } });
+		CHECK(Run(registry, session, "project.info")["scriptInstructionLimit"] == 5000);
+		CHECK(Project::GetActiveScriptInstructionLimit() == 5000);
+		CHECK(ScriptEngine::GetInstructionLimit() == 5000);
+		Run(registry, session, "project.set", { { "scriptInstructionLimit", 0 } });
+		CHECK(Project::GetActiveScriptInstructionLimit() == 0);
+		for (const json& bad : { json(-1), json(4294967296), json(1.5), json("7") })
+			CHECK(RunError(registry, session, "project.set", { { "scriptInstructionLimit", bad } }).find("scriptInstructionLimit") != std::string::npos);
+		Run(registry, session, "project.set", { { "scriptInstructionLimit", DefaultScriptInstructionLimit } });
 		CHECK(Run(registry, session, "project.info")["randomSeed"] == Random::DefaultSeed);
 		CHECK(Project::GetActiveRandomSeed() == Random::DefaultSeed);
 		Run(registry, session, "project.set", { { "randomSeed", 4294967295u } });

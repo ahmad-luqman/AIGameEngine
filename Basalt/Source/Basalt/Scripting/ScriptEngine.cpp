@@ -887,11 +887,28 @@ namespace Basalt {
 		return ScriptEngineAccess::LocateStorage(Engine).Load(outError);
 	}
 
+	namespace {
+
+		bool s_InstructionLimitDisabled = false;
+
+	}
+
+	void ScriptEngine::DisableInstructionLimit()
+	{
+		s_InstructionLimitDisabled = true;
+	}
+
+	uint32_t ScriptEngine::GetInstructionLimit()
+	{
+		return s_InstructionLimitDisabled ? 0 : Project::GetActiveScriptInstructionLimit();
+	}
+
 	ScriptEngine::ScriptEngine(Scene* scene)
 		: m_Impl(CreateScope<Impl>(*this))
 		, m_Scene(scene)
 	{
 		OpenSafeLibraries(m_Impl->Lua, m_Impl->Warnings);
+		m_Impl->Context.LimitInstructions(m_Impl->Lua.lua_state(), GetInstructionLimit());
 		m_Impl->Context.SceneContext = scene;
 		// Every play session starts from its seed (the project's), so its random numbers repeat run after run.
 		m_Impl->Context.ResetRandom(scene->GetRandomSeed());
@@ -1457,9 +1474,15 @@ namespace Basalt {
 		LuaWarnings warnings;
 		sol::state lua{ sol::default_at_panic, &MemoryTracker::LuaAllocator };
 		OpenSafeLibraries(lua, warnings);
+		// Running the file is how its Properties are found, which the inspector, component.set and project.validate ask for.
+		context.LimitInstructions(lua.lua_state(), GetInstructionLimit());
 		RegisterScriptBindings(lua, context);
 
-		auto scriptClass = LoadScriptClass(lua, scriptPath, outError);
+		std::optional<sol::table> scriptClass;
+		{
+			ScriptOwnerScope scope(context, UUID(0), "property discovery");
+			scriptClass = LoadScriptClass(lua, scriptPath, outError);
+		}
 		if (!scriptClass)
 			return std::nullopt;
 
