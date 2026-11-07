@@ -245,6 +245,11 @@ namespace Basalt {
 			Set({ { "randomSeed", std::random_device{}() } });
 		HelpMarker("Seeds Lua's random numbers, particle emitters and runtime entity IDs, so a session replays identically.");
 
+		uint32_t limit = config.ScriptInstructionLimit;
+		if (EditCommitted("Script Instruction Limit", limit, [](const char* id, uint32_t* value) { ImGui::InputScalar(id, ImGuiDataType_U32, value); }) && limit != config.ScriptInstructionLimit)
+			Set({ { "scriptInstructionLimit", limit } });
+		HelpMarker("How many instructions one call into a script may run in the editor before it fails with an error, so an endless loop cannot hang the editor. 0 removes the limit, and its overhead on tight Lua code. Exported games have no limit. Applies from the next Play.");
+
 		// Physics step: presets by rate, or any value in seconds.
 		const float step = config.FixedTimestep;
 		const std::string label = fmt::format("{} Hz ({:.5f} s)", std::lround(1.0f / step), step);

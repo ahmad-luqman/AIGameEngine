@@ -49,6 +49,12 @@ namespace Basalt {
 	class ScriptEngine
 	{
 	public:
+		// The project's ScriptInstructionLimit stops scripts that never return, while editing a game (ScriptContext::
+		// LimitInstructions explains its cost). The runtime, which plays finished games, turns it off for the process.
+		static void DisableInstructionLimit();
+		// What sessions starting now run under; 0: no limit.
+		static uint32_t GetInstructionLimit();
+
 		explicit ScriptEngine(Scene* scene);
 		~ScriptEngine();
 

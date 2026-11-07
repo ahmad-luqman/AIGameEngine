@@ -224,6 +224,11 @@ namespace Basalt {
 			outError = fmt::format("invalid project file '{}': RandomSeed must be an integer between 0 and {}", fileText, UINT32_MAX);
 			return nullptr;
 		}
+		if (const auto limit = data.find("ScriptInstructionLimit"); limit != data.end() && !JsonToUInt32(*limit, config.ScriptInstructionLimit))
+		{
+			outError = fmt::format("invalid project file '{}': ScriptInstructionLimit must be an integer between 0 and {}", fileText, UINT32_MAX);
+			return nullptr;
+		}
 		// The window size reaches the runtime's window unchecked otherwise (a negative value would wrap around).
 		for (const auto& [key, size] : { std::pair{ "WindowWidth", &config.WindowWidth }, std::pair{ "WindowHeight", &config.WindowHeight } })
 		{
@@ -341,6 +346,7 @@ namespace Basalt {
 			{ "PhysicsLayers", m_Config.Physics.ToJson() },
 			{ "FixedTimestep", m_Config.FixedTimestep },
 			{ "RandomSeed", m_Config.RandomSeed },
+			{ "ScriptInstructionLimit", m_Config.ScriptInstructionLimit },
 		};
 		if (!FileSystem::WriteTextFile(GetProjectFilePath(), data.dump(1, '\t'), outError))
 		{

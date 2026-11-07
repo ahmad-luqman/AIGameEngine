@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Basalt/Core/Base.h"
 #include "Basalt/Core/UUID.h"
 #include "Basalt/Math/Random.h"
 #include "Basalt/UI/UIGeometry.h"
@@ -92,6 +93,17 @@ namespace Basalt {
 		// another instance's method does not change it); coroutines belong to the instance they are started on.
 		// 0 outside instance code (console, lua.exec, top-level script code).
 		UUID GetCurrentOwner() const { return m_CurrentOwner; }
+		// Stops any one call into Lua (a ScriptOwnerScope at the outside: a callback, a timer, one resume of a coroutine) after
+		// `limit` VM instructions, with a Lua error, so a script that never returns fails instead of hanging its host. 0 sets no
+		// hook. Call once on a new state, before it has coroutines, which inherit the hook. The context must outlive the state.
+		//
+		// A count hook sends every instruction through Lua's trace function, whatever the count: tight Lua runs up to 2.7 times
+		// slower, a script moving entities through bindings about 5%, hence ScriptEngine::DisableInstructionLimit for games. It counts
+		// instructions rather than time so that it never depends on the machine, on a blocking binding or on a debugger, and it
+		// reaches every coroutine, which a watchdog thread could not see. C functions (a slow string.find) and __gc finalizers,
+		// where Lua turns hooks off, are not stopped.
+		void LimitInstructions(lua_State* state, uint32_t limit);
+
 		static constexpr size_t MaxClipLeakWarnings = 1024;
 		// A reload makes repaired callbacks eligible for a fresh diagnostic.
 		void ResetClipLeakWarnings()
@@ -101,10 +113,19 @@ namespace Basalt {
 		}
 
 	private:
+		// The count hook. Raises its error only inside a ScriptOwnerScope, whose protected calls catch it: Lua code outside one
+		// (a metamethod C++ triggered) has no handler, so an error there would end the process. Raising it longjmps out of
+		// this frame, which must hold no C++ object (on MSVC that runs their destructors twice).
+		BS_NOINLINE static void OnInstructions(lua_State* state, lua_Debug* debug);
+
 		// Changed only by ScriptOwnerScope.
 		UUID m_CurrentOwner = 0;
 		std::unordered_set<std::string> m_ReportedClipLeaks;
 		bool m_ReportedClipLeakLimit = false;
+		uint32_t m_ScopeDepth = 0;
+		uint64_t m_InstructionsUsed = 0;
+		uint64_t m_InstructionLimit = 0;
+		int m_HookPeriod = 0;
 
 		friend class ScriptOwnerScope;
 	};

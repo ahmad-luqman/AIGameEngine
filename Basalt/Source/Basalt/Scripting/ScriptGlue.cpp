@@ -43,6 +43,37 @@
 
 namespace Basalt {
 
+	void ScriptContext::LimitInstructions(lua_State* state, uint32_t limit)
+	{
+		if (limit == 0)
+			return;
+		// The hook's count runs on across calls, so each firing charges the running call a whole period it may have only
+		// finished: a short period keeps that error small, and the period is free, as the hook costs the same at any count.
+		constexpr uint32_t PeriodsPerLimit = 64;
+		m_InstructionLimit = limit;
+		m_HookPeriod = static_cast<int>(std::clamp(limit / PeriodsPerLimit, 1u, 1u << 20));
+		// Coroutines copy this space from the main state, so the hook reaches the context from any of them.
+		*static_cast<ScriptContext**>(lua_getextraspace(state)) = this;
+		lua_sethook(state, &OnInstructions, LUA_MASKCOUNT, m_HookPeriod);
+	}
+
+	void ScriptContext::OnInstructions(lua_State* state, lua_Debug*)
+	{
+		ScriptContext& context = **static_cast<ScriptContext**>(lua_getextraspace(state));
+		const int period = lua_gethookcount(state);
+		if (period != context.m_HookPeriod)
+			lua_sethook(state, &OnInstructions, LUA_MASKCOUNT, context.m_HookPeriod);
+		if (context.m_ScopeDepth == 0)
+			return;
+		context.m_InstructionsUsed += static_cast<uint64_t>(period);
+		if (context.m_InstructionsUsed < context.m_InstructionLimit)
+			return;
+		// Now at every instruction, until the scope ends: a pcall in the script catches one error, and the next instruction
+		// outside it raises the next, so a loop around pcall cannot outlast the limit.
+		lua_sethook(state, &OnInstructions, LUA_MASKCOUNT, 1);
+		luaL_error(state, "ran %I instructions without returning (an endless loop?); project.set scriptInstructionLimit changes the limit, 0 removes it", static_cast<LUAI_UACINT>(context.m_InstructionLimit));
+	}
+
 	ScriptOwnerScope::ScriptOwnerScope(ScriptContext& context, UUID owner, const char* callback)
 		: m_Context(context)
 		, m_Previous(context.m_CurrentOwner)
@@ -51,11 +82,15 @@ namespace Basalt {
 		, m_Clips(GameUI::CaptureClipStack())
 	{
 		context.m_CurrentOwner = owner;
+		// A handler that a script's Events.Emit runs nests in that script's call, and shares its budget.
+		if (context.m_ScopeDepth++ == 0)
+			context.m_InstructionsUsed = 0;
 	}
 
 	ScriptOwnerScope::~ScriptOwnerScope()
 	{
 		m_Context.m_CurrentOwner = m_Previous;
+		m_Context.m_ScopeDepth--;
 		if (!GameUI::RestoreClipStack(std::move(m_Clips)))
 			return;
 		auto& reported = m_Context.m_ReportedClipLeaks;
