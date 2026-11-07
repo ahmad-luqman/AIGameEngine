@@ -640,7 +640,7 @@ TEST_SUITE("Automation")
 		server.Stop();
 	}
 
-	TEST_CASE("A first non-blank frame that cannot open JSON closes the connection before any handler sees it")
+	TEST_CASE("A first non-blank frame that opens no JSON object or array closes the connection before any handler sees it")
 	{
 		CommandRegistry registry;
 		AutomationSession session;
@@ -669,6 +669,15 @@ TEST_SUITE("Automation")
 		}
 		CHECK(Run(registry, session, "entity.list")["entities"].empty());
 
+		// A blank line first decides nothing.
+		{
+			BasaltTest::LineClient client(server.GetPort());
+			REQUIRE(client.Send(""));
+			REQUIRE(client.Send("POST / HTTP/1.1"));
+			CHECK(ParseJson(client.ReadLine())["error"] == "this port speaks newline-delimited JSON");
+			CHECK(requests == 1);
+			requests = 0;
+		}
 		for (const char* frame : { "hello", "123", "\"text\"", "null", "  POST / HTTP/1.1", "\xEF\xBB\xBFhello" })
 		{
 			CAPTURE(frame);

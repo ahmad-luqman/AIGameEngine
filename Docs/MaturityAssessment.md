@@ -88,7 +88,8 @@ It also said the hardware rows were empty, and its A column silently normalized 
 
 These were reproduced or confirmed in source, and they carry more weight than any missing feature because they fail
 silently or fatally. **Status:** PR #74 addressed all five after this assessment. Defects 1 and 2 are fixed. Defect 3 is
-fixed in the editor and CLI, by an instruction limit rather than a time budget, and remains in exported games. Defect 4
+fixed in the editor and CLI for script code, by an instruction limit rather than a time budget, with the limits
+`Docs/ScriptingAPI.md` lists, and remains in exported games. Defect 4
 now refuses HTTP, with no authentication added. Defect 5 is now a validation error, and Vorbis still does not play. The
 table and the scores below stand as measured at `4f823ab`.
 

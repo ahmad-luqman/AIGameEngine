@@ -281,12 +281,8 @@ namespace Basalt {
 
 			sol::protected_function function = chunk;
 			sol::protected_function_result result = function();
-			if (!result.valid())
-			{
-				const sol::error error = result;
-				outError = error.what();
+			if (scope.Failed(result, outError))
 				return std::nullopt;
-			}
 			if (result.get_type() != sol::type::table)
 			{
 				outError = scriptPath + ": script must return a table (its class)";
@@ -349,7 +345,8 @@ namespace Basalt {
 			const sol::table registry = lua.registry();
 			auto loaded = registry.get<sol::optional<sol::table>>(LUA_LOADED_TABLE);
 			const auto package = registry.get<sol::optional<sol::table>>("Basalt.Package");
-			auto path = package ? package->get<sol::optional<std::string>>("path") : sol::nullopt;
+			// Raw, as are all reads and writes of these two tables here: a script can give them metatables.
+			auto path = package ? package->raw_get<sol::optional<std::string>>("path") : sol::nullopt;
 			if (!loaded || !path)
 				return std::nullopt;
 			return PackageView{ *loaded, *path };
@@ -514,25 +511,25 @@ namespace Basalt {
 		template<typename... Args>
 		static bool Invoke(ScriptEngine& engine, UUID id, const sol::table& self, const char* name, Args&&... args)
 		{
-			// The enclosing call ran out, not this instance: it stops at its next instruction.
+			// The enclosing call ran out, not this instance, which is left alone: that call stops at its next instruction. So
+			// true means nothing failed, not that the callback ran.
 			if (engine.m_Impl->Context.Budget.IsSpent())
 				return true;
 			ScriptOwnerScope scope(engine.m_Impl->Context, id, name);
-			std::string lookupError;
-			const std::optional<sol::object> callback = ProtectedIndex(self, name, lookupError);
+			std::string error;
+			const std::optional<sol::object> callback = scope.Index(self, name, error);
 			if (!callback)
 			{
-				engine.ReportError(lookupError + " (finding " + name + ")");
+				engine.ReportError(error + " (finding " + name + ")");
 				return false;
 			}
 			if (callback->get_type() != sol::type::function)
 				return true;
 			sol::protected_function function = callback->as<sol::protected_function>();
 			const sol::protected_function_result result = function(self, std::forward<Args>(args)...);
-			if (result.valid())
+			if (!scope.Failed(result, error))
 				return true;
-			const sol::error error = result;
-			engine.ReportError(std::string(error.what()) + " (in " + name + ")");
+			engine.ReportError(error + " (in " + name + ")");
 			return false;
 		}
 
@@ -668,10 +665,12 @@ namespace Basalt {
 			const std::optional<sol::table> table = LoadScriptClass(impl.Context, impl.Lua, owner, "class load", path, outError);
 			if (!table)
 				return std::nullopt;
-			sol::table metatable = MakeInstanceMetatable(impl.Lua, *table);
-			metatable.raw_set(InstanceMetatableMarker, true);
+			std::optional<sol::table> metatable = MakeInstanceMetatable(impl.Lua, *table, outError);
+			if (!metatable)
+				return std::nullopt;
+			metatable->raw_set(InstanceMetatableMarker, true);
 			guard.Kept = true;
-			return ScriptEngine::Impl::ScriptClass{ *table, metatable, owner };
+			return ScriptEngine::Impl::ScriptClass{ *table, *metatable, owner };
 		}
 
 		// A new owner for top-level code, described as `name` in messages.
@@ -797,8 +796,8 @@ namespace Basalt {
 			}
 			for (const std::string& name : forgotten)
 			{
-				ScriptEngine::Impl::ForgottenModule module{ name, package->Loaded[name], 0 };
-				package->Loaded[name] = sol::lua_nil;
+				ScriptEngine::Impl::ForgottenModule module{ name, package->Loaded.raw_get<sol::object>(name), 0 };
+				package->Loaded.raw_set(name, sol::lua_nil);
 				// Detached, not released: a new load gets an owner of its own, while the old one's work keeps running.
 				if (const auto it = impl.ModuleOwners.find(name); it != impl.ModuleOwners.end())
 				{
@@ -822,7 +821,7 @@ namespace Basalt {
 			{
 				if (package && impl.FailedRequires.contains(module.Name) && !impl.ModuleOwners.contains(module.Name))
 				{
-					package->Loaded[module.Name] = module.Value;
+					package->Loaded.raw_set(module.Name, module.Value);
 					if (module.Owner != 0)
 						impl.ModuleOwners.emplace(module.Name, module.Owner);
 				}
@@ -834,20 +833,26 @@ namespace Basalt {
 		}
 
 		// Sets the instance's fields from the class's Properties (with the component's overrides); with onlyMissing,
-		// only those it does not have yet. Raw writes: after creation an instance may carry a metatable of its own
+		// only those it does not have yet. False when reading them failed, which is reported unless the enclosing call ran out.
+		// Raw writes: after creation an instance may carry a metatable of its own
 		// whose __newindex would run (and could raise outside any protected call).
-		static void AssignProperties(ScriptEngine& engine, sol::table& self, const sol::table& scriptClass, const ScriptComponent& component, bool onlyMissing)
+		static bool AssignProperties(ScriptEngine& engine, sol::table& self, const sol::table& scriptClass, const ScriptComponent& component, bool onlyMissing)
 		{
 			std::optional<sol::object> properties;
+			std::string readError;
 			{
 				ScriptOwnerScope scope(engine.m_Impl->Context, engine.m_Impl->Context.GetCurrentOwner(), "reading Properties");
-				std::string error;
-				properties = ProtectedIndex(scriptClass, "Properties", error);
-				if (!properties)
-					engine.ReportError(error + " (reading Properties)");
+				properties = scope.Index(scriptClass, "Properties", readError);
 			}
-			if (!properties || properties->get_type() != sol::type::table)
-				return;
+			if (!properties)
+			{
+				// Still spent with this scope closed: an enclosing call ran out, and it reports that.
+				if (!engine.m_Impl->Context.Budget.IsSpent())
+					engine.ReportError(readError + " (reading Properties)");
+				return false;
+			}
+			if (properties->get_type() != sol::type::table)
+				return true;
 			for (const auto& [key, defaultValue] : properties->as<sol::table>())
 			{
 				if (!key.is<std::string>())
@@ -860,6 +865,7 @@ namespace Basalt {
 				if (!error.empty())
 					engine.ReportError(error);
 			}
+			return true;
 		}
 
 		// The metatable is one MakeInstanceMetatable made (not one a script set itself).
@@ -958,17 +964,8 @@ namespace Basalt {
 		m_Impl->ForgottenModules.clear();
 	}
 
-	void ScriptEngine::ReportSwallowedStops()
-	{
-		std::vector<ScriptContext::SwallowedStop> stops;
-		stops.swap(m_Impl->Context.SwallowedStops);
-		for (const ScriptContext::SwallowedStop& stop : stops)
-			ScriptEngineAccess::FailOwner(*this, stop.Owner, stop.Message, stop.Where);
-	}
-
 	void ScriptEngine::ReportError(const std::string& message)
 	{
-		m_Impl->Context.Budget.MarkReported();
 		BS_CORE_ERROR("Script error: {}", message);
 		m_Errors.push_back(message);
 		if (SceneEventListener* listener = m_Scene ? m_Scene->GetEventListener() : nullptr)
@@ -978,7 +975,19 @@ namespace Basalt {
 	void ScriptEngine::EnsureInstance(Entity entity)
 	{
 		if (CreateInstance(entity))
-			ScriptEngineAccess::StartInstance(*this, entity.GetUUID());
+			StartOrDefer(entity.GetUUID());
+	}
+
+	void ScriptEngine::StartOrDefer(UUID uuid)
+	{
+		// The call creating it ran out, through no fault of this script: a new frame starts it with a budget of its own.
+		if (m_Impl->Context.Budget.IsSpent())
+		{
+			ScriptEngineAccess::Teardown(*this, uuid);
+			m_Impl->Pending.insert(uuid);
+			return;
+		}
+		ScriptEngineAccess::StartInstance(*this, uuid);
 	}
 
 	void ScriptEngine::EnsureInstances(const std::vector<Entity>& entities)
@@ -991,7 +1000,7 @@ namespace Basalt {
 				created.push_back(entity.GetUUID());
 		}
 		for (UUID uuid : created)
-			ScriptEngineAccess::StartInstance(*this, uuid);
+			StartOrDefer(uuid);
 	}
 
 	bool ScriptEngine::CreateInstance(Entity entity)
@@ -1001,6 +1010,11 @@ namespace Basalt {
 			return false;
 		const UUID uuid = entity.GetUUID();
 		impl.Pending.erase(uuid);
+		if (impl.Context.Budget.IsSpent())
+		{
+			impl.Pending.insert(uuid);
+			return false;
+		}
 
 		// Copy the component: Lua run below (OnDestroy, the script chunk) may remove or move it in storage.
 		const auto* liveComponent = entity.TryGetComponent<ScriptComponent>();
@@ -1034,6 +1048,12 @@ namespace Basalt {
 			std::optional<Impl::ScriptClass> scriptClass = ScriptClassLoader::Load(*this, component->Script, error);
 			if (!scriptClass)
 			{
+				// What ran out was the call loading it: the class gets its chance, and its own budget, next frame.
+				if (impl.Context.Budget.IsSpent())
+				{
+					impl.Pending.insert(uuid);
+					return false;
+				}
 				impl.FailedClasses.insert(component->Script);
 				ReportError(error);
 				return false;
@@ -1045,7 +1065,12 @@ namespace Basalt {
 		sol::table self = impl.Lua.create_table();
 		self[sol::metatable_key] = classIt->second.InstanceMetatable;
 		self["Entity"] = ScriptEntity{ uuid, m_Scene };
-		ScriptClassLoader::AssignProperties(*this, self, classIt->second.Table, *component, false);
+		if (!ScriptClassLoader::AssignProperties(*this, self, classIt->second.Table, *component, false))
+		{
+			if (impl.Context.Budget.IsSpent())
+				impl.Pending.insert(uuid);
+			return false;
+		}
 
 		Impl::Instance instance;
 		instance.ScriptPath = component->Script;
@@ -1072,7 +1097,7 @@ namespace Basalt {
 		{
 			ScriptOwnerScope scope(m_Impl->Context, entity.GetUUID(), "reading a field");
 			std::string error;
-			value = ProtectedIndex(it->second.Self, name.c_str(), error);
+			value = scope.Index(it->second.Self, name, error);
 		}
 		if (!value)
 			return std::nullopt;
@@ -1169,12 +1194,17 @@ namespace Basalt {
 		if (it->second.Failed)
 			return;
 		std::optional<sol::object> handler;
+		std::string lookupError;
 		{
 			ScriptOwnerScope scope(m_Impl->Context, event.Target, "finding a UI method");
-			std::string error;
-			handler = ProtectedIndex(it->second.Self, event.Method.c_str(), error);
+			handler = scope.Index(it->second.Self, event.Method, lookupError);
 		}
-		if (!handler || handler->get_type() != sol::type::function)
+		if (!handler)
+		{
+			report("method", "finding " + event.Method + " on the script of '" + target.GetName() + "' failed: " + lookupError);
+			return;
+		}
+		if (handler->get_type() != sol::type::function)
 		{
 			report("method", "the script of '" + target.GetName() + "' has no method " + event.Method);
 			return;
@@ -1193,7 +1223,6 @@ namespace Basalt {
 
 	void ScriptEngine::LateUpdate(Timestep ts)
 	{
-		ReportSwallowedStops();
 		ScriptEngineAccess::CallOnEveryInstance(*this, "OnLateUpdate", ts.GetSeconds());
 	}
 
@@ -1463,38 +1492,20 @@ namespace Basalt {
 			return false;
 		}
 
-		const auto run = [&]() {
-			ScriptOwnerScope scope(m_Impl->Context, UUID(0), "console");
-			sol::protected_function function = chunk;
-			sol::protected_function_result result = function();
-			if (!result.valid())
-			{
-				const sol::error error = result;
-				outResult = error.what();
-				return false;
-			}
-			outResult.clear();
-			if (result.return_count() == 0)
-				return true;
-			const sol::protected_function toString = lua.registry()[ToStringRegistryKey];
-			sol::protected_function_result text = toString(result.get<sol::object>(0));
-			if (text.valid())
-			{
-				outResult = text.get<std::string>();
-				return true;
-			}
-			const sol::error error = text;
-			outResult = error.what();
+		ScriptOwnerScope scope(m_Impl->Context, UUID(0), "console");
+		sol::protected_function function = chunk;
+		sol::protected_function_result result = function();
+		if (scope.Failed(result, outResult))
 			return false;
-		};
-		const bool succeeded = run();
-		// A stop the code swallowed is what happened, whatever it returned; nothing else reports it here.
-		std::vector<ScriptContext::SwallowedStop>& stops = m_Impl->Context.SwallowedStops;
-		if (!stops.empty() && succeeded)
-			outResult = stops.back().Message;
-		const bool stopped = !stops.empty();
-		stops.clear();
-		return succeeded && !stopped;
+		outResult.clear();
+		if (result.return_count() == 0)
+			return true;
+		const sol::protected_function toString = lua.registry()[ToStringRegistryKey];
+		sol::protected_function_result text = toString(result.get<sol::object>(0));
+		if (scope.Failed(text, outResult))
+			return false;
+		outResult = text.get<std::string>();
+		return true;
 	}
 
 	bool ScriptEngine::CheckSyntax(const std::string& scriptPath, std::string& outError)
@@ -1534,15 +1545,10 @@ namespace Basalt {
 		std::optional<sol::object> properties;
 		{
 			ScriptOwnerScope scope(context, UUID(0), "property discovery");
-			properties = ProtectedIndex(*scriptClass, "Properties", outError);
+			properties = scope.Index(*scriptClass, "Properties", outError);
 		}
 		if (!properties)
 			return std::nullopt;
-		if (!context.SwallowedStops.empty())
-		{
-			outError = scriptPath + ": " + context.SwallowedStops.back().Message;
-			return std::nullopt;
-		}
 		if (properties->get_type() != sol::type::table)
 			return nlohmann::json::object();
 		try

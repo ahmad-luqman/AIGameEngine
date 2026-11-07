@@ -103,20 +103,31 @@ with `asset.write` or `asset.refresh` (which also reloads models and textures ch
 - Not carried over: module-level `local` variables start afresh, and functions instances already handed to timers,
   coroutines or event handlers keep running the old code until they are created again (`OnReload` can restart them).
   A disabled instance's timers and handlers were cancelled when it failed.
-- **A script that never returns fails instead of hanging.** In the editor and the CLI, one call into Lua (a callback, a
-  timer, a handler, one resume of a coroutine, a file's top level) may run `ScriptInstructionLimit` VM instructions, by
-  default 2 billion, some seconds of tight Lua in Release (longer in Debug, or where the loop allocates). Past that, or
-  once the call has grown the Lua heap by as many bytes, it raises an ordinary script error naming the line it reached,
-  which disables the instance as any error does. A `pcall` in the script does not outlast it, and if the script swallows
-  it anyway the instance is disabled all the same. What a call nests shares its budget, so the call that ran out takes the
-  blame, and any event handlers left do not run. Instructions count rather than seconds, so the outcome is the same on
-  every machine and time spent in bindings does not count. Set the limit with `project.set scriptInstructionLimit`, from
-  the next play (reading a script's properties uses it at once). 0 removes it and its overhead, which depends on the
-  script: about 5% for one moving 2,000 entities through bindings, and up to 2.7 times for tight arithmetic, so profile
-  with it off. `BasaltRuntime`, and so every exported game, never applies the limit, and can hang. Also not limited: time
-  inside a C function (a slow `string.find` pattern), `__gc` finalizers, and, as Lua keeps hooks off after this error
-  until a `pcall` restores them, an `xpcall` message handler the stop itself calls and the `__close` of a coroutine it ended.
 - Deleting a script leaves its running version in place until play stops.
+
+### Scripts that never return
+
+In the editor and the CLI, a script stuck in a loop fails with an error instead of hanging its host. One call into Lua (a
+callback, a timer, a handler, one resume of a coroutine, a file's top level) may run the project's `ScriptInstructionLimit` VM
+instructions, by default 2 billion, some seconds of tight Lua in Release (longer in Debug, or where the loop allocates). Past
+that, or once the call has kept as many more bytes on the Lua heap (64 MiB at least), it raises an ordinary script error naming
+the line it reached.
+
+- A call that ran out has failed, even if it caught the error: `pcall` does not outlast the limit, an instance is disabled,
+  and a timer, handler or coroutine ends.
+- What a call nests shares its budget, so the call that ran out takes the blame. Callbacks, handlers and scripts it would still
+  have started do not run: instances wait for the next frame, and their own budget.
+- Each stopped instance pays the budget once, so an endless loop in a script that 100 entities use stops the game for 100 limits.
+- Instructions count rather than seconds, so the outcome is the same on every machine, and time spent in bindings does not count.
+- Set the limit with `project.set scriptInstructionLimit`, from the next play (reading a script's properties uses it at once). 0
+  removes it and its overhead, which depends on the script: about 5% for one moving 2,000 entities through bindings, and up to
+  2.7 times for tight arithmetic, so profile with it off.
+- `BasaltRuntime`, and so every exported game, never applies the limit, and can hang.
+
+Also not limited: time inside a C function (a slow `string.find` pattern), and how much one allocates; `__gc` finalizers; and, as
+Lua keeps hooks off after this error until a `pcall` restores them, an `xpcall` message handler the stop itself calls and the
+`__close` of a coroutine it ended. Coroutines that end within 256 instructions charge nothing themselves, so a loop of them runs
+longer than the limit says, though only the loop's own count from ending.
 
 ## Math types
 
@@ -1095,7 +1106,7 @@ whose data could crash the font rasterizer draw blank, with a warning (also show
 
 ## Audio
 
-An `AudioSource` component plays a project-relative clip (WAV, FLAC or MP3; `project.validate` reports others, such as Ogg Vorbis and Opus) while the scene plays: from
+An `AudioSource` component plays a project-relative clip (WAV, FLAC, also inside Ogg, or MP3; `project.validate` reports others, such as Ogg Vorbis and Opus) while the scene plays: from
 the start with `PlayOnStart`, or when a script calls `e:PlayAudio()` (which restarts it from the beginning).
 Every field except the effects (`Doppler`, `LowPass`, `ReverbSend`, `HighPass`, `Echo`, `Distortion`) is read when the clip is loaded; changes
 apply on the next `e:PlayAudio()`, which stops the current sound first even when the new one cannot play. The

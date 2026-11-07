@@ -55,7 +55,7 @@ serves one connection at a time; a second client waits until the first disconnec
 or bridges if initialization is waiting. Oversized requests close without a reply and log the size
 and limit in the editor. A new TCP connection must initialize again. The first parsed object containing
 `jsonrpc` or `method` selects MCP; a malformed first frame containing either quoted key also selects
-MCP and receives a parse error. Other parsed objects and arrays select the original `{command, params}` protocol.
+MCP and receives a parse error. Other parsed values select the original `{command, params}` protocol.
 Blank frames, and malformed ones that start like an object or array and name neither key, leave detection open. The
 selected protocol lasts until
 disconnect. Command execution and undo-history commits stay on the editor's main thread.

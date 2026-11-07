@@ -21,8 +21,10 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 		return 0;
 	float frames[2 * 1024];
 	// Bounded: a few header bytes can declare hours of audio.
-	for (int chunk = 0; chunk < 256 && ma_decoder_read_pcm_frames(&decoder, frames, 1024, nullptr) == MA_SUCCESS; chunk++)
+	for (int chunk = 0; chunk < 256; chunk++)
 	{
+		if (ma_decoder_read_pcm_frames(&decoder, frames, 1024, nullptr) != MA_SUCCESS)
+			break;
 	}
 	ma_decoder_seek_to_pcm_frame(&decoder, 0);
 	ma_decoder_read_pcm_frames(&decoder, frames, 1024, nullptr);

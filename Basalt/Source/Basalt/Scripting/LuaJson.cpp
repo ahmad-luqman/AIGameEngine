@@ -12,11 +12,16 @@ namespace Basalt {
 	namespace {
 
 		constexpr int MaxDepth = 32;
+		// Past any real save or property. A table can hold another twice, so a few lines of Lua can make 2^32 values of it, and
+		// converting them runs no Lua for an instruction limit to count.
+		constexpr size_t MaxValues = size_t{ 1 } << 20;
 
-		nlohmann::json LuaToJsonImpl(const sol::object& value, int depth)
+		nlohmann::json LuaToJsonImpl(const sol::object& value, int depth, size_t& values)
 		{
 			if (depth > MaxDepth)
 				throw std::runtime_error("value is nested too deeply (or contains a cycle)");
+			if (++values > MaxValues)
+				throw std::runtime_error("value holds too many values (a table repeated inside itself?)");
 			// A default-constructed object (sol::lua_nil) has no Lua state; asking it for its type would
 			// dereference a null lua_State (found by FuzzLuaJson).
 			if (!value.lua_state())
@@ -90,7 +95,7 @@ namespace Basalt {
 					{
 						nlohmann::json array = nlohmann::json::array();
 						for (size_t i = 1; i <= count; i++)
-							array.push_back(LuaToJsonImpl(table.raw_get<sol::object>(i), depth + 1));
+							array.push_back(LuaToJsonImpl(table.raw_get<sol::object>(i), depth + 1, values));
 						return array;
 					}
 
@@ -104,7 +109,7 @@ namespace Basalt {
 							error = "tables must use either sequence or string keys";
 							return;
 						}
-						object[key.as<std::string>()] = LuaToJsonImpl(element, depth + 1); });
+						object[key.as<std::string>()] = LuaToJsonImpl(element, depth + 1, values); });
 					if (!error.empty())
 						throw std::runtime_error(error);
 					return object;
@@ -155,7 +160,8 @@ namespace Basalt {
 
 	nlohmann::json LuaToJson(const sol::object& value)
 	{
-		return LuaToJsonImpl(value, 0);
+		size_t values = 0;
+		return LuaToJsonImpl(value, 0, values);
 	}
 
 }

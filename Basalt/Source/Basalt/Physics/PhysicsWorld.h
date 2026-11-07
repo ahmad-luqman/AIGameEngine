@@ -143,11 +143,11 @@ namespace Basalt {
 		ContactInfo Flipped() const { return { Point, -Normal, Impulse }; }
 	};
 
-	// What one world can hold, fixed when it starts. The defaults fit about as many touching boxes as MaxBodies allows, measured
-	// at 65,000 in a pile and 64,000 in a lattice. They reserve about 520 MiB per world, which the step cost does not follow: Jolt
-	// sizes its tables to the scene on each step and leaves the rest unused, so a process with an empty world peaks about 11 MiB
-	// higher than it did at 16384 contact constraints. Past a limit contacts are dropped, which PhysicsWorld logs. Values
-	// outside what Jolt accepts are clamped.
+	// What one world can hold, fixed when it starts. The defaults hold about as many touching boxes as MaxBodies allows (measured
+	// in Release at 65,000 piled and 64,000 in a lattice). They reserve about 510 MiB per world, the temp block and Jolt's
+	// contact pools, of which a world starts by touching 12 MiB, the hash buckets: Jolt sizes its tables to the scene on each
+	// step, so step cost follows the scene. Windows' debug CRT fills the reserve instead. Past a limit contacts are dropped,
+	// which PhysicsWorld logs. Values outside what Jolt accepts are clamped.
 	struct PhysicsCapacity
 	{
 		uint32_t MaxBodies = 65536;
@@ -188,14 +188,14 @@ namespace Basalt {
 	class PhysicsWorld
 	{
 	public:
-		explicit PhysicsWorld(Scene* scene, const PhysicsCapacity& capacity = GetDefaultCapacity());
+		explicit PhysicsWorld(Scene* scene, PhysicsCapacity capacity = GetDefaultCapacity());
 		~PhysicsWorld();
 
 		PhysicsWorld(const PhysicsWorld&) = delete;
 		PhysicsWorld& operator=(const PhysicsWorld&) = delete;
 
-		// What scenes start their worlds with. A host that starts thousands, as the unit tests do, can ask for less: in Debug and
-		// under sanitizers a world's start costs in proportion to what it reserves (Windows' debug CRT fills all of it).
+		// What scenes start their worlds with: PhysicsCapacity{} unless this process set less. A host that starts thousands, as
+		// the unit tests do, can ask for less: in Debug and under sanitizers a world's start costs in proportion to what it reserves.
 		static const PhysicsCapacity& GetDefaultCapacity();
 		static void SetDefaultCapacity(const PhysicsCapacity& capacity);
 

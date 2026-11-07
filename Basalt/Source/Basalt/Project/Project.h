@@ -63,8 +63,8 @@ namespace Basalt {
 		// and runtime entity UUIDs), so a session replays identically. Applies from the next play; changing
 		// it changes the gameplay of scripts that use randomness.
 		uint32_t RandomSeed = Random::DefaultSeed;
-		// How many VM instructions one call into Lua may run before it fails with an error, in the editor and the CLI (see
-		// ScriptCallBudget); 0: no limit. Applies from the next Play, and at once to reading a script's Properties.
+		// How many VM instructions one call into Lua may run before it fails with an error, and how many more bytes it may keep
+		// on the Lua heap, in the editor and the CLI (see ScriptCallBudget); 0: no limit. Applies from the next Play, and at once to reading a script's Properties.
 		uint32_t ScriptInstructionLimit = DefaultScriptInstructionLimit;
 	};
 

@@ -228,11 +228,11 @@ namespace Basalt {
 
 		ScriptOwnerScope scope(m_Context, owner, "timer");
 		const sol::protected_function_result result = callback(ScriptTaskHandle{ id });
-		if (result.valid())
+		std::string error;
+		if (!scope.Failed(result, error))
 			return;
-		const sol::error error = result;
 		m_Tasks.erase(id);
-		m_Host.FailOwner(owner, error.what(), "a timer");
+		m_Host.FailOwner(owner, error, "a timer");
 	}
 
 	void ScriptTasks::RunCoroutine(uint64_t id)
@@ -260,11 +260,27 @@ namespace Basalt {
 		const ActiveResume previous = std::exchange(m_Active, ActiveResume{ .Thread = coroutine });
 		int resultCount = 0;
 		int status = LUA_OK;
+		const char* stop = nullptr;
 		{
 			ScriptOwnerScope scope(m_Context, owner, "coroutine resume");
 			status = lua_resume(coroutine, from, nargs, &resultCount);
+			stop = m_Context.Budget.GetStop();
 		}
 		const WaitRequest wait = std::exchange(m_Active, previous).Wait;
+
+		// It ran out and caught that, so it fails as if it had not: resumed again, it would pay the budget every time.
+		if (stop && (status == LUA_YIELD || status == LUA_OK))
+		{
+			lua_pop(coroutine, resultCount);
+			m_Tasks.erase(id);
+			outError = stop;
+			if (status == LUA_YIELD)
+			{
+				ScriptOwnerScope scope(m_Context, owner, "coroutine close");
+				lua_closethread(coroutine, from);
+			}
+			return false;
+		}
 
 		if (status == LUA_YIELD)
 		{

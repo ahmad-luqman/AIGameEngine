@@ -52,9 +52,7 @@ namespace Basalt {
 		{
 			constexpr size_t MaxLength = 40;
 			std::string text(frame.substr(0, MaxLength));
-			for (char& character : text)
-				if (character < ' ' || character > '~')
-					character = '?';
+			std::ranges::replace_if(text, [](char character) { return character < ' ' || character > '~'; }, '?');
 			return text;
 		}
 
@@ -292,7 +290,7 @@ namespace Basalt {
 				buffer.erase(0, newline + 1);
 				if (!line.empty() && line.back() == '\r')
 					line.pop_back();
-				if (const std::string_view frame = awaitingFirstFrame ? SkipToFrameStart(line) : std::string_view(); !frame.empty())
+				if (const std::string_view frame = SkipToFrameStart(line); awaitingFirstFrame && !frame.empty())
 				{
 					awaitingFirstFrame = false;
 					// A web page can reach this port: a browser sends a cross-origin POST without a preflight, unless it blocks
@@ -301,7 +299,7 @@ namespace Basalt {
 					// array, or malformed JSON that starts like one.
 					if (frame.front() != '{' && frame.front() != '[')
 					{
-						BS_CORE_WARN("Automation: closing connection; its first frame does not open JSON (an HTTP request from a web page looks like this): '{}'", DescribeRefusedFrame(frame));
+						BS_CORE_WARN("Automation: closing connection; its first frame does not open a JSON object or array (an HTTP request from a web page looks like this): '{}'", DescribeRefusedFrame(frame));
 						const std::string refusal = R"({"ok":false,"error":"this port speaks newline-delimited JSON"})";
 						send(refusal + "\n", "a refusal");
 						return;
