@@ -5,6 +5,7 @@
 #include "Basalt/Animation/PropertyAnimation.h"
 #include "Basalt/Asset/AssetKey.h"
 #include "Basalt/Asset/AssetManager.h"
+#include "Basalt/Audio/AudioEngine.h"
 #include "Basalt/Asset/MaterialAsset.h"
 #include "Basalt/Asset/MeshImporter.h"
 #include "Basalt/Asset/MeshSource.h"
@@ -338,7 +339,7 @@ namespace Basalt {
 			void CheckEntities(Scene& scene, const std::string& file)
 			{
 				const nlohmann::json data = SceneSerializer::SerializeScene(scene);
-				std::set<std::string> paths, assetLike;
+				std::set<std::string> paths, assetLike, clips;
 				if (const auto entities = data.find("Entities"); entities != data.end())
 					for (const auto& entity : *entities)
 					{
@@ -352,8 +353,11 @@ namespace Basalt {
 							if (const auto* info = ComponentRegistry::Find(component))
 								for (const auto& assetField : info->AssetFields)
 									ForEachFieldValue(fields, assetField, [&](const nlohmann::json& value, const std::string&) {
-										if (value.is_string() && !value.get_ref<const std::string&>().empty())
-											paths.insert(value.get<std::string>());
+										if (!value.is_string() || value.get_ref<const std::string&>().empty())
+											return;
+										paths.insert(value.get<std::string>());
+										if (component == "AudioSource")
+											clips.insert(value.get<std::string>());
 									});
 							// Strings outside the asset fields that look like paths only warn (paths found above are skipped).
 							for (const auto& [field, value] : fields.items())
@@ -363,6 +367,8 @@ namespace Basalt {
 					}
 				for (const std::string& path : paths)
 					CheckReference(path, file, "references", ValidationSeverity::Error);
+				for (const std::string& clip : clips)
+					CheckAudioClip(clip, file);
 				for (const std::string& path : assetLike)
 					if (!paths.contains(path))
 						CheckReference(path, file, "has a value naming", ValidationSeverity::Warning);
@@ -374,6 +380,27 @@ namespace Basalt {
 				}
 				for (const UnknownPhysicsLayerUse& use : FindUnknownPhysicsLayers(scene, m_Project.GetConfig().Physics))
 					m_Report.Add(ValidationSeverity::Warning, file, fmt::format("'{}' uses the undefined physics layer '{}' (it plays on Default)", use.EntityName, use.Layer));
+			}
+
+			// A clip that exists but will not play fails only at runtime, and only in a log line. The decoders decide, not the
+			// name: they read a file's format from its bytes, so a .ogg holding FLAC plays and one holding Vorbis does not.
+			void CheckAudioClip(const std::string& clip, const std::string& file)
+			{
+				const std::filesystem::path path = m_Directory / FileSystem::PathFromUtf8(GetAssetSource(clip));
+				if (!FileSystem::Exists(path))
+					return; // CheckReference said so.
+				auto [problem, unread] = m_ClipProblems.try_emplace(Normalized(clip));
+				if (unread)
+				{
+					std::string error;
+					const auto bytes = FileSystem::ReadBinaryFile(path, &error);
+					if (bytes && !AudioEngine::CanDecode(*bytes, error))
+						problem->second = fmt::format("the engine cannot decode it ({}); it plays WAV, FLAC and MP3", error);
+					else if (!bytes)
+						problem->second = "it cannot be read (" + error + ")";
+				}
+				if (!problem->second.empty())
+					m_Report.Add(ValidationSeverity::Error, file, fmt::format("references the audio clip '{}', but {}", clip, problem->second));
 			}
 
 			// A path a scene, prefab or the project refers to: it must name an existing file inside Assets/, spelled
@@ -507,6 +534,8 @@ namespace Basalt {
 			std::filesystem::path m_Directory;
 			ValidationReport m_Report;
 			FileSystem::DirectoryListings m_Listings;
+			// Normalized clip -> why it will not play (empty: it plays), so a shared clip is read once.
+			std::map<std::string, std::string> m_ClipProblems;
 			// Decodes material files' UUIDs: this project's, whichever project is active.
 			AssetRegistry m_Assets;
 			// What each model referenced through a sub-asset key contains (or why it could not be read).

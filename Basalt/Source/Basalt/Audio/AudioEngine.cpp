@@ -494,6 +494,26 @@ namespace Basalt {
 		MixDeviceless(seconds, nullptr);
 	}
 
+	bool AudioEngine::CanDecode(std::span<const uint8_t> file, std::string& outError)
+	{
+		ma_decoder decoder;
+		const ma_decoder_config config = ma_decoder_config_init(ma_format_f32, 2, 48000);
+		if (const ma_result result = ma_decoder_init_memory(file.data(), file.size(), &config, &decoder); result != MA_SUCCESS)
+		{
+			outError = ma_result_description(result);
+			return false;
+		}
+		// A format's header can pass and its audio still not decode.
+		float frames[2 * 64];
+		ma_uint64 read = 0;
+		const ma_result result = ma_decoder_read_pcm_frames(&decoder, frames, 64, &read);
+		ma_decoder_uninit(&decoder);
+		if (read > 0 || result == MA_AT_END)
+			return true;
+		outError = ma_result_description(result);
+		return false;
+	}
+
 	bool AudioEngine::ReadDeviceless(float seconds, std::vector<float>& output)
 	{
 		return MixDeviceless(seconds, &output);

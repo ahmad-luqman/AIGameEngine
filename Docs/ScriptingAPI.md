@@ -1082,7 +1082,7 @@ whose data could crash the font rasterizer draw blank, with a warning (also show
 
 ## Audio
 
-An `AudioSource` component plays a project-relative clip (WAV, FLAC or MP3) while the scene plays: from
+An `AudioSource` component plays a project-relative clip (WAV, FLAC or MP3; `project.validate` reports others, such as Ogg Vorbis and Opus) while the scene plays: from
 the start with `PlayOnStart`, or when a script calls `e:PlayAudio()` (which restarts it from the beginning).
 Every field except the effects (`Doppler`, `LowPass`, `ReverbSend`, `HighPass`, `Echo`, `Distortion`) is read when the clip is loaded; changes
 apply on the next `e:PlayAudio()`, which stops the current sound first even when the new one cannot play. The
