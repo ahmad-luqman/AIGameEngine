@@ -306,7 +306,9 @@ TEST_SUITE("Scripting")
 			{ "OnCreate", "local S = {} function S:OnCreate() Calls = Calls + 1 return pcall(" + spin + ") end function S:OnUpdate(dt) Calls = Calls + 1 end return S" },
 			{ "a repeating timer at the top level", "Timer.Every(0.001, function() Calls = Calls + 1 return pcall(" + spin + ") end) return {}" },
 			{ "a shared event handler", "Events.On('go', function() Calls = Calls + 1 return pcall(" + spin + ") end) local S = {} function S:OnUpdate(dt) Events.Emit('go') end return S" },
-			{ "an engine coroutine that yields", "local S = {} function S:OnCreate() self:StartCoroutine(function() while true do Calls = Calls + 1 coroutine.resume(coroutine.create(" + spin + ")) WaitFrames(1) end end) end return S" },
+			{ "the class's __index", "Calls = Calls + 1 return setmetatable({}, { __index = function() return pcall(" + spin + ") end })" },
+			{ "reading Properties", "Calls = Calls + 1 return setmetatable({}, { __index = function(t, k) if k == 'Properties' then return pcall(" + spin + ") end end })" },
+			{ "an engine coroutine that yields", "local S = {} function S:OnCreate() self:StartCoroutine(function() WaitFrames(1) while true do Calls = Calls + 1 coroutine.resume(coroutine.create(" + spin + ")) WaitFrames(1) end end) end return S" },
 		};
 		for (const auto& [name, source] : cases)
 		{
@@ -316,6 +318,7 @@ TEST_SUITE("Scripting")
 			Scene scene;
 			AddScripted(scene, "Swallowing", script);
 			scene.OnRuntimeStart();
+			scene.OnUpdate(Step);
 			scene.OnUpdate(Step);
 			// A handler fails with the emitter around it, which the same call stops.
 			const size_t reports = title == "a shared event handler" ? 2 : 1;
@@ -429,6 +432,28 @@ TEST_SUITE("Scripting")
 			CHECK(Evaluate(scene, "return Updates ~= nil") == "true");
 			scene.OnRuntimeStop();
 			// Globals are per session, and the class was not marked as failed.
+		}
+	}
+
+	TEST_CASE("A limit landing on any instruction of a nested class load fails cleanly")
+	{
+		// Under 128 the hook fires at every instruction, so one of these lands inside the instance metatable factory.
+		for (uint32_t limit = 1; limit < 128; limit++)
+		{
+			CAPTURE(limit);
+			LimitedProject project("LimitSweep", limit);
+			project.WriteFile("Assets/Scripts/Nested.lua", "local N = {} function N:OnUpdate(dt) end return N");
+			const std::string script = project.WriteFile("Assets/Scripts/Loader.lua", R"(
+				local S = {}
+				function S:OnUpdate(dt) Scene.CreateEntity("N"):AddComponent("Script", { Script = "Assets/Scripts/Nested.lua" }) end
+				return S
+			)");
+			Scene scene;
+			AddScripted(scene, "Loader", script);
+			scene.OnRuntimeStart();
+			scene.OnUpdate(Step);
+			scene.OnUpdate(Step);
+			scene.OnRuntimeStop();
 		}
 	}
 
