@@ -143,16 +143,19 @@ namespace Basalt {
 		ContactInfo Flipped() const { return { Point, -Normal, Impulse }; }
 	};
 
-	// What one world can hold, fixed when it starts. The defaults fit a pile of as many boxes as MaxBodies allows, and cost a
-	// small scene next to nothing: Jolt sizes its tables to the scene on each step, and never touches the rest. Past a limit
-	// contacts are dropped, which PhysicsWorld logs.
+	// What one world can hold, fixed when it starts. The defaults fit about as many touching boxes as MaxBodies allows, measured
+	// at 65,000 in a pile and 64,000 in a lattice. They reserve about 520 MiB per world, which the step cost does not follow: Jolt
+	// sizes its tables to the scene on each step and leaves the rest unused, so a process with an empty world peaks about 11 MiB
+	// higher than it did at 16384 contact constraints. Past a limit contacts are dropped, which PhysicsWorld logs. Values
+	// outside what Jolt accepts are clamped.
 	struct PhysicsCapacity
 	{
 		uint32_t MaxBodies = 65536;
+		// These two share one pool in Jolt, so running out of one can depend on the other.
 		uint32_t MaxBodyPairs = 1u << 20;
 		uint32_t MaxContactConstraints = 1u << 19;
 		// The block a step's working memory comes from. 0 sizes it to MaxContactConstraints, which Jolt reserves in full on
-		// every step; working memory past the block comes from malloc, so a block too small is slow, never fatal.
+		// every step; working memory past the block comes from malloc, so a block too small is only slower.
 		uint32_t TempMemoryBytes = 0;
 	};
 
@@ -185,11 +188,16 @@ namespace Basalt {
 	class PhysicsWorld
 	{
 	public:
-		explicit PhysicsWorld(Scene* scene, const PhysicsCapacity& capacity = {});
+		explicit PhysicsWorld(Scene* scene, const PhysicsCapacity& capacity = GetDefaultCapacity());
 		~PhysicsWorld();
 
 		PhysicsWorld(const PhysicsWorld&) = delete;
 		PhysicsWorld& operator=(const PhysicsWorld&) = delete;
+
+		// What scenes start their worlds with. A host that starts thousands, as the unit tests do, can ask for less: in Debug and
+		// under sanitizers a world's start costs in proportion to what it reserves (Windows' debug CRT fills all of it).
+		static const PhysicsCapacity& GetDefaultCapacity();
+		static void SetDefaultCapacity(const PhysicsCapacity& capacity);
 
 		void Start();
 		// Runs as many fixed steps as the accumulated time allows, then dispatches contact events.

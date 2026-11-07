@@ -40,6 +40,9 @@ namespace Basalt {
 			return sol::stack::push(state, description);
 		}
 
+		// One process, one kind of host: set before any session starts.
+		bool s_InstructionLimitDisabled = false;
+
 		// Routes enabled Lua warnings to the host log; outlives callbacks from lua_close finalizers.
 		struct LuaWarnings
 		{
@@ -233,6 +236,7 @@ namespace Basalt {
 			lua_setwarnf(lua.lua_state(), &LuaWarnings::Receive, &warnings);
 			lua.set_exception_handler(&QuietExceptionHandler);
 			lua.open_libraries(sol::lib::base, sol::lib::package, sol::lib::string, sol::lib::math, sol::lib::table, sol::lib::utf8, sol::lib::coroutine);
+			lua.registry()[ToStringRegistryKey] = lua["tostring"];
 			// Scripts load code only through require (resolved inside the project).
 			lua["dofile"] = sol::lua_nil;
 			lua["loadfile"] = sol::lua_nil;
@@ -256,8 +260,9 @@ namespace Basalt {
 		}
 
 		// Loads a script file and returns its class table.
-		std::optional<sol::table> LoadScriptClass(sol::state& lua, const std::string& scriptPath, std::string& outError)
+		std::optional<sol::table> LoadScriptClass(ScriptContext& context, sol::state& lua, UUID owner, const char* callback, const std::string& scriptPath, std::string& outError)
 		{
+			ScriptOwnerScope scope(context, owner, callback);
 			std::string readError;
 			const auto source = FileSystem::ReadTextFile(Project::ResolvePath(scriptPath), &readError);
 			if (!source)
@@ -509,11 +514,20 @@ namespace Basalt {
 		template<typename... Args>
 		static bool Invoke(ScriptEngine& engine, UUID id, const sol::table& self, const char* name, Args&&... args)
 		{
-			const sol::object callback = self[name];
-			if (callback.get_type() != sol::type::function)
+			// The enclosing call ran out, not this instance: it stops at its next instruction.
+			if (engine.m_Impl->Context.Budget.IsSpent())
 				return true;
-			sol::protected_function function = callback.as<sol::protected_function>();
 			ScriptOwnerScope scope(engine.m_Impl->Context, id, name);
+			std::string lookupError;
+			const std::optional<sol::object> callback = ProtectedIndex(self, name, lookupError);
+			if (!callback)
+			{
+				engine.ReportError(lookupError + " (finding " + name + ")");
+				return false;
+			}
+			if (callback->get_type() != sol::type::function)
+				return true;
+			sol::protected_function function = callback->as<sol::protected_function>();
 			const sol::protected_function_result result = function(self, std::forward<Args>(args)...);
 			if (result.valid())
 				return true;
@@ -651,11 +665,7 @@ namespace Basalt {
 						Release(Engine, Owner);
 				}
 			} guard{ engine, owner };
-			std::optional<sol::table> table;
-			{
-				ScriptOwnerScope scope(impl.Context, owner, "class load");
-				table = LoadScriptClass(impl.Lua, path, outError);
-			}
+			const std::optional<sol::table> table = LoadScriptClass(impl.Context, impl.Lua, owner, "class load", path, outError);
 			if (!table)
 				return std::nullopt;
 			sol::table metatable = MakeInstanceMetatable(impl.Lua, *table);
@@ -828,10 +838,17 @@ namespace Basalt {
 		// whose __newindex would run (and could raise outside any protected call).
 		static void AssignProperties(ScriptEngine& engine, sol::table& self, const sol::table& scriptClass, const ScriptComponent& component, bool onlyMissing)
 		{
-			const sol::object properties = scriptClass["Properties"];
-			if (properties.get_type() != sol::type::table)
+			std::optional<sol::object> properties;
+			{
+				ScriptOwnerScope scope(engine.m_Impl->Context, engine.m_Impl->Context.GetCurrentOwner(), "reading Properties");
+				std::string error;
+				properties = ProtectedIndex(scriptClass, "Properties", error);
+				if (!properties)
+					engine.ReportError(error + " (reading Properties)");
+			}
+			if (!properties || properties->get_type() != sol::type::table)
 				return;
-			for (const auto& [key, defaultValue] : properties.as<sol::table>())
+			for (const auto& [key, defaultValue] : properties->as<sol::table>())
 			{
 				if (!key.is<std::string>())
 					continue;
@@ -887,12 +904,6 @@ namespace Basalt {
 		return ScriptEngineAccess::LocateStorage(Engine).Load(outError);
 	}
 
-	namespace {
-
-		bool s_InstructionLimitDisabled = false;
-
-	}
-
 	void ScriptEngine::DisableInstructionLimit()
 	{
 		s_InstructionLimitDisabled = true;
@@ -908,7 +919,7 @@ namespace Basalt {
 		, m_Scene(scene)
 	{
 		OpenSafeLibraries(m_Impl->Lua, m_Impl->Warnings);
-		m_Impl->Context.LimitInstructions(m_Impl->Lua.lua_state(), GetInstructionLimit());
+		m_Impl->Context.Budget.Install(m_Impl->Lua, GetInstructionLimit());
 		m_Impl->Context.SceneContext = scene;
 		// Every play session starts from its seed (the project's), so its random numbers repeat run after run.
 		m_Impl->Context.ResetRandom(scene->GetRandomSeed());
@@ -947,8 +958,17 @@ namespace Basalt {
 		m_Impl->ForgottenModules.clear();
 	}
 
+	void ScriptEngine::ReportSwallowedStops()
+	{
+		std::vector<ScriptContext::SwallowedStop> stops;
+		stops.swap(m_Impl->Context.SwallowedStops);
+		for (const ScriptContext::SwallowedStop& stop : stops)
+			ScriptEngineAccess::FailOwner(*this, stop.Owner, stop.Message, stop.Where);
+	}
+
 	void ScriptEngine::ReportError(const std::string& message)
 	{
+		m_Impl->Context.Budget.MarkReported();
 		BS_CORE_ERROR("Script error: {}", message);
 		m_Errors.push_back(message);
 		if (SceneEventListener* listener = m_Scene ? m_Scene->GetEventListener() : nullptr)
@@ -1048,9 +1068,17 @@ namespace Basalt {
 		auto it = m_Impl->Instances.find(entity.GetUUID());
 		if (it == m_Impl->Instances.end())
 			return std::nullopt;
+		std::optional<sol::object> value;
+		{
+			ScriptOwnerScope scope(m_Impl->Context, entity.GetUUID(), "reading a field");
+			std::string error;
+			value = ProtectedIndex(it->second.Self, name.c_str(), error);
+		}
+		if (!value)
+			return std::nullopt;
 		try
 		{
-			return LuaToJson(it->second.Self[name].get<sol::object>());
+			return LuaToJson(*value);
 		}
 		catch (const std::exception&)
 		{
@@ -1140,7 +1168,13 @@ namespace Basalt {
 		// A failed instance already reported its error.
 		if (it->second.Failed)
 			return;
-		if (it->second.Self[event.Method].get_type() != sol::type::function)
+		std::optional<sol::object> handler;
+		{
+			ScriptOwnerScope scope(m_Impl->Context, event.Target, "finding a UI method");
+			std::string error;
+			handler = ProtectedIndex(it->second.Self, event.Method.c_str(), error);
+		}
+		if (!handler || handler->get_type() != sol::type::function)
 		{
 			report("method", "the script of '" + target.GetName() + "' has no method " + event.Method);
 			return;
@@ -1159,6 +1193,7 @@ namespace Basalt {
 
 	void ScriptEngine::LateUpdate(Timestep ts)
 	{
+		ReportSwallowedStops();
 		ScriptEngineAccess::CallOnEveryInstance(*this, "OnLateUpdate", ts.GetSeconds());
 	}
 
@@ -1416,7 +1451,6 @@ namespace Basalt {
 
 	bool ScriptEngine::ExecuteString(const std::string& code, std::string& outResult)
 	{
-		ScriptOwnerScope scope(m_Impl->Context, UUID(0), "console");
 		sol::state& lua = m_Impl->Lua;
 		// Try as an expression first so "Scene.GetEntityCount()" returns its value.
 		sol::load_result chunk = lua.load("return " + code, "=console");
@@ -1429,23 +1463,38 @@ namespace Basalt {
 			return false;
 		}
 
-		sol::protected_function function = chunk;
-		sol::protected_function_result result = function();
-		if (!result.valid())
-		{
-			const sol::error error = result;
+		const auto run = [&]() {
+			ScriptOwnerScope scope(m_Impl->Context, UUID(0), "console");
+			sol::protected_function function = chunk;
+			sol::protected_function_result result = function();
+			if (!result.valid())
+			{
+				const sol::error error = result;
+				outResult = error.what();
+				return false;
+			}
+			outResult.clear();
+			if (result.return_count() == 0)
+				return true;
+			const sol::protected_function toString = lua.registry()[ToStringRegistryKey];
+			sol::protected_function_result text = toString(result.get<sol::object>(0));
+			if (text.valid())
+			{
+				outResult = text.get<std::string>();
+				return true;
+			}
+			const sol::error error = text;
 			outResult = error.what();
 			return false;
-		}
-
-		outResult.clear();
-		if (result.return_count() > 0)
-		{
-			const sol::protected_function toString = lua["tostring"];
-			sol::protected_function_result text = toString(result.get<sol::object>(0));
-			outResult = text.valid() ? text.get<std::string>() : "?";
-		}
-		return true;
+		};
+		const bool succeeded = run();
+		// A stop the code swallowed is what happened, whatever it returned; nothing else reports it here.
+		std::vector<ScriptContext::SwallowedStop>& stops = m_Impl->Context.SwallowedStops;
+		if (!stops.empty() && succeeded)
+			outResult = stops.back().Message;
+		const bool stopped = !stops.empty();
+		stops.clear();
+		return succeeded && !stopped;
 	}
 
 	bool ScriptEngine::CheckSyntax(const std::string& scriptPath, std::string& outError)
@@ -1475,23 +1524,30 @@ namespace Basalt {
 		sol::state lua{ sol::default_at_panic, &MemoryTracker::LuaAllocator };
 		OpenSafeLibraries(lua, warnings);
 		// Running the file is how its Properties are found, which the inspector, component.set and project.validate ask for.
-		context.LimitInstructions(lua.lua_state(), GetInstructionLimit());
+		context.Budget.Install(lua, GetInstructionLimit());
 		RegisterScriptBindings(lua, context);
 
-		std::optional<sol::table> scriptClass;
-		{
-			ScriptOwnerScope scope(context, UUID(0), "property discovery");
-			scriptClass = LoadScriptClass(lua, scriptPath, outError);
-		}
+		const auto scriptClass = LoadScriptClass(context, lua, UUID(0), "property discovery", scriptPath, outError);
 		if (!scriptClass)
 			return std::nullopt;
 
-		const sol::object properties = (*scriptClass)["Properties"];
-		if (properties.get_type() != sol::type::table)
+		std::optional<sol::object> properties;
+		{
+			ScriptOwnerScope scope(context, UUID(0), "property discovery");
+			properties = ProtectedIndex(*scriptClass, "Properties", outError);
+		}
+		if (!properties)
+			return std::nullopt;
+		if (!context.SwallowedStops.empty())
+		{
+			outError = scriptPath + ": " + context.SwallowedStops.back().Message;
+			return std::nullopt;
+		}
+		if (properties->get_type() != sol::type::table)
 			return nlohmann::json::object();
 		try
 		{
-			nlohmann::json json = LuaToJson(properties);
+			nlohmann::json json = LuaToJson(*properties);
 			return json.is_object() ? json : nlohmann::json::object();
 		}
 		catch (const std::exception& e)

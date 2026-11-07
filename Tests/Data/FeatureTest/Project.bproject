@@ -11,5 +11,6 @@
 	"PhysicsLayers": {
 		"Names": ["Default", "Ghost", "Debris"],
 		"IgnoredPairs": [["Default", "Ghost"]]
-	}
+	},
+	"ScriptInstructionLimit": 50000000
 }

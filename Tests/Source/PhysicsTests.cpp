@@ -463,15 +463,15 @@ TEST_SUITE("Physics")
 		fewPairs.MaxBodyPairs = 4;
 		fewPairs.MaxContactConstraints = 4;
 		run(fewPairs);
-		CHECK(BasaltTest::CountLogMessages(since, "too many body pairs at once (the limit is 4)") == 1);
+		CHECK(BasaltTest::CountLogMessages(since, "too many body pairs touching at once (MaxBodyPairs is 4)") == 1);
 
 		PhysicsCapacity fewContacts;
 		fewContacts.MaxContactConstraints = 4;
 		run(fewContacts);
-		CHECK(BasaltTest::CountLogMessages(since, "too many contact constraints at once (the limit is 4)") == 1);
+		CHECK(BasaltTest::CountLogMessages(since, "too many contact constraints touching at once (MaxContactConstraints is 4)") == 1);
 		// Each world reports for itself.
 		run(fewContacts);
-		CHECK(BasaltTest::CountLogMessages(since, "too many contact constraints at once (the limit is 4)") == 2);
+		CHECK(BasaltTest::CountLogMessages(since, "too many contact constraints touching at once (MaxContactConstraints is 4)") == 2);
 	}
 
 	TEST_CASE("A floor covered in boxes keeps every contact")
@@ -479,11 +479,7 @@ TEST_SUITE("Physics")
 		// Each box touches only the floor: as many contacts as boxes, past the 16384 the limit once was, at the least cost.
 		constexpr int Side = 129;
 		Scene scene;
-		Entity floor = scene.CreateEntity("Floor");
-		floor.GetTransform().Translation = { 0.0f, -0.5f, 0.0f };
-		floor.GetTransform().Scale = { 1000.0f, 1.0f, 1000.0f };
-		floor.AddComponent<RigidBodyComponent>();
-		floor.AddComponent<BoxColliderComponent>();
+		CreateGround(scene).GetComponent<BoxColliderComponent>().HalfExtents = { 500.0f, 0.5f, 500.0f };
 		std::vector<Entity> boxes;
 		boxes.reserve(size_t{ Side } * Side);
 		for (int x = 0; x < Side; x++)
@@ -491,13 +487,33 @@ TEST_SUITE("Physics")
 				boxes.push_back(CreateBox(scene, { static_cast<float>(x) * 2.0f - Side, 0.51f, static_cast<float>(z) * 2.0f - Side }));
 
 		const uint64_t since = Log::GetHistory().GetTotalCount();
-		scene.OnSimulationStart();
-		Simulate(scene, 0.1f);
+		// What games get: the unit tests start scenes with less (TestMain.cpp).
+		PhysicsWorld world(&scene, PhysicsCapacity{});
+		world.Start();
+		for (int i = 0; i < 6; i++)
+			world.Step(Step);
 		CHECK(BasaltTest::CountLogMessages(since, "too many") == 0);
 		// 0.05 m below where they rest by now, had they lost the floor.
-		const bool held = std::ranges::all_of(boxes, [](Entity box) { return box.GetTransform().Translation.y > 0.48f; });
-		CHECK(held);
-		scene.OnSimulationStop();
+		CHECK(std::ranges::all_of(boxes, [](Entity box) { return box.GetTransform().Translation.y > 0.48f; }));
+	}
+
+	TEST_CASE("Capacities Jolt would refuse are clamped, and messages name what it kept")
+	{
+		Scene scene;
+		CreateGround(scene);
+		for (int x = 0; x < 8; x++)
+			CreateBox(scene, { static_cast<float>(x) * 1.5f, 0.5f, 0.0f });
+		PhysicsCapacity capacity;
+		capacity.MaxBodies = UINT32_MAX;
+		capacity.MaxBodyPairs = UINT32_MAX;
+		capacity.MaxContactConstraints = 0;
+		const uint64_t since = Log::GetHistory().GetTotalCount();
+		PhysicsWorld world(&scene, capacity);
+		world.Start();
+		for (int i = 0; i < 10; i++)
+			world.Step(Step);
+		CHECK(world.GetBodyCount() == 9);
+		CHECK(BasaltTest::CountLogMessages(since, "(MaxContactConstraints is 4)") >= 1);
 	}
 
 	TEST_CASE("A step that outgrows its working memory block carries on with malloc")

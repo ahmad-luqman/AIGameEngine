@@ -49,8 +49,9 @@ namespace Basalt {
 	class ScriptEngine
 	{
 	public:
-		// The project's ScriptInstructionLimit stops scripts that never return, while editing a game (ScriptContext::
-		// LimitInstructions explains its cost). The runtime, which plays finished games, turns it off for the process.
+		// The project's ScriptInstructionLimit stops scripts that never return, while editing a game (ScriptCallBudget explains
+		// its cost). The runtime, which plays finished games, turns it off for the process: call before the first ScriptEngine,
+		// as sessions keep the hook they started with.
 		static void DisableInstructionLimit();
 		// What sessions starting now run under; 0: no limit.
 		static uint32_t GetInstructionLimit();
@@ -118,6 +119,9 @@ namespace Basalt {
 
 		// Records a script error (logged, and returned by GetErrors, e.g. play.step's scriptErrors).
 		void ReportError(const std::string& message);
+		// Fails the owners of calls that ran out and hid it (ScriptContext::SwallowedStops): nothing else would, and each
+		// frame would spend the budget again.
+		void ReportSwallowedStops();
 		const std::vector<std::string>& GetErrors() const { return m_Errors; }
 		void ClearErrors() { m_Errors.clear(); }
 

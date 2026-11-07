@@ -55,13 +55,15 @@ serves one connection at a time; a second client waits until the first disconnec
 or bridges if initialization is waiting. Oversized requests close without a reply and log the size
 and limit in the editor. A new TCP connection must initialize again. The first parsed object containing
 `jsonrpc` or `method` selects MCP; a malformed first frame containing either quoted key also selects
-MCP and receives a parse error. Other parsed values select the original `{command, params}` protocol.
-Blank or unidentifiable malformed frames leave detection open. The selected protocol lasts until
+MCP and receives a parse error. Other parsed objects and arrays select the original `{command, params}` protocol.
+Blank frames, and malformed ones that start like an object or array and name neither key, leave detection open. The
+selected protocol lasts until
 disconnect. Command execution and undo-history commits stay on the editor's main thread.
 
 A client's first frame that is not blank must open a JSON object or array. Anything else, which includes every HTTP
-request, gets one refusal line and the connection closes, so nothing later on it runs: a web page can reach a loopback
-port, and it chooses the body of a request but not the request line. This is not authentication. The loopback server
+request, gets one refusal line, unless the connection resets first, and the connection closes, so nothing later on it
+runs: a web page may reach a loopback port, and it chooses the body of a request but not the request line. This is not
+authentication. The loopback server
 has none, and gives every local process the same editing, file-writing and Lua execution authority as the existing
 automation API; use it for trusted local clients.
 

@@ -60,6 +60,8 @@ Size estimates: **S** = a day or less, **M** = a few days, **L** = a week or mor
 - Motion matching
 - Procedural creatures
 
+- **Ogg Vorbis and Opus playback** (ROADMAP, Audio): M, with libvorbis and libopus pinned.
+
 ## Outside the sessions
 
 - **Real-GPU smoke tests (P0).** This is the roadmap's top priority, but it needs NVIDIA, AMD and Intel hardware

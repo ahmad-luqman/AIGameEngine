@@ -352,12 +352,16 @@ TEST_SUITE("Audio")
 		// A real file: no decoder here reads Vorbis, though its container looks like one FLAC can come in.
 		CHECK_FALSE(AudioEngine::CanDecode(read("Vorbis.ogg"), error));
 		CHECK_FALSE(error.empty());
-		for (const std::string& file : { std::string(), std::string("not audio at all") })
+		// A real header can promise audio that is not there, and an empty file should say so.
+		const std::string headerOnly = wav.substr(0, 44);
+		const std::pair<std::string, const char*> refused[] = { { "", "the file is empty" }, { "not audio at all", "" }, { headerOnly, "it holds no audio" } };
+		for (const auto& [file, reason] : refused)
 		{
-			CAPTURE(file);
+			CAPTURE(file.size());
 			error.clear();
 			CHECK_FALSE(AudioEngine::CanDecode(bytesOf(file), error));
 			CHECK_FALSE(error.empty());
+			CHECK(error.find(reason) != std::string::npos);
 		}
 	}
 

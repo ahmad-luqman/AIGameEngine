@@ -640,7 +640,7 @@ TEST_SUITE("Automation")
 		server.Stop();
 	}
 
-	TEST_CASE("A first frame that cannot open JSON closes the connection before any handler sees a frame")
+	TEST_CASE("A first non-blank frame that cannot open JSON closes the connection before any handler sees it")
 	{
 		CommandRegistry registry;
 		AutomationSession session;
@@ -669,7 +669,7 @@ TEST_SUITE("Automation")
 		}
 		CHECK(Run(registry, session, "entity.list")["entities"].empty());
 
-		for (const std::string& frame : { std::string("hello"), std::string("123"), std::string("\"text\""), std::string("null"), std::string("  POST / HTTP/1.1"), std::string("\xEF\xBB\xBFhello") })
+		for (const char* frame : { "hello", "123", "\"text\"", "null", "  POST / HTTP/1.1", "\xEF\xBB\xBFhello" })
 		{
 			CAPTURE(frame);
 			BasaltTest::LineClient client(server.GetPort());
@@ -681,26 +681,30 @@ TEST_SUITE("Automation")
 
 		// Anything an automation client can send still gets through, whatever came first.
 		const std::string info = R"({"command":"scene.info"})";
-		for (const std::string& opening : { std::string(), std::string("\r") })
+		const auto expectAnswered = [&](BasaltTest::LineClient& client) {
+			REQUIRE(client.Send(info));
+			CHECK(ParseJson(client.ReadLine())["ok"] == true);
+		};
+		for (const char* opening : { "", "\r" })
 		{
 			CAPTURE(opening);
 			BasaltTest::LineClient client(server.GetPort());
 			REQUIRE(client.Send(opening));
-			REQUIRE(client.Send(info));
-			CHECK(ParseJson(client.ReadLine())["ok"] == true);
+			expectAnswered(client);
 		}
-		for (const std::string& opening : { std::string("  \t"), std::string("\xEF\xBB\xBF") })
+		for (const char* opening : { "  \t", "\r\r", "\xEF\xBB\xBF" })
 		{
 			CAPTURE(opening);
 			BasaltTest::LineClient client(server.GetPort());
 			REQUIRE(client.Send(opening));
 			CHECK(ParseJson(client.ReadLine())["error"] == "invalid JSON");
-			REQUIRE(client.Send(info));
-			CHECK(ParseJson(client.ReadLine())["ok"] == true);
+			expectAnswered(client);
 		}
+		for (const char* prefix : { "\xEF\xBB\xBF", " \t", "\r" })
 		{
+			CAPTURE(prefix);
 			BasaltTest::LineClient client(server.GetPort());
-			REQUIRE(client.Send("\xEF\xBB\xBF" + info));
+			REQUIRE(client.Send(prefix + info));
 			CHECK(ParseJson(client.ReadLine())["ok"] == true);
 		}
 		{
@@ -710,15 +714,13 @@ TEST_SUITE("Automation")
 			CHECK(ParseJson(client.ReadLine())["error"] == "invalid JSON");
 			REQUIRE(client.Send("not json either"));
 			CHECK(ParseJson(client.ReadLine())["error"] == "invalid JSON");
-			REQUIRE(client.Send(info));
-			CHECK(ParseJson(client.ReadLine())["ok"] == true);
+			expectAnswered(client);
 		}
 		{
 			BasaltTest::LineClient client(server.GetPort());
 			REQUIRE(client.Send("[1,2]"));
 			CHECK(ParseJson(client.ReadLine()).is_array());
-			REQUIRE(client.Send(info));
-			CHECK(ParseJson(client.ReadLine())["ok"] == true);
+			expectAnswered(client);
 		}
 		server.Stop();
 	}

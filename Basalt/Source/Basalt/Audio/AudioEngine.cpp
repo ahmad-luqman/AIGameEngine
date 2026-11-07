@@ -496,21 +496,28 @@ namespace Basalt {
 
 	bool AudioEngine::CanDecode(std::span<const uint8_t> file, std::string& outError)
 	{
-		ma_decoder decoder;
-		const ma_decoder_config config = ma_decoder_config_init(ma_format_f32, 2, 48000);
-		if (const ma_result result = ma_decoder_init_memory(file.data(), file.size(), &config, &decoder); result != MA_SUCCESS)
+		if (file.empty())
 		{
-			outError = ma_result_description(result);
+			outError = "the file is empty";
 			return false;
 		}
-		// A format's header can pass and its audio still not decode.
-		float frames[2 * 64];
-		ma_uint64 read = 0;
-		const ma_result result = ma_decoder_read_pcm_frames(&decoder, frames, 64, &read);
-		ma_decoder_uninit(&decoder);
-		if (read > 0 || result == MA_AT_END)
-			return true;
-		outError = ma_result_description(result);
+		constexpr ma_uint32 Channels = 2;
+		constexpr ma_uint64 ProbeFrames = 64;
+		ma_decoder decoder;
+		// As the resource manager decodes: the same built-in decoders, as it has no custom ones.
+		const ma_decoder_config config = ma_decoder_config_init(ma_format_f32, Channels, 48000);
+		ma_result result = ma_decoder_init_memory(file.data(), file.size(), &config, &decoder);
+		if (result == MA_SUCCESS)
+		{
+			// A format's header can pass with no audio behind it.
+			float frames[Channels * ProbeFrames];
+			ma_uint64 read = 0;
+			result = ma_decoder_read_pcm_frames(&decoder, frames, ProbeFrames, &read);
+			ma_decoder_uninit(&decoder);
+			if (read > 0)
+				return true;
+		}
+		outError = result == MA_AT_END ? "it holds no audio" : ma_result_description(result);
 		return false;
 	}
 

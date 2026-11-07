@@ -92,7 +92,7 @@ return %s
 				return "[MDL]";
 			if (extension == ".ktx2" || extension == ".png" || extension == ".jpg" || extension == ".jpeg" || extension == ".hdr" || extension == ".tga")
 				return "[IMG]";
-			if (extension == ".wav" || extension == ".mp3" || extension == ".ogg" || extension == ".flac")
+			if (extension == ".wav" || extension == ".mp3" || extension == ".flac")
 				return "[SND]";
 			return "[FILE]";
 		}

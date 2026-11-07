@@ -36,7 +36,8 @@ namespace Basalt::PhysicsInternal {
 		bool JoltAssertFailed(const char* expression, const char* message, const char* file, JPH::uint line)
 		{
 			// The one that is no misuse: a scene over the world's limits. PhysicsWorld reports it, as in Release, from the
-			// result of the update this ends, which Debug must reach.
+			// result of the update this ends (PhysicsSystem.cpp, end of Update), which Debug must reach. Matched by its text,
+			// so a Jolt bump that rewords it stops Debug there again: the over-limit test in PhysicsTests fails if so.
 			if (message && std::string_view(message).starts_with("An error occurred during the physics update"))
 				return false;
 			if (message)
