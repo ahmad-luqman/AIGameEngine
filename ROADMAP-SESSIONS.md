@@ -1,9 +1,11 @@
 # Roadmap Sessions
 
 The `ROADMAP.md` items grouped into single-session milestones, sorted in order of implementation, with completed
-sessions retained for reference. The order follows the roadmap's priorities (P1 → P2 → P3) and is adjusted so that
-work a later session depends on comes first.
-Updated on 5 November 2026: sessions 1–24 have shipped, and session 25 is planned.
+sessions retained for reference. The order follows the roadmap's priorities (P0 networking, then P1 release and proof,
+P2 scale, P3 debugging and editor workflow, P4 rendering, P5 gameplay systems, P6 follow-ups), adjusted so that work a
+later session depends on comes first. Sessions 1–24 were planned against the earlier roadmap; sessions 26 onward follow
+the maturity assessment (`Docs/MaturityAssessment.md`) and the scope settled in `ROADMAP.md`.
+Updated on 8 November 2026: sessions 1–24 have shipped, session 25 is blocked, and session 26 is next.
 
 Size estimates: **S** = a day or less, **M** = a few days, **L** = a week or more.
 
@@ -33,51 +35,86 @@ Size estimates: **S** = a day or less, **M** = a few days, **L** = a week or mor
 | 22 | **Character animation III** ✅ | Powered ragdoll follow-ups: partial ragdolls whose root follows the animation, per-bone motor strengths, active balance (M); spring bone follow-ups II: physics layer filtering, continuous collision, edit-mode collisions against static bodies (S) | Shipped in [PR #71](https://github.com/ahmad-luqman/AIGameEngine/pull/71): `KinematicRoot` rigs that keep the entity's body or character and walk with the animation, per-bone `MotorStrength`, active balance (`IsRagdollBalanced`), and spring chain `Layer`, `Continuous` and static bodies in the edit preview. |
 | 23 | **Animation authoring II** ✅ | IK and layer follow-ups II: FABRIK joint limits, a mask editor, layer graph events and per-layer parameters, edit-mode ground placement (S each); retargeting follow-ups II: a joint map editor, reference poses from per-joint rotation offsets (S) | Shipped in [PR #72](https://github.com/ahmad-luqman/AIGameEngine/pull/72): Fabrik chain `SwingAngle`, `TwistMin`, `TwistMax` and `JointLimits` measured from the rest pose; Animation Mask and Joint Map windows over one headless draft, with `animator.match_joints`; layer `Events` and `OwnParameters` with `SetAnimationLayerParameter`/`SetAnimationLayerTrigger`; `Ground` chains on static bodies in the edit preview; and pair `Offset`s that stand in for a reference pose. |
 | 24 | **Property animation III** ✅ | Stable Euler serialization at exact gimbal lock, physics configuration tracks that preserve contacts, asset reference tracks (texture flipbooks), tracks on other entities (S) | Shipped in [PR #73](https://github.com/ahmad-luqman/AIGameEngine/pull/73): `EulerFromQuat` keeps the orientation at and near gimbal lock and writes one canonical form there; bodies and colliders update in place, keeping contacts and joints, so tracks can animate each component's live fields; `Keys[].Asset` flipbooks with preloading; `Tracks[].Target` on other entities, through list element asset and entity fields at any depth. |
-| 25 | **Signing** | Windows code signing with `signtool` (S); signed and notarized macOS tools and universal (arm64 + x86-64) binaries (S) | Blocked until a Windows certificate and the CI secrets are available. |
+| 25 | **Signing** | Windows code signing with `signtool` (S); signed and notarized macOS tools and universal (arm64 + x86-64) binaries (S) | Blocked until a Windows certificate and the CI secrets are available. Runs whenever they are, independent of the order below. |
+| 26 | **Networking I** | Transport, connections and replication: a pinned UDP library, an authoritative host (listen server or `BasaltRuntime --headless`), a networked-entity component with registry-declared replicated fields, snapshot deltas, `FuzzNetPacket` (L) | P0, first by decision (8 November 2026). Everything multiplayer builds on it. |
+| 27 | **Networking II** | `Network` Lua API with messages and RPCs, client prediction and reconciliation for characters, snapshot interpolation, lag-compensated raycasts, `net.*` automation commands with simulated latency and loss (L) | Needs session 26's replication. |
+| 28 | **Multiplayer sample** | A small arena or co-op game built through the automation API, with a headless server-and-two-clients ctest (M) | Proves sessions 26–27 end to end, as the Platformer did for character movement. |
+| 29 | **Release v0.1.0** | Unsigned binary downloads on a `v0.1.0` tag; a getting-started tutorial, starter template and default scene; CHANGELOG, stability policy, CONTRIBUTING, SECURITY, branch protection; third-party notices in exports; a decision on the name (M) | P1. Outside agents and the benchmark (session 31) need something to install. |
+| 30 | **Agent sight and parity** | Headless `render.*` in the CLI and images over MCP; Simulate, Pause, Debug View and folder create/delete in the API; a token for the editor server (M); a decision on runaway scripts in exported games (S) | P1. The benchmark should measure the engine with its blind spot and parity gaps closed. |
+| 31 | **Agent benchmark** | A CEGame-Bench-style task set run through Basalt, Godot and Unity with the same agent; tasks, harness and results published (M) | P1. The test of the agent-first claim; after sessions 29–30 so it measures what users get. |
+| 32 | **Audio formats and voices** | Ogg Vorbis and Opus through libvorbis and libopus, fuzzed through `FuzzAudio` (M); a voice cap with priorities, a master limiter and raycast occlusion (M) | Before the real game, which needs compressed music and more voices than the samples. |
+| 33 | **One real game** | About 30 minutes of content with real art and characters, built mostly by an agent, packaged on all three OSes (L, 2–4 weeks, several sessions) | P1. Its engine problems become roadmap items, so it comes before the scale and rendering work they may reorder. |
+| 34 | **Scale I** | A realistic benchmark scene with CI frame-time gates, profiled (S); cached world transforms, linear mass destruction, physics sync of moved bodies only, fixed-step interpolation (M) | P2. The benchmark comes first so there is a baseline to compare against, as in sessions 3–4. |
+| 35 | **Scale II** | A GPU suballocator, memory budget and eviction, `Scene.Load` releasing unused assets (M); importance-based light selection past 256 point lights (S) | P2. Measured on session 34's scene. |
+| 36 | **Occlusion culling** | GPU two-phase HZB culling or CPU culling against baked occluders, chosen from the session 34 profile (L) | P2. Needs the benchmark to show where the cost is. |
+| 37 | **Script debugging** | Lua stack traces on every protected call (S); a per-script and per-callback Lua profiler with Tracy zones (M) | P3. |
+| 38 | **Lua debugger** | A Debug Adapter Protocol server in the editor, for VS Code and agents (L) | P3. Builds on session 37's error paths. |
+| 39 | **Editor workflow** | Search, copy/paste, OS file drop, GUI rename and move (M); a curve and dope-sheet editor and free graph node placement (M) | P3. |
+| 40 | **Custom shaders** | User materials with their own GLSL fragment code against a documented interface, errors in `project.validate` (L) | P4, first among rendering items: teams cannot work around its absence. |
+| 41 | **Fog** | Height fog, then froxel volumetric fog lit by the clustered lights and shadows (M) | P4. Volumetric fog can reuse the clustered light lists. |
+| 42 | **Global illumination** | One MoltenVK-friendly technique: baked irradiance probes or compute-updated DDGI-style probes (L) | P4. Sponza showed the gap plainly. |
+| 43 | **Reflection probes and SSR** | Box-projected cubemap probes captured in the editor, then screen-space reflections (L) | P4. After GI, so captured probes include bounce light. |
+| 44 | **Navigation** | Recast/Detour behind a component: navmesh baking in the editor and through automation, agents with avoidance, Lua path queries, debug drawing (L) | P5. |
+| 45 | **Character follow-ups** | IK and retargeting follow-ups III (S); spring bone follow-ups III (S); powered ragdoll follow-ups II (M) | P6. The follow-ups of sessions 17–24, which had no session. The real game (session 33) may reorder them. |
 
-## Status (5 November 2026)
+## Status (8 November 2026)
 
 - **Shipped outside the sessions:**
   - The fix for glTF primitives that share index accessors ([PR #64](https://github.com/ahmad-luqman/AIGameEngine/pull/64)).
   - UTF-8 command-line arguments and paths on Windows ([PR #65](https://github.com/ahmad-luqman/AIGameEngine/pull/65)).
-- **Shipped in sessions:** sessions 17–24 ([PR #66](https://github.com/ahmad-luqman/AIGameEngine/pull/66),
+  - The five defects of the maturity assessment ([PR #74](https://github.com/ahmad-luqman/AIGameEngine/pull/74)): physics
+    overflow reporting and temporary memory sized from capacity, an instruction limit for scripts in the editor and the
+    CLI, non-JSON connections closed by the editor server, and undecodable clips refused by `project.validate`. Its
+    residuals are in sessions 30 and 32.
+- **Shipped in sessions:** sessions 1–24, the last eight in [PR #66](https://github.com/ahmad-luqman/AIGameEngine/pull/66),
   [#67](https://github.com/ahmad-luqman/AIGameEngine/pull/67), [#68](https://github.com/ahmad-luqman/AIGameEngine/pull/68),
   [#69](https://github.com/ahmad-luqman/AIGameEngine/pull/69), [#70](https://github.com/ahmad-luqman/AIGameEngine/pull/70),
-  [#71](https://github.com/ahmad-luqman/AIGameEngine/pull/71), [#72](https://github.com/ahmad-luqman/AIGameEngine/pull/72),
-  [#73](https://github.com/ahmad-luqman/AIGameEngine/pull/73)).
-  `ROADMAP.md` lists only their follow-ups (the IK and retargeting, spring bone and powered ragdoll follow-ups, which have no
-  session yet).
-- **Next:** session 25 (Signing), once a Windows certificate and the CI secrets are available.
-- **Open checks after #69:** its Windows crash paths (deadline thread, watchdog timeouts, Open Report) are only
-  compile-tested, so they belong with the real-GPU smoke tests on Windows hardware.
+  [#71](https://github.com/ahmad-luqman/AIGameEngine/pull/71), [#72](https://github.com/ahmad-luqman/AIGameEngine/pull/72)
+  and [#73](https://github.com/ahmad-luqman/AIGameEngine/pull/73).
+- **Next:** session 26 (Networking I). Session 25 (Signing) runs whenever a Windows certificate and the CI secrets are
+  available.
 
-## Later (L, one session each)
+## Later (one session each)
 
-- Reflection probes and SSR
-- Decals
-- Text in 3D
-- HDR output
-- Motion matching
-- Procedural creatures
+- Terrain and large coordinates (L)
+- Decals (L)
+- Text in 3D (L)
+- HDR output (L)
+- Game UI text: shaping, fallback fonts, right-to-left text, IME, localization (M)
+- Asset import settings and FBX (M)
+- Vehicles and cloth (M each)
+- Clip compression (M)
+- Cross-platform export (M)
+- Networking III: interest management, and lockstep or rollback once the whole simulation is deterministic (L)
+- Motion matching (L)
+- Procedural creatures (L)
+- Mobile (L) and web (L), only after the release (session 29) and the real game (session 33); see `ROADMAP.md`, Scope.
 
 ## Outside the sessions
 
-- **Ogg Vorbis and Opus playback** (ROADMAP, Audio): M, with libvorbis and libopus pinned.
-
-- **Real-GPU smoke tests (P0).** This is the roadmap's top priority, but it needs NVIDIA, AMD and Intel hardware
-  on Windows and native Linux. Run it whenever that hardware is available; an AWS g4ad instance covers AMD. The
-  procedure is in `Docs/TestedHardware.md`.
+- **Real-GPU smoke tests (P1).** This needs NVIDIA, AMD and Intel hardware on Windows and native Linux. Run it whenever
+  that hardware is available; an AWS g4ad instance covers AMD. It also covers PR #69's Windows crash paths (deadline
+  thread, watchdog timeouts, Open Report), which are only compile-tested. The procedure is in `Docs/TestedHardware.md`.
 - **Wayland testing.** This is a manual check on Ubuntu 24.04.
 - **GPU particle simulation (M).** This is conditional: it gets a session only if particle counts start to demand it.
 - **Soft six-DOF rotation limits.** This is blocked until Jolt adds springs to rotation limits.
 
 ## Ordering notes
 
-- **Three items come early because later work depends on them:** benchmarks before instancing (so there's a
-  baseline to compare against), clipping before scroll views, and stable IDs before material assets and the
-  archive. Doing them early keeps later sessions from redoing work.
-- **TAA comes late on purpose.** Motion vectors have to know where every vertex was in the previous frame,
-  which affects the instancing, skinning and morph code. Doing those first means the reprojection code is
-  written once.
+- **Networking comes first by decision.** It was settled with the scope on 8 November 2026, ahead of the assessment's
+  own order, which put release and proof first. The sample (session 28) keeps it honest: a layer without a game is not
+  done.
+- **Release before the benchmark, and agent sight before both.** Outside agents need binaries, and a benchmark run
+  with the headless render gap open would measure a known weakness rather than the engine.
+- **The real game before scale and rendering.** It will find problems no plan lists, and those may reorder sessions
+  34–45. Audio formats come just before it because real content needs compressed music.
+- **Benchmarks before optimizations.** As session 3 came before session 4, session 34's scene comes before transforms,
+  memory and occlusion culling, so every gain is measured.
+- **Custom shaders before fog, GI and reflections.** Teams cannot work around missing shaders, and the later passes
+  should be written once against the material interface that session 40 defines.
+- **Three items came early in sessions 1–24 because later work depended on them:** benchmarks before instancing,
+  clipping before scroll views, and stable IDs before material assets and the archive.
+- **TAA came late on purpose.** Motion vectors have to know where every vertex was in the previous frame, which
+  affects the instancing, skinning and morph code. Doing those first meant the reprojection code was written once.
 - **Each session is sized like recent milestone PRs:** most pair one M item with one S or M item, and the L
-  items run alone.
+  items run alone. The real game is the exception: it spans several sessions.

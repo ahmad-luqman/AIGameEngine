@@ -419,6 +419,10 @@ rendering features come after correctness and proof.
 9. **Decide scope in writing:** networking, mobile, web and consoles are either roadmapped or declared non-goals, so that
    the positioning is honest. A recommended scope statement: "a desktop 3D engine built for agent-driven development".
 
+**Adopted on 2026-11-08.** `ROADMAP.md` and `ROADMAP-SESSIONS.md` now carry these items and the scope statement, with two
+decisions of the owner: networking is in scope and comes first, ahead of item 2; consoles are a non-goal, mobile and web
+come after desktop is proven, and XR and a 2D pipeline are not planned. Item 1 shipped in PR #74.
+
 ## 11. What would change these scores
 
 | Event | Effect |

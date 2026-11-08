@@ -1,8 +1,10 @@
 # AGENTS.md — Basalt Engine Development Guide
 
-Basalt is a production-grade 3D game engine (C++20, CMake, Vulkan via nvrhi) for Windows, macOS and
-Linux. This file is the source of truth for how to work in this repository. Read it fully before
-changing code. Task-specific procedures live in `.claude/skills/*/SKILL.md`.
+Basalt is a desktop 3D engine built for agent-driven development (C++20, CMake, Vulkan via nvrhi) for Windows, macOS
+and Linux. It is early alpha (0.1.0, unreleased), and its code is held to production standards: the rules below are not
+relaxed because of that. Scope and non-goals are in `ROADMAP.md` (Scope). This file is the source of truth for how to
+work in this repository. Read it fully before changing code. Task-specific procedures live in
+`.claude/skills/*/SKILL.md`.
 
 ## Repository layout
 
@@ -484,7 +486,8 @@ Other rules:
   ctest fails while they are stale).
 - Skills in `.claude/skills/`: build/test, code review, make-game (AI workflow), add-component,
   debug-rendering.
-- `ROADMAP.md`: prioritized list of missing features and verification work. Remove an item when it ships.
+- `ROADMAP.md`: scope, non-goals and the prioritized list of missing features and verification work; `ROADMAP-SESSIONS.md`
+  groups it into session milestones. Remove an item when it ships. `Docs/MaturityAssessment.md` is a dated snapshot.
 
 ## Commit workflow
 
