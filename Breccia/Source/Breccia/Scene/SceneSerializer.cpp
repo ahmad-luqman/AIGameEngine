@@ -629,10 +629,10 @@ namespace Breccia {
 		return entities;
 	}
 
-	Entity SceneSerializer::DeserializeEntityTree(Scene& scene, const json& entities, Entity parent, std::string& outError)
+	Entity SceneSerializer::CreateTree(Scene& scene, const json& entities, bool remapIDs, Entity parent, std::string& outError)
 	{
 		std::vector<Entity> created;
-		if (!CreateEntities(scene, entities, true, parent, created, outError))
+		if (!CreateEntities(scene, entities, remapIDs, parent, created, outError))
 		{
 			for (Entity entity : std::views::reverse(created))
 			{
@@ -649,6 +649,11 @@ namespace Breccia {
 		return created.front();
 	}
 
+	Entity SceneSerializer::DeserializeEntityTree(Scene& scene, const json& entities, Entity parent, std::string& outError)
+	{
+		return CreateTree(scene, entities, true, parent, outError);
+	}
+
 	Entity SceneSerializer::CreateEntityTreeWithIds(Scene& scene, const json& entities, Entity parent, std::string& outError)
 	{
 		if (!entities.is_array() || entities.empty())
@@ -660,8 +665,8 @@ namespace Breccia {
 		for (size_t i = 0; i < entities.size(); i++)
 		{
 			const json& record = entities[i];
-			const auto id = record.is_object() ? record.find("ID") : json::const_iterator{};
-			if (!record.is_object() || id == record.end() || !id->is_number_unsigned() || id->get<uint64_t>() == 0)
+			const auto id = record.is_object() ? record.find("ID") : record.end();
+			if (id == record.end() || !id->is_number_unsigned() || id->get<uint64_t>() == 0)
 			{
 				outError = "entity #" + std::to_string(i) + " needs a nonzero ID";
 				return {};
@@ -672,24 +677,15 @@ namespace Breccia {
 				return {};
 			}
 			const auto parentId = record.find("Parent");
-			const bool isRoot = parentId == record.end() || (parentId->is_number_unsigned() && parentId->get<uint64_t>() == 0) || (parentId->is_number_integer() && parentId->get<int64_t>() == 0);
+			// is_number_integer holds for unsigned numbers too.
+			const bool isRoot = parentId == record.end() || (parentId->is_number_integer() && parentId->get<int64_t>() == 0);
 			if ((i == 0) != isRoot)
 			{
 				outError = i == 0 ? "the first record must be the tree's root (Parent 0)" : "entity #" + std::to_string(i) + " must have a parent in the tree";
 				return {};
 			}
 		}
-		std::vector<Entity> created;
-		if (!CreateEntities(scene, entities, false, parent, created, outError))
-		{
-			for (Entity entity : std::views::reverse(created))
-			{
-				if (entity.IsValid())
-					scene.DestroyEntity(entity);
-			}
-			return {};
-		}
-		return created.front();
+		return CreateTree(scene, entities, false, parent, outError);
 	}
 
 	json SceneSerializer::SceneDocument(json entities)

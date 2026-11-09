@@ -71,6 +71,8 @@ namespace Breccia {
 		bool StartNetwork(NetworkRole role, std::string& outError);
 		// Logs the session's totals and fails (through `fail`) a client that is not connected at the end of the run.
 		void CheckNetworkResults(const std::function<void(int)>& fail);
+		// Shows a client's lost connection to the player once (CrashReporter's dialog, which automated runs never show).
+		void ReportDisconnect();
 
 		RuntimeOptions m_Options;
 		Ref<Scene> m_Scene;
@@ -85,6 +87,7 @@ namespace Breccia {
 		// This frame succeeded, rather than merely having a camera or stale renderer counters.
 		bool m_Rendered = false;
 		CursorMode m_AppliedCursorMode = CursorMode::Normal;
+		bool m_ReportedDisconnect = false;
 	};
 
 }

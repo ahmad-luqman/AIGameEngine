@@ -28,15 +28,8 @@ namespace Breccia {
 		void WriteString(std::string_view text);
 		void WriteBytes(std::span<const uint8_t> bytes);
 
-		size_t GetSize() const { return m_Bytes.size(); }
 		const std::vector<uint8_t>& GetBytes() const { return m_Bytes; }
 		std::vector<uint8_t> TakeBytes() { return std::move(m_Bytes); }
-		// Drops everything written after `size` (an earlier GetSize), to undo a record that does not fit.
-		void Truncate(size_t size)
-		{
-			if (size < m_Bytes.size())
-				m_Bytes.resize(size);
-		}
 
 	private:
 		std::vector<uint8_t> m_Bytes;
@@ -60,11 +53,13 @@ namespace Breccia {
 		bool ReadU16(uint16_t& value);
 		bool ReadU32(uint32_t& value);
 		bool ReadU64(uint64_t& value);
-		// Fails on more than 10 bytes, or on a 10th byte that would overflow 64 bits.
+		// Fails on more than 10 bytes, or on a 10th byte that would overflow 64 bits. Longer forms of a value than needed
+		// (0x80 0x00 for 0) are accepted: nothing compares encodings it received.
 		bool ReadVarUInt(uint64_t& value);
 		bool ReadVarInt(int64_t& value);
-		// A VarUInt that must not exceed `max` (counts and indices), read into 32 bits.
-		bool ReadCount(uint32_t& value, uint32_t max);
+		// A VarUInt that must not exceed `max` (counts and indices; a max beyond 32 bits means UINT32_MAX), read into 32
+		// bits.
+		bool ReadCount(uint32_t& value, uint64_t max);
 		bool ReadFloat(float& value);
 		bool ReadDouble(double& value);
 		// Fails when the length exceeds maxLength or the remaining bytes.
@@ -75,7 +70,6 @@ namespace Breccia {
 		void Fail() { m_Failed = true; }
 		bool Ok() const { return !m_Failed; }
 		size_t GetRemaining() const { return m_Failed ? 0 : m_Bytes.size() - m_Offset; }
-		size_t GetOffset() const { return m_Offset; }
 		bool AtEnd() const { return !m_Failed && m_Offset == m_Bytes.size(); }
 
 	private:

@@ -26,8 +26,7 @@ namespace Breccia::NetValue {
 			Array,
 			Object,
 			// An array of numbers that are all exact float32 values.
-			Float32Array,
-			Count
+			Float32Array
 		};
 
 		// Whether the number is a float32 exactly (NaN and infinities included, which float32 holds too).
@@ -229,7 +228,7 @@ namespace Breccia::NetValue {
 				{
 					uint32_t count = 0;
 					// Four bytes per element, and an empty one is written as an ordinary array.
-					if (!reader.ReadCount(count, static_cast<uint32_t>(std::min<size_t>(reader.GetRemaining() / 4, std::numeric_limits<uint32_t>::max()))) || count == 0)
+					if (!reader.ReadCount(count, reader.GetRemaining() / 4) || count == 0)
 					{
 						reader.Fail();
 						return false;
@@ -249,10 +248,10 @@ namespace Breccia::NetValue {
 				{
 					uint32_t count = 0;
 					// Every element takes at least its tag byte.
-					if (!reader.ReadCount(count, static_cast<uint32_t>(std::min<size_t>(reader.GetRemaining(), std::numeric_limits<uint32_t>::max()))))
+					if (!reader.ReadCount(count, reader.GetRemaining()))
 						return false;
+					// No reserve: nested arrays would each reserve up to the whole message, multiplied by the nesting.
 					value = nlohmann::json::array();
-					value.get_ref<nlohmann::json::array_t&>().reserve(count);
 					for (uint32_t i = 0; i < count; i++)
 					{
 						nlohmann::json element;
@@ -266,7 +265,7 @@ namespace Breccia::NetValue {
 				{
 					uint32_t count = 0;
 					// Every entry takes at least a key length byte and a tag byte.
-					if (!reader.ReadCount(count, static_cast<uint32_t>(std::min<size_t>(reader.GetRemaining() / 2, std::numeric_limits<uint32_t>::max()))))
+					if (!reader.ReadCount(count, reader.GetRemaining() / 2))
 						return false;
 					value = nlohmann::json::object();
 					for (uint32_t i = 0; i < count; i++)
@@ -277,7 +276,7 @@ namespace Breccia::NetValue {
 						nlohmann::json element;
 						if (!DecodeValue(reader, element, depth + 1))
 							return false;
-						// A repeated key would silently replace the first: two encodings of one object must not exist.
+						// A repeated key would silently replace the first: refuse the message instead of guessing.
 						if (!value.emplace(std::move(key), std::move(element)).second)
 						{
 							reader.Fail();
@@ -286,8 +285,6 @@ namespace Breccia::NetValue {
 					}
 					return true;
 				}
-				case Tag::Count:
-					break;
 			}
 			reader.Fail();
 			return false;

@@ -1,6 +1,7 @@
-"""A network session over real UDP between two BrecciaRuntime processes (ctest NetworkSession): a headless host on a port
-the system picks, and a headless client that must connect, receive the networked entities and leave cleanly; then a
-client of another game, which the host refuses, and one aimed at a port nobody answers on. Both end with exit code 8.
+"""A network session over real UDP between BrecciaRuntime processes (ctest NetworkSession): a headless host on a port the
+system picks, and a headless client that must connect, receive the networked entities and leave cleanly; a client of
+another game, which the host refuses; one aimed at a port nobody answers on; one killed mid-session, which the host must
+time out; and a host that stops on its own, which must tell its client. Clients that end unconnected exit with code 8.
 
 Usage: NetworkSession.py <breccia CLI> <BrecciaRuntime>
 """
@@ -29,9 +30,10 @@ def require(condition, message):
 class Host:
     """A runtime hosting the project, its output read on a thread so its pipe never fills."""
 
-    def __init__(self, runtime, project, env):
-        # Long enough for every client below; stopped once they are done.
-        self.process = subprocess.Popen([str(runtime), "--project", str(project), "--headless", "--frames", "6000", "--host", "0"],
+    def __init__(self, runtime, project, env, frames=6000, role=("--host", "0")):
+        # By default long enough for every client below; stopped once they are done.
+        self.started = time.monotonic()
+        self.process = subprocess.Popen([str(runtime), "--project", str(project), "--headless", "--frames", str(frames), *role],
                                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
         self.lines = queue.Queue()
         self.output = []
@@ -113,8 +115,8 @@ def main():
             require("connected to 127.0.0.1" in joined.stdout, f"the client never connected:\n{joined.stdout}")
             # The client's own copies of the networked entities make way for the host's.
             require("removed 2 networked entities" in joined.stdout, f"the client kept its own networked entities:\n{joined.stdout}")
-            summary = re.search(r"Runtime: network client connections=1 remoteEntities=2 spawns=2 updates=(\d+)", joined.stdout)
-            require(summary is not None, f"the client did not receive both networked entities:\n{joined.stdout}")
+            summary = re.search(r"Runtime: network client connections=1 remoteEntities=2 spawns=2 updates=(\d+) .* rejectedValues=0 rejectedRecords=0", joined.stdout)
+            require(summary is not None, f"the client did not receive both networked entities cleanly:\n{joined.stdout}")
             # The crate falls on the host: its transform keeps arriving.
             require(int(summary.group(1)) > 5, f"the client received too few updates:\n{joined.stdout}")
             require(host.wait_for(r"Network: client 1 \(127\.0\.0\.1:\d+\) left: the client left", 30), f"the host did not hear the client leave:\n{host.text()}")
@@ -124,20 +126,59 @@ def main():
             require("different games" in refused.stdout, f"the client was not told why it was refused:\n{refused.stdout}")
             require(host.wait_for(r"disconnected a connecting client .*different games", 30), f"the host did not refuse the other game:\n{host.text()}")
 
-            # A UDP port held open here, which never answers: the attempt never connects.
+            # A UDP port held open here, which never answers: the attempt fails after the project's 3-second timeout.
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as silent:
                 silent.bind(("127.0.0.1", 0))
-                unanswered = client(game, f"127.0.0.1:{silent.getsockname()[1]}", frames=60)
+                unanswered = client(game, f"127.0.0.1:{silent.getsockname()[1]}", frames=360)
             require(unanswered.returncode == 8, f"a client that never connected should exit with 8, not {unanswered.returncode}:\n{unanswered.stdout}")
-            require("not connected at the end of the run" in unanswered.stdout, f"no reason given:\n{unanswered.stdout}")
+            require("not connected at the end of the run (the connection could not be made)" in unanswered.stdout, f"no reason given:\n{unanswered.stdout}")
 
-            malformed = run(str(runtime), "--project", str(game), "--headless", "--frames", "1", "--connect", "127.0.0.1:99999")
-            require(malformed.returncode != 0 and "--connect must be" in malformed.stdout, f"a bad port was accepted:\n{malformed.stdout}")
+            # A client that dies (no goodbye): the host times it out over real UDP.
+            doomed = Host(runtime, game, env, frames=100000, role=("--connect", f"127.0.0.1:{port}"))
+            try:
+                joined_again = host.wait_for(r"Network: client (\d+) joined", 60)
+                require(joined_again is not None, f"the second client never joined:\n{host.text()}\n{doomed.text()}")
+            finally:
+                doomed.stop()
+            peer = joined_again.group(1)
+            require(host.wait_for(rf"Network: client {peer} \(127\.0\.0\.1:\d+\) left: the connection timed out", 60), f"the host did not time out the killed client:\n{host.text()}")
+
+            # --connect without a port uses the project's Network.Port.
+            moved = run(str(cli), "--project", str(game), "project.set", json.dumps({"network": {"Port": port, "TimeoutSeconds": 3}}))
+            require(moved.returncode == 0, f"project.set network: {moved.stdout}")
+            defaulted = client(game, "127.0.0.1", frames=120)
+            require(defaulted.returncode == 0, f"a client using the project's port failed (exit {defaulted.returncode}):\n{defaulted.stdout}")
+
+            for option, value, message in [("--connect", "127.0.0.1:99999", "--connect must be"), ("--connect", ":7777", "--connect must be"),
+                                           ("--connect", "127.0.0.1:", "--connect must be"), ("--connect", "127.0.0.1:0", "--connect must be"),
+                                           ("--connect", "127.0.0.1:abc", "--connect must be"), ("--host", "-1", "--host must be"),
+                                           ("--host", "65536", "--host must be"), ("--host", "abc", "--host must be")]:
+                malformed = run(str(runtime), "--project", str(game), "--headless", "--frames", "1", option, value)
+                require(malformed.returncode != 0 and message in malformed.stdout, f"{option} {value} was accepted:\n{malformed.stdout}")
             both = run(str(runtime), "--project", str(game), "--headless", "--frames", "1", "--host", "0", "--connect", "127.0.0.1")
             require(both.returncode != 0 and "cannot be combined" in both.stdout, f"--host and --connect together were accepted:\n{both.stdout}")
             require(host.process.poll() is None, f"the host stopped early:\n{host.text()}")
+            # Nothing the clients sent was refused, and the socket never failed.
+            for problem in ("sent a value", "not shown", "UDP socket failed", "invalid message", "which it does not own"):
+                require(problem not in host.text(), f"the host logged '{problem}':\n{host.text()}")
         finally:
             host.stop()
+
+        # A host that stops on its own tells its client, which then ends unconnected. A headless host is paced: its 150
+        # frames at 60 per second take about 2.5 seconds, not a few milliseconds.
+        brief = Host(runtime, game, env, frames=150)
+        try:
+            match = brief.wait_for(PORT_LINE, 60)
+            require(match is not None, f"the brief host never said which port it listens on:\n{brief.text()}")
+            left = client(game, f"127.0.0.1:{match.group(1)}", frames=400)
+            require(left.returncode == 8, f"a client whose host stopped should exit with 8, not {left.returncode}:\n{left.stdout}")
+            require("disconnected from the host: the host stopped" in left.stdout, f"the client was not told the host stopped:\n{left.stdout}")
+            brief.process.wait(timeout=TIMEOUT)
+            require(brief.process.returncode == 0, f"the brief host failed (exit {brief.process.returncode}):\n{brief.text()}")
+            elapsed = time.monotonic() - brief.started
+            require(elapsed >= 2.0, f"150 paced frames took only {elapsed:.2f} s: the headless host is not paced")
+        finally:
+            brief.stop()
     print("OK")
 
 

@@ -153,6 +153,8 @@
 	{ "id": "random-seed-range", "command": "project.set", "params": { "randomSeed": -1 }, "expectError": "'randomSeed' must be in" },
 	{ "id": "script-instruction-limit-range", "command": "project.set", "params": { "scriptInstructionLimit": -1 }, "expectError": "'scriptInstructionLimit' must be in" },
 	{ "id": "fixed-timestep-range", "command": "project.set", "params": { "fixedTimestep": 0 }, "expectError": "fixedTimestep" },
+	{ "id": "network-range", "command": "project.set", "params": { "network": { "TickRate": 0 } }, "expectError": "Network.TickRate must be a number in [1, 240]" },
+	{ "id": "network-unknown-key", "command": "project.set", "params": { "network": { "Tick": 30 } }, "expectError": "unknown key 'Tick'" },
 	{ "id": "version-format", "command": "project.set", "params": { "version": "1.2" }, "expectError": "parameter 'version' must be MAJOR.MINOR.PATCH" },
 	{ "id": "icon-outside-assets", "command": "project.set", "params": { "icon": "Project.bproject" }, "expectError": "the icon must be under Assets/" },
 	{ "id": "icon-not-png", "command": "project.set", "params": { "icon": "Assets/Scenes/FeatureTest.bscene" }, "expectError": "is not a PNG file" },

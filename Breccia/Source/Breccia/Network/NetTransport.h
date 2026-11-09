@@ -48,12 +48,16 @@ namespace Breccia {
 	public:
 		virtual ~NetTransport() = default;
 
-		// Queues a message; dropped when the peer is unknown or gone. Reliable messages arrive in order; unreliable ones
-		// may not arrive, or arrive late (the receiver orders them).
-		virtual void Send(NetPeerHandle peer, NetChannel channel, std::span<const uint8_t> data) = 0;
+		// Queues a message: false when it was not (the peer is unknown or gone, or the transport could not take it, which
+		// it logs). Reliable messages arrive in order; unreliable ones may not arrive, or arrive late (the receiver orders
+		// them).
+		virtual bool Send(NetPeerHandle peer, NetChannel channel, std::span<const uint8_t> data) = 0;
 		// Ends a connection: queued reliable messages are still delivered, then the peer gets a Disconnected event with
 		// the code. The handle is dead at once on this side (no event follows here).
 		virtual void Disconnect(NetPeerHandle peer, uint32_t code) = 0;
+		// Disconnect for every connection, including a client's attempt that has not connected yet (the host hears of it
+		// if it already accepted it).
+		virtual void DisconnectAll(uint32_t code) = 0;
 		// Sends what is queued, receives, and appends what happened since the last call to `events`.
 		virtual void Poll(std::vector<NetTransportEvent>& events) = 0;
 		// Sends what is queued now (before a shutdown, so final messages leave).

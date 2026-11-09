@@ -87,10 +87,6 @@ namespace Breccia {
 			return true;
 		}
 
-	}
-
-	namespace {
-
 		// Reads --host <port> and --connect <address[:port]> into options (a missing port is the project's); false, after
 		// logging, when they are malformed or both given.
 		bool ReadNetworkOptions(const CommandLine& commandLine, const NetworkSettings& settings, RuntimeOptions& options)
@@ -102,21 +98,23 @@ namespace Breccia {
 				BR_CORE_CRITICAL("--host and --connect cannot be combined (a host plays its own game)");
 				return false;
 			}
-			const auto readPort = [](const std::string& text, int64_t min, uint16_t& port) {
+			const auto readPort = [](const std::string& text, uint16_t& port) {
 				int64_t value = -1;
 				const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), value);
-				if (error != std::errc() || end != text.data() + text.size() || value < min || value > 65535)
+				if (error != std::errc() || end != text.data() + text.size() || value < 1 || value > 65535)
 					return false;
 				port = static_cast<uint16_t>(value);
 				return true;
 			};
 			if (host)
 			{
-				if (!readPort(*host, 0, options.NetworkPort))
+				const std::optional<int64_t> port = commandLine.GetInteger("host");
+				if (!port || *port < 0 || *port > 65535)
 				{
 					BR_CORE_CRITICAL("--host must be a port in [0, 65535] (0 picks a free one), not '{}'", *host);
 					return false;
 				}
+				options.NetworkPort = static_cast<uint16_t>(*port);
 				options.Network = NetworkRole::Host;
 			}
 			else if (connect)
@@ -125,7 +123,7 @@ namespace Breccia {
 				const size_t colon = connect->rfind(':');
 				options.ConnectAddress = connect->substr(0, colon);
 				options.NetworkPort = settings.Port;
-				if (options.ConnectAddress.empty() || (colon != std::string::npos && !readPort(connect->substr(colon + 1), 1, options.NetworkPort)))
+				if (options.ConnectAddress.empty() || (colon != std::string::npos && !readPort(connect->substr(colon + 1), options.NetworkPort)))
 				{
 					BR_CORE_CRITICAL("--connect must be <address> or <address>:<port> with a port in [1, 65535], not '{}'", *connect);
 					return false;

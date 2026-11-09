@@ -216,6 +216,119 @@ namespace {
 		NetPeerHandle m_Peer = 0;
 	};
 
+	// A client scene whose host is played by hand, for messages a real host would never send.
+	class FakeHost
+	{
+	public:
+		explicit FakeHost(const std::function<void(Scene&)>& build = {}, NetworkSettings settings = {})
+		{
+			std::string error;
+			m_Host = m_Link.Listen(0, 4, error);
+			REQUIRE(m_Host);
+			m_Client = CreateRef<Scene>("Client");
+			if (build)
+				build(*m_Client);
+			m_Client->StartNetwork(CreateScope<NetworkSystem>(*m_Client, NetworkRole::Client, m_Link.Connect(m_Host->GetListenPort()), settings, TestIdentity()));
+			m_Client->OnRuntimeStart();
+			for (int i = 0; i < 30 && m_Peer == 0; i++)
+			{
+				Advance(1);
+				std::vector<NetTransportEvent> events;
+				m_Host->Poll(events);
+				for (const NetTransportEvent& event : events)
+					if (event.Type == NetTransportEvent::Kind::Connected)
+						m_Peer = event.Peer;
+			}
+			REQUIRE(m_Peer != 0);
+		}
+		~FakeHost() { m_Client->OnRuntimeStop(); }
+
+		FakeHost(const FakeHost&) = delete;
+		FakeHost& operator=(const FakeHost&) = delete;
+
+		// Delivers what was sent, then lets the client receive it.
+		void Advance(int frames)
+		{
+			for (int i = 0; i < frames; i++)
+			{
+				m_Link.Advance(Step);
+				m_Client->OnUpdate(Step);
+			}
+		}
+		void Send(const std::vector<uint8_t>& message, NetChannel channel = NetChannel::Reliable)
+		{
+			m_Host->Send(m_Peer, channel, message);
+			Advance(2);
+		}
+		void Welcome() { Send(NetProtocol::EncodeWelcome({ 1, 30.0f })); }
+		void Snapshot(NetState state)
+		{
+			state.Sequence = ++m_Sequence;
+			Send(NetProtocol::EncodeState(NetMessageType::Snapshot, state), NetChannel::Unreliable);
+		}
+
+		Scene& Client() { return *m_Client; }
+		NetworkSystem& Network() { return *m_Client->GetNetworkSystem(); }
+
+	private:
+		SimulatedNetwork m_Link;
+		Scope<NetTransport> m_Host;
+		Ref<Scene> m_Client;
+		NetPeerHandle m_Peer = 0;
+		uint32_t m_Sequence = 0;
+	};
+
+	nlohmann::json Record(uint64_t id, nlohmann::json components, uint64_t parent = 0)
+	{
+		return { { "ID", id }, { "Name", "Spawned" }, { "Parent", parent }, { "Components", std::move(components) } };
+	}
+
+	NetEntitySpawn Spawn(uint64_t id, nlohmann::json components, uint64_t parent = 0)
+	{
+		return { id, parent, nlohmann::json::array({ Record(id, std::move(components)) }) };
+	}
+
+	NetState DecodeState(const std::vector<uint8_t>& bytes)
+	{
+		const auto message = DecodeMessage(bytes);
+		REQUIRE(message);
+		REQUIRE((message->Type == NetMessageType::Snapshot || message->Type == NetMessageType::ClientUpdate));
+		return std::get<NetState>(message->Body);
+	}
+
+	// A captured entity with only a Transform, at x.
+	ReplicatedEntity TransformEntity(UUID id, float x, float priority = 1.0f)
+	{
+		const auto field = [](const nlohmann::json& value) { return ReplicatedFieldValue{ Encode(value), value }; };
+		ReplicatedEntity entity;
+		entity.Entity = id;
+		entity.Priority = priority;
+		entity.Components.push_back({ ComponentIndex("Transform"), { field({ x, 0.0, 0.0 }), field({ 0.0, 0.0, 0.0 }), field({ 1.0, 1.0, 1.0 }) } });
+		return entity;
+	}
+
+	// A world whose spawns are one record each, padded by `padding` bytes; counts the spawns built.
+	ReplicationWorld SpawnWorld(std::vector<ReplicatedEntity> entities, size_t padding = 0, int* built = nullptr)
+	{
+		return ReplicationWorld(std::move(entities), [padding, built](const ReplicatedEntity& entity) {
+			if (built)
+				(*built)++;
+			nlohmann::json record = { { "ID", static_cast<uint64_t>(entity.Entity) } };
+			if (padding > 0)
+				record["Pad"] = std::string(padding, 'x');
+			NetWriter writer;
+			NetProtocol::WriteSpawn(writer, { entity.Entity, 0, nlohmann::json::array({ record }) });
+			return std::optional<std::vector<uint8_t>>(writer.TakeBytes());
+		});
+	}
+
+	void AddGround(Scene& scene)
+	{
+		Entity ground = scene.CreateEntity("Ground");
+		ground.AddComponent<RigidBodyComponent>();
+		ground.AddComponent<BoxColliderComponent>().HalfExtents = { 10.0f, 0.5f, 10.0f };
+	}
+
 	Entity CreateNetworked(Scene& scene, const std::string& name, UUID uuid = 0, glm::vec3 translation = glm::vec3(0.0f))
 	{
 		Entity entity = uuid.IsValid() ? scene.CreateEntityWithUUID(uuid, name) : scene.CreateEntity(name);
@@ -375,6 +488,26 @@ TEST_SUITE("Network")
 		CHECK(networked->Info->ReplicatedFields == std::vector<std::string>{ "Owner", "Authority" });
 		CHECK_FALSE(schema.FindComponent(static_cast<uint32_t>(schema.GetComponents().size())));
 		CHECK(schema.GetHash() != 0);
+		// The hash moves with anything spawns or updates depend on: a field (replicated or not), a type, an enum option, a
+		// list element's field, the replicated list.
+		std::vector<ComponentInfo> components = ComponentRegistry::GetAll();
+		CHECK(ReplicationSchema::ComputeHash(components) == schema.GetHash());
+		const auto changed = [&](const std::function<void(std::vector<ComponentInfo>&)>& change) {
+			std::vector<ComponentInfo> copy = components;
+			change(copy);
+			return ReplicationSchema::ComputeHash(copy) != schema.GetHash();
+		};
+		const auto find = [](std::vector<ComponentInfo>& infos, const char* name) -> ComponentInfo& { return *std::ranges::find(infos, std::string(name), &ComponentInfo::Name); };
+		CHECK(changed([&](auto& infos) { find(infos, "PointLight").Fields.push_back("Extra"); }));
+		CHECK(changed([&](auto& infos) { find(infos, "PointLight").FieldTypes["Radius"].Kind = ComponentFieldKind::Integer; }));
+		CHECK(changed([&](auto& infos) { find(infos, "RigidBody").EnumOptions["Type"].push_back("Ghost"); }));
+		CHECK(changed([&](auto& infos) { find(infos, "PointLight").ReplicatedFields.pop_back(); }));
+		CHECK(changed([&](auto& infos) {
+			ComponentInfo& animator = find(infos, "Animator");
+			auto element = std::make_shared<ComponentObjectSchema>(*animator.FieldTypes["Events"].Element);
+			element->Fields.emplace_back("Extra");
+			animator.FieldTypes["Events"].Element = element;
+		}));
 		// Only top-level fields, never asset fields (a client would load whatever path a host named).
 		for (const ComponentInfo& info : ComponentRegistry::GetAll())
 			for (const std::string& field : info.ReplicatedFields)
@@ -434,8 +567,8 @@ TEST_SUITE("Network")
 		state.Sequence = 5;
 		state.Acknowledged = 3;
 		state.Spawns.push_back({ 10, 0, nlohmann::json::array({ { { "ID", 10 }, { "Name", "A" }, { "Parent", 0 }, { "Components", nlohmann::json::object() } } }) });
-		state.Updates.push_back({ 11, UUID(10), { { transform, false, false, { { 0, { 1.0, 2.0, 3.0 } } } }, { light, true, false, {} } } });
-		state.Updates.push_back({ 12, std::nullopt, { { light, false, true, { { 0, { 1.0, 1.0, 1.0 } }, { 1, 4.0 } } } } });
+		state.Updates.push_back({ 11, UUID(10), { { transform, NetComponentChange::Changed, { { 0, { 1.0, 2.0, 3.0 } } } }, { light, NetComponentChange::Removed, {} } } });
+		state.Updates.push_back({ 12, std::nullopt, { { light, NetComponentChange::Added, { { 0, { 1.0, 1.0, 1.0 } }, { 1, 4.0 } } } } });
 		state.Despawns.emplace_back(13);
 		const std::vector<uint8_t> bytes = NetProtocol::EncodeState(NetMessageType::Snapshot, state);
 		const auto decoded = DecodeMessage(bytes, &error);
@@ -448,165 +581,276 @@ TEST_SUITE("Network")
 		REQUIRE(back.Updates.size() == 2);
 		CHECK(back.Updates[0].Parent == std::optional<UUID>(10));
 		CHECK(back.Updates[0].Components[0].Fields[0].Value == nlohmann::json{ 1.0, 2.0, 3.0 });
-		CHECK(back.Updates[0].Components[1].Removed);
-		CHECK(back.Updates[1].Components[0].Added);
+		CHECK(back.Updates[0].Components[1].Change == NetComponentChange::Removed);
+		CHECK(back.Updates[1].Components[0].Change == NetComponentChange::Added);
 		CHECK(back.Despawns == std::vector<UUID>{ 13 });
 		CHECK(NetProtocol::EncodeState(NetMessageType::Snapshot, back) == bytes);
-		// Trailing bytes, and clients sending spawns or despawns, are invalid.
+		// Trailing bytes, and clients sending spawns or despawns (each alone), are invalid.
 		std::vector<uint8_t> trailing = bytes;
 		trailing.push_back(0);
 		CHECK_FALSE(DecodeMessage(trailing));
-		CHECK_FALSE(DecodeMessage(NetProtocol::EncodeState(NetMessageType::ClientUpdate, state)));
+		NetState clientSpawns;
+		clientSpawns.Sequence = 1;
+		clientSpawns.Spawns = state.Spawns;
+		CHECK_FALSE(DecodeMessage(NetProtocol::EncodeState(NetMessageType::ClientUpdate, clientSpawns), &error));
+		CHECK(error == "clients cannot spawn entities");
+		NetState clientDespawns;
+		clientDespawns.Sequence = 1;
+		clientDespawns.Despawns = { 13 };
+		CHECK_FALSE(DecodeMessage(NetProtocol::EncodeState(NetMessageType::ClientUpdate, clientDespawns), &error));
+		CHECK(error == "clients cannot despawn entities");
 	}
 
 	TEST_CASE("NetProtocol rejects records the schema does not allow")
 	{
 		const uint32_t transform = ComponentIndex("Transform");
 		const uint32_t light = ComponentIndex("PointLight");
-		const auto encodes = [](const NetState& state) { return DecodeMessage(NetProtocol::EncodeState(NetMessageType::Snapshot, state)).has_value(); };
+		const uint32_t listener = ComponentIndex("AudioListener");
 		const auto withUpdate = [](NetEntityUpdate update) {
 			NetState state;
 			state.Sequence = 1;
 			state.Updates.push_back(std::move(update));
 			return state;
 		};
-		CHECK(encodes(withUpdate({ 1, std::nullopt, { { transform, false, false, { { 2, { 1.0, 1.0, 1.0 } } } } } })));
-		// An unknown component, a field past the replicated ones, a field twice, a core component added or removed, an
-		// added component without every field, an empty entry, an entity that is its own parent, entity 0.
-		CHECK_FALSE(encodes(withUpdate({ 1, std::nullopt, { { 100000, false, false, { { 0, 1 } } } } })));
-		CHECK_FALSE(encodes(withUpdate({ 1, std::nullopt, { { transform, false, false, { { 3, 1 } } } } })));
-		CHECK_FALSE(encodes(withUpdate({ 1, std::nullopt, { { transform, false, false, { { 0, 1 }, { 0, 1 } } } } })));
-		CHECK_FALSE(encodes(withUpdate({ 1, std::nullopt, { { transform, true, false, {} } } })));
-		CHECK_FALSE(encodes(withUpdate({ 1, std::nullopt, { { light, false, true, { { 0, 1 } } } } })));
-		CHECK_FALSE(encodes(withUpdate({ 1, std::nullopt, { { light, false, false, {} } } })));
-		CHECK_FALSE(encodes(withUpdate({ 1, std::nullopt, {} })));
-		CHECK_FALSE(encodes(withUpdate({ 1, UUID(1), {} })));
-		CHECK_FALSE(encodes(withUpdate({ 0, UUID(5), {} })));
-		// One entity twice in a message.
+		// The decoder refuses what CheckUpdate refuses, for the reason it gives.
+		const auto refused = [&](NetEntityUpdate update, const std::string& reason) {
+			CHECK(NetProtocol::CheckUpdate(update, ReplicationSchema::Get()) == reason);
+			std::string error;
+			CHECK_FALSE(DecodeMessage(NetProtocol::EncodeState(NetMessageType::Snapshot, withUpdate(std::move(update))), &error));
+			CHECK(error == reason);
+		};
+		const NetEntityUpdate valid{ 1, std::nullopt, { { transform, NetComponentChange::Changed, { { 2, { 1.0, 1.0, 1.0 } } } } } };
+		CHECK(NetProtocol::CheckUpdate(valid, ReplicationSchema::Get()).empty());
+		CHECK(DecodeMessage(NetProtocol::EncodeState(NetMessageType::Snapshot, withUpdate(valid))));
+		refused({ 1, std::nullopt, { { 100000, NetComponentChange::Changed, { { 0, 1 } } } } }, "unknown component index 100000");
+		refused({ 1, std::nullopt, { { transform, NetComponentChange::Changed, { { 3, 1 } } } } }, "Transform has no replicated field 3");
+		refused({ 1, std::nullopt, { { transform, NetComponentChange::Changed, { { 0, 1 }, { 0, 1 } } } } }, "Transform field 0 appears twice");
+		refused({ 1, std::nullopt, { { transform, NetComponentChange::Removed, {} } } }, "Transform cannot be added or removed");
+		refused({ 1, std::nullopt, { { light, NetComponentChange::Added, { { 0, 1 } } } } }, "an added PointLight must carry every replicated field");
+		refused({ 1, std::nullopt, { { light, NetComponentChange::Removed, { { 0, 1 } } } } }, "a removed PointLight carries fields");
+		refused({ 1, std::nullopt, { { light, NetComponentChange::Changed, {} } } }, "a changed PointLight carries no field");
+		refused({ 1, std::nullopt, { { light, NetComponentChange::Changed, { { 1, 2.0 } } }, { light, NetComponentChange::Changed, { { 1, 2.0 } } } } }, "PointLight appears twice in one entity update");
+		// Nothing is tracked for a component without replicated fields, so nothing may add or remove it after a spawn.
+		refused({ 1, std::nullopt, { { listener, NetComponentChange::Added, {} } } }, "AudioListener has no replicated fields");
+		refused({ 1, std::nullopt, { { listener, NetComponentChange::Removed, {} } } }, "AudioListener has no replicated fields");
+		refused({ 1, std::nullopt, {} }, "an entity update carries nothing");
+		refused({ 1, UUID(1), {} }, "an entity cannot be its own parent");
+		refused({ 0, UUID(5), {} }, "an entity ID is 0");
+		// An invalid change byte.
+		// Type, sequence, acknowledgement, spawn and update counts (11 bytes); the entity, flags, component count and index
+		// (11 more): then the change.
+		std::vector<uint8_t> badChange = NetProtocol::EncodeState(NetMessageType::Snapshot, withUpdate(valid));
+		REQUIRE(badChange.size() > 22);
+		REQUIRE(badChange[21] == transform);
+		REQUIRE(badChange[22] == static_cast<uint8_t>(NetComponentChange::Changed));
+		badChange[22] = 3;
+		CHECK_FALSE(DecodeMessage(badChange));
+		// One entity twice in a message, sequence 0, and spawns with no records or too many.
+		std::string error;
 		NetState twice = withUpdate({ 1, UUID(5), {} });
 		twice.Despawns.emplace_back(1);
-		CHECK_FALSE(encodes(twice));
+		CHECK_FALSE(DecodeMessage(NetProtocol::EncodeState(NetMessageType::Snapshot, twice), &error));
+		CHECK(error == "an entity appears twice in one message");
 		NetState zero = withUpdate({ 1, UUID(5), {} });
 		zero.Sequence = 0;
-		CHECK_FALSE(encodes(zero));
+		CHECK_FALSE(DecodeMessage(NetProtocol::EncodeState(NetMessageType::Snapshot, zero)));
 		NetState emptySpawn;
 		emptySpawn.Sequence = 1;
 		emptySpawn.Spawns.push_back({ 2, 0, nlohmann::json::array() });
-		CHECK_FALSE(encodes(emptySpawn));
+		CHECK_FALSE(DecodeMessage(NetProtocol::EncodeState(NetMessageType::Snapshot, emptySpawn)));
+		const NetEntitySpawn huge{ 2, 0, nlohmann::json(std::vector<nlohmann::json>(NetProtocol::MaxSpawnEntities + 1, nlohmann::json::object())) };
+		CHECK_FALSE(NetProtocol::CheckSpawn(huge).empty());
+		CHECK(NetProtocol::CheckSpawn({ 2, 0, nlohmann::json::array({ nlohmann::json::object() }) }).empty());
+		CHECK_FALSE(NetProtocol::CheckSpawn({ 2, 2, nlohmann::json::array({ nlohmann::json::object() }) }).empty());
+
+		CHECK(DisconnectReasonFromCode(0) == NetDisconnectReason::None);
 		CHECK(DisconnectReasonFromCode(static_cast<uint32_t>(NetDisconnectReason::ServerFull)) == NetDisconnectReason::ServerFull);
-		CHECK(DisconnectReasonFromCode(9999) == NetDisconnectReason::None);
-		CHECK(std::string(DescribeDisconnectReason(static_cast<NetDisconnectReason>(9999))) == "unknown reason");
+		CHECK(DisconnectReasonFromCode(static_cast<uint32_t>(NetDisconnectReason::Unknown)) == NetDisconnectReason::Unknown);
+		CHECK(DisconnectReasonFromCode(9999) == NetDisconnectReason::Unknown);
+		CHECK(std::string(DescribeDisconnectReason(NetDisconnectReason::Unknown)) == "an unknown reason (a newer peer's)");
 	}
 
 	TEST_CASE("ReplicationSender repeats what is unacknowledged and sends only changes after")
 	{
-		const uint32_t transform = ComponentIndex("Transform");
-		const auto field = [](const nlohmann::json& value) { return ReplicatedFieldValue{ Encode(value), value }; };
-		const auto entityAt = [&](float x) {
-			ReplicatedEntity entity;
-			entity.Entity = 100;
-			entity.Components.push_back({ transform, { field({ x, 0.0, 0.0 }), field({ 0.0, 0.0, 0.0 }), field({ 1.0, 1.0, 1.0 }) } });
-			return entity;
-		};
 		int spawnsBuilt = 0;
-		const auto world = [&](std::vector<ReplicatedEntity> entities) {
-			return ReplicationWorld(std::move(entities), [&](const ReplicatedEntity& entity) {
-				spawnsBuilt++;
-				NetWriter writer;
-				NetProtocol::WriteSpawn(writer, { entity.Entity, 0, nlohmann::json::array({ { { "ID", static_cast<uint64_t>(entity.Entity) } } }) });
-				return std::optional<std::vector<uint8_t>>(writer.TakeBytes());
-			});
-		};
-		const auto decode = [](const std::vector<uint8_t>& bytes) {
-			const auto message = DecodeMessage(bytes);
-			REQUIRE(message);
-			return std::get<NetState>(message->Body);
-		};
+		const auto world = [&](std::vector<ReplicatedEntity> entities) { return SpawnWorld(std::move(entities), 0, &spawnsBuilt); };
 
 		ReplicationSender sender;
 		// Unacknowledged spawns repeat (built once per world).
-		NetState first = decode(sender.Build(NetMessageType::Snapshot, world({ entityAt(1) }), 0, 100000));
+		NetState first = DecodeState(sender.Build(world({ TransformEntity(100, 1) }), 0, 100000));
 		CHECK(first.Sequence == 1);
 		CHECK(first.Spawns.size() == 1);
-		CHECK(decode(sender.Build(NetMessageType::Snapshot, world({ entityAt(1) }), 0, 100000)).Spawns.size() == 1);
+		CHECK(DecodeState(sender.Build(world({ TransformEntity(100, 1) }), 0, 100000)).Spawns.size() == 1);
 		CHECK(spawnsBuilt == 2);
 		// Acknowledging the second makes it known; nothing changed since, so nothing goes.
-		sender.Acknowledge(2);
+		CHECK(sender.Acknowledge(2));
 		CHECK(sender.GetKnownEntityCount() == 1);
-		NetState quiet = decode(sender.Build(NetMessageType::Snapshot, world({ entityAt(1) }), 0, 100000));
+		NetState quiet = DecodeState(sender.Build(world({ TransformEntity(100, 1) }), 0, 100000));
 		CHECK((quiet.Spawns.empty() && quiet.Updates.empty()));
 		// A change goes as just that field, and repeats until acknowledged.
-		NetState moved = decode(sender.Build(NetMessageType::Snapshot, world({ entityAt(2) }), 0, 100000));
+		NetState moved = DecodeState(sender.Build(world({ TransformEntity(100, 2) }), 0, 100000));
 		REQUIRE(moved.Updates.size() == 1);
 		REQUIRE(moved.Updates[0].Components.size() == 1);
 		CHECK(moved.Updates[0].Components[0].Fields.size() == 1);
 		CHECK(moved.Updates[0].Components[0].Fields[0].Field == 0);
 		// Moving back to the acknowledged value still sends it: the receiver may have applied the unacknowledged one.
-		NetState back = decode(sender.Build(NetMessageType::Snapshot, world({ entityAt(1) }), 0, 100000));
+		NetState back = DecodeState(sender.Build(world({ TransformEntity(100, 1) }), 0, 100000));
 		REQUIRE(back.Updates.size() == 1);
 		CHECK(back.Updates[0].Components[0].Fields[0].Value == nlohmann::json{ 1.0, 0.0, 0.0 });
 		// The receiver applied the newest (acknowledging it drops the older one, whatever it held).
-		sender.Acknowledge(back.Sequence);
-		CHECK(decode(sender.Build(NetMessageType::Snapshot, world({ entityAt(1) }), 0, 100000)).Updates.empty());
+		CHECK(sender.Acknowledge(back.Sequence));
+		CHECK(DecodeState(sender.Build(world({ TransformEntity(100, 1) }), 0, 100000)).Updates.empty());
 		// An acknowledgement of a message older than one already acknowledged changes nothing.
-		sender.Acknowledge(moved.Sequence);
-		CHECK(decode(sender.Build(NetMessageType::Snapshot, world({ entityAt(1) }), 0, 100000)).Updates.empty());
+		CHECK(sender.Acknowledge(moved.Sequence));
+		CHECK(DecodeState(sender.Build(world({ TransformEntity(100, 1) }), 0, 100000)).Updates.empty());
+		// One this sender never built is refused.
+		CHECK_FALSE(sender.Acknowledge(1000));
 
-		// Gone: despawns repeat until acknowledged, and a new entity with the ID waits for that.
-		CHECK(decode(sender.Build(NetMessageType::Snapshot, world({}), 0, 100000)).Despawns == std::vector<UUID>{ 100 });
-		NetState again = decode(sender.Build(NetMessageType::Snapshot, world({ entityAt(5) }), 0, 100000));
-		CHECK(again.Despawns.empty());
+		// Gone: despawns repeat until acknowledged, even when the entity is back meanwhile, and its new spawn waits for that.
+		const NetState gone = DecodeState(sender.Build(world({}), 0, 100000));
+		CHECK(gone.Despawns == std::vector<UUID>{ 100 });
+		NetState again = DecodeState(sender.Build(world({ TransformEntity(100, 5) }), 0, 100000));
+		CHECK(again.Despawns == std::vector<UUID>{ 100 });
 		CHECK(again.Spawns.empty());
-		NetState despawned = decode(sender.Build(NetMessageType::Snapshot, world({}), 0, 100000));
-		CHECK(despawned.Despawns == std::vector<UUID>{ 100 });
-		sender.Acknowledge(despawned.Sequence);
+		CHECK(again.Updates.empty());
+		CHECK(sender.Acknowledge(again.Sequence));
 		CHECK(sender.GetKnownEntityCount() == 0);
-		CHECK(decode(sender.Build(NetMessageType::Snapshot, world({ entityAt(5) }), 0, 100000)).Spawns.size() == 1);
+		CHECK(DecodeState(sender.Build(world({ TransformEntity(100, 5) }), 0, 100000)).Spawns.size() == 1);
+	}
+
+	TEST_CASE("ReplicationSender settles once a value is acknowledged, however long acknowledgements take")
+	{
+		ReplicationSender sender;
+		sender.Build(SpawnWorld({ TransformEntity(100, 0) }), 0, 100000);
+		REQUIRE(sender.Acknowledge(1));
+		// A round trip longer than a tick: the change goes out three times before the first acknowledgement arrives.
+		for (int tick = 0; tick < 3; tick++)
+			CHECK(DecodeState(sender.Build(SpawnWorld({ TransformEntity(100, 7) }), 0, 100000)).Updates.size() == 1);
+		REQUIRE(sender.Acknowledge(2));
+		// Every unacknowledged message carried 7, which the receiver now holds: nothing more to send.
+		CHECK(DecodeState(sender.Build(SpawnWorld({ TransformEntity(100, 7) }), 0, 100000)).Updates.empty());
+		// A value that changed back while messages were in flight keeps going until a message carrying it is acknowledged.
+		DecodeState(sender.Build(SpawnWorld({ TransformEntity(100, 8) }), 0, 100000));
+		const NetState reverted = DecodeState(sender.Build(SpawnWorld({ TransformEntity(100, 7) }), 0, 100000));
+		REQUIRE(reverted.Updates.size() == 1);
+		REQUIRE(sender.Acknowledge(reverted.Sequence - 1));
+		CHECK(DecodeState(sender.Build(SpawnWorld({ TransformEntity(100, 7) }), 0, 100000)).Updates.size() == 1);
+
+		// The receiver may have applied a message carrying another value whose acknowledgement was lost, and lost the one
+		// that put the value back: until a message carrying the value is acknowledged, it keeps going.
+		ReplicationSender other;
+		other.Build(SpawnWorld({ TransformEntity(100, 7) }), 0, 100000);
+		REQUIRE(other.Acknowledge(1));
+		DecodeState(other.Build(SpawnWorld({ TransformEntity(100, 8) }), 0, 100000));
+		DecodeState(other.Build(SpawnWorld({ TransformEntity(100, 7) }), 0, 100000));
+		CHECK(DecodeState(other.Build(SpawnWorld({ TransformEntity(100, 7) }), 0, 100000)).Updates.size() == 1);
+		// A message carrying 7 is acknowledged: settled.
+		REQUIRE(other.Acknowledge(4));
+		CHECK(DecodeState(other.Build(SpawnWorld({ TransformEntity(100, 7) }), 0, 100000)).Updates.empty());
+	}
+
+	TEST_CASE("ReplicationSender limits: oversized records, a full history, unsendable components, scopes")
+	{
+		const uint32_t light = ComponentIndex("PointLight");
+		// A record no message can carry is never sent, and smaller ones still are.
+		ReplicationSender small(ReplicationSenderOptions{ .MaxMessageBytes = 200 });
+		const NetState first = DecodeState(small.Build(SpawnWorld({ TransformEntity(1, 0), TransformEntity(2, 0) }, 300), 0, 100000));
+		CHECK(first.Spawns.empty());
+		CHECK(DecodeState(small.Build(SpawnWorld({ TransformEntity(3, 0) }), 0, 100000)).Spawns.size() == 1);
+
+		// Forgotten messages: an acknowledgement of one changes nothing, and what it carried goes again.
+		ReplicationSender forgetful(ReplicationSenderOptions{ .HistoryLength = 2 });
+		for (int i = 0; i < 3; i++)
+			forgetful.Build(SpawnWorld({ TransformEntity(1, 0) }), 0, 100000);
+		CHECK(forgetful.Acknowledge(1));
+		CHECK(forgetful.GetKnownEntityCount() == 0);
+		CHECK(DecodeState(forgetful.Build(SpawnWorld({ TransformEntity(1, 0) }), 0, 100000)).Spawns.size() == 1);
+		// An acknowledgement of a message that carried nothing (it is not in the history) makes nothing known.
+		ReplicationSender empty;
+		empty.Build(SpawnWorld({}), 0, 100000);
+		empty.Build(SpawnWorld({ TransformEntity(1, 0) }), 0, 100000);
+		CHECK(empty.Acknowledge(1));
+		CHECK(empty.GetKnownEntityCount() == 0);
+
+		// A component that cannot be encoded this tick is neither updated nor removed.
+		ReplicationSender sender;
+		ReplicatedEntity lit = TransformEntity(1, 0);
+		lit.Components.push_back({ light, { { Encode({ 1.0, 1.0, 1.0 }), { 1.0, 1.0, 1.0 } }, { Encode(2.0), 2.0 } } });
+		sender.Build(SpawnWorld({ lit }), 0, 100000);
+		REQUIRE(sender.Acknowledge(1));
+		ReplicatedEntity broken = lit;
+		broken.Components[1] = { light, {}, true };
+		CHECK(DecodeState(sender.Build(SpawnWorld({ broken }), 0, 100000)).Updates.empty());
+		ReplicatedEntity removed = TransformEntity(1, 0);
+		const NetState removal = DecodeState(sender.Build(SpawnWorld({ removed }), 0, 100000));
+		REQUIRE(removal.Updates.size() == 1);
+		CHECK(removal.Updates[0].Components[0].Change == NetComponentChange::Removed);
+
+		// PresenceOnly: a receiver that decides an entity hears of a component the host adds, not of its field changes.
+		const ReplicationFilter owned = [](const ReplicatedEntity&, uint32_t) { return ReplicationScope::PresenceOnly; };
+		ReplicationSender owner;
+		owner.Build(SpawnWorld({ TransformEntity(1, 0) }), 0, 100000, owned);
+		REQUIRE(owner.Acknowledge(1));
+		CHECK(DecodeState(owner.Build(SpawnWorld({ TransformEntity(1, 9) }), 0, 100000, owned)).Updates.empty());
+		const NetState added = DecodeState(owner.Build(SpawnWorld({ lit }), 0, 100000, owned));
+		REQUIRE(added.Updates.size() == 1);
+		REQUIRE(added.Updates[0].Components.size() == 1);
+		CHECK(added.Updates[0].Components[0].Component == light);
+		CHECK(added.Updates[0].Components[0].Change == NetComponentChange::Added);
+
+		// Client updates carry field changes only: no spawns, despawns, parents or additions.
+		ReplicationSender client(ReplicationSenderOptions{ .Direction = ReplicationDirection::ClientToHost, .MaxMessageBytes = NetworkSystem::MaxClientMessageBytes });
+		ReplicatedEntity child = lit;
+		child.Parent = 50;
+		const auto clientMessage = DecodeMessage(client.Build(SpawnWorld({ child }), 0, 100000));
+		REQUIRE(clientMessage);
+		CHECK(clientMessage->Type == NetMessageType::ClientUpdate);
+		const NetState& clientState = std::get<NetState>(clientMessage->Body);
+		REQUIRE(clientState.Updates.size() == 1);
+		CHECK_FALSE(clientState.Updates[0].Parent);
+		for (const NetComponentUpdate& change : clientState.Updates[0].Components)
+			CHECK(change.Change == NetComponentChange::Changed);
+		CHECK(DecodeState(client.Build(SpawnWorld({}), 0, 100000)).Despawns.empty());
 	}
 
 	TEST_CASE("ReplicationSender stays within its budget and lets waiting entities catch up")
 	{
-		const uint32_t transform = ComponentIndex("Transform");
-		const auto entity = [&](UUID id, float priority, float x) {
-			ReplicatedEntity replicated;
-			replicated.Entity = id;
-			replicated.Priority = priority;
-			const nlohmann::json value = { x, 0.0, 0.0 };
-			replicated.Components.push_back({ transform, { { Encode(value), value }, { Encode({ 0.0, 0.0, 0.0 }), { 0.0, 0.0, 0.0 } }, { Encode({ 1.0, 1.0, 1.0 }), { 1.0, 1.0, 1.0 } } } });
-			return replicated;
-		};
-		const auto world = [](std::vector<ReplicatedEntity> entities) {
-			return ReplicationWorld(std::move(entities), [](const ReplicatedEntity& replicated) {
-				NetWriter writer;
-				NetProtocol::WriteSpawn(writer, { replicated.Entity, 0, nlohmann::json::array({ { { "ID", static_cast<uint64_t>(replicated.Entity) }, { "Pad", std::string(200, 'x') } } }) });
-				return std::optional<std::vector<uint8_t>>(writer.TakeBytes());
-			});
-		};
+		const auto world = [](std::vector<ReplicatedEntity> entities) { return SpawnWorld(std::move(entities), 200); };
 		ReplicationSender sender;
 		// A budget for one spawn: the rest wait.
-		std::vector<uint8_t> message = sender.Build(NetMessageType::Snapshot, world({ entity(1, 1, 0), entity(2, 1, 0), entity(3, 1, 0) }), 0, 300);
+		std::vector<uint8_t> message = sender.Build(world({ TransformEntity(1, 0), TransformEntity(2, 0), TransformEntity(3, 0) }), 0, 300);
 		CHECK(message.size() <= 300);
-		CHECK(std::get<NetState>(DecodeMessage(message)->Body).Spawns.size() == 1);
+		CHECK(DecodeState(message).Spawns.size() == 1);
 		CHECK(sender.GetDeferredRecordCount() == 2);
 		// Below the size of any record, the first still goes when the budget is positive; at 0 nothing does.
-		CHECK(std::get<NetState>(DecodeMessage(sender.Build(NetMessageType::Snapshot, world({ entity(1, 1, 0), entity(2, 1, 0), entity(3, 1, 0) }), 0, 10))->Body).Spawns.size() == 1);
-		CHECK(std::get<NetState>(DecodeMessage(sender.Build(NetMessageType::Snapshot, world({ entity(1, 1, 0), entity(2, 1, 0), entity(3, 1, 0) }), 0, 0))->Body).Spawns.empty());
+		CHECK(DecodeState(sender.Build(world({ TransformEntity(1, 0), TransformEntity(2, 0), TransformEntity(3, 0) }), 0, 10)).Spawns.size() == 1);
+		CHECK(DecodeState(sender.Build(world({ TransformEntity(1, 0), TransformEntity(2, 0), TransformEntity(3, 0) }), 0, 0)).Spawns.empty());
 
-		// Priorities: with room for one update per tick, the priority 3 entity goes twice for each time the priority 1 one
-		// does (it waits until its total catches up), and the priority 1 one is never starved.
+		// Priorities: with room for one update per tick, the higher priority goes more often, and the lower one is never
+		// starved (its total catches up within a few ticks).
 		ReplicationSender updates;
-		updates.Build(NetMessageType::Snapshot, world({ entity(1, 1, 0), entity(2, 3, 0) }), 0, 100000);
-		updates.Acknowledge(1);
+		updates.Build(world({ TransformEntity(1, 0, 1), TransformEntity(2, 0, 3) }), 0, 100000);
+		REQUIRE(updates.Acknowledge(1));
 		int sent[3] = {};
+		int lastLow = 0;
+		int longestWait = 0;
 		for (int tick = 1; tick <= 40; tick++)
 		{
-			const auto state = std::get<NetState>(DecodeMessage(updates.Build(NetMessageType::Snapshot, world({ entity(1, 1, static_cast<float>(tick)), entity(2, 3, static_cast<float>(tick)) }), 0, 40))->Body);
+			const auto x = static_cast<float>(tick);
+			const NetState state = DecodeState(updates.Build(world({ TransformEntity(1, x, 1), TransformEntity(2, x, 3) }), 0, 40));
 			REQUIRE(state.Updates.size() == 1);
-			sent[state.Updates[0].Entity]++;
-			updates.Acknowledge(state.Sequence);
+			const auto entity = static_cast<size_t>(static_cast<uint64_t>(state.Updates[0].Entity));
+			sent[entity]++;
+			if (entity == 1)
+			{
+				longestWait = std::max(longestWait, tick - lastLow);
+				lastLow = tick;
+			}
+			REQUIRE(updates.Acknowledge(state.Sequence));
 		}
-		CHECK(sent[1] == 13);
-		CHECK(sent[2] == 27);
+		CHECK(sent[2] > sent[1]);
+		CHECK(sent[1] + sent[2] == 40);
+		CHECK(longestWait <= 3);
 	}
 
 	TEST_CASE("SimulatedNetwork delivers with latency, loses unreliable messages and keeps reliable ones in order")
@@ -745,7 +989,7 @@ TEST_SUITE("Network")
 		CHECK(session.ClientNetwork(0).GetStatistics().DespawnsApplied == 1);
 		CHECK(session.ClientNetwork(0).GetRemoteEntityCount() == 0);
 
-		// A component removed on the host takes the entity off the clients.
+		// Removing Networked on the host takes the entity off the clients (the host keeps it).
 		Entity marker = CreateNetworked(host, "Marker");
 		REQUIRE(session.RunUntil([&] { return static_cast<bool>(client.GetEntityByUUID(marker.GetUUID())); }, 30));
 		marker.RemoveComponent<NetworkedComponent>();
@@ -852,46 +1096,97 @@ TEST_SUITE("Network")
 		Session session;
 		UUID crateId = 0;
 		UUID ownedId = 0;
+		UUID otherId = 0;
 		Scene& host = session.StartHost([&](Scene& scene) {
 			crateId = CreateNetworked(scene, "Crate").GetUUID();
 			Entity owned = CreateNetworked(scene, "Owned");
 			owned.GetComponent<NetworkedComponent>() = { 1, NetworkAuthority::Owner };
+			owned.AddComponent<PointLightComponent>();
 			ownedId = owned.GetUUID();
+			Entity other = CreateNetworked(scene, "OwnedByTwo");
+			other.GetComponent<NetworkedComponent>() = { 2, NetworkAuthority::Owner };
+			otherId = other.GetUUID();
 		});
 		RawPeer raw(session, session.Link().Connect(session.GetPort()));
 		REQUIRE(raw.Join() == 1);
 		const uint32_t transform = ComponentIndex("Transform");
 		const uint32_t networked = ComponentIndex("Networked");
-		NetState state;
-		state.Sequence = 1;
-		state.Updates.push_back({ crateId, std::nullopt, { { transform, false, false, { { 0, { 50.0, 0.0, 0.0 } } } } } });
-		state.Updates.push_back({ ownedId, std::nullopt, { { networked, false, false, { { 0, 2 } } } } });
-		raw.Send(NetProtocol::EncodeState(NetMessageType::ClientUpdate, state), NetChannel::Unreliable);
-		session.Run(10);
+		const uint32_t light = ComponentIndex("PointLight");
+		const uint32_t spot = ComponentIndex("SpotLight");
+		uint32_t sequence = 0;
+		const auto send = [&](NetEntityUpdate update) {
+			NetState state;
+			state.Sequence = ++sequence;
+			state.Updates.push_back(std::move(update));
+			raw.Send(NetProtocol::EncodeState(NetMessageType::ClientUpdate, state), NetChannel::Unreliable);
+			session.Run(4);
+			return session.HostNetwork().GetStatistics().RejectedRecords;
+		};
+		const auto moveTo = [&](UUID entity, double x) { return NetEntityUpdate{ entity, std::nullopt, { { transform, NetComponentChange::Changed, { { 0, { x, 0.0, 0.0 } } } } } }; };
+		const Entity owned = host.GetEntityByUUID(ownedId);
+		// One rule at a time: a server-authority entity, an entity another client owns.
+		CHECK(send(moveTo(crateId, 50.0)) == 1);
 		CHECK(host.GetEntityByUUID(crateId).GetComponent<TransformComponent>().Translation.x == 0.0f);
-		CHECK(host.GetEntityByUUID(ownedId).GetComponent<NetworkedComponent>().Owner == 1);
-		CHECK(session.HostNetwork().GetStatistics().RejectedRecords == 2);
-		// A value the component refuses (a scale with a NaN) is refused here too; an older message is dropped.
+		CHECK(send(moveTo(otherId, 50.0)) == 2);
+		CHECK(host.GetEntityByUUID(otherId).GetComponent<TransformComponent>().Translation.x == 0.0f);
+		// On its own entity: ownership, a parent, removing or adding a component, and changing one the host's entity lacks.
+		CHECK(send({ ownedId, std::nullopt, { { networked, NetComponentChange::Changed, { { 0, 2 } } } } }) == 3);
+		CHECK(owned.GetComponent<NetworkedComponent>().Owner == 1);
+		CHECK(send({ ownedId, crateId, {} }) == 4);
+		CHECK_FALSE(owned.GetParent());
+		CHECK(send({ ownedId, std::nullopt, { { light, NetComponentChange::Removed, {} } } }) == 5);
+		CHECK(owned.HasComponent<PointLightComponent>());
+		CHECK(send({ ownedId, std::nullopt, { { spot, NetComponentChange::Added, { { 0, { 1.0, 1.0, 1.0 } }, { 1, 5.0 } } } } }) == 6);
+		CHECK_FALSE(owned.HasComponent<SpotLightComponent>());
+		CHECK(send({ ownedId, std::nullopt, { { spot, NetComponentChange::Changed, { { 1, 5.0 } } } } }) == 7);
+		CHECK_FALSE(owned.HasComponent<SpotLightComponent>());
+		// What it may do: change its own entity's fields.
+		CHECK(send(moveTo(ownedId, 4.0)) == 7);
+		CHECK(owned.GetComponent<TransformComponent>().Translation.x == 4.0f);
+		// A value the component refuses (a NaN) is refused here too, and the rest of that component's change with it.
 		NetState invalid;
-		invalid.Sequence = 3;
-		invalid.Updates.push_back({ ownedId, std::nullopt, { { transform, false, false, { { 0, { std::numeric_limits<double>::quiet_NaN(), 0.0, 0.0 } }, { 2, { 2.0, 2.0, 2.0 } } } } } });
+		invalid.Sequence = ++sequence;
+		invalid.Updates.push_back({ ownedId, std::nullopt, { { transform, NetComponentChange::Changed, { { 0, { std::numeric_limits<double>::quiet_NaN(), 0.0, 0.0 } }, { 2, { 2.0, 2.0, 2.0 } } } } } });
 		raw.Send(NetProtocol::EncodeState(NetMessageType::ClientUpdate, invalid), NetChannel::Unreliable);
-		session.Run(10);
+		session.Run(4);
 		CHECK(session.HostNetwork().GetStatistics().RejectedValues == 1);
-		CHECK(host.GetEntityByUUID(ownedId).GetComponent<TransformComponent>().Scale == glm::vec3(1.0f));
+		CHECK(owned.GetComponent<TransformComponent>().Scale == glm::vec3(1.0f));
+		// An older message is dropped.
 		NetState stale;
-		stale.Sequence = 2;
-		stale.Updates.push_back({ ownedId, std::nullopt, { { transform, false, false, { { 0, { 8.0, 0.0, 0.0 } } } } } });
+		stale.Sequence = sequence - 1;
+		stale.Updates.push_back(moveTo(ownedId, 8.0));
 		raw.Send(NetProtocol::EncodeState(NetMessageType::ClientUpdate, stale), NetChannel::Unreliable);
-		session.Run(10);
+		session.Run(4);
 		CHECK(session.HostNetwork().GetStatistics().StaleMessages == 1);
-		CHECK(host.GetEntityByUUID(ownedId).GetComponent<TransformComponent>().Translation.x == 0.0f);
-		// Anything that does not decode ends the connection.
-		raw.Send(Bytes({ 0xEE, 1, 2 }));
-		const auto kicked = raw.WaitFor(NetTransportEvent::Kind::Disconnected);
-		REQUIRE(kicked);
-		CHECK(DisconnectReasonFromCode(kicked->DisconnectCode) == NetDisconnectReason::InvalidPacket);
-		CHECK(session.HostNetwork().GetConnections().empty());
+		CHECK(owned.GetComponent<TransformComponent>().Translation.x == 4.0f);
+		CHECK(session.HostNetwork().GetConnections().size() == 1);
+	}
+
+	TEST_CASE("The host ends a client's connection over messages a client must not send")
+	{
+		Session session;
+		session.StartHost([](Scene& scene) { CreateNetworked(scene, "Crate"); });
+		const auto kickedFor = [&](const std::vector<uint8_t>& message) {
+			RawPeer raw(session, session.Link().Connect(session.GetPort()));
+			raw.Join();
+			raw.Send(message);
+			const auto event = raw.WaitFor(NetTransportEvent::Kind::Disconnected);
+			REQUIRE(event);
+			CHECK(session.HostNetwork().GetConnections().empty());
+			return DisconnectReasonFromCode(event->DisconnectCode);
+		};
+		// Anything that does not decode, a second Hello, a Snapshot, more than a client may send, and an acknowledgement of a
+		// snapshot the host never sent.
+		CHECK(kickedFor(Bytes({ 0xEE, 1, 2 })) == NetDisconnectReason::InvalidPacket);
+		CHECK(kickedFor(NetProtocol::EncodeHello({ NetProtocol::Version, ReplicationSchema::Get().GetHash(), TestIdentity().Game, TestIdentity().GameVersion })) == NetDisconnectReason::InvalidPacket);
+		NetState snapshot;
+		snapshot.Sequence = 1;
+		CHECK(kickedFor(NetProtocol::EncodeState(NetMessageType::Snapshot, snapshot)) == NetDisconnectReason::InvalidPacket);
+		CHECK(kickedFor(std::vector<uint8_t>(NetworkSystem::MaxClientMessageBytes + 1, 0)) == NetDisconnectReason::InvalidPacket);
+		NetState lying;
+		lying.Sequence = 1;
+		lying.Acknowledged = 100000;
+		CHECK(kickedFor(NetProtocol::EncodeState(NetMessageType::ClientUpdate, lying)) == NetDisconnectReason::InvalidPacket);
 	}
 
 	TEST_CASE("The host refuses clients of another protocol, build or game, past its limit, or that never say hello")
@@ -916,14 +1211,12 @@ TEST_SUITE("Network")
 		CHECK(refused(NetProtocol::EncodeHello({ NetProtocol::Version, hash, "NetTest", "1.0.1" })) == NetDisconnectReason::GameMismatch);
 		CHECK(refused(NetProtocol::EncodeState(NetMessageType::ClientUpdate, { 1 })) == NetDisconnectReason::InvalidPacket);
 
-		Scene& first = session.AddClient();
+		session.AddClient();
 		REQUIRE(session.RunUntil([&] { return session.ClientNetwork(0).GetState() == NetConnectionState::Connected; }, 60));
-		Scene& second = session.AddClient();
+		session.AddClient();
 		REQUIRE(session.RunUntil([&] { return session.ClientNetwork(1).GetState() == NetConnectionState::Disconnected; }, 60));
 		CHECK(session.ClientNetwork(1).GetDisconnectReason() == NetDisconnectReason::ServerFull);
 		CHECK(session.ClientNetwork(0).GetState() == NetConnectionState::Connected);
-		(void)first;
-		(void)second;
 
 		RawPeer silent(session, session.Link().Connect(session.GetPort()));
 		REQUIRE(silent.WaitFor(NetTransportEvent::Kind::Connected));
@@ -946,10 +1239,9 @@ TEST_SUITE("Network")
 		CHECK(session.ClientNetwork(0).GetDisconnectReason() == NetDisconnectReason::Timeout);
 		CHECK(session.HostNetwork().GetConnections().empty());
 		// A client whose host never answers did not connect at all.
-		Scene& orphan = session.AddClient();
+		session.AddClient();
 		REQUIRE(session.RunUntil([&] { return session.ClientNetwork(1).GetState() == NetConnectionState::Disconnected; }, 180));
 		CHECK(session.ClientNetwork(1).GetDisconnectReason() == NetDisconnectReason::ConnectionFailed);
-		(void)orphan;
 
 		// Quitting and stopping are told to the other side.
 		session.Link().SetLinkSettings({ .TimeoutSeconds = 1.0f });
@@ -957,12 +1249,11 @@ TEST_SUITE("Network")
 		REQUIRE(session.RunUntil([&] { return session.ClientNetwork(2).GetState() == NetConnectionState::Connected; }, 60));
 		leaver.StopNetwork();
 		REQUIRE(session.RunUntil([&] { return session.HostNetwork().GetConnections().empty(); }, 60));
-		Scene& stayer = session.AddClient();
+		session.AddClient();
 		REQUIRE(session.RunUntil([&] { return session.ClientNetwork(3).GetState() == NetConnectionState::Connected; }, 60));
 		session.Host().StopNetwork();
 		REQUIRE(session.RunUntil([&] { return session.ClientNetwork(3).GetState() == NetConnectionState::Disconnected; }, 60));
 		CHECK(session.ClientNetwork(3).GetDisconnectReason() == NetDisconnectReason::ServerShutdown);
-		(void)stayer;
 	}
 
 	TEST_CASE("Replication converges over a lossy, reordering link, and replays exactly")
@@ -1019,9 +1310,7 @@ TEST_SUITE("Network")
 		UUID crateId = 0;
 		UUID avatarId = 0;
 		Scene& host = session.StartHost([&](Scene& scene) {
-			Entity ground = scene.CreateEntity("Ground");
-			ground.AddComponent<RigidBodyComponent>();
-			ground.AddComponent<BoxColliderComponent>().HalfExtents = { 10.0f, 0.5f, 10.0f };
+			AddGround(scene);
 			Entity crate = CreateNetworked(scene, "Crate", 0, { 0.0f, 4.0f, 0.0f });
 			crate.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Dynamic;
 			crate.AddComponent<BoxColliderComponent>();
@@ -1032,11 +1321,7 @@ TEST_SUITE("Network")
 			avatar.AddComponent<SphereColliderComponent>();
 			avatarId = avatar.GetUUID();
 		});
-		Scene& client = session.AddClient([](Scene& scene) {
-			Entity ground = scene.CreateEntity("Ground");
-			ground.AddComponent<RigidBodyComponent>();
-			ground.AddComponent<BoxColliderComponent>().HalfExtents = { 10.0f, 0.5f, 10.0f };
-		});
+		Scene& client = session.AddClient(AddGround);
 		REQUIRE(session.RunUntil([&] { return client.GetEntityByUUID(crateId) && client.GetEntityByUUID(avatarId); }, 60));
 		session.Run(2);
 		Entity crate = client.GetEntityByUUID(crateId);
@@ -1066,60 +1351,404 @@ TEST_SUITE("Network")
 
 	TEST_CASE("Spawns from a host are checked like scene files, and asset paths stay inside the project")
 	{
-		Session session;
-		std::string error;
-		Scope<NetTransport> listening = session.Link().Listen(0, 4, error);
-		REQUIRE(listening);
-		RawPeer fakeHost(session, std::move(listening));
-		Ref<Scene> clientScene = CreateRef<Scene>("Client");
-		clientScene->CreateEntityWithUUID(77, "Local");
-		clientScene->StartNetwork(CreateScope<NetworkSystem>(*clientScene, NetworkRole::Client, session.Link().Connect(fakeHost.Transport().GetListenPort()), NetworkSettings{}, TestIdentity()));
-		clientScene->OnRuntimeStart();
-		const auto step = [&](int frames) {
-			for (int i = 0; i < frames; i++)
-			{
-				clientScene->OnUpdate(Step);
-				session.Link().Advance(Step);
-			}
-		};
-		std::vector<NetTransportEvent> events;
-		for (int i = 0; i < 30 && events.empty(); i++)
-		{
-			step(1);
-			fakeHost.Transport().Poll(events);
-		}
-		REQUIRE_FALSE(events.empty());
-		const NetPeerHandle client = events[0].Peer;
-		fakeHost.Transport().Send(client, NetChannel::Reliable, NetProtocol::EncodeWelcome({ 1, 30.0f }));
-		step(5);
-		REQUIRE(clientScene->GetNetworkSystem()->GetState() == NetConnectionState::Connected);
-
-		const auto record = [](uint64_t id, nlohmann::json components) { return nlohmann::json{ { "ID", id }, { "Name", "Spawned" }, { "Parent", 0 }, { "Components", std::move(components) } }; };
+		FakeHost host([](Scene& scene) { scene.CreateEntityWithUUID(77, "Local"); });
+		host.Welcome();
+		REQUIRE(host.Network().GetState() == NetConnectionState::Connected);
 		NetState state;
-		state.Sequence = 1;
-		state.Spawns.push_back({ 10, 0, nlohmann::json::array({ record(10, { { "Mesh", { { "Mesh", "../../secret.gltf" } } } }) }) });
-		state.Spawns.push_back({ 11, 0, nlohmann::json::array({ record(11, { { "Mesh", { { "Mesh", "/etc/passwd" } } } }) }) });
-		state.Spawns.push_back({ 12, 0, nlohmann::json::array({ record(12, { { "Transform", { { "Scale", "big" } } } }) }) });
-		state.Spawns.push_back({ 77, 0, nlohmann::json::array({ record(77, nlohmann::json::object()) }) });
-		state.Spawns.push_back({ 13, 0, nlohmann::json::array({ record(14, nlohmann::json::object()) }) });
-		state.Spawns.push_back({ 15, 0, nlohmann::json::array({ record(15, { { "Mesh", { { "Mesh", "Assets/Models/Ok.gltf" } } } }) }) });
-		fakeHost.Transport().Send(client, NetChannel::Unreliable, NetProtocol::EncodeState(NetMessageType::Snapshot, state));
-		step(5);
-		for (uint64_t id : { 10, 11, 12, 13, 14 })
-			CHECK_FALSE(clientScene->GetEntityByUUID(id));
-		CHECK(clientScene->GetEntityByUUID(77).GetName() == "Local");
-		CHECK(clientScene->GetEntityByUUID(15));
-		CHECK(clientScene->GetNetworkSystem()->GetStatistics().RejectedRecords == 5);
+		// Outside the project: up, absolute, a sub-asset key hiding "..", a {UUID, Path} object, a backslash, a drive, and
+		// a list element's asset field.
+		state.Spawns.push_back(Spawn(10, { { "Mesh", { { "Mesh", "../../secret.gltf" } } } }));
+		state.Spawns.push_back(Spawn(11, { { "Mesh", { { "Mesh", "/etc/passwd" } } } }));
+		state.Spawns.push_back(Spawn(12, { { "Mesh", { { "Mesh", "Assets/x#/../../../secret.gltf" } } } }));
+		state.Spawns.push_back(Spawn(13, { { "Mesh", { { "Mesh", { { "UUID", 5 }, { "Path", "../secret.gltf" } } } } } }));
+		state.Spawns.push_back(Spawn(14, { { "Mesh", { { "Mesh", "..\\secret.gltf" } } } }));
+		state.Spawns.push_back(Spawn(15, { { "Mesh", { { "Mesh", "C:/secret.gltf" } } } }));
+		state.Spawns.push_back(Spawn(16, { { "Animator", { { "ClipLibraries", { { { "Mesh", "../secret.gltf" } } } } } } }));
+		// Records a scene file would not pass, and a spawn whose first record is another entity.
+		state.Spawns.push_back(Spawn(17, { { "Transform", { { "Scale", "big" } } } }));
+		state.Spawns.push_back({ 18, 0, nlohmann::json::array({ Record(19, nlohmann::json::object()) }) });
+		// Fine: a project file, and a sub-asset key.
+		state.Spawns.push_back(Spawn(20, { { "Mesh", { { "Mesh", "Assets/Models/Ok.gltf" } } } }));
+		state.Spawns.push_back(Spawn(21, { { "Material", { { "Material", "Assets/Models/Ok.gltf#material/0" } } } }));
+		// An entity this client has already (an authored one the host made networked): it is the same entity.
+		state.Spawns.push_back(Spawn(77, { { "Transform", { { "Translation", { 0.0, 7.0, 0.0 } } } } }));
+		host.Snapshot(state);
+		for (uint64_t id : { 10, 11, 12, 13, 14, 15, 16, 17, 18, 19 })
+		{
+			INFO("entity ", id);
+			CHECK_FALSE(host.Client().GetEntityByUUID(id));
+		}
+		CHECK(host.Client().GetEntityByUUID(20));
+		CHECK(host.Client().GetEntityByUUID(21));
+		const Entity adopted = host.Client().GetEntityByUUID(77);
+		CHECK(adopted.GetName() == "Local");
+		CHECK(adopted.GetComponent<TransformComponent>().Translation.y == 7.0f);
+		CHECK(host.Network().GetRemoteEntityCount() == 3);
+		CHECK(host.Network().GetStatistics().RejectedRecords == 9);
+
+		// Updates follow only for entities the host spawned (or the client took as such).
+		NetState updates;
+		updates.Updates.push_back({ 77, std::nullopt, { { ComponentIndex("Transform"), NetComponentChange::Changed, { { 0, { 0.0, 9.0, 0.0 } } } } } });
+		updates.Updates.push_back({ 10, std::nullopt, { { ComponentIndex("Transform"), NetComponentChange::Changed, { { 0, { 0.0, 9.0, 0.0 } } } } } });
+		host.Snapshot(updates);
+		CHECK(adopted.GetComponent<TransformComponent>().Translation.y == 9.0f);
+		CHECK(host.Network().GetStatistics().RejectedRecords == 10);
 
 		// A message that does not decode ends the session from the client's side.
-		fakeHost.Transport().Send(client, NetChannel::Reliable, Bytes({ 3, 0 }));
-		step(5);
-		CHECK(clientScene->GetNetworkSystem()->GetState() == NetConnectionState::Disconnected);
-		CHECK(clientScene->GetNetworkSystem()->GetDisconnectReason() == NetDisconnectReason::InvalidPacket);
-		clientScene->OnRuntimeStop();
+		host.Send(Bytes({ 3, 0 }));
+		CHECK(host.Network().GetState() == NetConnectionState::Disconnected);
+		CHECK(host.Network().GetDisconnectReason() == NetDisconnectReason::InvalidPacket);
 	}
 
-	TEST_CASE("Network sessions: client IDs come from their own stream, and scene loads wait for a later session")
+	TEST_CASE("A repeated spawn refreshes what the first created, and a child may arrive before its parent")
+	{
+		FakeHost host;
+		host.Welcome();
+		NetState first;
+		first.Spawns.push_back(Spawn(30, { { "Transform", { { "Translation", { 1.0, 0.0, 0.0 } } } }, { "PointLight", nlohmann::json::object() } }));
+		// The child names a parent that has not arrived.
+		first.Spawns.push_back(Spawn(31, nlohmann::json::object(), 40));
+		host.Snapshot(first);
+		const Entity entity = host.Client().GetEntityByUUID(30);
+		REQUIRE(entity);
+		REQUIRE(host.Client().GetEntityByUUID(31));
+		CHECK_FALSE(host.Client().GetEntityByUUID(31).GetParent());
+		// The repeat (its first message unacknowledged) holds the host's newer state: applied, components included.
+		NetState repeat;
+		repeat.Spawns.push_back(Spawn(30, { { "Transform", { { "Translation", { 2.0, 0.0, 0.0 } } } }, { "SpotLight", nlohmann::json::object() } }));
+		repeat.Spawns.push_back(Spawn(40, nlohmann::json::object()));
+		host.Snapshot(repeat);
+		CHECK(entity.GetComponent<TransformComponent>().Translation.x == 2.0f);
+		CHECK_FALSE(entity.HasComponent<PointLightComponent>());
+		CHECK(entity.HasComponent<SpotLightComponent>());
+		CHECK(host.Network().GetStatistics().SpawnsApplied == 3);
+		// The parent arrived: the child goes under it.
+		CHECK(host.Client().GetEntityByUUID(31).GetParent() == host.Client().GetEntityByUUID(40));
+
+		// An entity this client decides: a repeated spawn changes who owns it and which components it has, not its values.
+		NetState owned;
+		owned.Spawns.push_back(Spawn(50, { { "Transform", { { "Translation", { 1.0, 0.0, 0.0 } } } }, { "Networked", { { "Owner", 1 }, { "Authority", "Owner" } } } }));
+		host.Snapshot(owned);
+		const Entity mine = host.Client().GetEntityByUUID(50);
+		REQUIRE(mine);
+		CHECK(host.Network().HasAuthority(mine));
+		NetState ownedAgain;
+		ownedAgain.Spawns.push_back(Spawn(50, { { "Transform", { { "Translation", { 5.0, 0.0, 0.0 } } } }, { "PointLight", nlohmann::json::object() }, { "Networked", { { "Owner", 1 }, { "Authority", "Owner" } } } }));
+		host.Snapshot(ownedAgain);
+		CHECK(mine.GetComponent<TransformComponent>().Translation.x == 1.0f);
+		CHECK(mine.HasComponent<PointLightComponent>());
+		// Handed to another client in the same message: ownership applies first, then the host's values.
+		NetState handedOver;
+		handedOver.Spawns.push_back(Spawn(50, { { "Transform", { { "Translation", { 5.0, 0.0, 0.0 } } } }, { "PointLight", nlohmann::json::object() }, { "Networked", { { "Owner", 2 }, { "Authority", "Owner" } } } }));
+		host.Snapshot(handedOver);
+		CHECK(mine.GetComponent<NetworkedComponent>().Owner == 2);
+		CHECK_FALSE(host.Network().HasAuthority(mine));
+		CHECK(mine.GetComponent<TransformComponent>().Translation.x == 5.0f);
+	}
+
+	TEST_CASE("A client's handshake: a second Welcome, a snapshot before it, no Welcome at all, a lying acknowledgement")
+	{
+		{
+			FakeHost host([](Scene& scene) {
+				Entity mine = CreateNetworked(scene, "Mine");
+				mine.GetComponent<NetworkedComponent>() = { 1, NetworkAuthority::Owner };
+			});
+			// Before the Welcome a client decides nothing networked, even what names it as owner.
+			CHECK_FALSE(host.Network().HasAuthority(host.Client().FindEntityByName("Mine")));
+			NetState early;
+			early.Spawns.push_back(Spawn(60, nlohmann::json::object()));
+			host.Snapshot(early);
+			CHECK_FALSE(host.Client().GetEntityByUUID(60));
+			host.Welcome();
+			CHECK(host.Network().GetState() == NetConnectionState::Connected);
+			host.Welcome();
+			CHECK(host.Network().GetState() == NetConnectionState::Disconnected);
+			CHECK(host.Network().GetDisconnectReason() == NetDisconnectReason::InvalidPacket);
+		}
+		{
+			NetworkSettings settings;
+			settings.TimeoutSeconds = 1.0f;
+			FakeHost host({}, settings);
+			host.Advance(90);
+			CHECK(host.Network().GetState() == NetConnectionState::Disconnected);
+			CHECK(host.Network().GetDisconnectReason() == NetDisconnectReason::HandshakeTimeout);
+		}
+		{
+			FakeHost host;
+			host.Welcome();
+			NetState lying;
+			lying.Acknowledged = 100000;
+			host.Snapshot(lying);
+			CHECK(host.Network().GetState() == NetConnectionState::Disconnected);
+			CHECK(host.Network().GetDisconnectReason() == NetDisconnectReason::InvalidPacket);
+		}
+	}
+
+	TEST_CASE("Networked descendants outlive a despawned parent, and tree members can become networked")
+	{
+		Session session;
+		UUID vehicleId = 0;
+		UUID turretId = 0;
+		UUID wheelId = 0;
+		Scene& host = session.StartHost([&](Scene& scene) {
+			Entity vehicle = CreateNetworked(scene, "Vehicle");
+			Entity turret = scene.CreateChildEntity(vehicle, "Turret");
+			turret.AddComponent<NetworkedComponent>();
+			wheelId = scene.CreateChildEntity(vehicle, "Wheel").GetUUID();
+			vehicleId = vehicle.GetUUID();
+			turretId = turret.GetUUID();
+		});
+		Scene& client = session.AddClient();
+		REQUIRE(session.RunUntil([&] { return client.GetEntityByUUID(vehicleId) && client.GetEntityByUUID(turretId); }, 60));
+		REQUIRE(client.GetEntityByUUID(wheelId));
+		// The wheel came inside the vehicle's spawn; made networked, it is the same entity and updates follow.
+		host.GetEntityByUUID(wheelId).AddComponent<NetworkedComponent>();
+		session.Run(10);
+		Patch(host.GetEntityByUUID(wheelId), "Transform", { { "Translation", { 0.0, 0.0, 3.0 } } });
+		session.Run(10);
+		CHECK(client.FindEntitiesByName("Wheel").size() == 1);
+		CHECK(client.GetEntityByUUID(wheelId).GetComponent<TransformComponent>().Translation.z == 3.0f);
+		CHECK(session.ClientNetwork(0).GetStatistics().RejectedRecords == 0);
+		// The vehicle stops being networked: it goes from the client, its networked children stay (at the root) and still
+		// update.
+		host.GetEntityByUUID(vehicleId).RemoveComponent<NetworkedComponent>();
+		REQUIRE(session.RunUntil([&] { return !client.GetEntityByUUID(vehicleId); }, 30));
+		REQUIRE(client.GetEntityByUUID(turretId));
+		CHECK_FALSE(client.GetEntityByUUID(turretId).GetParent());
+		Patch(host.GetEntityByUUID(turretId), "Transform", { { "Translation", { 4.0, 0.0, 0.0 } } });
+		session.Run(10);
+		CHECK(client.GetEntityByUUID(turretId).GetComponent<TransformComponent>().Translation.x == 4.0f);
+		CHECK(session.ClientNetwork(0).GetRemoteEntityCount() == 2);
+		// Destroyed on the host, everything goes.
+		host.DestroyEntity(host.GetEntityByUUID(vehicleId));
+		REQUIRE(session.RunUntil([&] { return session.ClientNetwork(0).GetRemoteEntityCount() == 0; }, 30));
+		CHECK_FALSE(client.GetEntityByUUID(turretId));
+		CHECK_FALSE(client.GetEntityByUUID(wheelId));
+	}
+
+	TEST_CASE("An authored entity the host makes networked during play is the same entity on clients")
+	{
+		const auto build = [](Scene& scene) { scene.CreateEntityWithUUID(700, "Door"); };
+		Session session;
+		Scene& host = session.StartHost(build);
+		Scene& client = session.AddClient(build);
+		REQUIRE(session.RunUntil([&] { return session.ClientNetwork(0).GetState() == NetConnectionState::Connected; }, 60));
+		Entity door = host.GetEntityByUUID(700);
+		door.AddComponent<NetworkedComponent>();
+		Patch(door, "Transform", { { "Translation", { 0.0, 2.5, 0.0 } } });
+		session.Run(10);
+		CHECK(client.FindEntitiesByName("Door").size() == 1);
+		CHECK(client.GetEntityByUUID(700).GetComponent<TransformComponent>().Translation.y == 2.5f);
+		CHECK(client.GetEntityByUUID(700).HasComponent<NetworkedComponent>());
+		Patch(door, "Transform", { { "Translation", { 0.0, 4.0, 0.0 } } });
+		session.Run(10);
+		CHECK(client.GetEntityByUUID(700).GetComponent<TransformComponent>().Translation.y == 4.0f);
+	}
+
+	TEST_CASE("An owner hears of components the host adds or removes on its entity, and keeps its own values")
+	{
+		Session session;
+		UUID avatarId = 0;
+		Scene& host = session.StartHost([&](Scene& scene) {
+			Entity avatar = CreateNetworked(scene, "Avatar");
+			avatar.GetComponent<NetworkedComponent>() = { 1, NetworkAuthority::Owner };
+			avatarId = avatar.GetUUID();
+		});
+		Scene& owner = session.AddClient();
+		REQUIRE(session.RunUntil([&] { return static_cast<bool>(owner.GetEntityByUUID(avatarId)); }, 60));
+		Patch(owner.GetEntityByUUID(avatarId), "Transform", { { "Translation", { 6.0, 0.0, 0.0 } } });
+		session.Run(10);
+		Patch(host.GetEntityByUUID(avatarId), "PointLight", { { "Intensity", 3.0 } });
+		session.Run(10);
+		Entity mine = owner.GetEntityByUUID(avatarId);
+		REQUIRE(mine.HasComponent<PointLightComponent>());
+		CHECK(mine.GetComponent<PointLightComponent>().Intensity == 3.0f);
+		CHECK(mine.GetComponent<TransformComponent>().Translation.x == 6.0f);
+		// Later field changes are the owner's: the host's do not reach it, the owner's reach the host.
+		Patch(host.GetEntityByUUID(avatarId), "PointLight", { { "Intensity", 8.0 } });
+		session.Run(10);
+		CHECK(mine.GetComponent<PointLightComponent>().Intensity == 3.0f);
+		Patch(mine, "PointLight", { { "Intensity", 5.0 } });
+		session.Run(10);
+		CHECK(host.GetEntityByUUID(avatarId).GetComponent<PointLightComponent>().Intensity == 5.0f);
+		host.GetEntityByUUID(avatarId).RemoveComponent<PointLightComponent>();
+		session.Run(10);
+		CHECK_FALSE(mine.HasComponent<PointLightComponent>());
+	}
+
+	TEST_CASE("The host sends an owner who owns what, and which components it has, never the values it decides")
+	{
+		Session session;
+		UUID ownedId = 0;
+		UUID crateId = 0;
+		Scene& host = session.StartHost([&](Scene& scene) {
+			Entity owned = CreateNetworked(scene, "Owned");
+			owned.GetComponent<NetworkedComponent>() = { 1, NetworkAuthority::Owner };
+			ownedId = owned.GetUUID();
+			crateId = CreateNetworked(scene, "Crate").GetUUID();
+		});
+		RawPeer raw(session, session.Link().Connect(session.GetPort()));
+		REQUIRE(raw.Join() == 1);
+		// Acknowledges every snapshot (as a client would) and collects their updates.
+		uint32_t sequence = 0;
+		std::vector<NetEntityUpdate> updates;
+		const auto listen = [&](int frames) {
+			for (int i = 0; i < frames; i++)
+			{
+				std::vector<NetTransportEvent> events;
+				raw.Transport().Poll(events);
+				for (const NetTransportEvent& event : events)
+				{
+					const auto message = DecodeMessage(event.Data);
+					if (!message || message->Type != NetMessageType::Snapshot)
+						continue;
+					const NetState& state = std::get<NetState>(message->Body);
+					updates.insert(updates.end(), state.Updates.begin(), state.Updates.end());
+					NetState ack;
+					ack.Sequence = ++sequence;
+					ack.Acknowledged = state.Sequence;
+					raw.Send(NetProtocol::EncodeState(NetMessageType::ClientUpdate, ack), NetChannel::Unreliable);
+				}
+				session.Run(1);
+			}
+		};
+		listen(20);
+		updates.clear();
+		Patch(host.GetEntityByUUID(ownedId), "Transform", { { "Translation", { 1.0, 0.0, 0.0 } } });
+		Patch(host.GetEntityByUUID(crateId), "Transform", { { "Translation", { 2.0, 0.0, 0.0 } } });
+		Patch(host.GetEntityByUUID(ownedId), "PointLight", { { "Intensity", 3.0 } });
+		Patch(host.GetEntityByUUID(ownedId), "Networked", { { "Priority", 2.0 }, { "Authority", "Owner" } });
+		listen(20);
+		const uint32_t transform = ComponentIndex("Transform");
+		bool crateMoved = false;
+		bool lightAdded = false;
+		for (const NetEntityUpdate& update : updates)
+			for (const NetComponentUpdate& change : update.Components)
+			{
+				if (update.Entity == ownedId)
+					CHECK_FALSE(change.Component == transform);
+				if (update.Entity == ownedId && change.Component == ComponentIndex("PointLight"))
+					lightAdded = change.Change == NetComponentChange::Added;
+				if (update.Entity == crateId && change.Component == transform)
+					crateMoved = true;
+			}
+		CHECK(crateMoved);
+		CHECK(lightAdded);
+	}
+
+	TEST_CASE("An entity despawned and back before the client acknowledged ends up as one live copy, over a lossy link")
+	{
+		Session session({ .Latency = 0.03f, .Jitter = 0.03f, .Loss = 0.4f, .TimeoutSeconds = 30.0f }, {}, 5);
+		UUID crateId = 0;
+		Scene& host = session.StartHost([&](Scene& scene) { crateId = CreateNetworked(scene, "Crate", 900).GetUUID(); });
+		Scene& client = session.AddClient();
+		REQUIRE(session.RunUntil([&] { return static_cast<bool>(client.GetEntityByUUID(crateId)); }, 600));
+		Entity crate = host.GetEntityByUUID(crateId);
+		for (int i = 0; i < 5; i++)
+		{
+			crate.RemoveComponent<NetworkedComponent>();
+			session.Run(2);
+			crate.AddComponent<NetworkedComponent>();
+			session.Run(1);
+		}
+		Patch(crate, "Transform", { { "Translation", { 0.0, 0.0, 9.0 } } });
+		REQUIRE(session.RunUntil([&] { return client.GetEntityByUUID(crateId) && client.GetEntityByUUID(crateId).GetComponent<TransformComponent>().Translation.z == 9.0f; }, 600));
+		CHECK(client.FindEntitiesByName("Crate").size() == 1);
+		CHECK(session.Link().GetLostCount() > 0);
+		Patch(crate, "Transform", { { "Translation", { 0.0, 0.0, 2.0 } } });
+		REQUIRE(session.RunUntil([&] { return client.GetEntityByUUID(crateId).GetComponent<TransformComponent>().Translation.z == 2.0f; }, 600));
+	}
+
+	TEST_CASE("A value that cannot be sent leaves the component on clients, and a tree too large for a spawn is not sent")
+	{
+		Session session;
+		UUID riggedId = 0;
+		UUID hugeId = 0;
+		Scene& host = session.StartHost([&](Scene& scene) {
+			Entity rigged = CreateNetworked(scene, "Rigged");
+			rigged.AddComponent<AnimatorComponent>().Clip = "Walk";
+			riggedId = rigged.GetUUID();
+			Entity huge = CreateNetworked(scene, "Huge");
+			for (uint32_t i = 0; i < NetProtocol::MaxSpawnEntities; i++)
+				scene.CreateChildEntity(huge, "Part");
+			hugeId = huge.GetUUID();
+		});
+		Scene& client = session.AddClient();
+		REQUIRE(session.RunUntil([&] { return static_cast<bool>(client.GetEntityByUUID(riggedId)); }, 60));
+		session.Run(4);
+		CHECK_FALSE(client.GetEntityByUUID(hugeId));
+		CHECK(session.ClientNetwork(0).GetState() == NetConnectionState::Connected);
+		// C++ can store text that is not UTF-8 (Lua strings too): the component stays as it was on the client.
+		host.GetEntityByUUID(riggedId).GetComponent<AnimatorComponent>().Clip = "\xFF\xFE";
+		session.Run(10);
+		REQUIRE(client.GetEntityByUUID(riggedId).HasComponent<AnimatorComponent>());
+		CHECK(client.GetEntityByUUID(riggedId).GetComponent<AnimatorComponent>().Clip == "Walk");
+		Patch(host.GetEntityByUUID(riggedId), "Animator", { { "Clip", "Run" } });
+		session.Run(10);
+		CHECK(client.GetEntityByUUID(riggedId).GetComponent<AnimatorComponent>().Clip == "Run");
+		// One added while its value cannot be sent waits, then arrives whole.
+		Entity late = CreateNetworked(host, "Late");
+		REQUIRE(session.RunUntil([&] { return static_cast<bool>(client.GetEntityByUUID(late.GetUUID())); }, 30));
+		late.AddComponent<AnimatorComponent>().Clip = "\xFF";
+		session.Run(10);
+		CHECK_FALSE(client.GetEntityByUUID(late.GetUUID()).HasComponent<AnimatorComponent>());
+		Patch(late, "Animator", { { "Clip", "Idle" } });
+		session.Run(10);
+		REQUIRE(client.GetEntityByUUID(late.GetUUID()).HasComponent<AnimatorComponent>());
+		CHECK(client.GetEntityByUUID(late.GetUUID()).GetComponent<AnimatorComponent>().Clip == "Idle");
+	}
+
+	TEST_CASE("A client without its host decides nothing, and a session attached during play")
+	{
+		Session session;
+		UUID mineId = 0;
+		session.StartHost([&](Scene& scene) {
+			AddGround(scene);
+			Entity mine = CreateNetworked(scene, "Mine", 0, { 0.0f, 3.0f, 0.0f });
+			mine.GetComponent<NetworkedComponent>() = { 1, NetworkAuthority::Owner };
+			mine.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Dynamic;
+			mine.AddComponent<BoxColliderComponent>();
+			mineId = mine.GetUUID();
+		});
+		Scene& client = session.AddClient(AddGround);
+		REQUIRE(session.RunUntil([&] { return static_cast<bool>(client.GetEntityByUUID(mineId)); }, 60));
+		session.Run(2);
+		Entity mine = client.GetEntityByUUID(mineId);
+		CHECK(session.ClientNetwork(0).HasAuthority(mine));
+		CHECK_FALSE(client.GetPhysicsWorld()->IsDrivenExternally(mine));
+		session.Host().StopNetwork();
+		REQUIRE(session.RunUntil([&] { return session.ClientNetwork(0).GetState() == NetConnectionState::Disconnected; }, 60));
+		session.Run(1);
+		CHECK_FALSE(session.ClientNetwork(0).HasAuthority(mine));
+		CHECK(client.GetPhysicsWorld()->IsDrivenExternally(mine));
+
+		// Attached mid-play: a host keeps the stream it has (replaying it could reissue the ID of an entity destroyed
+		// meanwhile), a client moves to its own.
+		SimulatedNetwork link;
+		std::string error;
+		Scene hostScene("LateHost");
+		Scene offline("Offline");
+		hostScene.OnRuntimeStart();
+		offline.OnRuntimeStart();
+		CHECK(hostScene.CreateEntity("A").GetUUID() == offline.CreateEntity("A").GetUUID());
+		// Destroyed: a replayed stream would hand its ID out again.
+		hostScene.DestroyEntity(hostScene.FindEntityByName("A"));
+		offline.DestroyEntity(offline.FindEntityByName("A"));
+		auto listening = link.Listen(0, 4, error);
+		const uint16_t port = listening->GetListenPort();
+		hostScene.StartNetwork(CreateScope<NetworkSystem>(hostScene, NetworkRole::Host, std::move(listening), NetworkSettings{}, TestIdentity()));
+		CHECK(hostScene.CreateEntity("B").GetUUID() == offline.CreateEntity("B").GetUUID());
+		Scene clientScene("LateClient");
+		clientScene.OnRuntimeStart();
+		clientScene.CreateEntity("A");
+		clientScene.StartNetwork(CreateScope<NetworkSystem>(clientScene, NetworkRole::Client, link.Connect(port), NetworkSettings{}, TestIdentity()));
+		CHECK(clientScene.CreateEntity("B").GetUUID() != offline.CreateEntity("C").GetUUID());
+		clientScene.OnRuntimeStop();
+		hostScene.OnRuntimeStop();
+		offline.OnRuntimeStop();
+	}
+
+	TEST_CASE("Network sessions: client IDs come from their own stream, and scene loads are refused")
 	{
 		Session session;
 		Scene& host = session.StartHost();
@@ -1148,11 +1777,22 @@ TEST_SUITE("Network")
 		CHECK(settings->TickRate == 60.0f);
 		CHECK(NetworkSettings::FromJson(settings->ToJson(), error) == settings);
 		CHECK(NetworkSettings::FromJson(nlohmann::json::object(), error) == NetworkSettings{});
-		for (const nlohmann::json& bad : { nlohmann::json{ { "Port", 0 } }, nlohmann::json{ { "Port", 70000 } }, nlohmann::json{ { "MaxClients", -1 } }, nlohmann::json{ { "TickRate", 0.5 } }, nlohmann::json{ { "TickRate", "fast" } }, nlohmann::json{ { "MaxBytesPerSecond", 10 } }, nlohmann::json{ { "TimeoutSeconds", 1e9 } }, nlohmann::json{ { "Unknown", 1 } }, nlohmann::json(3) })
+		for (const nlohmann::json& bad : { nlohmann::json{ { "Port", 0 } }, nlohmann::json{ { "Port", 65536 } }, nlohmann::json{ { "Port", 9000.5 } }, nlohmann::json{ { "MaxClients", -1 } }, nlohmann::json{ { "MaxClients", 0 } }, nlohmann::json{ { "MaxClients", 1025 } }, nlohmann::json{ { "TickRate", 0.5 } }, nlohmann::json{ { "TickRate", 240.5 } }, nlohmann::json{ { "TickRate", "fast" } }, nlohmann::json{ { "MaxBytesPerSecond", 1023 } }, nlohmann::json{ { "MaxBytesPerSecond", 104857601 } }, nlohmann::json{ { "TimeoutSeconds", 0.5 } }, nlohmann::json{ { "TimeoutSeconds", 600.5 } }, nlohmann::json{ { "Unknown", 1 } }, nlohmann::json(3) })
 		{
+			INFO(bad.dump());
 			CHECK_FALSE(NetworkSettings::FromJson(bad, error));
-			CHECK_FALSE(error.empty());
+			CHECK(error.find("Network") == 0);
 		}
+		// The edges themselves are fine.
+		for (const nlohmann::json& edge : { nlohmann::json{ { "Port", 1 } }, nlohmann::json{ { "Port", 65535 } }, nlohmann::json{ { "MaxClients", 1 } }, nlohmann::json{ { "MaxClients", 1024 } }, nlohmann::json{ { "TickRate", 1 } }, nlohmann::json{ { "TickRate", 240 } }, nlohmann::json{ { "MaxBytesPerSecond", 1024 } }, nlohmann::json{ { "MaxBytesPerSecond", 104857600 } }, nlohmann::json{ { "TimeoutSeconds", 1 } }, nlohmann::json{ { "TimeoutSeconds", 600 } } })
+		{
+			INFO(edge.dump());
+			CHECK(NetworkSettings::FromJson(edge, error));
+		}
+		NetworkSettings outOfRange;
+		outOfRange.TickRate = std::numeric_limits<float>::quiet_NaN();
+		CHECK_FALSE(outOfRange.Validate().empty());
+		CHECK(NetworkSettings{}.Validate().empty());
 
 		BrecciaTest::TempProject temp("NetworkSettingsProject");
 		REQUIRE(temp.IsValid());

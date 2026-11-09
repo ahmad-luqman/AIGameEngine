@@ -1,26 +1,44 @@
 #include "Breccia/Network/NetBuffer.h"
 
+#include <algorithm>
 #include <bit>
 #include <cstring>
 
 namespace Breccia {
 
+	namespace {
+
+		template<typename T>
+		void WriteLittleEndian(std::vector<uint8_t>& bytes, T value)
+		{
+			for (size_t i = 0; i < sizeof(T); i++)
+				bytes.push_back(static_cast<uint8_t>(value >> (8 * i)));
+		}
+
+		template<typename T>
+		T ReadLittleEndian(const uint8_t* data)
+		{
+			T value = 0;
+			for (size_t i = sizeof(T); i-- > 0;)
+				value = static_cast<T>((value << 8) | data[i]);
+			return value;
+		}
+
+	}
+
 	void NetWriter::WriteU16(uint16_t value)
 	{
-		WriteU8(static_cast<uint8_t>(value));
-		WriteU8(static_cast<uint8_t>(value >> 8));
+		WriteLittleEndian(m_Bytes, value);
 	}
 
 	void NetWriter::WriteU32(uint32_t value)
 	{
-		for (int shift = 0; shift < 32; shift += 8)
-			WriteU8(static_cast<uint8_t>(value >> shift));
+		WriteLittleEndian(m_Bytes, value);
 	}
 
 	void NetWriter::WriteU64(uint64_t value)
 	{
-		for (int shift = 0; shift < 64; shift += 8)
-			WriteU8(static_cast<uint8_t>(value >> shift));
+		WriteLittleEndian(m_Bytes, value);
 	}
 
 	void NetWriter::WriteVarUInt(uint64_t value)
@@ -84,33 +102,26 @@ namespace Breccia {
 
 	bool NetReader::ReadU16(uint16_t& value)
 	{
-		const uint8_t* data = Take(2);
-		if (!data)
-			return false;
-		value = static_cast<uint16_t>(data[0] | (data[1] << 8));
-		return true;
+		const uint8_t* data = Take(sizeof(value));
+		if (data)
+			value = ReadLittleEndian<uint16_t>(data);
+		return data != nullptr;
 	}
 
 	bool NetReader::ReadU32(uint32_t& value)
 	{
-		const uint8_t* data = Take(4);
-		if (!data)
-			return false;
-		value = 0;
-		for (int i = 3; i >= 0; i--)
-			value = (value << 8) | data[i];
-		return true;
+		const uint8_t* data = Take(sizeof(value));
+		if (data)
+			value = ReadLittleEndian<uint32_t>(data);
+		return data != nullptr;
 	}
 
 	bool NetReader::ReadU64(uint64_t& value)
 	{
-		const uint8_t* data = Take(8);
-		if (!data)
-			return false;
-		value = 0;
-		for (int i = 7; i >= 0; i--)
-			value = (value << 8) | data[i];
-		return true;
+		const uint8_t* data = Take(sizeof(value));
+		if (data)
+			value = ReadLittleEndian<uint64_t>(data);
+		return data != nullptr;
 	}
 
 	bool NetReader::ReadVarUInt(uint64_t& value)
@@ -137,16 +148,16 @@ namespace Breccia {
 		uint64_t bits = 0;
 		if (!ReadVarUInt(bits))
 			return false;
-		value = static_cast<int64_t>((bits >> 1) ^ (~(bits & 1) + 1));
+		value = static_cast<int64_t>(bits >> 1) ^ -static_cast<int64_t>(bits & 1);
 		return true;
 	}
 
-	bool NetReader::ReadCount(uint32_t& value, uint32_t max)
+	bool NetReader::ReadCount(uint32_t& value, uint64_t max)
 	{
 		uint64_t wide = 0;
 		if (!ReadVarUInt(wide))
 			return false;
-		if (wide > max)
+		if (wide > std::min<uint64_t>(max, UINT32_MAX))
 		{
 			m_Failed = true;
 			return false;

@@ -14,8 +14,8 @@ namespace Breccia {
 	{
 		// A peer that acknowledges nothing for this long is disconnected (TimedOut), and so is an unanswered attempt.
 		float TimeoutSeconds = 10.0f;
-		// Largest message accepted or sent, and the most a peer may have waiting to be reassembled: a peer cannot make the
-		// transport buffer more than this.
+		// Largest message accepted or sent. A peer may leave at most twice this waiting to be reassembled, so it cannot make
+		// the transport buffer more.
 		size_t MaxMessageBytes = size_t{ 1024 } * 1024;
 	};
 

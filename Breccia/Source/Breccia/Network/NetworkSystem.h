@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -37,6 +38,26 @@ namespace Breccia {
 		Disconnected
 	};
 
+	// Messages and bytes the transport accepted to send, and received.
+	struct NetTraffic
+	{
+		uint64_t MessagesSent = 0;
+		uint64_t MessagesReceived = 0;
+		uint64_t BytesSent = 0;
+		uint64_t BytesReceived = 0;
+
+		void Sent(size_t bytes)
+		{
+			MessagesSent++;
+			BytesSent += bytes;
+		}
+		void Received(size_t bytes)
+		{
+			MessagesReceived++;
+			BytesReceived += bytes;
+		}
+	};
+
 	// One connection as a host or client sees it.
 	struct NetConnectionInfo
 	{
@@ -44,29 +65,25 @@ namespace Breccia {
 		uint32_t PeerId = 0;
 		std::string Address;
 		float RoundTripTime = 0.0f;
-		// Entities the peer has acknowledged (a host's connections only).
+		// A host's connection: the entities whose spawn the client acknowledged. A client's: the entities it received from
+		// the host and still has.
 		size_t KnownEntities = 0;
-		uint64_t MessagesSent = 0;
-		uint64_t MessagesReceived = 0;
-		uint64_t BytesSent = 0;
-		uint64_t BytesReceived = 0;
+		NetTraffic Traffic;
 	};
 
 	// Totals since the session started.
 	struct NetworkStatistics
 	{
-		uint64_t MessagesSent = 0;
-		uint64_t MessagesReceived = 0;
-		uint64_t BytesSent = 0;
-		uint64_t BytesReceived = 0;
+		NetTraffic Traffic;
 		// State messages older than one already applied (dropped).
 		uint64_t StaleMessages = 0;
 		uint64_t SpawnsApplied = 0;
 		uint64_t DespawnsApplied = 0;
 		uint64_t UpdatesApplied = 0;
-		// Replicated values the receiving component refused (ComponentRegistry validation), and records naming entities the
-		// sender may not change.
+		// Replicated values the receiving component refused (ComponentRegistry validation).
 		uint64_t RejectedValues = 0;
+		// Records not applied: spawns refused (invalid records, files outside the project), updates naming an entity the
+		// receiver does not have or the sender may not change, and structure changes from clients.
 		uint64_t RejectedRecords = 0;
 	};
 
@@ -76,18 +93,25 @@ namespace Breccia {
 	// A client applies them through ComponentRegistry, so every value passes the same checks as a file's, and sends back
 	// the replicated fields of entities whose Authority is Owner and whose Owner is its peer ID, which the host checks
 	// and applies. Peers drive the dynamic bodies of entities they have no authority over kinematically
-	// (PhysicsWorld::SetDrivenExternally).
+	// (PhysicsWorld::SetDrivenExternally; this system is its only caller).
 	//
 	// Receive runs before the frame's scripts and Send after its last system, both on the main thread; time comes only
 	// from the frame steps they are given, so a fixed timestep over a SimulatedNetwork replays exactly. A client removes
-	// the networked entities of its own copy of the scene when the host accepts it: the host spawns its own. Clients
-	// should not destroy networked entities; one a client destroys stays gone until the host despawns it.
+	// the networked entities of its own copy of the scene when the host accepts it (the host spawns its own), and takes a
+	// spawn naming an entity it already has (an authored one the host made networked) as that entity. A client should not
+	// destroy networked entities: one it destroys stays gone for the rest of the session, as does one whose spawn it
+	// refused (logged), since the host counts both as delivered.
 	class NetworkSystem
 	{
 	public:
 		// The largest message a host sends, and a client: the host refuses (InvalidPacket) a larger one before decoding.
 		static constexpr size_t MaxHostMessageBytes = size_t{ 1024 } * 1024;
 		static constexpr size_t MaxClientMessageBytes = size_t{ 64 } * 1024;
+		// Connections a host's transport accepts beyond MaxClients, so that a client past the limit is told the host is
+		// full (ServerFull) instead of never hearing back.
+		static constexpr uint32_t SpareTransportSlots = 4;
+		// A child waiting this long for a parent that has not arrived is reported.
+		static constexpr float PendingParentWarningSeconds = 1.0f;
 
 		// What a client must match to join: the game and its version (the project's Name and Version).
 		struct Identity
@@ -98,10 +122,11 @@ namespace Breccia {
 			static Identity FromActiveProject();
 		};
 
-		// transport: a listening transport (Host) or a connecting one (Client). Attach the system to a scene with
-		// Scene::StartNetwork.
+		// transport: a listening transport (Host) or a connecting one (Client). settings must pass
+		// NetworkSettings::Validate. Attach the system to a scene with Scene::StartNetwork.
 		NetworkSystem(Scene& scene, NetworkRole role, Scope<NetTransport> transport, const NetworkSettings& settings, Identity identity);
-		// Tells every peer the session ended (ServerShutdown from a host, ClientQuit from a client).
+		// Tells every peer the session ended (ServerShutdown from a host, ClientQuit from a client, even one still
+		// connecting).
 		~NetworkSystem();
 
 		NetworkSystem(const NetworkSystem&) = delete;
@@ -109,7 +134,8 @@ namespace Breccia {
 
 		// Receives and applies what arrived, then drives bodies by authority. Called by Scene::OnUpdate before scripts.
 		void Receive(float deltaTime);
-		// Sends this tick's messages when one is due. Called by Scene::OnUpdate after the frame's systems.
+		// Sends this tick's messages when one is due (at most one tick per frame). Called by Scene::OnUpdate after the
+		// frame's systems.
 		void Send(float deltaTime);
 
 		// Whether this peer decides the entity: everything not networked; on a host, every networked entity except those
@@ -123,7 +149,6 @@ namespace Breccia {
 		// Why a client's connection ended (None while it lasts).
 		NetDisconnectReason GetDisconnectReason() const { return m_DisconnectReason; }
 		uint16_t GetListenPort() const;
-		const NetworkSettings& GetSettings() const { return m_Settings; }
 		// A host's admitted clients, in join order; a client's connection to its host (none before it is accepted).
 		std::vector<NetConnectionInfo> GetConnections() const;
 		const NetworkStatistics& GetStatistics() const { return m_Statistics; }
@@ -139,44 +164,53 @@ namespace Breccia {
 			// 0 until its Hello is accepted.
 			uint32_t PeerId = 0;
 			float ConnectedAt = 0.0f;
-			ReplicationSender Sender = ReplicationSender(ReplicationSenderOptions{ .Spawns = true, .MaxMessageBytes = MaxHostMessageBytes });
+			ReplicationSender Sender = ReplicationSender(ReplicationSenderOptions{ .Direction = ReplicationDirection::HostToClient, .MaxMessageBytes = MaxHostMessageBytes });
 			// The newest ClientUpdate applied, which snapshots acknowledge.
 			uint32_t LastApplied = 0;
 			// Bytes this connection may still send (its budget, refilled at MaxBytesPerSecond).
 			double Tokens = 0.0;
-			uint64_t MessagesSent = 0;
-			uint64_t MessagesReceived = 0;
-			uint64_t BytesSent = 0;
-			uint64_t BytesReceived = 0;
-			// Kinds of problem already logged for this client.
+			NetTraffic Traffic;
+			// Problems already logged for this client.
 			std::unordered_set<std::string> Reported;
+
+			bool IsAdmitted() const { return PeerId != 0; }
 		};
 
-		void HandleEvent(NetTransportEvent& event);
+		// An entity waiting for its parent to arrive.
+		struct PendingParent
+		{
+			UUID Parent = 0;
+			float Since = 0.0f;
+			bool Reported = false;
+		};
+
+		void HandleEvent(const NetTransportEvent& event);
 		void HandleHostMessage(Connection& connection, const std::vector<uint8_t>& data);
 		void HandleClientMessage(const std::vector<uint8_t>& data);
 		// Ends a host's connection with a reason (logged).
-		void Kick(Connection& connection, NetDisconnectReason reason, const std::string& detail);
+		void Kick(NetPeerHandle handle, NetDisconnectReason reason, const std::string& detail);
 		// Ends a client's connection to its host.
 		void LeaveHost(NetDisconnectReason reason, bool tellHost);
 		void AcceptHello(Connection& connection, const NetHello& hello);
 		void ApplyClientUpdate(Connection& connection, const NetState& state);
 		void ApplySnapshot(const NetState& state);
 		void ApplySpawn(const NetEntitySpawn& spawn);
+		void ApplyDespawn(UUID uuid);
 		void ApplyUpdate(Entity entity, const NetEntityUpdate& update, bool fromHost, std::unordered_set<std::string>& reported);
 		void ApplyParent(Entity entity, UUID parent);
+		void WaitForParent(UUID child, UUID parent);
 		void ResolvePendingParents();
-		// Applies a repeated spawn to the entity an earlier one created: its replicated fields, components and parent.
+		// Applies a repeated spawn to the entity an earlier one created (or an existing one it names): its replicated
+		// fields, components and parent.
 		void RefreshFromSpawn(Entity entity, const NetEntitySpawn& spawn);
 		void RemoveLocalNetworkedEntities();
 		void UpdateDrivenBodies();
 		ReplicationWorld CaptureWorld() const;
 		std::optional<std::vector<uint8_t>> BuildSpawn(const ReplicatedEntity& entity) const;
 		bool IsActivePeer(uint32_t peerId) const;
+		uint32_t GetAdmittedCount() const;
 		Connection* FindConnection(NetPeerHandle handle);
-		// Logs a problem once per kind (per client on a host).
-		void Report(std::unordered_set<std::string>& reported, const std::string& kind, const std::string& message) const;
-		void Transmit(NetPeerHandle handle, NetChannel channel, const std::vector<uint8_t>& data, Connection* connection);
+		void Transmit(NetPeerHandle handle, NetChannel channel, const std::vector<uint8_t>& data, NetTraffic& traffic);
 
 		Scene& m_Scene;
 		NetworkRole m_Role;
@@ -190,29 +224,27 @@ namespace Breccia {
 		float m_TickAccumulator = 0.0f;
 		float m_SinceLastTick = 0.0f;
 		NetworkStatistics m_Statistics;
+		// Problems already logged (a host's own, or a client's about its host).
+		mutable std::unordered_set<std::string> m_Reported;
 
 		// Host: connections by transport handle (admitted or waiting for their Hello), and the next peer ID.
 		std::map<NetPeerHandle, Connection> m_Connections;
 		uint32_t m_NextPeerId = 1;
 
-		// Client: the host's connection, the newest snapshot applied, what goes back, and what the host spawned here.
+		// Client: the host's connection (set once the transport connects, when the Hello goes), the newest snapshot applied,
+		// what goes back, and what the host spawned here.
 		std::optional<NetPeerHandle> m_HostHandle;
 		std::string m_HostAddress;
-		bool m_HostConnected = false;
+		float m_HelloSentAt = 0.0f;
 		uint32_t m_LastSnapshot = 0;
 		ReplicationSender m_ClientSender;
 		double m_ClientTokens = 0.0;
-		uint64_t m_HostMessagesSent = 0;
-		uint64_t m_HostMessagesReceived = 0;
-		uint64_t m_HostBytesSent = 0;
-		uint64_t m_HostBytesReceived = 0;
+		NetTraffic m_HostTraffic;
 		std::unordered_set<UUID> m_RemoteEntities;
-		// Entities waiting for a parent that has not arrived yet (child -> parent).
-		std::map<UUID, UUID> m_PendingParents;
-		mutable std::unordered_set<std::string> m_Reported;
+		std::map<UUID, PendingParent> m_PendingParents;
 
-		// Entities whose body this peer drives kinematically.
-		std::unordered_set<UUID> m_DrivenBodies;
+		// Entities whose body this peer drives kinematically, in ID order (physics rebuilds follow it).
+		std::set<UUID> m_DrivenBodies;
 	};
 
 }

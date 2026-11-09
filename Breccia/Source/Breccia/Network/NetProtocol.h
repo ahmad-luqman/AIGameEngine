@@ -16,11 +16,12 @@ namespace Breccia {
 
 	class ReplicationSchema;
 
-	// Why a connection ended. Sent as the transport's disconnect code, so a peer learns the reason before it goes.
+	// Why a connection ended. Sent as the transport's disconnect code, so a peer learns it with the disconnect (unless that
+	// datagram is lost: then it times out).
 	enum class NetDisconnectReason : uint32_t
 	{
 		None = 0,
-		// The client left (Disconnect, or the game stopped).
+		// The client left (Scene::StopNetwork, or the end of Play).
 		ClientQuit,
 		// The host stopped its session.
 		ServerShutdown,
@@ -39,12 +40,14 @@ namespace Breccia {
 		InvalidPacket,
 		// The host could not be reached, or refused the connection at the transport level.
 		ConnectionFailed,
+		// A code this build does not know (a newer peer's); never sent.
+		Unknown,
 		Count
 	};
 
-	// "client quit", "timed out", ...; "unknown reason" for a code outside the enum (a newer peer's).
+	// "the client left", "the connection timed out", ...
 	const char* DescribeDisconnectReason(NetDisconnectReason reason);
-	// Reads a transport disconnect code, mapping codes this build does not know to None.
+	// Reads a transport disconnect code: 0 is None, codes this build does not know are Unknown.
 	NetDisconnectReason DisconnectReasonFromCode(uint32_t code);
 
 	enum class NetMessageType : uint8_t
@@ -82,14 +85,23 @@ namespace Breccia {
 		nlohmann::json Value;
 	};
 
-	// One component of an updated entity: removed, or (added or changed) with the replicated fields that differ.
+	// What happened to a component of an updated entity.
+	enum class NetComponentChange : uint8_t
+	{
+		// Some of its replicated fields changed (at least one is listed).
+		Changed = 0,
+		// It is gone from the entity (no fields).
+		Removed,
+		// It is new on the entity (every replicated field is listed); repeated until acknowledged.
+		Added
+	};
+
+	// One component of an updated entity. Only components that declare replicated fields appear.
 	struct NetComponentUpdate
 	{
 		// Index into ReplicationSchema::GetComponents.
 		uint32_t Component = 0;
-		bool Removed = false;
-		// Present: the component exists on the sender (sent once when it is added, with every replicated field).
-		bool Added = false;
+		NetComponentChange Change = NetComponentChange::Changed;
 		std::vector<NetFieldValue> Fields;
 	};
 
@@ -127,14 +139,16 @@ namespace Breccia {
 		std::variant<NetHello, NetWelcome, NetState> Body;
 	};
 
-	// The wire format of every message: a type byte, then the body. Encoders write what decoders accept, and decoders
-	// treat their input as hostile (NetReader); every count is bounded.
+	// The wire format of every message: a type byte, then the body. Decoders treat their input as hostile (NetReader),
+	// bound every count and check every record with CheckUpdate and CheckSpawn; encoders write whatever they are given (the
+	// tests encode invalid records on purpose), so producers check their records with the same functions.
 	namespace NetProtocol {
 
 		// "BRNT", first in a Hello: anything else is not a Breccia client.
 		inline constexpr uint32_t Magic = 0x544E5242u;
 		// Bump with every change to the format below.
 		inline constexpr uint32_t Version = 1;
+		// Longest game name or version in a Hello (ProjectConfig::MaxTextLength, checked where both are known).
 		inline constexpr size_t MaxTextLength = 256;
 		inline constexpr uint32_t MaxRecords = 4096;
 		inline constexpr uint32_t MaxComponentsPerEntity = 256;
@@ -150,6 +164,14 @@ namespace Breccia {
 		std::vector<uint8_t> AssembleState(NetMessageType type, uint32_t sequence, uint32_t acknowledged, std::span<const std::vector<uint8_t>> spawns, std::span<const std::vector<uint8_t>> updates, std::span<const UUID> despawns);
 		// Empty when a value cannot be encoded.
 		std::vector<uint8_t> EncodeState(NetMessageType type, const NetState& state);
+
+		// What is wrong with a record, or an empty string: an entity ID of 0 or its own parent, nothing to say, a component
+		// the schema does not have or that declares no replicated fields, a core component added or removed, a removed one
+		// with fields, an added one without every replicated field, a changed one without any, a field index out of range or
+		// repeated.
+		std::string CheckUpdate(const NetEntityUpdate& update, const ReplicationSchema& schema);
+		// The same for a spawn: its IDs, and 1 to MaxSpawnEntities records (whose contents SceneSerializer checks).
+		std::string CheckSpawn(const NetEntitySpawn& spawn);
 
 		// Decodes one message, checking component and field indices against the schema. A Hello whose version is not
 		// Version decodes with only ProtocolVersion set, so the host can answer ProtocolMismatch. nullopt (with

@@ -214,9 +214,9 @@ namespace Breccia {
 		// --- Network session ---------------------------------------------------------------------
 		// Attaches a network session (Network/NetworkSystem) until StopNetwork or the end of Play: during Play it receives
 		// before the scripts of every update and sends after the last system. Attach it before OnRuntimeStart: a client's
-		// runtime entity UUIDs then come from a stream of their own (the session seed mixed with a constant), so what a
-		// client spawns locally never takes an ID the host's stream gives its networked entities. Scene loads are refused
-		// while one is attached. Replacing a session ends the old one.
+		// runtime entity UUIDs then come from a stream of their own (the session seed mixed with a constant), independent of
+		// the host's, so what a client spawns locally practically never takes an ID the host gives its networked entities.
+		// Scene loads are refused while one is attached. Replacing a session ends the old one.
 		void StartNetwork(Scope<NetworkSystem> network);
 		// Ends the session (peers are told: ServerShutdown from a host, ClientQuit from a client).
 		void StopNetwork();

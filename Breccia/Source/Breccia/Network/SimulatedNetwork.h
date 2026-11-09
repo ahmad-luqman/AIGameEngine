@@ -32,6 +32,7 @@ namespace Breccia {
 	class SimulatedNetwork
 	{
 	public:
+		// The settings must be finite and non-negative, with Loss in [0, 1].
 		explicit SimulatedNetwork(SimulatedLinkSettings settings = {}, uint32_t seed = 1);
 		~SimulatedNetwork();
 
@@ -50,9 +51,7 @@ namespace Breccia {
 		float GetTime() const;
 		// Applies to messages sent from now on.
 		void SetLinkSettings(const SimulatedLinkSettings& settings);
-		const SimulatedLinkSettings& GetLinkSettings() const;
-		// Messages delivered and lost so far, for tests that check the link did what they meant.
-		uint64_t GetDeliveredCount() const;
+		// Messages lost so far, for tests that check the link did what they meant.
 		uint64_t GetLostCount() const;
 
 		struct State;
