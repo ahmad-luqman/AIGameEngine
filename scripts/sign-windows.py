@@ -19,9 +19,10 @@ with
 Signatures use SHA-256 and an RFC 3161 timestamp (default http://timestamp.digicert.com), which keeps them valid after
 the certificate expires. A signing that fails because of the timestamp server (signtool names it, or reports a network
 error) is tried again twice, after 5 and 15 seconds; --no-timestamp signs without one. Every file is then checked with
-`signtool verify /pa` (and, with --thumbprint, that this certificate signed it), which requires a certificate that
-chains to a root this machine trusts; --allow-untrusted verifies each file on its own and accepts a failure only when it
-is an untrusted root, for test certificates.
+`signtool verify /pa /v`, which requires a certificate that chains to a root this machine trusts, and with --thumbprint
+that this certificate is in each file's chain (verify's verbose output lists each certificate's SHA-1 hash).
+--allow-untrusted verifies each file on its own and accepts a failure only when it is an untrusted root, for test
+certificates (whose signer that leaves unchecked).
 
 signtool comes from --signtool, the SIGNTOOL environment variable, PATH, or the newest Windows 10/11 SDK. It exits 2 for
 invalid options, and 1 when a file, a folder's code or signtool is missing, or signing or verifying fails.
@@ -114,8 +115,14 @@ def run(arguments):
     return completed, (completed.stdout + completed.stderr).strip()
 
 
+def mentions(output, texts):
+    """Whether signtool's output holds one of the texts, ignoring case and how signtool wrapped its lines."""
+    flat = " ".join(output.lower().split())
+    return any(text in flat for text in texts)
+
+
 def is_timestamp_failure(output):
-    return any(text in output.lower() for text in TIMESTAMP_FAILURES)
+    return mentions(output, TIMESTAMP_FAILURES)
 
 
 def main():
@@ -161,16 +168,18 @@ def main():
         print(f"sign-windows: the timestamp server failed, trying again in {delay} s: {output}")
         time.sleep(delay)
 
-    # /sha1 here checks that the certificate asked for signed each file, not merely some trusted one. With
-    # --allow-untrusted each file is verified alone, so one file's untrusted root cannot cover another's other failure.
-    verify = [signtool, "verify", "/pa"] + (["/sha1", options.thumbprint] if options.thumbprint else [])
+    # With --allow-untrusted each file is verified alone, so one file's untrusted root cannot cover another's other failure.
     untrusted = False
     for batch in ([[name] for name in names] if options.allow_untrusted else [names]):
-        verified, output = run(verify + batch)
-        if verified.returncode != 0 and options.allow_untrusted and any(text in output.lower() for text in UNTRUSTED_ROOT):
+        verified, output = run([signtool, "verify", "/pa", "/v"] + batch)
+        if verified.returncode != 0 and options.allow_untrusted and mentions(output, UNTRUSTED_ROOT):
             untrusted = True
         elif verified.returncode != 0:
             fail(f"signtool verify exited with code {verified.returncode} (is the certificate trusted on this machine?): {output}")
+        # A trusted signature by another certificate (a second one in the store) is no signature by this one: the verbose
+        # output lists each file's chain, the signer among it, by SHA-1 hash ("SHA1 hash: <40 digits>").
+        elif options.thumbprint and re.sub(r"\s", "", output).lower().count(f"sha1hash:{options.thumbprint.lower()}") < len(batch):
+            fail(f"signtool verify does not list the certificate {options.thumbprint} for every file: {output}")
     print(f"sign-windows: signed {', '.join(file.name for file in files)}{'' if options.no_timestamp else ' (timestamped)'}"
           f"{', by a certificate this machine does not trust' if untrusted else ''}")
 

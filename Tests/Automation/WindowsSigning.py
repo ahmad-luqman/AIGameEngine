@@ -20,7 +20,8 @@ THUMBPRINT = "0123456789abcdef0123456789ABCDEF01234567"
 # call for another reason, "path" every sign call with an error that only mentions a path named timestamp, "verify" every
 # verify call, "untrusted" every verify call with an untrusted root ("untrustedcode" by its error code alone, as Windows
 # in another language says it), and "mixed" a verify call with an untrusted root for files whose name holds "Trusted"
-# and another failure for the rest.
+# and another failure for the rest, and "othersigner" a trusted verify call by another certificate. A verify call lists,
+# for each file, the certificate the last sign call named (as `signtool verify /v` lists each file's chain).
 STAND_IN = r"""
 import json, os, sys
 log = os.environ["STANDIN_LOG"]
@@ -37,7 +38,8 @@ if command == "sign" and mode in ("timestamp", "network"):
         else:
             print(f"SignTool Error: An unexpected internal error has occurred. Error information: SignerSign() failed. ({code or '0x80072ee2'})")
         sys.exit(1)
-untrusted_root = "SignTool Error: A certificate chain processed, but terminated in a root certificate which is not trusted by the trust provider."
+# Wrapped as signtool wraps it.
+untrusted_root = "SignTool Error: A certificate chain processed, but terminated in a root\n\tcertificate which is not trusted by the trust provider."
 if command == "verify" and (mode == "untrusted" or (mode == "mixed" and all("Trusted" in name for name in sys.argv[2:] if name.endswith(".exe")))):
     print(untrusted_root)
     sys.exit(1)
@@ -53,6 +55,12 @@ if command == "sign" and mode == "path":
 if command == mode:
     print(f"SignTool Error: {command} failed for a reason of its own.")
     sys.exit(1)
+if command == "verify":
+    signs = [json.loads(line) for line in open(log) if json.loads(line)[0] == "sign"]
+    named = signs[-1][signs[-1].index("/sha1") + 1] if signs and "/sha1" in signs[-1] else ""
+    signer = "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF" if mode == "othersigner" else named
+    for name in [argument for argument in sys.argv[2:] if argument not in ("/pa", "/v")]:
+        print(f"Verifying: {name}\nSigning Certificate Chain:\n    Issued to: Test\n    SHA1 hash: {signer}\n")
 print("Successfully done.")
 """
 
@@ -108,7 +116,11 @@ def check_stand_in(temp):
     signed = sign([str(folder), str(tool), str(folder / "Game.exe"), "--thumbprint", THUMBPRINT, "--description", "My Game"], env)
     require(signed.returncode == 0 and "signed Game.exe, Helper.DLL, Tool.exe (timestamped)" in signed.stdout, f"signing: {signed.stdout}{signed.stderr}")
     expected_sign = ["sign", "/fd", "SHA256", "/sha1", THUMBPRINT, "/tr", "http://timestamp.digicert.com", "/td", "SHA256", "/d", "My Game", game, helper, str(tool)]
-    require(take_calls(log) == [expected_sign, ["verify", "/pa", "/sha1", THUMBPRINT, game, helper, str(tool)]], "signtool calls")
+    require(take_calls(log) == [expected_sign, ["verify", "/pa", "/v", game, helper, str(tool)]], "signtool calls")
+    # A trusted signature by another certificate is refused.
+    signed = sign([game, "--thumbprint", THUMBPRINT], dict(env, STANDIN_FAIL="othersigner"))
+    require(signed.returncode == 1 and f"does not list the certificate {THUMBPRINT}" in signed.stderr, f"another signer: {signed.stdout}{signed.stderr}")
+    take_calls(log)
     # Files of the same name in two folders are two files.
     signed = sign([game, str(temp / "Other" / "Game.exe"), "--thumbprint", THUMBPRINT, "--no-timestamp"], env)
     require(signed.returncode == 0 and take_calls(log)[0][-2:] == [game, str(temp / "Other" / "Game.exe")], f"two files named Game.exe: {signed.stderr}")
@@ -118,7 +130,7 @@ def check_stand_in(temp):
     # A signing service's library instead of a certificate, without a timestamp.
     signed = sign([game, "--dlib", "C:/Dlib.dll", "--dlib-metadata", "C:/metadata.json", "--no-timestamp"], env)
     require(signed.returncode == 0, f"--dlib: {signed.stdout}{signed.stderr}")
-    require(take_calls(log) == [["sign", "/fd", "SHA256", "/dlib", "C:/Dlib.dll", "/dmdf", "C:/metadata.json", game], ["verify", "/pa", game]], "--dlib calls")
+    require(take_calls(log) == [["sign", "/fd", "SHA256", "/dlib", "C:/Dlib.dll", "/dmdf", "C:/metadata.json", game], ["verify", "/pa", "/v", game]], "--dlib calls")
     signed = sign([game, "--thumbprint", THUMBPRINT, "--timestamp-url", "http://timestamp.acs.microsoft.com"], env)
     require(signed.returncode == 0 and take_calls(log)[0][5:9] == ["/tr", "http://timestamp.acs.microsoft.com", "/td", "SHA256"], f"--timestamp-url: {signed.stderr}")
 
@@ -137,7 +149,7 @@ def check_stand_in(temp):
     take_calls(log)
     signed = sign([str(trusted), game, "--thumbprint", THUMBPRINT, "--allow-untrusted"], dict(env, STANDIN_FAIL="mixed"))
     require(signed.returncode == 1 and "did not verify" in signed.stderr, f"--allow-untrusted with one broken signature among two: {signed.stdout}{signed.stderr}")
-    require([call[:1] + call[4:] for call in take_calls(log)][1:] == [["verify", str(trusted)], ["verify", game]], "--allow-untrusted verifies file by file")
+    require([call[:1] + call[3:] for call in take_calls(log)][1:] == [["verify", str(trusted)], ["verify", game]], "--allow-untrusted verifies file by file")
     signed = sign([str(trusted), "--thumbprint", THUMBPRINT, "--allow-untrusted"], dict(env, STANDIN_FAIL="mixed"))
     require(signed.returncode == 0 and "does not trust" in signed.stdout, f"--allow-untrusted on one untrusted file: {signed.stdout}{signed.stderr}")
     take_calls(log)
