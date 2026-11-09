@@ -103,7 +103,8 @@ These close the gap between "works on the developer's machine" and an engine oth
 agent claim that is Basalt's reason to exist.
 
 ### Release v0.1.0 — M
-- Unsigned binary downloads of the editor, runtime and CLI from the existing release pipeline, on a `v0.1.0` tag.
+- Binary downloads of the editor, runtime and CLI from the existing release pipeline (signed once its certificates are
+  set up; universal on macOS), on a `v0.1.0` tag.
 - A getting-started tutorial (zero to a playable game, by hand and by agent), a starter project template, and a default
   scene with ground, light and camera instead of an empty void.
 - A CHANGELOG, a stability policy (what may break before 1.0), CONTRIBUTING and SECURITY files, and branch protection on

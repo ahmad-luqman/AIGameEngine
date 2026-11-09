@@ -240,6 +240,12 @@ endif()
 FetchContent_MakeAvailable(VulkanHeaders)
 FetchContent_MakeAvailable(glfw glm nvrhi spdlog entt json jolt sol2 doctest
 	lua imgui imguizmo miniaudio cgltf stb fsr1 meshoptimizer bc7enc basisu zstd)
+# A universal macOS build (CMAKE_OSX_ARCHITECTURES with arm64 and x86_64) takes Jolt's arm64 branch, which sets no x86
+# flags, so the x86-64 half would get SSE2 only. SSE4.2 and POPCNT are what Jolt's own Xcode builds give it, and every Mac
+# the deployment target allows has them; PUBLIC, since Jolt's headers pick its SIMD paths from them (Core.h).
+if(CMAKE_OSX_ARCHITECTURES MATCHES "arm64" AND CMAKE_OSX_ARCHITECTURES MATCHES "x86_64")
+	target_compile_options(Jolt PUBLIC "SHELL:-Xarch_x86_64 -msse4.2" "SHELL:-Xarch_x86_64 -mpopcnt")
+endif()
 # Jolt's deterministic mode turns contraction off for GCC, clang and MSVC, but not for clang-cl.
 if(MSVC AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 	target_compile_options(Jolt PRIVATE /clang:-ffp-contract=off)

@@ -9,6 +9,7 @@ import json
 import os
 import posixpath
 from pathlib import Path
+import shutil
 import struct
 import subprocess
 import sys
@@ -47,14 +48,51 @@ def load(name, path):
     return module
 
 
-def make_dylibs(directory, architectures):
-    """Empty but real dylibs named like the Vulkan loader and MoltenVK, for the given architectures: the release checks
-    their architectures and signs them, while headless runs never load them."""
+def make_dylibs(directory, architectures, molten_vk_architectures=None):
+    """Empty but real dylibs named like the Vulkan loader and MoltenVK, for the given architectures (MoltenVK's may
+    differ): the release checks their architectures and signs them, while headless runs never load them."""
     directory.mkdir(parents=True)
     for name in ("libvulkan.1.dylib", "libMoltenVK.dylib"):
-        flags = [flag for architecture in architectures for flag in ("-arch", architecture)]
+        wanted = molten_vk_architectures if name == "libMoltenVK.dylib" and molten_vk_architectures else architectures
+        flags = [flag for architecture in wanted for flag in ("-arch", architecture)]
         built = subprocess.run(["xcrun", "clang", "-dynamiclib", "-x", "c", "-", "-o", str(directory / name)] + flags, input="", capture_output=True, text=True)
         require(built.returncode == 0, f"cannot build a stand-in {name}: {built.stderr}")
+
+
+def check_sign_macos_folder():
+    """scripts/sign-macos.sh on a folder: it signs the libraries and Mach-O executables directly in it, leaves links,
+    scripts and subfolders alone, and stops at Mach-O code it cannot place."""
+    sign = ROOT / "scripts" / "sign-macos.sh"
+    with tempfile.TemporaryDirectory(prefix="Basalt Sign ") as temp:
+        folder = Path(temp, "Game")
+        folder.mkdir()
+        (folder / "sub").mkdir()
+        for path, flags in ((folder / "Game", []), (folder / "sub" / "Inner", []), (folder / "libThing.dylib", ["-dynamiclib"])):
+            built = subprocess.run(["xcrun", "clang", "-x", "c", "-", "-o", str(path)] + flags, input="int main(void) { return 0; }\n", capture_output=True, text=True)
+            require(built.returncode == 0, f"cannot build {path.name}: {built.stderr}")
+        (folder / "run.sh").write_text("#!/bin/sh\n")
+        (folder / "run.sh").chmod(0o755)
+        (folder / "Link").symlink_to("Game")
+
+        def flags(path):
+            return subprocess.run(["codesign", "-dv", str(path)], capture_output=True, text=True).stderr
+
+        # The linker's own signature says linker-signed; the script's ad hoc one does not.
+        shutil.copy2(folder / "Game", folder / "Stray")
+        (folder / "Stray").chmod(0o644)
+        refused = subprocess.run(["bash", str(sign), str(folder)], capture_output=True, text=True)
+        require(refused.returncode == 1 and "Stray' is Mach-O code that is neither a .dylib nor executable" in refused.stderr, f"a stray Mach-O file: {refused.stderr}")
+        (folder / "Stray").unlink()
+        signed = subprocess.run(["bash", str(sign), str(folder)], capture_output=True, text=True)
+        require(signed.returncode == 0 and "signed 2 files" in signed.stdout, f"sign-macos.sh on a folder: {signed.stdout}{signed.stderr}")
+        for name in ("Game", "libThing.dylib"):
+            require("flags=0x2(adhoc)" in flags(folder / name), f"{name} was not signed: {flags(folder / name)}")
+        require("linker-signed" in flags(folder / "sub" / "Inner"), "a subfolder's executable was signed")
+        require("not signed at all" in flags(folder / "run.sh"), "a script was signed")
+        empty = Path(temp, "Empty")
+        empty.mkdir()
+        refused = subprocess.run(["bash", str(sign), str(empty)], capture_output=True, text=True)
+        require(refused.returncode == 1 and "holds no libraries or executables" in refused.stderr, f"an empty folder: {refused.stderr}")
 
 
 def check_mach_o_parser(package_release):
@@ -65,16 +103,22 @@ def check_mach_o_parser(package_release):
             path.write_bytes(data)
             return package_release.mach_o_architectures(path)
         thin_arm64 = b"\xcf\xfa\xed\xfe" + struct.pack("<i", 0x0100000C) + bytes(24)
-        require(architectures(thin_arm64) == ["arm64"], "a thin arm64 header")
-        require(architectures(b"\xcf\xfa\xed\xfe" + struct.pack("<i", 0x01000007)) == ["x86_64"], "a thin x86_64 header")
+        thin_x86_64 = b"\xcf\xfa\xed\xfe" + struct.pack("<i", 0x01000007)
+        require(architectures(thin_arm64) == ("arm64",), "a thin arm64 header")
+        require(architectures(thin_x86_64) == ("x86_64",), "a thin x86_64 header")
         fat = b"\xca\xfe\xba\xbe" + struct.pack(">I", 2) + struct.pack(">iiIII", 0x01000007, 3, 4096, 1, 12) + struct.pack(">iiIII", 0x0100000C, 0, 8192, 1, 14)
-        require(architectures(fat) == ["arm64", "x86_64"], "a universal header")
-        fat64 = b"\xca\xfe\xba\xbf" + struct.pack(">I", 1) + struct.pack(">iiQQII", 0x0100000C, 0, 4096, 1, 14, 0)
-        require(architectures(fat64) == ["arm64"], "a 64-bit universal header")
-        require(architectures(b"\xca\xfe\xba\xbe" + struct.pack(">I", 1) + struct.pack(">iiIII", 18, 0, 4096, 1, 12)) == ["cpu-0x12"], "an unknown CPU type")
-        # A Java class file (minor and major version where the slice count would be), a truncated table, text, nothing.
+        require(architectures(fat) == ("arm64", "x86_64"), "a universal header")
+        fat64 = b"\xca\xfe\xba\xbf" + struct.pack(">I", 2) + struct.pack(">iiQQII", 0x0100000C, 0, 4096, 1, 14, 0) + struct.pack(">iiQQII", 0x01000007, 3, 8192, 1, 12, 0)
+        require(architectures(fat64) == ("arm64", "x86_64"), "a 64-bit universal header")
+        require(architectures(b"\xca\xfe\xba\xbe" + struct.pack(">I", 1) + struct.pack(">iiIII", 18, 0, 4096, 1, 12)) == ("cpu-0x12",), "an unknown CPU type")
+        # Sixteen slices is the most a universal file is taken to hold; 17 is a Java class file's version.
+        entry = struct.pack(">iiIII", 0x0100000C, 0, 4096, 1, 14)
+        require(architectures(b"\xca\xfe\xba\xbe" + struct.pack(">I", 16) + entry * 16) == ("arm64",), "sixteen slices")
+        require(architectures(b"\xca\xfe\xba\xbe" + struct.pack(">I", 17) + entry * 17) == (), "seventeen slices")
+        # A Java class file (minor and major version where the slice count would be), a truncated table, text, nothing, a
+        # truncated header.
         for data in (b"\xca\xfe\xba\xbe\x00\x00\x00\x41", b"\xca\xfe\xba\xbe" + struct.pack(">I", 2) + bytes(20), b"stand-in", b"", fat[:7]):
-            require(architectures(data) == [], f"not Mach-O: {data[:12]!r}")
+            require(architectures(data) == (), f"not Mach-O: {data[:12]!r}")
     # The release name follows the CLI's architectures on macOS.
     if sys.platform == "darwin":
         with tempfile.TemporaryDirectory(prefix="BasaltMachO-") as temp:
@@ -82,6 +126,8 @@ def check_mach_o_parser(package_release):
             require(package_release.platform_name(Path(temp, "basalt")) == "macos-universal", "a universal CLI")
             Path(temp, "basalt").write_bytes(thin_arm64)
             require(package_release.platform_name(Path(temp, "basalt")) == "macos-arm64", "an arm64 CLI")
+            Path(temp, "basalt").write_bytes(thin_x86_64)
+            require(package_release.platform_name(Path(temp, "basalt")) == "macos-x64", "an x86-64 CLI")
 
 
 def main():
@@ -92,6 +138,8 @@ def main():
     version, platform = package_release.engine_version(), package_release.platform_name(cli)
     exe = package_release.EXE
     check_mach_o_parser(package_release)
+    if sys.platform == "darwin":
+        check_sign_macos_folder()
 
     # A tag must name the engine version.
     require(run(["--check-tag", f"v{version}"]).returncode == 0, "the matching tag was refused")
@@ -99,11 +147,15 @@ def main():
     require(mismatch.returncode == 1 and "does not match the engine version" in mismatch.stderr, f"a mismatched tag: {mismatch.stderr}")
     require(run(["--build", str(build), "--output", "x", "--notarize", "profile"]).returncode == 2, "--notarize without --sign-identity")
     # Each platform's signing options are refused elsewhere.
-    foreign = [["--windows-certificate", "0" * 40]] if sys.platform != "win32" else []
+    foreign = [["--windows-certificate", "0" * 40], ["--windows-dlib", "x.dll", "--windows-dlib-metadata", "x.json"]] if sys.platform != "win32" else []
     foreign += [["--sign-identity", "Developer ID Application: X"], ["--require-universal"]] if sys.platform != "darwin" else []
     for arguments in foreign:
         refused = run(["--build", str(build), "--output", "x"] + arguments)
         require(refused.returncode == 2 and ("is for" in refused.stderr or "are for" in refused.stderr), f"{arguments} on this platform: {refused.stderr}")
+    for arguments, message in ((["--windows-certificate", "Z" * 40], "40 hexadecimal digits"), (["--windows-certificate", "0" * 40, "--windows-dlib", "x"], "not allowed with"),
+                               (["--windows-dlib", "x"], "go together")):
+        refused = run(["--build", str(build), "--output", "x"] + arguments)
+        require(refused.returncode == 2 and message in refused.stderr, f"{arguments}: {refused.stderr}")
     bad_level = run(["--build", str(build), "--output", "x", "--gzip-level", "0"])
     require(bad_level.returncode == 2 and "--gzip-level" in bad_level.stderr and "invalid choice" in bad_level.stderr, f"--gzip-level 0: {bad_level.stderr}")
 
@@ -142,11 +194,15 @@ def main():
         if sys.platform == "darwin":
             architectures = package_release.mach_o_architectures(cli)
             # Libraries of another architecture than the tools' fail the release, naming the file.
-            other = ["x86_64"] if architectures == ["arm64"] else ["arm64"]
-            make_dylibs(Path(temp, "Other SDK", "lib"), other)
-            mismatch = run(["--build", str(build), "--output", str(Path(temp, "mismatch")), "--samples", "Tetris"] + ([] if with_engine else ["--skip-engine"]),
-                           dict(env, VULKAN_SDK=str(Path(temp, "Other SDK"))))
-            require(mismatch.returncode == 1 and f"holds {', '.join(other)}, the tools {', '.join(architectures)}" in mismatch.stderr, f"mismatched libraries: {mismatch.stdout[-2000:]}{mismatch.stderr}")
+            # A MoltenVK of another architecture than the tools' (the loader is right) fails the release, naming the file:
+            # in the tools archive, and in a sample's bundle.
+            other = ("x86_64",) if architectures == ("arm64",) else ("arm64",)
+            make_dylibs(Path(temp, "Other SDK", "lib"), architectures, other)
+            for engine_too in ([True] if with_engine else []) + [False]:
+                mismatch = run(["--build", str(build), "--output", str(Path(temp, f"mismatch {engine_too}")), "--samples", "Tetris"] + ([] if engine_too else ["--skip-engine"]),
+                               dict(env, VULKAN_SDK=str(Path(temp, "Other SDK"))))
+                expected = f"{'the tools' if engine_too else 'Tetris'}: libMoltenVK.dylib holds {', '.join(other)}, the tools {', '.join(architectures)}"
+                require(mismatch.returncode == 1 and expected in mismatch.stderr, f"mismatched libraries: {mismatch.stdout[-2000:]}{mismatch.stderr}")
             if architectures != package_release.UNIVERSAL:
                 refused = run(["--build", str(build), "--output", str(Path(temp, "refused")), "--require-universal"], env)
                 require(refused.returncode == 1 and "the build is not universal" in refused.stderr, f"--require-universal: {refused.stderr}")
@@ -155,7 +211,9 @@ def main():
             env["VULKAN_SDK"] = str(Path(temp, "Vulkan SDK"))
         elif sys.platform == "win32":
             # A stand-in signtool records what scripts/sign-windows.py asks of it.
-            env.update(SIGNTOOL=str(load("WindowsSigning", Path(__file__).with_name("WindowsSigning.py")).make_stand_in(Path(temp))), STANDIN_LOG=str(signtool_log))
+            windows_signing_test = load("WindowsSigning", Path(__file__).with_name("WindowsSigning.py"))
+            env["SIGNTOOL"] = str(windows_signing_test.make_stand_in(Path(temp)))
+            env["STANDIN_LOG"] = str(signtool_log)
             windows_signing = ["--windows-certificate", "ab" * 20]
         output = Path(temp, "dist")
         # The fastest gzip level: level 9 takes minutes over a Debug build's binaries. Only Linux writes .tar.gz archives
@@ -164,6 +222,8 @@ def main():
         arguments = ["--build", str(build), "--output", str(output), "--samples", "Tetris"] + (["--gzip-level", "1"] if linux else []) + ([] if with_engine else ["--skip-engine"]) + windows_signing
         packaged = run(arguments, env)
         require(packaged.returncode == 0, f"package_release.py failed: {packaged.stdout}{packaged.stderr}")
+        # The packaged tools were started (under Rosetta too, on a universal build).
+        require(("package_release: started the packaged tools\n" in packaged.stdout) == with_engine, f"the packaged tools were not started: {packaged.stdout[-2000:]}")
         files = sorted(path.name for path in output.iterdir())
         checksums_name = f"SHA256SUMS-{platform}.txt"
         sample = next((name for name in files if name.startswith(f"Basalt-{version}-Tetris-{platform}")), None)
@@ -200,7 +260,7 @@ def main():
         if with_engine:
             folder = f"Basalt-{version}-{platform}"
             contents = members(output / engine)
-            wanted = {f"{folder}/bin/{tool}{exe}" for tool in ("BasaltEditor", "BasaltRuntime", "basalt")}
+            wanted = {f"{folder}/bin/{tool}{exe}" for tool in package_release.TOOLS}
             wanted |= {f"{folder}/Samples/Tetris/Project.bproject", f"{folder}/Docs/Shipping.md", f"{folder}/LICENSE"}
             if sys.platform == "darwin":
                 wanted |= {f"{folder}/bin/libvulkan.1.dylib", f"{folder}/bin/libMoltenVK.dylib", f"{folder}/bin/vulkan/icd.d/MoltenVK_icd.json"}
@@ -211,13 +271,19 @@ def main():
                     library = json.loads(archive.read(f"{folder}/bin/vulkan/icd.d/MoltenVK_icd.json"))["ICD"]["library_path"]
                 require(posixpath.normpath(f"{folder}/bin/vulkan/icd.d/{library}") == f"{folder}/bin/libMoltenVK.dylib", f"the tools' manifest names {library}")
 
-        if sys.platform == "darwin" and with_engine:
-            # The tools and their libraries are signed (ad hoc here), and the signatures survive the archive.
+        if sys.platform == "darwin":
+            # The tools and their libraries, and the sample's bundle, are signed (ad hoc here: flags 0x2, where the linker's
+            # own signature would add linker-signed), and the signatures survive the archives.
             extracted = Path(temp, "extracted")
-            subprocess.run(["ditto", "-x", "-k", str(output / engine), str(extracted)], check=True)
-            for name in ("BasaltEditor", "BasaltRuntime", "basalt", "libvulkan.1.dylib", "libMoltenVK.dylib"):
-                verified = subprocess.run(["codesign", "--verify", "--strict", str(extracted / f"Basalt-{version}-{platform}" / "bin" / name)], capture_output=True, text=True)
-                require(verified.returncode == 0, f"the packaged {name} is not signed: {verified.stderr}")
+            code = [extracted / "Tetris.app"]
+            subprocess.run(["ditto", "-x", "-k", str(output / sample), str(extracted)], check=True)
+            if with_engine:
+                subprocess.run(["ditto", "-x", "-k", str(output / engine), str(extracted)], check=True)
+                code += [extracted / f"Basalt-{version}-{platform}" / "bin" / name for name in package_release.TOOLS + package_release.VULKAN_LIBRARIES]
+            for path in code:
+                verified = subprocess.run(["codesign", "--verify", "--strict", str(path)], capture_output=True, text=True)
+                described = subprocess.run(["codesign", "-dv", str(path)], capture_output=True, text=True).stderr
+                require(verified.returncode == 0 and "flags=0x2(adhoc)" in described, f"the packaged {path.name} is not signed ad hoc: {verified.stderr}{described}")
         if sys.platform == "win32":
             # The tools (with --with-engine) and the sample's executable, each signed and then verified.
             calls = [json.loads(line) for line in signtool_log.read_text().splitlines()]

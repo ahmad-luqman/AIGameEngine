@@ -58,16 +58,17 @@ def check_manifest(manifest, library):
     require((Path(manifest).parent / path).resolve() == Path(library).resolve(), f"{manifest} names {path}, not {library}")
 
 
-def code_signature(path):
-    """codesign's description of a file's signature (its CodeDirectory flags among it); fails when it does not verify."""
-    verified = subprocess.run(["codesign", "--verify", "--strict", str(path)], capture_output=True, text=True)
+def code_signature(path, deep=False):
+    """codesign's description of a file's signature (its CodeDirectory flags among it); fails when it does not verify
+    (with deep, nor anything nested in it)."""
+    verified = subprocess.run(["codesign", "--verify", "--strict"] + (["--deep"] if deep else []) + [str(path)], capture_output=True, text=True)
     require(verified.returncode == 0, f"{path} is not validly signed: {verified.stderr}")
     return subprocess.run(["codesign", "-dv", str(path)], capture_output=True, text=True).stderr
 
 
-def check_ad_hoc(path):
+def check_ad_hoc(path, deep=False):
     """Signed ad hoc, without the hardened runtime: what the exporter leaves for the developer to sign."""
-    signature = code_signature(path)
+    signature = code_signature(path, deep)
     require("flags=0x2(adhoc)" in signature, f"{path} is not signed ad hoc without the hardened runtime: {signature}")
 
 
@@ -132,11 +133,12 @@ def check_package(exported, output, has_icon=True):
             require((contents / relative).is_file(), f"the bundle has no Contents/{relative}")
         # The manifest must reach MoltenVK in Frameworks from Resources (VulkanLoader finds the loader in ../Frameworks).
         check_manifest(contents / "Resources" / "vulkan" / "icd.d" / "MoltenVK_icd.json", contents / "Frameworks" / "libMoltenVK.dylib")
-        # The exporter signs the bundle ad hoc, sealing its resources; its own platform minimum is stated.
-        check_ad_hoc(package)
-        verified = subprocess.run(["codesign", "--verify", "--deep", "--strict", str(package)], capture_output=True, text=True)
-        require(verified.returncode == 0, f"the exported bundle does not verify: {verified.stderr}")
-        require(re.fullmatch(r"\d+\.\d+(\.\d+)?", info.get("LSMinimumSystemVersion", "")), f"LSMinimumSystemVersion: {info}")
+        # The exporter signs the bundle ad hoc, sealing its resources and the libraries in it.
+        check_ad_hoc(package, deep=True)
+        # Info.plist states the macOS the runtime is built for (its LC_BUILD_VERSION minos).
+        build_version = subprocess.run(["vtool", "-show-build", str(executable)], capture_output=True, text=True).stdout
+        minimums = set(re.findall(r"minos (\S+)", build_version))
+        require(len(minimums) == 1 and info.get("LSMinimumSystemVersion") in minimums, f"LSMinimumSystemVersion {info.get('LSMinimumSystemVersion')}, minos {minimums}")
         if not has_icon:
             return
         if shutil.which("iconutil"):
@@ -172,25 +174,39 @@ def check_package(exported, output, has_icon=True):
 
 
 def check_hardened_runtime(cli, project, temp, env):
-    """A release's runtime carries the hardened runtime (here signed ad hoc with it, as no Developer ID is at hand), whose
-    library validation would refuse the Vulkan libraries an export bundles: the export signs its copy ad hoc again. Next to
-    a runtime that has the libraries (the tools archive's layout) and without VULKAN_SDK, the export takes those."""
+    """A release's runtime, once signed, carries the hardened runtime (here signed ad hoc with it, as no Developer ID is at
+    hand), whose library validation would refuse the Vulkan libraries an export bundles: the export signs its copy ad hoc
+    again. Next to a runtime that has the libraries (the tools archive's layout), the export takes those, even with
+    VULKAN_SDK set, and warns when one lacks an architecture the runtime has."""
     tools = temp / "Hardened Tools"
     tools.mkdir()
     shutil.copy2(cli, tools / cli.name)
     shutil.copy2(cli.parent / "BasaltRuntime", tools / "BasaltRuntime")
     hardened = subprocess.run(["codesign", "--force", "--sign", "-", "--options", "runtime", str(tools / "BasaltRuntime")], capture_output=True, text=True)
     require(hardened.returncode == 0 and "runtime" in code_signature(tools / "BasaltRuntime"), f"cannot give the runtime the hardened runtime: {hardened.stderr}")
-    for name in ("libvulkan.1.dylib", "libMoltenVK.dylib"):
-        (tools / name).write_text(f"{name} next to the runtime")
+    (tools / "libvulkan.1.dylib").write_text("libvulkan.1.dylib next to the runtime")
+    # A MoltenVK built for another architecture than the runtime's.
+    runtime_architectures = subprocess.run(["lipo", "-archs", str(tools / "BasaltRuntime")], capture_output=True, text=True).stdout.split()
+    other = "x86_64" if "x86_64" not in runtime_architectures else "arm64"
+    built = subprocess.run(["xcrun", "clang", "-dynamiclib", "-arch", other, "-x", "c", "-", "-o", str(tools / "libMoltenVK.dylib")], input="", capture_output=True, text=True)
+    require(built.returncode == 0, f"cannot build a stand-in MoltenVK: {built.stderr}")
     output = temp / "Hardened Export"
+    require(env.get("VULKAN_SDK"), "the libraries next to the runtime must win over VULKAN_SDK's")
     exported = subprocess.run([str(tools / cli.name), "--project", str(project), "project.export", json.dumps({"output": str(output)})],
-                              capture_output=True, text=True, timeout=300, env={key: value for key, value in env.items() if key != "VULKAN_SDK"})
-    response = json.loads(exported.stdout[exported.stdout.find("{"):])
+                              capture_output=True, text=True, timeout=300, env=env)
+    # The response is the last JSON object, after any log lines.
+    start = exported.stdout.rfind("\n{") + 1 if "\n{" in exported.stdout else exported.stdout.find("{")
+    require(start >= 0, f"export from a hardened runtime printed no response: {exported.stdout}{exported.stderr}")
+    response = json.loads(exported.stdout[start:])
     require(response.get("ok"), f"export from a hardened runtime: {response}")
     check_ad_hoc(Path(response["result"]["executable"]))
-    for name in ("libvulkan.1.dylib", "libMoltenVK.dylib"):
-        require((output / name).read_text() == f"{name} next to the runtime", f"{name} did not come from the runtime's folder")
+    require((output / "libvulkan.1.dylib").read_text() == "libvulkan.1.dylib next to the runtime", "the loader did not come from the runtime's folder")
+    # (The export signed its copy, so only the architecture says where it came from.)
+    exported_architectures = subprocess.run(["lipo", "-archs", str(output / "libMoltenVK.dylib")], capture_output=True, text=True).stdout.split()
+    require(exported_architectures == [other], f"MoltenVK did not come from the runtime's folder: it holds {exported_architectures}")
+    warnings = response["result"].get("warnings", [])
+    require(any(f"libMoltenVK.dylib' holds {other}, the runtime {', '.join(sorted(runtime_architectures))}" in warning for warning in warnings), f"no architecture warning: {warnings}")
+    require(not any("libvulkan" in warning for warning in warnings), f"a library that is no Mach-O code was warned about: {warnings}")
 
 
 def main():
@@ -264,8 +280,8 @@ def main():
         if sys.platform == "darwin":
             # A folder export's manifest reaches the MoltenVK next to the executable, and its code is signed ad hoc.
             check_manifest(output / "vulkan" / "icd.d" / "MoltenVK_icd.json", output / "libMoltenVK.dylib")
-            for code in (executable, output / "libvulkan.1.dylib", output / "libMoltenVK.dylib"):
-                code_signature(code)
+            for library in ("libvulkan.1.dylib", "libMoltenVK.dylib"):
+                code_signature(output / library)
             check_ad_hoc(executable)
             check_hardened_runtime(Path(cli), project, Path(temp), env)
         hung = ok("project.smoke_test", {"executable": str(executable), "frames": 10, "timeout": 1})

@@ -9,6 +9,9 @@
 #include "Basalt/Project/Packaging.h"
 #include "Basalt/Project/Project.h"
 
+#include <spdlog/fmt/fmt.h>
+#include <spdlog/fmt/ranges.h>
+
 #include <algorithm>
 #include <cctype>
 #include <charconv>
@@ -24,6 +27,12 @@
 namespace Basalt {
 
 	namespace {
+
+		// Why a process failed: what RunProcess reported, or its exit code after a normal exit (Windows exports start none).
+		[[maybe_unused]] std::string DescribeFailure(const ProcessResult& run)
+		{
+			return run.Error.empty() ? "exit code " + std::to_string(run.ExitCode) : run.Error;
+		}
 
 		std::string SanitizeFileName(const std::string& name)
 		{
@@ -473,15 +482,15 @@ namespace Basalt {
 			std::filesystem::path MoltenVK;
 		};
 
-		// The Vulkan loader and MoltenVK to ship. scripts/package_release.py searches the same places for the tools archive,
-		// except the runtime's own directory: the tools archive holds both libraries next to the runtime (built for every
-		// architecture the runtime is, and signed along with it), so an export from it needs no Vulkan SDK.
+		// The Vulkan loader and MoltenVK to ship. The runtime's own directory comes first: the tools archive holds both
+		// libraries next to the runtime, built for the same architectures, so an export from it needs no Vulkan SDK and
+		// keeps them whatever VULKAN_SDK says (a build tree has none there). scripts/package_release.py, which packages
+		// that archive, searches the other places in the same order.
 		bool FindVulkanLibraries(const std::filesystem::path& runtimeDirectory, VulkanLibraries& outLibraries, std::string& outError)
 		{
-			std::vector<std::filesystem::path> searchDirectories;
+			std::vector<std::filesystem::path> searchDirectories{ runtimeDirectory };
 			if (const auto sdk = Platform::GetEnvVar("VULKAN_SDK"))
 				searchDirectories.emplace_back(FileSystem::PathFromUtf8(*sdk) / "lib");
-			searchDirectories.push_back(runtimeDirectory);
 			searchDirectories.emplace_back("/opt/homebrew/lib");
 			searchDirectories.emplace_back("/usr/local/lib");
 			auto find = [&](const char* fileName) -> std::filesystem::path {
@@ -540,22 +549,47 @@ namespace Basalt {
 			return true;
 		}
 
-		// Signs an export ad hoc, in the order given: nested code first, then the executable or the bundle that seals it. A
-		// release's runtime carries Basalt's Developer ID with the hardened runtime, whose library validation refuses Vulkan
-		// libraries signed by anyone else (the SDK's, Homebrew's), and which would name Basalt's publisher as the game's.
-		// An ad hoc signature names no one and checks no libraries; scripts/sign-macos.sh replaces it with the developer's.
-		bool SignAdHoc(std::initializer_list<std::filesystem::path> code, std::string& outError)
+		// Warns when a bundled library is Mach-O code that lacks an architecture the runtime has: the game would not start
+		// on such Macs (a universal runtime with Homebrew's single-architecture libraries). Files that are not Mach-O at
+		// all are left to the loader, which reports them when the game starts.
+		void CheckLibraryArchitectures(const std::filesystem::path& runtime, const VulkanLibraries& libraries, std::vector<std::string>& outWarnings)
 		{
-			for (const std::filesystem::path& path : code)
+			const auto architectures = [](const std::filesystem::path& path) {
+				std::error_code error;
+				const std::optional<uint64_t> size = FileSystem::GetRegularFileSize(path, error);
+				const auto header = size ? FileSystem::ReadBinaryFilePrefix(path, std::min<uint64_t>(*size, MachOHeaderBytes)) : std::nullopt;
+				return header ? MachOArchitectures(*header) : std::vector<std::string>{};
+			};
+			const std::vector<std::string> wanted = architectures(runtime);
+			for (const std::filesystem::path* library : { &libraries.Loader, &libraries.MoltenVK })
+			{
+				const std::vector<std::string> found = architectures(*library);
+				if (found.empty() || std::includes(found.begin(), found.end(), wanted.begin(), wanted.end()))
+					continue;
+				outWarnings.push_back(fmt::format("'{}' holds {}, the runtime {}: the game will not start on Macs of the missing kind (use the libraries next to a release's runtime, or a universal Vulkan SDK)",
+												  FileSystem::PathToUtf8(*library), fmt::join(found, ", "), fmt::join(wanted, ", ")));
+			}
+		}
+
+		// Signs an export ad hoc: the Vulkan libraries in libraryDirectory first, then sealingCode, the executable or the
+		// bundle that seals them. A release's runtime, once signed with Basalt's Developer ID, has the hardened runtime,
+		// whose library validation refuses libraries signed by anyone else (the SDK's, Homebrew's), and would name Basalt's
+		// publisher as the game's. An ad hoc signature names no one and checks no libraries; scripts/sign-macos.sh
+		// replaces it with the developer's.
+		bool SignAdHoc(const std::filesystem::path& libraryDirectory, const std::filesystem::path& sealingCode, std::string& outError)
+		{
+			for (const std::filesystem::path& path : { libraryDirectory / LoaderFileName, libraryDirectory / MoltenVKFileName, sealingCode })
 			{
 				ProcessSpec spec;
 				// Part of macOS itself, not of the developer tools.
 				spec.Executable = "/usr/bin/codesign";
 				spec.Arguments = { "--force", "--sign", "-", FileSystem::PathToUtf8(path) };
+				// A bundle's signature hashes every resource, Assets.bpak included, which takes a while for a large game.
+				spec.Timeout = std::chrono::minutes(10);
 				const ProcessResult run = RunProcess(spec);
 				if (!run.Succeeded())
 				{
-					outError = "codesign could not sign '" + FileSystem::PathToUtf8(path) + "' (" + (run.Error.empty() ? "exit code " + std::to_string(run.ExitCode) : run.Error) + "): " + run.Output;
+					outError = "codesign could not sign '" + FileSystem::PathToUtf8(path) + "' (" + DescribeFailure(run) + "): " + run.Output;
 					return false;
 				}
 			}
@@ -691,7 +725,7 @@ namespace Basalt {
 			const ProcessResult run = RunProcess(spec);
 			if (!run.Succeeded())
 			{
-				result.Error = "appimagetool failed (" + (run.Error.empty() ? "exit code " + std::to_string(run.ExitCode) : run.Error) + "): " + run.Output;
+				result.Error = "appimagetool failed (" + DescribeFailure(run) + "): " + run.Output;
 				return false;
 			}
 			outPackage = appImage;
@@ -883,14 +917,17 @@ namespace Basalt {
 		if (options.Package)
 		{
 			const std::filesystem::path frameworks = package / "Contents" / "Frameworks";
-			if (!BundleMoltenVK(vulkan, frameworks, projectDirectory, result.Error) || !FinishAppBundle(package, *info, icon, result.Error) || !SignAdHoc({ frameworks / LoaderFileName, frameworks / MoltenVKFileName, package }, result.Error))
+			const bool bundled = BundleMoltenVK(vulkan, frameworks, projectDirectory, result.Error) && FinishAppBundle(package, *info, icon, result.Error);
+			if (!bundled || !SignAdHoc(frameworks, package, result.Error))
 				return fail();
 			packagePath = package;
 		}
-		else if (!BundleMoltenVK(vulkan, output, output, result.Error) || !SignAdHoc({ output / LoaderFileName, output / MoltenVKFileName, executable }, result.Error))
+		else if (!BundleMoltenVK(vulkan, output, output, result.Error) || !SignAdHoc(output, executable, result.Error))
 			return fail();
+		CheckLibraryArchitectures(executable, vulkan, result.Warnings);
 #elif defined(BS_PLATFORM_WINDOWS)
-		// Before the resources are rewritten, which would leave a broken signature (see RemoveAuthenticodeSignature).
+		// Every export, folder or package: the game carries no signature but its developer's, and a package's resource
+		// rewrite (WriteWindowsResources, next) would break one anyway.
 		if (!RemoveAuthenticodeSignature(executable, result.Error))
 			return fail();
 		if (options.Package && !WriteWindowsResources(executable, *info, icon ? &*icon : nullptr, result.Error))

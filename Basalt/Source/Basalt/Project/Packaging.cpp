@@ -3,6 +3,7 @@
 #include "Basalt/Core/Assert.h"
 #include "Basalt/Core/Base.h"
 #include "Basalt/Core/FileSystem.h"
+#include "Basalt/Core/Log.h"
 #include "Basalt/Core/Platform.h"
 #include "Basalt/Core/TextEncoding.h"
 #include "Basalt/Project/Project.h"
@@ -596,17 +597,24 @@ namespace Basalt {
 			outError = reason;
 			return std::nullopt;
 		};
-		if (image.size() < 64 || image[0] != 'M' || image[1] != 'Z')
-			return fail("not a Windows executable (no MZ header)");
+		// Bytes that are no executable at all hold no signature to remove (a stand-in runtime; the export's smoke test is
+		// what refuses one). One that starts like an executable must be readable as one.
+		if (image.size() < 2 || image[0] != 'M' || image[1] != 'Z')
+			return SignatureRemoval::Unsigned;
+		if (image.size() < 64)
+			return fail("the executable's DOS header is truncated");
 		// The DOS header points at "PE\0\0" and the 20-byte COFF file header, which the optional header follows.
 		const uint64_t peHeader = read32(60);
 		const uint64_t optionalHeader = peHeader + 24;
 		if (optionalHeader > image.size() || std::memcmp(image.data() + peHeader, "PE\0\0", 4) != 0)
 			return fail("not a Windows executable (no PE header)");
+		const uint16_t sectionCount = read16(peHeader + 6);
 		const uint16_t optionalSize = read16(peHeader + 20);
-		const uint64_t headersEnd = optionalHeader + optionalSize;
+		const uint64_t sectionTable = optionalHeader + optionalSize;
+		// Each section header is 40 bytes; the table ends the headers.
+		const uint64_t headersEnd = sectionTable + uint64_t{ sectionCount } * 40;
 		if (optionalSize < 2 || headersEnd > image.size())
-			return fail("the executable's optional header is truncated");
+			return fail("the executable's headers are truncated");
 		// The data directories follow the PE32 or PE32+ fields; the fifth is the certificate table, whose "address" is a
 		// file offset. CheckSum sits at the same place in both.
 		const uint16_t magic = read16(optionalHeader);
@@ -615,15 +623,24 @@ namespace Basalt {
 		const uint64_t directories = optionalHeader + (magic == 0x10B ? 96 : 112);
 		constexpr uint32_t CertificateTable = 4;
 		const uint64_t entry = directories + uint64_t{ CertificateTable } * 8;
-		// An executable whose header has no room for the entry cannot be signed.
-		if (entry + 8 > headersEnd || read32(directories - 4) <= CertificateTable)
+		// An optional header without room for the entry, or declaring fewer than five directories, has no certificate
+		// table, and so no signature.
+		if (entry + 8 > sectionTable || read32(directories - 4) <= CertificateTable)
 			return SignatureRemoval::Unsigned;
 		const uint64_t tableOffset = read32(entry);
-		const uint64_t tableEnd = tableOffset + read32(entry + 4);
-		if (tableEnd == tableOffset && tableOffset == 0)
+		const uint64_t tableSize = read32(entry + 4);
+		if (tableSize == 0)
 			return SignatureRemoval::Unsigned;
-		if (tableOffset < headersEnd || tableEnd > image.size())
-			return fail("the executable's certificate table lies outside the file or among its headers");
+		// A WIN_CERTIFICATE starts with an 8-byte header.
+		if (tableSize < 8)
+			return fail("the executable's certificate table is too small to hold a certificate");
+		const uint64_t tableEnd = tableOffset + tableSize;
+		// Signing tools append the table after everything the loader maps: cutting it must not cut a section.
+		uint64_t dataEnd = headersEnd;
+		for (uint64_t section = sectionTable; section < headersEnd; section += 40)
+			dataEnd = std::max(dataEnd, uint64_t{ read32(section + 20) } + read32(section + 16));
+		if (tableOffset < dataEnd || tableEnd > image.size())
+			return fail("the executable's certificate table lies outside the file, or among its headers or sections");
 		// Signing tools may pad the file after the table. Anything else there would be lost along with it.
 		if (std::any_of(image.begin() + static_cast<std::ptrdiff_t>(tableEnd), image.end(), [](uint8_t byte) { return byte != 0; }))
 			return fail("data follows the executable's certificate table");
@@ -652,7 +669,44 @@ namespace Basalt {
 			return SignatureRemoval::Unsigned;
 		if (!FileSystem::WriteBinaryFile(executable, image->data(), image->size(), reason))
 			return fail();
+		BS_CORE_INFO("Exporter: removed the runtime's signature from '{}' (sign the game with scripts/sign-windows.py)", FileSystem::PathToUtf8(executable));
 		return SignatureRemoval::Removed;
+	}
+
+	std::vector<std::string> MachOArchitectures(const std::vector<uint8_t>& header)
+	{
+		const auto readBig32 = [&](size_t offset) { return static_cast<uint32_t>(header[offset] << 24 | header[offset + 1] << 16 | header[offset + 2] << 8 | header[offset + 3]); };
+		std::vector<uint32_t> types;
+		if (header.size() >= 8 && header[0] == 0xCF && header[1] == 0xFA && header[2] == 0xED && header[3] == 0xFE)
+		{
+			// MH_MAGIC_64, little-endian on both architectures.
+			types.push_back(static_cast<uint32_t>(header[4] | header[5] << 8 | header[6] << 16 | static_cast<uint32_t>(header[7]) << 24));
+		}
+		else if (header.size() >= 8 && header[0] == 0xCA && header[1] == 0xFE && header[2] == 0xBA && (header[3] == 0xBE || header[3] == 0xBF))
+		{
+			// FAT_MAGIC or FAT_MAGIC_64, big-endian, then one 20- or 32-byte entry per slice. Java class files share
+			// FAT_MAGIC; their next field is a version far above any real slice count.
+			const uint32_t count = readBig32(4);
+			const size_t entrySize = header[3] == 0xBE ? 20 : 32;
+			if (count == 0 || count > 16 || header.size() < 8 + count * entrySize)
+				return {};
+			for (uint32_t i = 0; i < count; ++i)
+				types.push_back(readBig32(8 + i * entrySize));
+		}
+		const auto name = [](uint32_t type) -> std::string {
+			if (type == 0x0100000C)
+				return "arm64";
+			if (type == 0x01000007)
+				return "x86_64";
+			return fmt::format("cpu-{:#x}", type);
+		};
+		std::vector<std::string> names;
+		names.reserve(types.size());
+		for (uint32_t type : types)
+			names.push_back(name(type));
+		std::sort(names.begin(), names.end());
+		names.erase(std::unique(names.begin(), names.end()), names.end());
+		return names;
 	}
 
 }

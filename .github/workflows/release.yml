@@ -1,11 +1,14 @@
 name: Release
 
 # A v<version> tag builds Dist on every platform (universal, arm64 + x86_64, on macOS), packages the tools and the
-# samples (scripts/package_release.py), signs them when the signing secrets are set (Docs/Shipping.md) and publishes them
-# as a GitHub release. Pull requests that change the main inputs of the packages (the workflow, the shared setup action
-# and the CI scripts it and this workflow run, the packaging and signing scripts, the top-level CMakeLists.txt (the macOS
-# deployment target), the Project module, the runtime, the Process, Window, VulkanLoader, PackArchive and CrashReporter
-# sources, the samples), and manual runs, do everything except publishing, so the pipeline is tested before a tag needs it.
+# samples (scripts/package_release.py), signs them (macOS ad hoc, or with a Developer ID and notarized when its secrets
+# are set; Windows when its certificate secret is set; Docs/Shipping.md) and publishes them as a GitHub release. Pull
+# requests that change the main inputs of the packages (the workflow, the shared setup action and the CI scripts it and
+# this workflow run, the packaging and signing scripts, the top-level and engine CMakeLists.txt (the macOS deployment
+# target), cmake/Dependencies.cmake (the Vulkan-Headers tag the release's loader is built at), the Project module, the
+# runtime, the Process, Window, VulkanLoader, PackArchive and CrashReporter sources, the samples), and manual runs, do
+# everything except publishing, so the pipeline is tested before a tag needs it. Same-repository pull requests sign with
+# the real secrets too, so the signing path is tested before a tag needs it.
 on:
   push:
     tags: [ 'v*' ]
@@ -18,6 +21,8 @@ on:
       - scripts/sign-macos.sh
       - scripts/sign-windows.py
       - CMakeLists.txt
+      - Basalt/CMakeLists.txt
+      - cmake/Dependencies.cmake
       - Basalt/Source/Basalt/Project/**
       - Basalt/Source/Basalt/Core/Process.*
       - Basalt/Source/Basalt/Core/Window.*
@@ -81,12 +86,9 @@ jobs:
 
       # Dist: optimized, no asserts. The tests run in CI on every push; here the samples' smoke tests check the build. macOS
       # builds both architectures into each binary (package_release.py --require-universal checks).
+      # (The default shell: Git Bash on Windows could put its own link before MSVC's.)
       - name: Configure
-        shell: bash
-        run: |
-          arguments=(-S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Dist -DBASALT_BUILD_TESTS=OFF -DBASALT_CHECK_FORMAT=OFF)
-          [[ "$RUNNER_OS" == "macOS" ]] && arguments+=("-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64")
-          cmake "${arguments[@]}"
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Dist -DBASALT_BUILD_TESTS=OFF -DBASALT_CHECK_FORMAT=OFF ${{ runner.os == 'macOS' && '"-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"' || '' }}
 
       - name: Check that the build uses the caches
         shell: bash
@@ -95,7 +97,8 @@ jobs:
       - name: Build
         run: cmake --build build -- -k 0
 
-      # After the build, so nothing in it sees VULKAN_SDK. The exporter and package_release.py take the libraries from it.
+      # After the build: the directory holds only lib/, and the build takes glslc hints from VULKAN_SDK (cmake/Shaders.cmake).
+      # The exporter and package_release.py take the libraries from it.
       - name: Build universal Vulkan libraries (macOS)
         if: runner.os == 'macOS'
         timeout-minutes: 15
@@ -147,8 +150,10 @@ jobs:
 
       # With a code signing certificate in the repository secrets, the Windows tools and samples are signed with signtool
       # (scripts/sign-windows.py) and timestamped; otherwise they are not signed (and a tag release says so).
-      # WINDOWS_CERTIFICATE is a base64 .pfx with its private key, WINDOWS_CERTIFICATE_PASSWORD its password. It goes into
-      # the runner's certificate store, from which signtool takes it by thumbprint, so the password reaches no command line.
+      # WINDOWS_CERTIFICATE is a base64 .pfx with its private key, WINDOWS_CERTIFICATE_PASSWORD its (required) password. It
+      # goes into the runner's certificate store, from which signtool takes it by thumbprint, so the password reaches no
+      # command line. Publicly trusted certificates issued since June 2023 cannot leave their hardware as a .pfx: for one,
+      # replace this step with the signing service's own and pass package_release.py --windows-dlib (Docs/Shipping.md).
       - name: Import the signing certificate (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -172,16 +177,23 @@ jobs:
           [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
           try {
             $password = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
-            # A .pfx may carry its issuers too; the signing certificate is the one with the private key.
-            $certificate = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password |
-              Where-Object { $_.HasPrivateKey } | Select-Object -First 1
+            $imported = @(Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password)
           } finally {
             Remove-Item $pfx
           }
-          if (-not $certificate) {
-            Write-Output "::error::WINDOWS_CERTIFICATE holds no certificate with a private key."
+          # A .pfx may carry its issuers, or an expired certificate beside a renewed one: take the one code signing
+          # certificate with a private key that is valid now.
+          $now = Get-Date
+          $certificate = @($imported | Where-Object {
+            $_.HasPrivateKey -and $_.NotBefore -le $now -and $now -lt $_.NotAfter -and
+            ($_.EnhancedKeyUsageList | Where-Object { $_.ObjectId -eq '1.3.6.1.5.5.7.3.3' })
+          })
+          if ($certificate.Count -ne 1) {
+            $found = ($imported | ForEach-Object { "$($_.Subject) (key: $($_.HasPrivateKey), valid $($_.NotBefore) to $($_.NotAfter))" }) -join '; '
+            Write-Output "::error::WINDOWS_CERTIFICATE must hold exactly one valid code signing certificate with its private key; it holds $($certificate.Count): $found"
             exit 1
           }
+          $certificate = $certificate[0]
           "WINDOWS_CERTIFICATE_THUMBPRINT=$($certificate.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Package
