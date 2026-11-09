@@ -245,15 +245,17 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   entry can be read in part (`PackArchive::ReadStored`, unhashed), which is how audio clips of 1 MiB or more are read from it, `AudioSource.Stream`
   or not, and MP3 and FLAC are always stored for that; `PackArchiveWriter` compresses a batch at a time on the job system and writes
   in path order, so its bytes stay deterministic.
-  Exports never keep the runtime's signature (a release's is Basalt's publisher's): Windows exports remove it
-  (`RemoveAuthenticodeSignature`, a pure byte function) before resources are written, and macOS exports are signed ad hoc
-  (`/usr/bin/codesign`, which also drops the hardened runtime whose library validation would refuse the bundled Vulkan
-  libraries); developers sign with `scripts/sign-macos.sh` (a bundle or a folder of loose code) or `scripts/sign-windows.py`
-  (signtool). Every macOS build targets macOS 13.3 (`CMAKE_OSX_DEPLOYMENT_TARGET`, set in the top-level `CMakeLists.txt`
-  before `project()`, stated in exported `Info.plist`s). Tags run `.github/workflows/release.yml`
-  (`scripts/package_release.py`, the signing scripts): macOS universal (arm64 + x86_64, with the loader and MoltenVK from
-  `scripts/ci-universal-vulkan.sh`, every shipped Mach-O checked for both), tools and samples signed when the secrets are
-  set. See `Docs/Shipping.md`.
+  Exports never keep the runtime's signature (a release's, once signed, is Basalt's publisher's): Windows exports remove
+  it (`RemoveAuthenticodeSignature`, a pure byte function) before resources are written, and macOS exports are signed ad
+  hoc (`/usr/bin/codesign`, which also drops the hardened runtime whose library validation would refuse the bundled
+  Vulkan libraries). macOS exports take the Vulkan libraries next to the runtime first (the tools archive's) and warn when
+  one lacks an architecture of the runtime (`MachOArchitectures`). Developers sign with `scripts/sign-macos.sh` (a bundle
+  or a folder of loose code) or `scripts/sign-windows.py` (signtool). macOS builds target macOS 13.3 by default
+  (`CMAKE_OSX_DEPLOYMENT_TARGET`, set in the top-level `CMakeLists.txt` before `project()`, stated in exported
+  `Info.plist`s). Tags run `.github/workflows/release.yml` (`scripts/package_release.py`, the signing scripts): macOS
+  universal (arm64 + x86_64, Jolt's x86-64 half at SSE4.2, with the loader and MoltenVK from
+  `scripts/ci-universal-vulkan.sh`, every shipped Mach-O checked for both and the x86-64 half started under Rosetta),
+  macOS signed ad hoc or with a Developer ID, Windows signed when its secrets are set. See `Docs/Shipping.md`.
 - **Editor file dialogs.** Path prompts add native pickers (`Basalt-Editor/Source/FileDialogs`, nativefiledialog-extended,
   editor only). Linux uses the XDG portal and needs D-Bus development files at build time; without them the editor
   builds with typed paths only, and a picker that fails at runtime leaves the typed path usable.

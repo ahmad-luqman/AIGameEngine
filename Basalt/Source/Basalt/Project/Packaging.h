@@ -102,12 +102,21 @@ namespace Basalt {
 		Removed
 	};
 	// Removes the Authenticode signature of a Windows executable (PE32 or PE32+) in place. The exporter strips it from
-	// the runtime it copies: a release's runtime is signed by Basalt's publisher, while the game is its developer's to
-	// sign (scripts/sign-windows.py), and rewriting resources would leave a broken signature behind. nullopt, with the
-	// reason, when the bytes are not such an executable or its certificate table lies where no signing tool puts one
-	// (anywhere but the end of the file, past the headers, followed by nothing but zero padding).
+	// the runtime it copies: a release's runtime, once signed, carries Basalt's publisher, while the game is its
+	// developer's to sign (scripts/sign-windows.py), and rewriting resources would leave a broken signature behind.
+	// Bytes that do not start with an MS-DOS header ("MZ") are no executable and hold no signature: Unsigned. nullopt, with
+	// the reason and the bytes unchanged, when an executable's headers do not read as PE32 or PE32+, or its certificate
+	// table lies where no signing tool puts one: anywhere but past the headers and every section's data, at the end of the
+	// file (zero padding may follow).
 	std::optional<SignatureRemoval> RemoveAuthenticodeSignature(std::vector<uint8_t>& image, std::string& outError);
-	// RemoveAuthenticodeSignature on a file, which is rewritten only when it was signed.
+	// RemoveAuthenticodeSignature on a file, which is rewritten (and the removal logged) only when it was signed.
 	std::optional<SignatureRemoval> RemoveAuthenticodeSignature(const std::filesystem::path& executable, std::string& outError);
+
+	// How many leading bytes of a file MachOArchitectures needs at most (a universal header with every slice listed).
+	constexpr size_t MachOHeaderBytes = 8 + 16 * 32;
+	// The architectures of a 64-bit Mach-O file, thin or universal, from its first bytes: "arm64", "x86_64", or
+	// "cpu-0x<type>" for other CPU types (subtypes are not told apart, so arm64e counts as arm64), sorted. Empty for
+	// anything else, a truncated header included. scripts/package_release.py reads them the same way.
+	std::vector<std::string> MachOArchitectures(const std::vector<uint8_t>& header);
 
 }

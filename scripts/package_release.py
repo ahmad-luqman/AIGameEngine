@@ -3,7 +3,8 @@
 
   package_release.py --build <dir> --output <dir> [--samples Tetris,Breakout] [--skip-engine]
                      [--sign-identity <Developer ID> [--notarize <profile>]] [--require-universal]
-                     [--windows-certificate <SHA-1 thumbprint>] [--require-appimage] [--gzip-level 1-9]
+                     [--windows-certificate <SHA-1 thumbprint> | --windows-dlib <dll> --windows-dlib-metadata <json>]
+                     [--require-appimage] [--gzip-level 1-9]
   package_release.py --check-tag <tag>
 
 The first form writes, for the host platform:
@@ -15,17 +16,21 @@ The first form writes, for the host platform:
                                             resources, or an AppImage (an AppDir tarball when appimagetool is missing,
                                             unless --require-appimage)
   SHA256SUMS-<platform>.txt                 (the release workflow joins the platforms' lists into SHA256SUMS.txt)
-<platform> is windows-x64, linux-x64, macos-arm64 or macos-universal (taken from the build's CLI on macOS).
+<platform> is e.g. windows-x64, linux-x64, macos-arm64 or macos-universal (on macOS, from the build CLI's architectures).
+
 Signing: on macOS the tools (with their Vulkan libraries) and each sample's .app are signed by scripts/sign-macos.sh,
-with --sign-identity (and notarized with --notarize) or ad hoc. Every Mach-O file shipped must hold the architectures the
-CLI holds, and --require-universal fails unless those are arm64 and x86_64; the x86-64 half is started through Rosetta
-when the machine has it. On Windows --windows-certificate signs the tools and each sample's executable through
-scripts/sign-windows.py. Signed tools and samples are started again afterwards.
+with --sign-identity (and notarized with --notarize) or ad hoc. Every Mach-O file shipped must hold exactly the
+architectures the CLI holds, and --require-universal fails unless those are arm64 and x86_64 and this Mac can run the
+x86-64 half (Rosetta 2), which is then started too. On Windows --windows-certificate (a certificate store thumbprint) or
+--windows-dlib with --windows-dlib-metadata (a signing service) signs the tools and each sample's folder through
+scripts/sign-windows.py. After packaging, the packaged CLI and runtime are started from the tools archive's folder, and
+each signed sample is smoke-tested again.
 --gzip-level sets the gzip level of the .tar.gz archives (Linux; default 9); the ReleasePackaging test passes 1 there,
 since level 9 spends minutes on a Debug build's binaries. Other hosts write zip archives and ignore it, with a warning.
 The second form exits 1 unless the tag is v<version> for the version in CMakeLists.txt.
 """
 import argparse
+from dataclasses import dataclass
 import hashlib
 import json
 import os
@@ -44,6 +49,13 @@ EXE = ".exe" if sys.platform == "win32" else ""
 SMOKE_TEST_FRAMES = 60
 # Sample files that are not part of a sample project (editor state, and replays the sample tests record).
 IGNORED = shutil.ignore_patterns("Cache", "Saved", "imgui.ini", "*.log", ".DS_Store")
+TOOLS = ("BasaltEditor", "BasaltRuntime", "basalt")
+VULKAN_LIBRARIES = ("libvulkan.1.dylib", "libMoltenVK.dylib")
+# Mach-O CPU types (mach/machine.h).
+MACH_O_CPU_TYPES = {0x01000007: "x86_64", 0x0100000C: "arm64"}
+UNIVERSAL = ("arm64", "x86_64")
+# Signing a bundle or folder may wait for Apple's notary service, which usually answers within minutes.
+SIGN_TIMEOUT = 2 * 60 * 60
 
 
 def fail(message):
@@ -58,46 +70,42 @@ def engine_version():
     return match.group(1)
 
 
-# Mach-O CPU types (mach/machine.h).
-MACH_O_CPU_TYPES = {0x01000007: "x86_64", 0x0100000C: "arm64"}
-UNIVERSAL = ["arm64", "x86_64"]
-
-
 def mach_o_architectures(path):
-    """The sorted architectures of a 64-bit Mach-O file, thin or universal; [] for any other file. What lipo -archs says,
-    without needing the developer tools."""
+    """The architectures of a 64-bit Mach-O file, thin or universal, sorted and unique; () for any other file. Slices
+    are told apart by CPU type only (arm64e counts as arm64, other CPUs are cpu-0x...), as MachOArchitectures in
+    Basalt/Source/Basalt/Project/Packaging.cpp reads them: enough to compare 64-bit Apple code without lipo."""
     with open(path, "rb") as file:
         header = file.read(8)
         if len(header) < 8:
-            return []
+            return ()
         if header[:4] == b"\xcf\xfa\xed\xfe":  # MH_MAGIC_64, little-endian on both architectures
-            types = [struct.unpack("<i", header[4:8])[0]]
+            types = [struct.unpack("<I", header[4:8])[0]]
         elif header[:4] in (b"\xca\xfe\xba\xbe", b"\xca\xfe\xba\xbf"):  # FAT_MAGIC, FAT_MAGIC_64: big-endian
             count = struct.unpack(">I", header[4:8])[0]
             size = 20 if header[3] == 0xBE else 32
             # Java class files share FAT_MAGIC; their next field is a version far above any real slice count.
             if count == 0 or count > 16:
-                return []
+                return ()
             table = file.read(count * size)
             if len(table) < count * size:
-                return []
-            types = [struct.unpack(">i", table[i * size:i * size + 4])[0] for i in range(count)]
+                return ()
+            types = [struct.unpack(">I", table[i * size:i * size + 4])[0] for i in range(count)]
         else:
-            return []
-    return sorted(MACH_O_CPU_TYPES.get(cpu & 0xFFFFFFFF, f"cpu-{cpu & 0xFFFFFFFF:#x}") for cpu in types)
+            return ()
+    return tuple(sorted({MACH_O_CPU_TYPES.get(cpu, f"cpu-{cpu:#x}") for cpu in types}))
 
 
-def platform_name(cli=None):
+def platform_name(cli):
     """windows-x64, linux-x64 (or -arm64), macos-arm64 (or -x64) or macos-universal. On macOS the architectures come from
-    the build's CLI when it is given, since a universal build runs on either."""
+    the build's CLI, since a universal build runs on either; a CLI that holds no single known one keeps the host's."""
     system = {"win32": "windows", "darwin": "macos"}.get(sys.platform, "linux")
-    if system == "macos" and cli is not None:
+    machine = platform.machine()
+    if system == "macos":
         architectures = mach_o_architectures(cli)
         if architectures == UNIVERSAL:
             return "macos-universal"
-        machine = architectures[0] if len(architectures) == 1 else platform.machine()
-    else:
-        machine = platform.machine()
+        if len(architectures) == 1:
+            machine = architectures[0]
     machine = machine.lower()
     architecture = {"amd64": "x64", "x86_64": "x64", "arm64": "arm64", "aarch64": "arm64"}.get(machine, machine)
     return f"{system}-{architecture}"
@@ -106,18 +114,24 @@ def platform_name(cli=None):
 def check_architectures(files, wanted, what):
     """Fails unless every file is Mach-O code for exactly the wanted architectures (those of the tools)."""
     for file in files:
+        if not file.is_file():
+            fail(f"{what}: {file} is missing")
         found = mach_o_architectures(file)
-        if found != wanted:
-            fail(f"{what}: {file.name} holds {', '.join(found) or 'no Mach-O code'}, the tools {', '.join(wanted)}: a Mac of "
-                 "the missing architecture could not run it (build universal Vulkan libraries with scripts/ci-universal-vulkan.sh)")
+        if found == wanted:
+            continue
+        missing = sorted(set(wanted) - set(found))
+        detail = (f"Macs of the missing kind ({', '.join(missing)}) could not run it (build universal Vulkan libraries with scripts/ci-universal-vulkan.sh)"
+                  if missing else "it holds architectures the tools do not (use libraries built for the tools' architectures)")
+        fail(f"{what}: {file.name} holds {', '.join(found) or 'no Mach-O code'}, the tools {', '.join(wanted)}: {detail}")
 
 
-def has_rosetta():
-    """Whether this Mac can run x86-64 code (Rosetta 2 is installed, or the Mac is an Intel one)."""
+def rosetta_problem():
+    """None when this Mac can run x86-64 code (Rosetta 2 is installed, or the Mac is an Intel one); otherwise why not."""
     try:
-        return subprocess.run(["arch", "-x86_64", "/usr/bin/true"], capture_output=True, timeout=60).returncode == 0
-    except (OSError, subprocess.TimeoutExpired):
-        return False
+        probe = subprocess.run(["arch", "-x86_64", "/usr/bin/true"], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return f"arch -x86_64 could not run: {error}"
+    return None if probe.returncode == 0 else f"arch -x86_64 exited with code {probe.returncode} (is Rosetta 2 installed?): {probe.stderr.strip()}"
 
 
 def warn(message):
@@ -133,11 +147,17 @@ def run(arguments, what, **kwargs):
         fail(f"{what} did not finish within {error.timeout} s: {error.stdout or ''}{error.stderr or ''}")
 
 
-def run_cli(cli, project, command, params, env):
-    """Runs one basalt command and returns its result; fails with the command's error otherwise. cli is the program, or
-    the command line that starts it (arch -x86_64 basalt)."""
-    program = [str(part) for part in cli] if isinstance(cli, list) else [str(cli)]
-    completed = run(program + ["--project", str(project), command, json.dumps(params)], f"{project.name}: {command}", env=env, timeout=1800)
+def run_smoke(command, what, env):
+    """Runs a game, or the runtime on a project, headless for SMOKE_TEST_FRAMES frames; fails unless it exits 0."""
+    smoke = run(command + ["--headless", "--frames", str(SMOKE_TEST_FRAMES), "--fail-on-script-errors"], what, env=env, timeout=300)
+    if smoke.returncode != 0:
+        fail(f"{what} exited with code {smoke.returncode} (7: script errors): {smoke.stdout}{smoke.stderr}")
+
+
+def run_cli(cli, project, command, params, env, prefix=()):
+    """Runs one basalt command and returns its result; fails with the command's error otherwise. prefix starts the CLI
+    (arch -x86_64)."""
+    completed = run([*prefix, str(cli), "--project", str(project), command, json.dumps(params)], f"{project.name}: {command}", env=env, timeout=1800)
     # Log lines come first; the response is the last JSON object.
     start = completed.stdout.rfind("\n{")
     start = start + 1 if start >= 0 else completed.stdout.find("{")
@@ -148,6 +168,16 @@ def run_cli(cli, project, command, params, env):
     if completed.returncode != 0 or not response.get("ok") or "result" not in response:
         fail(f"{project.name}: {command} failed (exit code {completed.returncode}): {response.get('error') or completed.stdout + completed.stderr}")
     return response["result"]
+
+
+def run_signing(command, what):
+    """Runs a signing script, whose own output explains a failure; fails with a message rather than a traceback."""
+    try:
+        signed = subprocess.run(command, timeout=SIGN_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        fail(f"signing {what} did not finish within {SIGN_TIMEOUT} s")
+    if signed.returncode != 0:
+        fail(f"signing {what} failed (exit code {signed.returncode}; the script's output above says why)")
 
 
 def writes_zip(host=sys.platform):
@@ -173,12 +203,11 @@ def archive(source, destination, gzip_level, host=sys.platform):
 
 
 def find_vulkan_libraries():
-    """libvulkan.1.dylib and libMoltenVK.dylib, searched where the exporter looks for them (FindVulkanLibraries in
-    Basalt/Source/Basalt/Project/Exporter.cpp; it also looks next to the runtime, after $VULKAN_SDK): change both
-    together."""
+    """libvulkan.1.dylib and libMoltenVK.dylib, searched where the exporter looks for them after the runtime's own
+    directory (FindVulkanLibraries in Basalt/Source/Basalt/Project/Exporter.cpp): change both together."""
     directories = ([Path(os.environ["VULKAN_SDK"], "lib")] if os.environ.get("VULKAN_SDK") else []) + [Path("/opt/homebrew/lib"), Path("/usr/local/lib")]
     found = []
-    for name in ("libvulkan.1.dylib", "libMoltenVK.dylib"):
+    for name in VULKAN_LIBRARIES:
         path = next((directory / name for directory in directories if (directory / name).is_file()), None)
         if not path:
             fail(f"cannot find {name} (install the Vulkan SDK or Homebrew vulkan-loader + molten-vk)")
@@ -186,7 +215,16 @@ def find_vulkan_libraries():
     return found
 
 
-TOOLS = ("BasaltEditor", "BasaltRuntime", "basalt")
+@dataclass(frozen=True)
+class Target:
+    """What main() works out about the build before packaging it."""
+    platform: str
+    # The CLI's Mach-O architectures, which every shipped Mach-O file must hold (macOS; () elsewhere).
+    architectures: tuple
+    # Whether the x86-64 half of a universal build is started too (through Rosetta 2).
+    run_x86_64: bool
+    # The sample whose project the packaged tools start on (the tools archive carries every sample in Samples/).
+    check_sample: str
 
 
 def sign_macos(target, options):
@@ -195,32 +233,40 @@ def sign_macos(target, options):
     sign = ["bash", str(ROOT / "scripts" / "sign-macos.sh"), str(target)]
     if options.sign_identity:
         sign += ["--identity", options.sign_identity] + (["--notarize", options.notarize] if options.notarize else [])
-    subprocess.run(sign, check=True)
+    run_signing(sign, f"'{target}'")
 
 
-def sign_windows(files, options, description=None):
-    """scripts/sign-windows.py with the certificate whose thumbprint --windows-certificate gives."""
-    sign = [sys.executable, str(ROOT / "scripts" / "sign-windows.py")] + [str(file) for file in files] + ["--thumbprint", options.windows_certificate]
+def sign_windows(paths, options, description=None):
+    """scripts/sign-windows.py on files or folders, with the certificate (--windows-certificate) or signing service
+    (--windows-dlib) given."""
+    sign = [sys.executable, str(ROOT / "scripts" / "sign-windows.py")] + [str(path) for path in paths]
+    if options.windows_certificate:
+        sign += ["--thumbprint", options.windows_certificate]
+    else:
+        sign += ["--dlib", options.windows_dlib, "--dlib-metadata", options.windows_dlib_metadata]
     if description:
         sign += ["--description", description]
-    subprocess.run(sign, check=True)
+    run_signing(sign, ", ".join(Path(path).name for path in paths))
 
 
-def start_tools(folder, sample, env, rosetta):
-    """Starts the packaged CLI and runtime (signed now, so this checks that the signatures let them run), and on a
-    universal build their x86-64 half through Rosetta. Any files they write stay in the staging folder, which is
-    already archived."""
-    project = folder / "Samples" / sample
-    for prefix in [[]] + ([["arch", "-x86_64"]] if rosetta else []):
+def signs_windows(options):
+    return bool(options.windows_certificate or options.windows_dlib)
+
+
+def start_tools(folder, target, env):
+    """Starts the packaged CLI (project.info) and runtime (headless) on a sample, from the tools archive's folder and so
+    after any signing (proving the signatures let them run), and on a universal build their x86-64 half through Rosetta.
+    The editor needs a display and is not started. Any files they write stay in the staging folder, which is already
+    archived."""
+    project = folder / "Samples" / target.check_sample
+    for prefix in [()] + ([("arch", "-x86_64")] if target.run_x86_64 else []):
         what = f"the packaged tools{' under Rosetta' if prefix else ''}"
-        run_cli(prefix + [str(folder / "bin" / f"basalt{EXE}")], project, "project.info", {}, env)
-        smoke = run(prefix + [str(folder / "bin" / f"BasaltRuntime{EXE}"), "--project", str(project), "--headless", "--frames",
-                              str(SMOKE_TEST_FRAMES), "--fail-on-script-errors"], f"{what}: BasaltRuntime", env=env, timeout=300)
-        if smoke.returncode != 0:
-            fail(f"{what}: BasaltRuntime exited with code {smoke.returncode} (7: script errors): {smoke.stdout}{smoke.stderr}")
+        run_cli(folder / "bin" / f"basalt{EXE}", project, "project.info", {}, env, prefix)
+        run_smoke([*prefix, str(folder / "bin" / f"BasaltRuntime{EXE}"), "--project", str(project)], f"{what}: BasaltRuntime", env)
+        print(f"package_release: started {what}")
 
 
-def package_engine(build, stage, output, name, options, env):
+def package_engine(build, stage, output, name, options, target, env):
     folder = stage / name
     bin_dir = folder / "bin"
     bin_dir.mkdir(parents=True)
@@ -231,61 +277,53 @@ def package_engine(build, stage, output, name, options, env):
         shutil.copy2(source, bin_dir)
     if sys.platform == "darwin":
         # The same layout a folder export uses: VulkanLoader finds the loader and the MoltenVK manifest next to the tools.
-        loader, molten_vk = find_vulkan_libraries()
-        shutil.copyfile(loader, bin_dir / "libvulkan.1.dylib")
-        shutil.copyfile(molten_vk, bin_dir / "libMoltenVK.dylib")
-        # Package-manager files are often read-only, and signing rewrites them.
-        for library in ("libvulkan.1.dylib", "libMoltenVK.dylib"):
-            (bin_dir / library).chmod(0o644)
-        check_architectures([bin_dir / f"{tool}" for tool in TOOLS] + [bin_dir / "libvulkan.1.dylib", bin_dir / "libMoltenVK.dylib"],
-                            options.architectures, "the tools")
+        # copyfile copies no mode, so the copies are writable for signing even when the originals are read-only.
+        for source, library in zip(find_vulkan_libraries(), VULKAN_LIBRARIES):
+            shutil.copyfile(source, bin_dir / library)
+        check_architectures([bin_dir / name for name in TOOLS + VULKAN_LIBRARIES], target.architectures, "the tools")
         manifest = bin_dir / "vulkan" / "icd.d"
         manifest.mkdir(parents=True)
         (manifest / "MoltenVK_icd.json").write_text(json.dumps({"file_format_version": "1.0.0", "ICD": {"library_path": "../../libMoltenVK.dylib", "api_version": "1.3.0", "is_portability_driver": True}}))
         sign_macos(bin_dir, options)
-    elif options.windows_certificate:
+    elif signs_windows(options):
         sign_windows([bin_dir / f"{tool}{EXE}" for tool in TOOLS], options)
     shutil.copytree(ROOT / "Docs", folder / "Docs", ignore=IGNORED)
     shutil.copytree(ROOT / "Samples", folder / "Samples", ignore=IGNORED)
     for document in ("README.md", "LICENSE"):
         shutil.copy2(ROOT / document, folder)
     path = archive(folder, output / name, options.gzip_level)
-    start_tools(folder, options.check_sample, env, sys.platform == "darwin" and options.architectures == UNIVERSAL and options.rosetta)
+    start_tools(folder, target, env)
     return path
 
 
-def package_sample(cli, sample, stage, output, prefix, options, env):
+def package_sample(cli, sample, stage, output, prefix, options, target, env):
     export = stage / "exports" / sample.name
     result = run_cli(cli, sample, "project.export", {"output": str(export), "package": True, "archive": True, "smokeTestFrames": SMOKE_TEST_FRAMES}, env)
     package = Path(result["package"])
     for message in result.get("warnings", []):
         warn(f"{sample.name}: {message}")
-    name = f"{prefix}-{sample.name}-{options.platform}"
+    name = f"{prefix}-{sample.name}-{target.platform}"
+    smoke_test = {"executable": result["executable"], "frames": SMOKE_TEST_FRAMES, "assertPassed": True}
     if sys.platform == "darwin":
-        contents = package / "Contents"
-        check_architectures([Path(result["executable"])] + sorted((contents / "Frameworks").glob("*.dylib")), options.architectures, sample.name)
+        frameworks = package / "Contents" / "Frameworks"
+        check_architectures([Path(result["executable"])] + [frameworks / library for library in VULKAN_LIBRARIES], target.architectures, sample.name)
         sign_macos(package, options)
         # What ships is the signed bundle (hardened runtime with a Developer ID): it must still start.
-        run_cli(cli, sample, "project.smoke_test", {"executable": result["executable"], "frames": SMOKE_TEST_FRAMES, "assertPassed": True}, env)
-        if options.architectures == UNIVERSAL and options.rosetta:
-            smoke = run(["arch", "-x86_64", result["executable"], "--headless", "--frames", str(SMOKE_TEST_FRAMES), "--fail-on-script-errors"],
-                        f"{sample.name} under Rosetta", env=env, timeout=300)
-            if smoke.returncode != 0:
-                fail(f"{sample.name}: the x86-64 half exited with code {smoke.returncode} under Rosetta (7: script errors): {smoke.stdout}{smoke.stderr}")
+        run_cli(cli, sample, "project.smoke_test", smoke_test, env)
+        if target.run_x86_64:
+            run_smoke(["arch", "-x86_64", result["executable"]], f"{sample.name}: the x86-64 half under Rosetta", env)
     elif package.suffix == ".AppImage":
         # The AppImage itself must start (extracted, so the check needs no FUSE).
-        smoke = run([str(package), "--headless", "--frames", str(SMOKE_TEST_FRAMES), "--fail-on-script-errors"], f"{sample.name}: the AppImage",
-                    env=dict(env, APPIMAGE_EXTRACT_AND_RUN="1"), timeout=300)
-        if smoke.returncode != 0:
-            fail(f"{sample.name}: the AppImage exited with code {smoke.returncode} (7: script errors): {smoke.stdout}{smoke.stderr}")
-        target = output / f"{name}.AppImage"
-        shutil.copy2(package, target)
-        return target
+        run_smoke([str(package)], f"{sample.name}: the AppImage", dict(env, APPIMAGE_EXTRACT_AND_RUN="1"))
+        destination = output / f"{name}.AppImage"
+        shutil.copy2(package, destination)
+        return destination
     elif sys.platform.startswith("linux") and options.require_appimage:
         fail(f"{sample.name}: no AppImage was built: {'; '.join(result.get('warnings', []))}")
-    elif options.windows_certificate:
-        sign_windows([result["executable"]], options, description=sample.name)
-        run_cli(cli, sample, "project.smoke_test", {"executable": result["executable"], "frames": SMOKE_TEST_FRAMES, "assertPassed": True}, env)
+    elif signs_windows(options):
+        # The folder: every executable and library an export holds.
+        sign_windows([package], options, description=sample.name)
+        run_cli(cli, sample, "project.smoke_test", smoke_test, env)
     return archive(package, output / name, options.gzip_level)
 
 
@@ -300,6 +338,13 @@ def write_checksums(files, destination):
     destination.write_text("".join(lines))
 
 
+def thumbprint(value):
+    """argparse type: a SHA-1 thumbprint (scripts/sign-windows.py checks the same), refused before anything is built."""
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", value):
+        raise argparse.ArgumentTypeError("a SHA-1 thumbprint is 40 hexadecimal digits, without spaces")
+    return value
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--check-tag", metavar="TAG", help="exit 1 unless TAG is v<version in CMakeLists.txt>")
@@ -309,8 +354,11 @@ def main():
     parser.add_argument("--skip-engine", action="store_true", help="package only the samples")
     parser.add_argument("--sign-identity", help="macOS Developer ID for scripts/sign-macos.sh, for the tools and samples (default: ad hoc)")
     parser.add_argument("--notarize", metavar="PROFILE", help="notarize the macOS tools and samples with this notarytool keychain profile")
-    parser.add_argument("--require-universal", action="store_true", help="fail on macOS unless the build is universal (arm64 and x86_64)")
-    parser.add_argument("--windows-certificate", metavar="THUMBPRINT", help="sign the Windows tools and samples with this certificate (scripts/sign-windows.py)")
+    parser.add_argument("--require-universal", action="store_true", help="fail on macOS unless the build is universal (arm64 and x86_64) and Rosetta 2 can start its x86-64 half")
+    windows = parser.add_mutually_exclusive_group()
+    windows.add_argument("--windows-certificate", metavar="THUMBPRINT", type=thumbprint, help="sign the Windows tools and samples with this certificate (scripts/sign-windows.py)")
+    windows.add_argument("--windows-dlib", metavar="DLL", help="sign the Windows tools and samples through this signing service library (with --windows-dlib-metadata)")
+    parser.add_argument("--windows-dlib-metadata", metavar="JSON", help="the metadata file that --windows-dlib reads")
     parser.add_argument("--require-appimage", action="store_true", help="fail on Linux when appimagetool cannot build the AppImage")
     parser.add_argument("--gzip-level", type=int, choices=range(1, 10), metavar="1-9",
                         help="gzip level of the .tar.gz archives (Linux; default: 9)")
@@ -328,8 +376,10 @@ def main():
         parser.error("--notarize needs --sign-identity")
     if (options.sign_identity or options.require_universal) and sys.platform != "darwin":
         parser.error("--sign-identity and --require-universal are for macOS")
-    if options.windows_certificate and sys.platform != "win32":
-        parser.error("--windows-certificate is for Windows")
+    if bool(options.windows_dlib) != bool(options.windows_dlib_metadata):
+        parser.error("--windows-dlib and --windows-dlib-metadata go together")
+    if signs_windows(options) and sys.platform != "win32":
+        parser.error("--windows-certificate and --windows-dlib are for Windows")
     if options.gzip_level is None:
         options.gzip_level = 9
     elif writes_zip():
@@ -347,31 +397,34 @@ def main():
         if unknown:
             fail(f"unknown samples: {', '.join(sorted(unknown))}")
         samples = [sample for sample in samples if sample.name in wanted]
+    if not samples:
+        fail("Samples/ holds no project to package, or to start the packaged tools on")
 
     cli = build / "bin" / f"basalt{EXE}"
     if not cli.is_file():
         fail(f"{cli} is missing (build the Dist configuration first)")
-    options.platform = platform_name(cli)
-    options.architectures = mach_o_architectures(cli) if sys.platform == "darwin" else []
-    if options.require_universal and options.architectures != UNIVERSAL:
-        fail(f"the build is not universal: {cli.name} holds {', '.join(options.architectures) or 'no Mach-O code'} "
-             "(configure with -DCMAKE_OSX_ARCHITECTURES=\"arm64;x86_64\")")
-    options.rosetta = options.architectures == UNIVERSAL and has_rosetta()
-    if options.architectures == UNIVERSAL and not options.rosetta:
-        warn("this Mac cannot run x86-64 code (no Rosetta 2): the x86-64 half of the tools and samples is not started")
-    # The packaged tools start on the first sample packaged (the tools archive holds them all).
-    options.check_sample = samples[0].name if samples else None
+    architectures = mach_o_architectures(cli) if sys.platform == "darwin" else ()
+    if sys.platform == "darwin" and not architectures:
+        fail(f"{cli} is not 64-bit Mach-O code")
+    if options.require_universal and architectures != UNIVERSAL:
+        fail(f"the build is not universal: {cli.name} holds {', '.join(architectures)} (configure with -DCMAKE_OSX_ARCHITECTURES=\"arm64;x86_64\")")
+    problem = rosetta_problem() if architectures == UNIVERSAL else None
+    if problem and options.require_universal:
+        fail(f"the x86-64 half cannot be started on this Mac, so it would ship untested: {problem}")
+    if problem:
+        warn(f"the x86-64 half of the tools and samples is not started: {problem}")
+    target = Target(platform_name(cli), architectures, architectures == UNIVERSAL and not problem, samples[0].name)
 
     prefix = f"Basalt-{version}"
     with tempfile.TemporaryDirectory(prefix="basalt-release-") as temp:
         stage = Path(temp)
         # Smoke tests save game data; keep it out of the user's (or the runner's) real data directory.
         env = dict(os.environ, BASALT_USER_DATA_DIR=str(stage / "UserData"))
-        files = [] if options.skip_engine else [package_engine(build, stage, output, f"{prefix}-{options.platform}", options, env)]
+        files = [] if options.skip_engine else [package_engine(build, stage, output, f"{prefix}-{target.platform}", options, target, env)]
         for sample in samples:
-            files.append(package_sample(cli, sample, stage, output, prefix, options, env))
+            files.append(package_sample(cli, sample, stage, output, prefix, options, target, env))
             print(f"package_release: {files[-1].name}")
-    write_checksums(files, output / f"SHA256SUMS-{options.platform}.txt")
+    write_checksums(files, output / f"SHA256SUMS-{target.platform}.txt")
     print(f"package_release: {len(files)} archives in {output}")
 
 

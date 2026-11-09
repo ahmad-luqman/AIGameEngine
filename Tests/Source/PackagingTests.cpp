@@ -16,6 +16,7 @@
 #include "TestUtils.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <map>
 #include <string>
@@ -53,28 +54,24 @@ namespace {
 	}
 #endif
 
-	// A Windows executable as RemoveAuthenticodeSignature reads it: DOS header, PE signature, COFF header and an optional
-	// header (PE32 or PE32+) with directoryCount data directories, then 509 bytes of code (so a signing tool must pad).
-	std::vector<uint8_t> TestExecutable(bool pe32Plus, uint32_t directoryCount = 16)
+	// Offsets in the test executables below (PE/COFF): the PE signature right after a 64-byte DOS header, the COFF header's
+	// section count and optional header size, and the optional header's checksum.
+	constexpr size_t PeHeader = 64;
+	constexpr size_t SectionCount = PeHeader + 6;
+	constexpr size_t OptionalSize = PeHeader + 20;
+	constexpr size_t OptionalHeader = PeHeader + 24;
+	constexpr size_t CheckSum = OptionalHeader + 64;
+	constexpr size_t CodeSize = 509;
+
+	void Write16(std::vector<uint8_t>& image, size_t offset, uint16_t value)
 	{
-		const size_t optionalSize = (pe32Plus ? 112 : 96) + size_t{ directoryCount } * 8;
-		std::vector<uint8_t> image(64 + 24 + optionalSize, 0);
-		image[0] = 'M';
-		image[1] = 'Z';
-		image[60] = 64;
-		std::memcpy(image.data() + 64, "PE\0\0", 4);
-		image[64 + 20] = static_cast<uint8_t>(optionalSize & 0xFF);
-		image[64 + 21] = static_cast<uint8_t>(optionalSize >> 8);
-		image[88] = 0x0B;
-		image[89] = pe32Plus ? 0x02 : 0x01;
-		// A checksum, which a removal must clear.
-		image[88 + 64] = 0x78;
-		image[88 + 65] = 0x56;
-		image[88 + 66] = 0x34;
-		image[88 + 67] = 0x12;
-		image[88 + (pe32Plus ? 108 : 92)] = static_cast<uint8_t>(directoryCount);
-		image.insert(image.end(), 509, 0xCC);
-		return image;
+		image[offset] = static_cast<uint8_t>(value);
+		image[offset + 1] = static_cast<uint8_t>(value >> 8);
+	}
+
+	size_t Read16(const std::vector<uint8_t>& image, size_t offset)
+	{
+		return image[offset] | size_t{ image[offset + 1] } << 8;
 	}
 
 	void Write32(std::vector<uint8_t>& image, size_t offset, uint32_t value)
@@ -83,10 +80,41 @@ namespace {
 			image[offset + i] = static_cast<uint8_t>(value >> (8 * i));
 	}
 
+	size_t DirectoriesOffset(bool pe32Plus)
+	{
+		return OptionalHeader + (pe32Plus ? 112 : 96);
+	}
 	// The certificate table's directory entry (the fifth data directory).
 	size_t CertificateEntry(bool pe32Plus)
 	{
-		return 88 + (pe32Plus ? 112 : 96) + 4 * 8;
+		return DirectoriesOffset(pe32Plus) + size_t{ 4 } * 8;
+	}
+
+	// A Windows executable as RemoveAuthenticodeSignature reads it: DOS header, PE signature, COFF header, an optional header
+	// (PE32 or PE32+) with room for roomFor data directories of which it declares directoryCount, one section header,
+	// then the section's codeSize bytes of code (509 by default, so a signing tool must pad).
+	std::vector<uint8_t> TestExecutable(bool pe32Plus, uint32_t roomFor = 16, uint32_t directoryCount = 16, size_t codeSize = CodeSize)
+	{
+		const size_t optionalSize = DirectoriesOffset(pe32Plus) - OptionalHeader + size_t{ roomFor } * 8;
+		const size_t sectionTable = OptionalHeader + optionalSize;
+		std::vector<uint8_t> image(sectionTable + 40, 0);
+		image[0] = 'M';
+		image[1] = 'Z';
+		Write32(image, 60, PeHeader);
+		std::memcpy(image.data() + PeHeader, "PE\0\0", 4);
+		Write16(image, SectionCount, 1);
+		Write16(image, OptionalSize, static_cast<uint16_t>(optionalSize));
+		Write16(image, OptionalHeader, pe32Plus ? 0x20B : 0x10B);
+		// A checksum, which a removal must clear.
+		Write32(image, CheckSum, 0x12345678);
+		// NumberOfRvaAndSizes sits just before the directories, when the header has room for it.
+		if (roomFor > 0)
+			Write32(image, DirectoriesOffset(pe32Plus) - 4, directoryCount);
+		// The section's SizeOfRawData and PointerToRawData: the code right after the headers.
+		Write32(image, sectionTable + 16, static_cast<uint32_t>(codeSize));
+		Write32(image, sectionTable + 20, static_cast<uint32_t>(image.size()));
+		image.insert(image.end(), codeSize, 0xCC);
+		return image;
 	}
 
 	// What signtool does to an executable: pad it to 8 bytes, append a WIN_CERTIFICATE (here 32 bytes of stand-in
@@ -98,8 +126,12 @@ namespace {
 		const std::vector<uint8_t> certificate = { 40, 0, 0, 0, 0x00, 0x02, 0x02, 0x00 };
 		image.insert(image.end(), certificate.begin(), certificate.end());
 		image.insert(image.end(), 32, 0xA5);
-		Write32(image, CertificateEntry(pe32Plus), offset);
-		Write32(image, CertificateEntry(pe32Plus) + 4, 40);
+		// Only when the header has room for the entry (TestExecutable with fewer than five directories has none).
+		if (CertificateEntry(pe32Plus) + 8 <= Read16(image, OptionalSize) + OptionalHeader)
+		{
+			Write32(image, CertificateEntry(pe32Plus), offset);
+			Write32(image, CertificateEntry(pe32Plus) + 4, 40);
+		}
 		return image;
 	}
 
@@ -567,7 +599,7 @@ TEST_SUITE("Packaging")
 		CHECK(plist.find("Copyright \xC2\xA9 Stone &lt;Works&gt;") != std::string::npos);
 		CHECK(plist.find("CFBundleIconFile") == std::string::npos);
 		CHECK(plist.find('\r') == std::string::npos);
-		// The macOS the runtime is built for (CMAKE_OSX_DEPLOYMENT_TARGET), as major.minor.
+		// The macOS the runtime is built for (CMAKE_OSX_DEPLOYMENT_TARGET), as major.minor[.patch].
 		const std::string minimumKey = "<key>LSMinimumSystemVersion</key>\n\t<string>";
 		const size_t minimum = plist.find(minimumKey);
 		REQUIRE(minimum != std::string::npos);
@@ -984,7 +1016,7 @@ TEST_SUITE("Packaging")
 			const std::vector<uint8_t> signedImage = SignTestExecutable(plainImage, pe32Plus);
 			std::vector<uint8_t> expected = plainImage;
 			expected.resize(signedImage.size() - 40, 0);
-			Write32(expected, 88 + 64, 0);
+			Write32(expected, CheckSum, 0);
 			image = signedImage;
 			REQUIRE_MESSAGE(RemoveAuthenticodeSignature(image, error) == SignatureRemoval::Removed, error);
 			CHECK(image == expected);
@@ -996,48 +1028,91 @@ TEST_SUITE("Packaging")
 			REQUIRE_MESSAGE(RemoveAuthenticodeSignature(image, error) == SignatureRemoval::Removed, error);
 			CHECK(image == expected);
 
-			// Anything else after it would be lost, so nothing is removed.
+			// A refused executable keeps its bytes.
+			const auto refused = [&](std::vector<uint8_t> candidate, const char* reason) {
+				const std::vector<uint8_t> before = candidate;
+				CHECK_FALSE(RemoveAuthenticodeSignature(candidate, error));
+				CHECK_MESSAGE(BasaltTest::Contains(error, reason), error);
+				CHECK(candidate == before);
+			};
+			// Anything but zeros after the table would be lost with it.
 			image = signedImage;
 			image.push_back(1);
-			CHECK_FALSE(RemoveAuthenticodeSignature(image, error));
-			CHECK(BasaltTest::Contains(error, "data follows"));
-			CHECK(std::equal(signedImage.begin(), signedImage.end(), image.begin()));
-
-			// A table past the end of the file, or among the headers, is no signature a tool wrote.
+			refused(image, "data follows");
+			// A table past the end of the file, among the headers, over the section's code or too small for a
+			// WIN_CERTIFICATE header is no signature a tool wrote.
 			image = signedImage;
 			Write32(image, CertificateEntry(pe32Plus) + 4, 41);
-			CHECK_FALSE(RemoveAuthenticodeSignature(image, error));
-			CHECK(BasaltTest::Contains(error, "outside the file"));
+			refused(image, "outside the file");
 			image = signedImage;
 			Write32(image, CertificateEntry(pe32Plus), 64);
-			CHECK_FALSE(RemoveAuthenticodeSignature(image, error));
-			CHECK(BasaltTest::Contains(error, "outside the file"));
+			refused(image, "among its headers or sections");
+			image = signedImage;
+			Write32(image, CertificateEntry(pe32Plus), 0);
+			refused(image, "among its headers or sections");
+			image = signedImage;
+			const auto insideCode = static_cast<uint32_t>(plainImage.size() - 8);
+			Write32(image, CertificateEntry(pe32Plus), insideCode);
+			Write32(image, CertificateEntry(pe32Plus) + 4, static_cast<uint32_t>(image.size() - insideCode));
+			refused(image, "among its headers or sections");
 			image = signedImage;
 			Write32(image, CertificateEntry(pe32Plus), 0xFFFFFFF8u);
 			Write32(image, CertificateEntry(pe32Plus) + 4, 0xFFFFFFF0u);
-			CHECK_FALSE(RemoveAuthenticodeSignature(image, error));
-			CHECK(BasaltTest::Contains(error, "outside the file"));
+			refused(image, "outside the file");
+			image = signedImage;
+			Write32(image, CertificateEntry(pe32Plus) + 4, 7);
+			refused(image, "too small");
 
-			// Without a certificate table directory, an executable has no signature, whatever bytes follow.
-			image = SignTestExecutable(TestExecutable(pe32Plus, 4), pe32Plus);
-			const std::vector<uint8_t> fourDirectories = image;
+			// An empty table holds nothing, wherever its entry points.
+			image = signedImage;
+			Write32(image, CertificateEntry(pe32Plus) + 4, 0);
+			const std::vector<uint8_t> emptyTable = image;
 			CHECK(RemoveAuthenticodeSignature(image, error) == SignatureRemoval::Unsigned);
-			CHECK(image == fourDirectories);
+			CHECK(image == emptyTable);
 
-			// Every prefix of a signed executable is refused or read within its bounds (AddressSanitizer checks the latter).
-			for (size_t size = 0; size < signedImage.size(); ++size)
+			// No certificate table directory, by count or by room, means no signature, whatever bytes follow.
+			for (const auto& [roomFor, count] : { std::pair{ 16u, 4u }, std::pair{ 4u, 4u }, std::pair{ 4u, 16u } })
+			{
+				CAPTURE(roomFor);
+				CAPTURE(count);
+				image = SignTestExecutable(TestExecutable(pe32Plus, roomFor, count), pe32Plus);
+				const std::vector<uint8_t> noDirectory = image;
+				CHECK(RemoveAuthenticodeSignature(image, error) == SignatureRemoval::Unsigned);
+				CHECK(image == noDirectory);
+			}
+			// A header declaring 16 directories with room for only four, ending the file: never read past its end.
+			image = TestExecutable(pe32Plus, 4, 16, 0);
+			Write16(image, SectionCount, 0);
+			image.resize(image.size() - 40);
+			CHECK(RemoveAuthenticodeSignature(image, error) == SignatureRemoval::Unsigned);
+			// Five directories are enough for a certificate table, and a table may start right after the headers.
+			image = SignTestExecutable(TestExecutable(pe32Plus, 5, 5), pe32Plus);
+			CHECK(RemoveAuthenticodeSignature(image, error) == SignatureRemoval::Removed);
+			image = SignTestExecutable(TestExecutable(pe32Plus, 16, 16, 0), pe32Plus);
+			CHECK(RemoveAuthenticodeSignature(image, error) == SignatureRemoval::Removed);
+
+			// Every prefix of a signed executable that has its DOS signature is refused (and, under AddressSanitizer, read
+			// only within its bounds).
+			for (size_t size = 2; size < signedImage.size(); ++size)
 			{
 				std::vector<uint8_t> prefix(signedImage.begin(), signedImage.begin() + static_cast<std::ptrdiff_t>(size));
 				CHECK_FALSE(RemoveAuthenticodeSignature(prefix, error));
 			}
 		}
 
+		// Bytes that are no executable hold no signature; ones that start like one must read as one.
+		for (const std::vector<uint8_t>& text : { std::vector<uint8_t>{}, std::vector<uint8_t>{ 'M' }, std::vector<uint8_t>{ 'M', 'X', 0, 0 }, std::vector<uint8_t>(100, 'Z') })
+		{
+			std::vector<uint8_t> image = text;
+			CHECK(RemoveAuthenticodeSignature(image, error) == SignatureRemoval::Unsigned);
+			CHECK(image == text);
+		}
 		std::vector<uint8_t> image = TestExecutable(true);
-		image[0] = 'Z';
+		image.resize(63);
 		CHECK_FALSE(RemoveAuthenticodeSignature(image, error));
-		CHECK(BasaltTest::Contains(error, "no MZ header"));
+		CHECK(BasaltTest::Contains(error, "DOS header is truncated"));
 		image = TestExecutable(true);
-		image[65] = 'X';
+		image[PeHeader + 1] = 'X';
 		CHECK_FALSE(RemoveAuthenticodeSignature(image, error));
 		CHECK(BasaltTest::Contains(error, "no PE header"));
 		image = TestExecutable(true);
@@ -1045,11 +1120,18 @@ TEST_SUITE("Packaging")
 		CHECK_FALSE(RemoveAuthenticodeSignature(image, error));
 		CHECK(BasaltTest::Contains(error, "no PE header"));
 		image = TestExecutable(true);
-		image[89] = 0x03;
+		image[OptionalHeader + 1] = 0x03;
 		CHECK_FALSE(RemoveAuthenticodeSignature(image, error));
 		CHECK(BasaltTest::Contains(error, "neither PE32 nor PE32+"));
+		for (const uint16_t optionalSize : { uint16_t{ 0 }, uint16_t{ 0x4000 } })
+		{
+			image = TestExecutable(true);
+			Write16(image, OptionalSize, optionalSize);
+			CHECK_FALSE(RemoveAuthenticodeSignature(image, error));
+			CHECK(BasaltTest::Contains(error, "truncated"));
+		}
 		image = TestExecutable(true);
-		image[64 + 21] = 0x40;
+		Write16(image, SectionCount, 100);
 		CHECK_FALSE(RemoveAuthenticodeSignature(image, error));
 		CHECK(BasaltTest::Contains(error, "truncated"));
 	}
@@ -1068,19 +1150,22 @@ TEST_SUITE("Packaging")
 		CHECK(stripped->size() == signedImage.size() - 40);
 		CHECK(RemoveAuthenticodeSignature(*stripped, error) == SignatureRemoval::Unsigned);
 
-		// An unsigned file is not written at all: a read-only one stays as it is.
+		// An unsigned file is not written at all (an atomic write would replace it, and its time with it).
 		REQUIRE(FileSystem::WriteBinaryFile(executable, plainImage.data(), plainImage.size()));
-		std::filesystem::permissions(executable, std::filesystem::perms::owner_write | std::filesystem::perms::group_write | std::filesystem::perms::others_write, std::filesystem::perm_options::remove);
+		const auto written = std::filesystem::last_write_time(executable) - std::chrono::hours(1);
+		std::filesystem::last_write_time(executable, written);
 		CHECK(RemoveAuthenticodeSignature(executable, error) == SignatureRemoval::Unsigned);
-		std::filesystem::permissions(executable, std::filesystem::perms::owner_write, std::filesystem::perm_options::add);
+		CHECK(std::filesystem::last_write_time(executable) == written);
 
 		CHECK_FALSE(RemoveAuthenticodeSignature(directory.GetPath() / "Missing.exe", error));
 		CHECK(BasaltTest::Contains(error, "Missing.exe"));
-		const std::string text = "not an executable";
-		REQUIRE(FileSystem::WriteTextFile(executable, text));
+		std::vector<uint8_t> broken = signedImage;
+		broken.push_back(1);
+		REQUIRE(FileSystem::WriteBinaryFile(executable, broken.data(), broken.size()));
 		CHECK_FALSE(RemoveAuthenticodeSignature(executable, error));
 		CHECK(BasaltTest::Contains(error, "Game.exe"));
-		CHECK(BasaltTest::Contains(error, "no MZ header"));
+		CHECK(BasaltTest::Contains(error, "data follows"));
+		CHECK(FileSystem::ReadBinaryFile(executable) == broken);
 #if defined(_WIN32)
 		// A real executable from the linker: unsigned, as the build leaves it.
 		wchar_t self[MAX_PATH] = {};
@@ -1089,5 +1174,51 @@ TEST_SUITE("Packaging")
 		REQUIRE(image);
 		CHECK(RemoveAuthenticodeSignature(*image, error) == SignatureRemoval::Unsigned);
 #endif
+	}
+
+	TEST_CASE("Mach-O architectures come from thin and universal headers")
+	{
+		const auto big32 = [](std::vector<uint8_t>& bytes, uint32_t value) {
+			for (int shift = 24; shift >= 0; shift -= 8)
+				bytes.push_back(static_cast<uint8_t>(value >> shift));
+		};
+		const auto thin = [](uint32_t cpu) {
+			std::vector<uint8_t> bytes = { 0xCF, 0xFA, 0xED, 0xFE };
+			for (int shift = 0; shift < 32; shift += 8)
+				bytes.push_back(static_cast<uint8_t>(cpu >> shift));
+			return bytes;
+		};
+		// A universal header with one entry per CPU type (20 bytes each, or 32 for FAT_MAGIC_64).
+		const auto universal = [&](const std::vector<uint32_t>& cpus, bool fat64) {
+			std::vector<uint8_t> bytes = { 0xCA, 0xFE, 0xBA, static_cast<uint8_t>(fat64 ? 0xBF : 0xBE) };
+			big32(bytes, static_cast<uint32_t>(cpus.size()));
+			for (uint32_t cpu : cpus)
+			{
+				big32(bytes, cpu);
+				bytes.resize(bytes.size() + (fat64 ? 28 : 16), 0);
+			}
+			return bytes;
+		};
+		using Names = std::vector<std::string>;
+		CHECK(MachOArchitectures(thin(0x0100000C)) == Names{ "arm64" });
+		CHECK(MachOArchitectures(thin(0x01000007)) == Names{ "x86_64" });
+		CHECK(MachOArchitectures(universal({ 0x01000007, 0x0100000C }, false)) == Names{ "arm64", "x86_64" });
+		CHECK(MachOArchitectures(universal({ 0x0100000C, 0x01000007 }, true)) == Names{ "arm64", "x86_64" });
+		CHECK(MachOArchitectures(universal({ 18 }, false)) == Names{ "cpu-0x12" });
+		// arm64 and arm64e slices are one architecture here.
+		CHECK(MachOArchitectures(universal({ 0x0100000C, 0x0100000C }, false)) == Names{ "arm64" });
+		const std::vector<uint8_t> sixteen = universal(std::vector<uint32_t>(16, 0x01000007), true);
+		CHECK(MachOArchitectures(sixteen) == Names{ "x86_64" });
+		CHECK(MachOHeaderBytes >= sixteen.size());
+		// Seventeen slices is a Java class file's version, as are no slices; truncated tables, text and nothing are no
+		// Mach-O either.
+		CHECK(MachOArchitectures(universal(std::vector<uint32_t>(17, 0x0100000C), false)).empty());
+		CHECK(MachOArchitectures(universal({}, false)).empty());
+		std::vector<uint8_t> truncated = universal({ 0x01000007, 0x0100000C }, true);
+		truncated.pop_back();
+		CHECK(MachOArchitectures(truncated).empty());
+		CHECK(MachOArchitectures({ 0xCF, 0xFA, 0xED, 0xFE, 0x0C, 0x00, 0x00 }).empty());
+		CHECK(MachOArchitectures({ 's', 't', 'a', 'n', 'd', '-', 'i', 'n' }).empty());
+		CHECK(MachOArchitectures({}).empty());
 	}
 }
