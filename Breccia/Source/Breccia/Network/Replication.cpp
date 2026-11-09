@@ -42,9 +42,15 @@ namespace Breccia {
 	{
 		if (index >= m_Entities.size() || !m_SpawnBuilder)
 			return nullptr;
-		if (!m_Spawns[index])
-			m_Spawns[index] = m_SpawnBuilder(m_Entities[index]);
-		return *m_Spawns[index] ? &**m_Spawns[index] : nullptr;
+		SpawnCache& cache = m_Spawns[index];
+		if (!cache.Built)
+		{
+			cache.Record = m_SpawnBuilder(m_Entities[index]);
+			cache.Built = true;
+		}
+		if (!cache.Record)
+			return nullptr;
+		return &*cache.Record;
 	}
 
 	void ReplicationSender::Tracked::Acknowledge(const std::vector<uint8_t>& value, uint32_t sequence)

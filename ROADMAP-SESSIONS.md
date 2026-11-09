@@ -5,7 +5,7 @@ sessions retained for reference. The order follows the roadmap's priorities (P0 
 P2 scale, P3 debugging and editor workflow, P4 rendering, P5 gameplay systems, P6 follow-ups), adjusted so that work a
 later session depends on comes first. Sessions 1–24 were planned against the earlier roadmap; sessions 26 onward follow
 the maturity assessment (`Docs/MaturityAssessment.md`) and the scope settled in `ROADMAP.md`.
-Updated on 9 November 2026: sessions 1–25 have shipped, and session 26 is next.
+Updated on 9 November 2026: sessions 1–26 have shipped, and session 27 is next.
 
 Size estimates: **S** = a day or less, **M** = a few days, **L** = a week or more.
 
@@ -36,7 +36,7 @@ Size estimates: **S** = a day or less, **M** = a few days, **L** = a week or mor
 | 23 | **Animation authoring II** ✅ | IK and layer follow-ups II: FABRIK joint limits, a mask editor, layer graph events and per-layer parameters, edit-mode ground placement (S each); retargeting follow-ups II: a joint map editor, reference poses from per-joint rotation offsets (S) | Shipped in [PR #72](https://github.com/ahmad-luqman/AIGameEngine/pull/72): Fabrik chain `SwingAngle`, `TwistMin`, `TwistMax` and `JointLimits` measured from the rest pose; Animation Mask and Joint Map windows over one headless draft, with `animator.match_joints`; layer `Events` and `OwnParameters` with `SetAnimationLayerParameter`/`SetAnimationLayerTrigger`; `Ground` chains on static bodies in the edit preview; and pair `Offset`s that stand in for a reference pose. |
 | 24 | **Property animation III** ✅ | Stable Euler serialization at exact gimbal lock, physics configuration tracks that preserve contacts, asset reference tracks (texture flipbooks), tracks on other entities (S) | Shipped in [PR #73](https://github.com/ahmad-luqman/AIGameEngine/pull/73): `EulerFromQuat` keeps the orientation at and near gimbal lock and writes one canonical form there; bodies and colliders update in place, keeping contacts and joints, so tracks can animate each component's live fields; `Keys[].Asset` flipbooks with preloading; `Tracks[].Target` on other entities, through list element asset and entity fields at any depth. |
 | 25 | **Signing** ✅ | Windows code signing with `signtool` (S); signed and notarized macOS tools and universal (arm64 + x86-64) binaries (S) | Shipped in [PR #75](https://github.com/ahmad-luqman/AIGameEngine/pull/75): `scripts/sign-windows.py` (signtool by certificate thumbprint or a signing service's library) signs the Windows tools and samples when `WINDOWS_CERTIFICATE` is set; the macOS tools and their Vulkan libraries are signed and notarized with the samples; the macOS release is universal for macOS 13.3 and later, with universal Vulkan libraries and an x86-64 run under Rosetta; exports drop the runtime's signature (Windows) or sign ad hoc (macOS). The macOS secrets still have to be added; Windows signing in CI needs a signing service set up in place of the `.pfx` import (`WINDOWS_SIGNING_DLIB`, `Docs/Shipping.md`), since publicly trusted certificates no longer come as `.pfx` files. |
-| 26 | **Networking I** | Transport, connections and replication: a pinned UDP library, an authoritative host (listen server or `BrecciaRuntime --headless`), a networked-entity component with registry-declared replicated fields, snapshot deltas, `FuzzNetPacket` (L) | P0, first by decision (8 November 2026). Everything multiplayer builds on it. |
+| 26 | **Networking I** ✅ | Transport, connections and replication: a pinned UDP library, an authoritative host (listen server or `BrecciaRuntime --headless`), a networked-entity component with registry-declared replicated fields, snapshot deltas, `FuzzNetPacket` (L) | Shipped in [PR #77](https://github.com/ahmad-luqman/AIGameEngine/pull/77): ENet (pinned after 1.3.18 for its fragment checks) behind a `NetTransport` with an in-process `SimulatedNetwork` for tests; an authoritative host (`--host`, headless as a dedicated server) and clients (`--connect`) with a protocol, schema and game check, a client limit, timeouts and disconnect reasons; the `Networked` component (owner and authority) and `ComponentInfo::ReplicatedFields`; spawns of whole trees with the host's UUIDs, acknowledged field deltas, despawns, and a per-connection budget shared by priority; Owner-authority entities driven by their client; `FuzzNetPacket` and a two-runtime UDP ctest. See `Docs/Networking.md`. |
 | 27 | **Networking II** | `Network` Lua API with messages and RPCs, client prediction and reconciliation for characters, snapshot interpolation, lag-compensated raycasts, `net.*` automation commands with simulated latency and loss (L) | Needs session 26's replication. |
 | 28 | **Multiplayer sample** | A small arena or co-op game built through the automation API, with a headless server-and-two-clients ctest (M) | Proves sessions 26–27 end to end, as the Platformer did for character movement. |
 | 29 | **Release v0.1.0** | Binary downloads on a `v0.1.0` tag (signed once the certificates are set up); a getting-started tutorial, starter template and default scene; CHANGELOG, stability policy, CONTRIBUTING, SECURITY, branch protection; third-party notices in exports; a decision on the name (M) | P1. Outside agents and the benchmark (session 31) need something to install. |
@@ -57,7 +57,7 @@ Size estimates: **S** = a day or less, **M** = a few days, **L** = a week or mor
 | 44 | **Navigation** | Recast/Detour behind a component: navmesh baking in the editor and through automation, agents with avoidance, Lua path queries, debug drawing (L) | P5. |
 | 45 | **Character follow-ups** | IK and retargeting follow-ups III (S); spring bone follow-ups III (S); powered ragdoll follow-ups II (M) | P6. The follow-ups of sessions 17–24, which had no session. The real game (session 33) may reorder them. |
 
-## Status (8 November 2026)
+## Status (9 November 2026)
 
 - **Shipped outside the sessions:**
   - The fix for glTF primitives that share index accessors ([PR #64](https://github.com/ahmad-luqman/AIGameEngine/pull/64)).
@@ -66,13 +66,14 @@ Size estimates: **S** = a day or less, **M** = a few days, **L** = a week or mor
     overflow reporting and temporary memory sized from capacity, an instruction limit for scripts in the editor and the
     CLI, non-JSON connections closed by the editor server, and undecodable clips refused by `project.validate`. Its
     residuals are in sessions 30 and 32.
-- **Shipped in sessions:** sessions 1–25, the last eight in [PR #67](https://github.com/ahmad-luqman/AIGameEngine/pull/67),
+- **Shipped in sessions:** sessions 1–26, the last nine in [PR #67](https://github.com/ahmad-luqman/AIGameEngine/pull/67),
   [#68](https://github.com/ahmad-luqman/AIGameEngine/pull/68), [#69](https://github.com/ahmad-luqman/AIGameEngine/pull/69),
   [#70](https://github.com/ahmad-luqman/AIGameEngine/pull/70), [#71](https://github.com/ahmad-luqman/AIGameEngine/pull/71),
-  [#72](https://github.com/ahmad-luqman/AIGameEngine/pull/72), [#73](https://github.com/ahmad-luqman/AIGameEngine/pull/73)
-  and [#75](https://github.com/ahmad-luqman/AIGameEngine/pull/75). Session 25's pipeline signs once the certificates are
-  set up (`Docs/Shipping.md`); until then it signs macOS ad hoc and leaves Windows unsigned.
-- **Next:** session 26 (Networking I).
+  [#72](https://github.com/ahmad-luqman/AIGameEngine/pull/72), [#73](https://github.com/ahmad-luqman/AIGameEngine/pull/73),
+  [#75](https://github.com/ahmad-luqman/AIGameEngine/pull/75) and [#77](https://github.com/ahmad-luqman/AIGameEngine/pull/77).
+  Session 25's pipeline signs once the certificates are set up (`Docs/Shipping.md`); until then it signs macOS ad hoc and
+  leaves Windows unsigned.
+- **Next:** session 27 (Networking II).
 
 ## Later (one session each)
 

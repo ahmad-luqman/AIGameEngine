@@ -840,6 +840,15 @@ offsets local receivers along their vertex normal, scaled by `(1 − N·L)` to e
 angles. Invalid bias settings are rejected. A zero-scale spot has no valid direction and is
 skipped; non-finite spot directions also warn once until the transforms recover.
 
+## Networking
+
+A network session is started from the runtime's command line (`--host`, `--connect`; see `Docs/Networking.md`). Scripts
+reach it through the `Networked` component, like any other: `Owner` (a peer ID: 0 is the host, clients are 1, 2, ... in
+the order they join), `Authority` (`"Server"` or `"Owner"`) and `Priority` (above 0, at most 100). A host's script hands an entity
+to a client with `e:SetComponent("Networked", { Owner = 2, Authority = "Owner" })`. Scripts run on every peer, and
+`Scene.Load` fails while a session runs. The `Network` API (connection events, messages and authority queries) is
+Networking II's.
+
 ## Screen UI
 
 Game UI is drawn over the scene on a canvas 1080 units tall, with the origin at the top-left, +Y down and

@@ -30,7 +30,9 @@ system, `.bpak` archives and file watching, command line, crash reports), `Event
 files, asset cache), `Physics` (Jolt), `Audio` (miniaudio: buses, per-source low-pass and Doppler, reverb sends into per-bus reverbs), `Particles` (CPU particle simulation), `Animation` (glTF TRS sampling, blends, crossfades, 1D/2D blend spaces with phase sync and velocity matching, animation events, bone transforms and attachments, data-driven state machines and per-state root motion, layers with joint masks, shared mask assets, additive clips and their own state machines, two-bone/look-at/FABRIK IK with foot placement and foot locking, spring bones with angle limits, per-chain colliders and physics-body collisions, morph targets, retargeted clip libraries with shared joint maps and reference poses, per-entity playback), `UI` (game UI: UI
 component layout, widgets and their mouse/keyboard/gamepad interaction, immediate-mode `UI.*`, TrueType fonts;
 drawn through ImGui after the scene), `Scripting` (Lua 5.4 + sol2; timers, coroutines, events), `Project`
-(project files, exporter and platform packages, save data), `Automation` (command API, session, TCP server, editor history and selection).
+(project files, exporter and platform packages, save data), `Network` (ENet UDP transport and an in-process simulated
+link, the wire protocol, snapshot replication and host/client sessions), `Automation` (command API, session, TCP server,
+editor history and selection).
 
 Other directories: `Docs/` (scripting API, rendering guide, generated command/component references), `Tests/Data/FeatureTest`
 (the project that exercises every feature).
@@ -263,6 +265,20 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
 - **Editor file dialogs.** Path prompts add native pickers (`Breccia-Editor/Source/FileDialogs`, nativefiledialog-extended,
   editor only). Linux uses the XDG portal and needs D-Bus development files at build time; without them the editor
   builds with typed paths only, and a picker that fails at runtime leaves the typed path usable.
+- **Network sessions.** `NetworkSystem` (owned by `Scene`, `Scene::StartNetwork`, ended with Play) is an authoritative
+  host or a client over a `NetTransport`: `EnetTransport` (UDP, IPv4) or `SimulatedNetwork` (in-process, seeded, driven by
+  `Advance`, which the unit tests use). It receives before scripts (outside the destruction deferral, so a client's own
+  networked entities, removed when the host accepts it, are gone before the host's spawns arrive) and sends after the last
+  system at the project's `Network.TickRate`. `NetworkedComponent` marks what replicates; `ComponentInfo::ReplicatedFields`
+  (top-level, never asset fields) is what updates after the spawn, which carries the tree as scene records with the host's
+  UUIDs (`SceneSerializer::CreateEntityTreeWithIds`, asset paths kept inside the project). Values travel as `NetValue`
+  (binary registry JSON) and land through `ComponentRegistry`. `ReplicationSender` is pure bookkeeping per connection and
+  direction: each message carries what differs from the last acknowledged value or rode an unacknowledged message, so the
+  newest one applied completes the state; priority accumulators and a token-bucket budget share `MaxBytesPerSecond`. The
+  handshake checks `NetProtocol::Version`, `ReplicationSchema::GetHash` and the project's Name/Version; every end has a
+  `NetDisconnectReason`. Owner-authority entities take their owner's fields (checked on the host); peers drive dynamic
+  bodies they do not decide kinematically (`PhysicsWorld::SetDrivenExternally`, an override the component never sees).
+  Clients draw runtime UUIDs from a salted stream; scene loads are refused during a session. See `Docs/Networking.md`.
 - **Play mode runs a copy.** `Scene::Copy` duplicates the edit scene (same UUIDs) for play/simulate;
   stopping discards it. In the editor the game runs in the Game tab (primary camera at the project's window
   size, letterboxed; the game UI takes the pointer while the Game image is hovered and navigation while the Game
@@ -341,7 +357,7 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
 | Binary | Purpose |
 |--------|---------|
 | `BrecciaEditor [--project P] [--port N\|--no-server] [--gpu G]` | Editor GUI + automation server |
-| `BrecciaRuntime [--project P] [--scene S] [--width W --height H] [--frames N [--screenshot out.png] [--require-validation] [--fail-on-script-errors]] [--headless \| --offscreen] [--debug-view V] [--render-scale S] [--dynamic-resolution FPS] [--min-render-scale S] [--gpu G] [--no-vsync] [--stats]` | Plays the project's start scene; exported games are this binary renamed. `--headless` runs without a GPU or window. `--frames` runs exit 1 (start/render failure), 3 (validation errors), 4 (screenshot), 5 (validation layer missing), 6 (dynamic resolution did not run) or 7 (script errors, with `--fail-on-script-errors`) |
+| `BrecciaRuntime [--project P] [--scene S] [--width W --height H] [--frames N [--screenshot out.png] [--require-validation] [--fail-on-script-errors]] [--headless \| --offscreen] [--debug-view V] [--render-scale S] [--dynamic-resolution FPS] [--min-render-scale S] [--gpu G] [--no-vsync] [--stats] [--host PORT \| --connect ADDRESS[:PORT]]` | Plays the project's start scene; exported games are this binary renamed. `--headless` runs without a GPU or window (with `--host`, a dedicated server paced to the frame rate). `--frames` runs exit 1 (start/render failure), 3 (validation errors), 4 (screenshot), 5 (validation layer missing), 6 (dynamic resolution did not run), 7 (script errors, with `--fail-on-script-errors`) or 8 (a `--connect` client not connected at the end) |
 | `breccia [--project P] [--scene S] [--no-save] [--verbose] <command> [json] \| batch <file> \| serve \| mcp` | Headless automation CLI |
 | `BrecciaTests` | Unit tests |
 
@@ -490,6 +506,7 @@ Other rules:
 ## Documentation
 
 - CI: `Docs/CI.md` (the workflows and their shared setup action, caches, what CI does not check).
+- Networking: `Docs/Networking.md` (sessions, the handshake and disconnect reasons, replication, authority, the transport).
 - Shipping: `Docs/Shipping.md` (project identity, export and platform packages, signing, the release pipeline).
 - Rendering: `Docs/Rendering.md` (clustered lighting, FSR 1 settings, diagnostics and GPU tests).
 - Lua API: `Docs/ScriptingAPI.md` and the LuaLS definitions `Docs/breccia.d.lua` (update both with every binding change;

@@ -66,7 +66,13 @@ namespace Breccia {
 		std::vector<ReplicatedEntity> m_Entities;
 		std::unordered_map<UUID, size_t> m_Index;
 		SpawnBuilder m_SpawnBuilder;
-		mutable std::vector<std::optional<std::optional<std::vector<uint8_t>>>> m_Spawns;
+		// One per entity: whether the builder ran, and what it returned.
+		struct SpawnCache
+		{
+			bool Built = false;
+			std::optional<std::vector<uint8_t>> Record;
+		};
+		mutable std::vector<SpawnCache> m_Spawns;
 	};
 
 	// Whether a sender includes a component's changes for an entity (false: the receiver decides them itself).

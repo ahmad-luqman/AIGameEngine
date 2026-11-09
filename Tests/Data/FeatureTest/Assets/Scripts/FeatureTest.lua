@@ -152,13 +152,20 @@ local function TestEntities(self)
 
 	-- Every component type round-trips through Lua.
 	for _, name in ipairs({ "Camera", "Mesh", "Animator", "PropertyAnimation", "Material", "DirectionalLight", "PointLight", "SpotLight", "SkyLight", "PostProcess", "RigidBody",
-		"BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider", "Joint", "CharacterController", "AudioSource", "AudioListener", "AudioReverbZone", "ParticleEmitter", "UIRect", "UIImage", "UIText", "UIButton", "UISlider", "UICheckbox", "UITextInput", "UIDropdown", "UIScrollView", "UIPanel", "UINavigation", "UIFocusRing", "Prefab", "BoneAttachment", "InverseKinematics", "SpringBone", "Ragdoll" }) do
+		"BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider", "Joint", "CharacterController", "AudioSource", "AudioListener", "AudioReverbZone", "ParticleEmitter", "UIRect", "UIImage", "UIText", "UIButton", "UISlider", "UICheckbox", "UITextInput", "UIDropdown", "UIScrollView", "UIPanel", "UINavigation", "UIFocusRing", "Prefab", "BoneAttachment", "InverseKinematics", "SpringBone", "Ragdoll", "Networked" }) do
 		local holder = Scene.CreateEntity("Holder" .. name)
 		Expect("AddComponent " .. name, function() holder:AddComponent(name) end)
 		local data = holder:GetComponent(name)
 		Expect("SetComponent round trip " .. name, function() holder:SetComponent(name, data) end)
 		holder:Destroy()
 	end
+
+	-- Networked marks network-replicated entities; without a session it is plain data.
+	local networkedProbe = Scene.FindEntityByName("NetworkedProbe")
+	local networked = networkedProbe and networkedProbe:GetComponent("Networked")
+	Check("Networked fields", networked ~= nil and networked.Owner == 2 and networked.Authority == "Owner" and Near(networked.Priority, 3, 1e-6))
+	ExpectError("Networked Priority range", function() networkedProbe:SetComponent("Networked", { Priority = 0 }) end, "Priority")
+	ExpectError("Networked Authority names", function() networkedProbe:SetComponent("Networked", { Authority = "Client" }) end, "Authority")
 
 	local coated = Scene.CreateEntity("MaterialExtensionsProbe")
 	coated:AddComponent("Material", { Clearcoat = 0.8, ClearcoatRoughness = 0.2, Transmission = 0.6,
