@@ -179,9 +179,11 @@ namespace Breccia {
 
 	void Scene::StartNetwork(Scope<NetworkSystem> network)
 	{
+		const uint32_t seed = IdentitySeed();
 		m_NetworkSystem = std::move(network);
-		// Attached mid-session: IDs already given out stay, later ones come from the client's stream.
-		if (m_SessionIdentity)
+		// A client attached mid-session: IDs already given out stay, later ones come from the client's stream. Reseeding
+		// to the same seed (a host) would replay the stream and could hand out the ID of an entity destroyed meanwhile.
+		if (m_SessionIdentity && IdentitySeed() != seed)
 			m_SessionIdentity->Stream.Seed(IdentitySeed());
 	}
 

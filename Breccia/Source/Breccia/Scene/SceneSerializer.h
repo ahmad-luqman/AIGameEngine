@@ -100,6 +100,8 @@ namespace Breccia {
 
 	private:
 		static bool CreateEntities(Scene& scene, const nlohmann::json& entities, bool remapIDs, Entity rootParent, std::vector<Entity>& outCreated, std::string& outError);
+		// CreateEntities, leaving nothing behind on failure; returns the root.
+		static Entity CreateTree(Scene& scene, const nlohmann::json& entities, bool remapIDs, Entity rootParent, std::string& outError);
 	};
 
 }

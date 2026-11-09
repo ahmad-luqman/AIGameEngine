@@ -1,5 +1,6 @@
 #include "Breccia/Network/Replication.h"
 
+#include "Breccia/Core/Assert.h"
 #include "Breccia/Core/Log.h"
 #include "Breccia/Network/ReplicationSchema.h"
 
@@ -34,8 +35,11 @@ namespace Breccia {
 		, m_SpawnBuilder(std::move(spawnBuilder))
 		, m_Spawns(m_Entities.size())
 	{
-		for (size_t i = 0; i < m_Entities.size(); i++)
-			m_Index.emplace(m_Entities[i].Entity, i);
+		for (const ReplicatedEntity& entity : m_Entities)
+		{
+			[[maybe_unused]] const bool unique = m_Ids.insert(entity.Entity).second;
+			BR_CORE_ASSERT(unique, "a replication world lists each entity once");
+		}
 	}
 
 	const std::vector<uint8_t>* ReplicationWorld::GetSpawnRecord(size_t index) const
@@ -53,28 +57,45 @@ namespace Breccia {
 		return &*cache.Record;
 	}
 
+	void ReplicationSender::Tracked::MarkSent(const std::vector<uint8_t>& value, uint32_t sequence)
+	{
+		if (SentSequence != 0 && Sent != value)
+			StaleSequence = SentSequence;
+		Sent = value;
+		SentSequence = sequence;
+	}
+
 	void ReplicationSender::Tracked::Acknowledge(const std::vector<uint8_t>& value, uint32_t sequence)
 	{
-		// An older message's value never replaces a newer acknowledged one.
-		if (HasAcked && sequence <= AckedSequence)
-			return;
+		// Acknowledgements arrive in order (Acknowledge drops older messages first), so a newer one always wins.
 		Acked = value;
-		HasAcked = true;
 		AckedSequence = sequence;
 	}
 
 	ReplicationSender::ReplicationSender(ReplicationSenderOptions options)
 		: m_Options(options)
 	{
+		BR_CORE_ASSERT(m_Options.MaxMessageBytes > HeaderBytes && m_Options.HistoryLength > 0, "a sender needs room for a record and a history");
+	}
+
+	ReplicationSender::Tracked& ReplicationSender::TrackFor(EntityTrack& track, const SentRecord::Value& value)
+	{
+		ComponentTrack& component = track.Components[value.Component];
+		if (!value.Field)
+			return component.Presence;
+		if (component.Fields.size() <= *value.Field)
+			component.Fields.resize(*value.Field + 1);
+		return component.Fields[*value.Field];
 	}
 
 	NetEntityUpdate ReplicationSender::BuildUpdate(const ReplicatedEntity& entity, EntityTrack& track, const ReplicationFilter& filter, SentRecord& record) const
 	{
+		const bool hostToClient = m_Options.Direction == ReplicationDirection::HostToClient;
 		NetEntityUpdate update;
 		update.Entity = entity.Entity;
 		record.Type = SentRecord::Kind::Update;
 		record.Entity = entity.Entity;
-		if (m_Options.Spawns)
+		if (hostToClient)
 		{
 			std::vector<uint8_t> parent = ParentBytes(entity.Parent);
 			if (track.Parent.Pending(parent))
@@ -83,18 +104,23 @@ namespace Breccia {
 				record.Parent = std::move(parent);
 			}
 		}
+		const auto scopeOf = [&](uint32_t component) { return filter ? filter(entity, component) : ReplicationScope::Everything; };
 		for (const ReplicatedComponent& component : entity.Components)
 		{
-			if (filter && !filter(entity, component.Component))
+			if (component.Unsendable)
 				continue;
 			ComponentTrack& tracked = track.Components[component.Component];
 			tracked.Fields.resize(component.Fields.size());
-			const bool added = m_Options.Spawns && !IsCore(component.Component) && tracked.Presence.Pending(Present);
+			const bool added = hostToClient && !IsCore(component.Component) && tracked.Presence.Pending(Present);
+			// The receiver decides the values of what it owns, but hears of a component the host adds (with the values it
+			// starts with) or removes.
+			if (!added && scopeOf(component.Component) == ReplicationScope::PresenceOnly)
+				continue;
 			NetComponentUpdate change;
 			change.Component = component.Component;
-			change.Added = added;
+			change.Change = added ? NetComponentChange::Added : NetComponentChange::Changed;
 			if (added)
-				record.Values.push_back({ component.Component, SentRecord::PresenceField, Present });
+				record.Values.push_back({ component.Component, std::nullopt, Present });
 			for (uint32_t field = 0; field < component.Fields.size(); field++)
 			{
 				const ReplicatedFieldValue& value = component.Fields[field];
@@ -106,19 +132,17 @@ namespace Breccia {
 			if (added || !change.Fields.empty())
 				update.Components.push_back(std::move(change));
 		}
-		if (m_Options.Spawns)
+		if (hostToClient)
 		{
 			// Components the receiver has (or may have) that the entity no longer has.
 			for (const auto& [index, tracked] : track.Components)
 			{
 				if (IsCore(index) || std::ranges::any_of(entity.Components, [index](const ReplicatedComponent& c) { return c.Component == index; }))
 					continue;
-				if (filter && !filter(entity, index))
-					continue;
 				if (!tracked.Presence.Pending(Absent))
 					continue;
-				update.Components.push_back({ index, true, false, {} });
-				record.Values.push_back({ index, SentRecord::PresenceField, Absent });
+				update.Components.push_back({ index, NetComponentChange::Removed, {} });
+				record.Values.push_back({ index, std::nullopt, Absent });
 			}
 		}
 		return update;
@@ -138,44 +162,38 @@ namespace Breccia {
 				break;
 		}
 		if (record.Parent)
-			track.Parent.SentSequence = sequence;
+			track.Parent.MarkSent(*record.Parent, sequence);
 		for (const SentRecord::Value& value : record.Values)
-		{
-			ComponentTrack& component = track.Components[value.Component];
-			if (value.Field == SentRecord::PresenceField)
-				component.Presence.SentSequence = sequence;
-			else
-			{
-				if (component.Fields.size() <= value.Field)
-					component.Fields.resize(value.Field + 1);
-				component.Fields[value.Field].SentSequence = sequence;
-			}
-		}
+			TrackFor(track, value).MarkSent(value.Bytes, sequence);
 	}
 
-	std::vector<uint8_t> ReplicationSender::Build(NetMessageType type, const ReplicationWorld& world, uint32_t acknowledged, size_t budget, const ReplicationFilter& filter)
+	std::vector<uint8_t> ReplicationSender::Build(const ReplicationWorld& world, uint32_t acknowledged, size_t budget, const ReplicationFilter& filter)
 	{
+		const bool hostToClient = m_Options.Direction == ReplicationDirection::HostToClient;
 		const uint32_t sequence = m_NextSequence++;
 		m_Deferred = 0;
 		budget = std::min(budget, m_Options.MaxMessageBytes);
-		const size_t maxRecordBytes = m_Options.MaxMessageBytes > HeaderBytes ? m_Options.MaxMessageBytes - HeaderBytes : 0;
+		const size_t maxRecordBytes = m_Options.MaxMessageBytes - HeaderBytes;
 
-		// Entities the receiver may have that are gone (destroyed, or no longer networked), in ID order.
-		std::vector<UUID> gone;
-		for (const auto& [uuid, track] : m_Entities)
-			if (!world.Contains(uuid))
-				gone.push_back(uuid);
-		std::ranges::sort(gone);
+		// Despawns, in ID order: entities the receiver may have that are gone (destroyed, or no longer networked), and those
+		// whose despawn is still unacknowledged, even if the entity is back: the receiver may have lost the old despawn, and
+		// the new spawn waits for it.
 		std::vector<UUID> despawns;
-		for (UUID uuid : gone)
+		for (auto it = m_Entities.begin(); it != m_Entities.end();)
 		{
-			const EntityTrack& track = m_Entities.at(uuid);
+			const EntityTrack& track = it->second;
+			const bool gone = !world.Contains(it->first);
 			// Never sent to the receiver (or this direction has no despawns): nothing to undo.
-			if (!m_Options.Spawns || (!track.Known && track.SpawnSent == 0))
-				m_Entities.erase(uuid);
-			else
-				despawns.push_back(uuid);
+			if (gone && (!hostToClient || (!track.Known && track.SpawnSent == 0)))
+			{
+				it = m_Entities.erase(it);
+				continue;
+			}
+			if (gone || track.DespawnSent != 0)
+				despawns.push_back(it->first);
+			++it;
 		}
+		std::ranges::sort(despawns);
 
 		struct Candidate
 		{
@@ -198,7 +216,7 @@ namespace Breccia {
 				continue;
 			Candidate candidate;
 			candidate.Index = i;
-			if (m_Options.Spawns && !track.Known)
+			if (hostToClient && !track.Known)
 			{
 				candidate.SpawnBytes = world.GetSpawnRecord(i);
 				if (!candidate.SpawnBytes)
@@ -208,8 +226,12 @@ namespace Breccia {
 				candidate.Record.Parent = ParentBytes(entity.Parent);
 				for (const ReplicatedComponent& component : entity.Components)
 				{
+					// The spawn's records hold the component as it is, but nothing is assumed about one that cannot be
+					// encoded: it goes as an addition once it can.
+					if (component.Unsendable)
+						continue;
 					if (!IsCore(component.Component))
-						candidate.Record.Values.push_back({ component.Component, SentRecord::PresenceField, Present });
+						candidate.Record.Values.push_back({ component.Component, std::nullopt, Present });
 					for (uint32_t field = 0; field < component.Fields.size(); field++)
 						candidate.Record.Values.push_back({ component.Component, field, component.Fields[field].Bytes });
 				}
@@ -219,6 +241,7 @@ namespace Breccia {
 				const NetEntityUpdate update = BuildUpdate(entity, track, filter, candidate.Record);
 				if (update.Components.empty() && !update.Parent)
 					continue;
+				BR_CORE_ASSERT(NetProtocol::CheckUpdate(update, ReplicationSchema::Get()).empty(), "the sender built an update its receiver refuses");
 				NetWriter writer;
 				// The values were encoded once already, when the world was captured.
 				if (!NetProtocol::WriteUpdate(writer, update))
@@ -290,17 +313,19 @@ namespace Breccia {
 			while (m_History.size() > m_Options.HistoryLength)
 				m_History.pop_front();
 		}
-		return NetProtocol::AssembleState(type, sequence, acknowledged, spawns, updates, sentDespawns);
+		return NetProtocol::AssembleState(hostToClient ? NetMessageType::Snapshot : NetMessageType::ClientUpdate, sequence, acknowledged, spawns, updates, sentDespawns);
 	}
 
-	void ReplicationSender::Acknowledge(uint32_t sequence)
+	bool ReplicationSender::Acknowledge(uint32_t sequence)
 	{
-		// Older messages are superseded: the receiver drops them, and the newer one repeated whatever they carried that
-		// was still unacknowledged.
+		if (sequence >= m_NextSequence)
+			return false;
+		// Older messages are superseded: the receiver drops them. Whatever they carried that the acknowledged one did not
+		// is still pending (Tracked::Pending), so it is sent again.
 		while (!m_History.empty() && m_History.front().Sequence < sequence)
 			m_History.pop_front();
 		if (m_History.empty() || m_History.front().Sequence != sequence)
-			return;
+			return true;
 		for (const SentRecord& record : m_History.front().Records)
 		{
 			auto it = m_Entities.find(record.Entity);
@@ -312,24 +337,18 @@ namespace Breccia {
 				m_Entities.erase(it);
 				continue;
 			}
+			// A record that went out before a despawn now in flight: the receiver removes the entity anyway.
+			if (track.DespawnSent != 0)
+				continue;
 			if (record.Type == SentRecord::Kind::Spawn)
 				track.Known = true;
 			if (record.Parent)
 				track.Parent.Acknowledge(*record.Parent, sequence);
 			for (const SentRecord::Value& value : record.Values)
-			{
-				ComponentTrack& component = track.Components[value.Component];
-				if (value.Field == SentRecord::PresenceField)
-					component.Presence.Acknowledge(value.Bytes, sequence);
-				else
-				{
-					if (component.Fields.size() <= value.Field)
-						component.Fields.resize(value.Field + 1);
-					component.Fields[value.Field].Acknowledge(value.Bytes, sequence);
-				}
-			}
+				TrackFor(track, value).Acknowledge(value.Bytes, sequence);
 		}
 		m_History.pop_front();
+		return true;
 	}
 
 	size_t ReplicationSender::GetKnownEntityCount() const

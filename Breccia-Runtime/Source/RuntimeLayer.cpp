@@ -103,6 +103,7 @@ namespace Breccia {
 
 		UpdateGameView();
 		m_Scene->OnUpdate(ts);
+		ReportDisconnect();
 		ApplyCursorMode();
 		m_RenderDeltaTime = ts;
 		m_Frame++;
@@ -117,8 +118,7 @@ namespace Breccia {
 		Scope<NetTransport> transport;
 		if (role == NetworkRole::Host)
 		{
-			// A few spare slots: a client past MaxClients is told the host is full instead of never hearing back.
-			transport = EnetTransport::Listen(m_Options.NetworkPort, settings.MaxClients + 4, transportSettings, outError);
+			transport = EnetTransport::Listen(m_Options.NetworkPort, settings.MaxClients + NetworkSystem::SpareTransportSlots, transportSettings, outError);
 			if (!transport)
 				return false;
 			// One parseable line: tests that ask for port 0 read the port from it.
@@ -135,6 +135,16 @@ namespace Breccia {
 		return true;
 	}
 
+	void RuntimeLayer::ReportDisconnect()
+	{
+		const NetworkSystem* network = m_Scene ? m_Scene->GetNetworkSystem() : nullptr;
+		if (!network || m_ReportedDisconnect || network->GetState() != NetConnectionState::Disconnected)
+			return;
+		m_ReportedDisconnect = true;
+		// A player sees why the game stopped updating (a dialog in windowed runs; the log already has it).
+		CrashReporter::ShowErrorDialog(fmt::format("Disconnected from the host: {}.", DescribeDisconnectReason(network->GetDisconnectReason())));
+	}
+
 	void RuntimeLayer::CheckNetworkResults(const std::function<void(int)>& fail)
 	{
 		const NetworkSystem* network = m_Scene ? m_Scene->GetNetworkSystem() : nullptr;
@@ -142,9 +152,9 @@ namespace Breccia {
 			return;
 		const NetworkStatistics& statistics = network->GetStatistics();
 		const bool host = network->GetRole() == NetworkRole::Host;
-		BR_CORE_INFO("Runtime: network {} connections={} remoteEntities={} spawns={} updates={} despawns={} sent={} ({} bytes) received={} ({} bytes) stale={} rejected={}",
-					 host ? "host" : "client", network->GetConnections().size(), network->GetRemoteEntityCount(), statistics.SpawnsApplied, statistics.UpdatesApplied, statistics.DespawnsApplied, statistics.MessagesSent,
-					 statistics.BytesSent, statistics.MessagesReceived, statistics.BytesReceived, statistics.StaleMessages, statistics.RejectedValues + statistics.RejectedRecords);
+		BR_CORE_INFO("Runtime: network {} connections={} remoteEntities={} spawns={} updates={} despawns={} sent={} ({} bytes) received={} ({} bytes) stale={} rejectedValues={} rejectedRecords={}",
+					 host ? "host" : "client", network->GetConnections().size(), network->GetRemoteEntityCount(), statistics.SpawnsApplied, statistics.UpdatesApplied, statistics.DespawnsApplied, statistics.Traffic.MessagesSent,
+					 statistics.Traffic.BytesSent, statistics.Traffic.MessagesReceived, statistics.Traffic.BytesReceived, statistics.StaleMessages, statistics.RejectedValues, statistics.RejectedRecords);
 		if (!host && network->GetState() != NetConnectionState::Connected)
 		{
 			const NetDisconnectReason reason = network->GetDisconnectReason();

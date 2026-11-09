@@ -1,5 +1,6 @@
 #include "Breccia/Network/SimulatedNetwork.h"
 
+#include "Breccia/Core/Assert.h"
 #include "Breccia/Math/Random.h"
 
 #include <algorithm>
@@ -14,6 +15,9 @@ namespace Breccia {
 		// Shortest round trip a lost reliable message waits before it is sent again, so a link without latency still
 		// spaces retries.
 		constexpr float MinRetryInterval = 0.05f;
+		// Attempts at a reliable message before it is given up (a timeout far longer than any test's would otherwise loop
+		// for as long as float precision lets the delay grow).
+		constexpr int MaxReliableAttempts = 1000;
 
 		enum class FlightKind : uint8_t
 		{
@@ -73,7 +77,6 @@ namespace Breccia {
 		std::unordered_map<uint32_t, SimulatedEndpoint> Endpoints;
 		std::map<uint16_t, uint32_t> Ports;
 		std::vector<Flight> Flights;
-		uint64_t Delivered = 0;
 		uint64_t Lost = 0;
 
 		explicit State(SimulatedLinkSettings settings, uint32_t seed)
@@ -106,11 +109,11 @@ namespace Breccia {
 			// connection anyway.
 			const float retry = std::max(2.0f * latency, MinRetryInterval);
 			float delay = latency;
-			while (Lose())
+			for (int attempt = 1; Lose(); attempt++)
 			{
 				Lost++;
 				delay += retry;
-				if (delay > Settings.TimeoutSeconds)
+				if (delay > Settings.TimeoutSeconds || attempt >= MaxReliableAttempts)
 					return -1.0f;
 			}
 			const float arrival = std::max(Time + delay, from.LastReliableArrival);
@@ -150,20 +153,18 @@ namespace Breccia {
 				if (endpoint->Connections.size() >= endpoint->MaxPeers)
 					return;
 				const NetPeerHandle handle = endpoint->NextHandle++;
-				endpoint->Connections[handle] = { flight.FromEndpoint, flight.FromHandle, true, Time, 0.0f };
-				endpoint->Events.push_back({ NetTransportEvent::Kind::Connected, handle });
-				Delivered++;
 				SimulatedConnection& server = endpoint->Connections[handle];
+				server = { flight.FromEndpoint, flight.FromHandle, true, Time, 0.0f };
+				endpoint->Events.push_back({ NetTransportEvent::Kind::Connected, handle });
 				// The accept travels like a reliable message.
 				if (const float arrival = Arrival(server, true); arrival >= 0.0f)
-					Queue({ arrival, 0, flight.FromEndpoint, flight.FromHandle, FlightKind::ConnectAccept, NetChannel::Reliable, 0, {}, flight.Endpoint, handle });
+					Queue({ .DeliverAt = arrival, .Endpoint = flight.FromEndpoint, .Handle = flight.FromHandle, .Kind = FlightKind::ConnectAccept, .Channel = NetChannel::Reliable, .FromEndpoint = flight.Endpoint, .FromHandle = handle });
 				return;
 			}
 			auto it = endpoint->Connections.find(flight.Handle);
 			if (it == endpoint->Connections.end())
 				return;
 			SimulatedConnection& connection = it->second;
-			Delivered++;
 			connection.LastHeard = Time;
 			switch (flight.Kind)
 			{
@@ -240,15 +241,16 @@ namespace Breccia {
 				m_State->Endpoints.erase(m_Endpoint);
 			}
 
-			void Send(NetPeerHandle peer, NetChannel channel, std::span<const uint8_t> data) override
+			bool Send(NetPeerHandle peer, NetChannel channel, std::span<const uint8_t> data) override
 			{
 				SimulatedConnection* connection = m_State->FindConnection(m_Endpoint, peer);
 				if (!connection || !connection->Connected)
-					return;
+					return false;
+				// A lost message was still sent: the link lost it.
 				const float arrival = m_State->Arrival(*connection, channel == NetChannel::Reliable);
-				if (arrival < 0.0f)
-					return;
-				m_State->Queue({ arrival, 0, connection->RemoteEndpoint, connection->RemoteHandle, FlightKind::Data, channel, 0, std::vector<uint8_t>(data.begin(), data.end()) });
+				if (arrival >= 0.0f)
+					m_State->Queue({ .DeliverAt = arrival, .Endpoint = connection->RemoteEndpoint, .Handle = connection->RemoteHandle, .Kind = FlightKind::Data, .Channel = channel, .Data = std::vector<uint8_t>(data.begin(), data.end()) });
+				return true;
 			}
 
 			void Disconnect(NetPeerHandle peer, uint32_t code) override
@@ -264,7 +266,20 @@ namespace Breccia {
 				if (!connection.Connected)
 					return;
 				if (const float arrival = m_State->Arrival(connection, true); arrival >= 0.0f)
-					m_State->Queue({ arrival, 0, connection.RemoteEndpoint, connection.RemoteHandle, FlightKind::Disconnect, NetChannel::Reliable, code });
+					m_State->Queue({ .DeliverAt = arrival, .Endpoint = connection.RemoteEndpoint, .Handle = connection.RemoteHandle, .Kind = FlightKind::Disconnect, .Channel = NetChannel::Reliable, .Code = code });
+			}
+
+			void DisconnectAll(uint32_t code) override
+			{
+				SimulatedEndpoint* endpoint = m_State->FindEndpoint(m_Endpoint);
+				if (!endpoint)
+					return;
+				std::vector<NetPeerHandle> handles;
+				handles.reserve(endpoint->Connections.size());
+				for (const auto& [handle, connection] : endpoint->Connections)
+					handles.push_back(handle);
+				for (NetPeerHandle handle : handles)
+					Disconnect(handle, code);
 			}
 
 			void Poll(std::vector<NetTransportEvent>& events) override
@@ -272,8 +287,7 @@ namespace Breccia {
 				SimulatedEndpoint* endpoint = m_State->FindEndpoint(m_Endpoint);
 				if (!endpoint)
 					return;
-				for (NetTransportEvent& event : endpoint->Events)
-					events.push_back(std::move(event));
+				events.insert(events.end(), std::make_move_iterator(endpoint->Events.begin()), std::make_move_iterator(endpoint->Events.end()));
 				endpoint->Events.clear();
 			}
 
@@ -302,9 +316,20 @@ namespace Breccia {
 
 	}
 
+	namespace {
+
+		bool IsValidLink(const SimulatedLinkSettings& settings)
+		{
+			// The comparisons are false for NaN, which they refuse too.
+			return settings.Latency >= 0.0f && settings.Jitter >= 0.0f && settings.Loss >= 0.0f && settings.Loss <= 1.0f && settings.TimeoutSeconds > 0.0f && std::isfinite(settings.Latency) && std::isfinite(settings.Jitter) && std::isfinite(settings.TimeoutSeconds);
+		}
+
+	}
+
 	SimulatedNetwork::SimulatedNetwork(SimulatedLinkSettings settings, uint32_t seed)
 		: m_State(std::make_shared<State>(settings, seed))
 	{
+		BR_CORE_ASSERT(IsValidLink(settings), "simulated link settings must be finite, non-negative and Loss in [0, 1]");
 	}
 
 	SimulatedNetwork::~SimulatedNetwork() = default;
@@ -343,7 +368,7 @@ namespace Breccia {
 		{
 			connection.RemoteEndpoint = host->second;
 			if (const float arrival = m_State->Arrival(connection, true); arrival >= 0.0f)
-				m_State->Queue({ arrival, 0, host->second, 0, FlightKind::ConnectRequest, NetChannel::Reliable, 0, {}, id, handle });
+				m_State->Queue({ .DeliverAt = arrival, .Endpoint = host->second, .Kind = FlightKind::ConnectRequest, .Channel = NetChannel::Reliable, .FromEndpoint = id, .FromHandle = handle });
 		}
 		return CreateScope<SimulatedTransport>(m_State, id);
 	}
@@ -360,17 +385,8 @@ namespace Breccia {
 
 	void SimulatedNetwork::SetLinkSettings(const SimulatedLinkSettings& settings)
 	{
+		BR_CORE_ASSERT(IsValidLink(settings), "simulated link settings must be finite, non-negative and Loss in [0, 1]");
 		m_State->Settings = settings;
-	}
-
-	const SimulatedLinkSettings& SimulatedNetwork::GetLinkSettings() const
-	{
-		return m_State->Settings;
-	}
-
-	uint64_t SimulatedNetwork::GetDeliveredCount() const
-	{
-		return m_State->Delivered;
 	}
 
 	uint64_t SimulatedNetwork::GetLostCount() const

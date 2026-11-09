@@ -213,7 +213,8 @@ namespace Breccia {
 		void RecreateBody(Entity entity);
 		// Whether another system decides where the entity's body is (a network peer without authority over it): a Dynamic
 		// body is then built as Kinematic, following the entity's transform instead of simulating, and goes back to Dynamic
-		// when this is turned off. The component keeps its Type; nothing changes for static or kinematic bodies.
+		// when this is turned off. The component keeps its Type; nothing changes for static or kinematic bodies, character
+		// controllers or ragdolls. One caller decides it (NetworkSystem): a second would undo the first's setting.
 		void SetDrivenExternally(Entity entity, bool driven);
 		bool IsDrivenExternally(Entity entity) const;
 

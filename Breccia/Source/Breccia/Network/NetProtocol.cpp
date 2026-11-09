@@ -6,6 +6,7 @@
 #include "Breccia/Scene/ComponentRegistry.h"
 
 #include <cmath>
+#include <limits>
 #include <unordered_set>
 
 namespace Breccia {
@@ -36,24 +37,22 @@ namespace Breccia {
 				return "a peer sent an invalid message";
 			case NetDisconnectReason::ConnectionFailed:
 				return "the connection could not be made";
+			case NetDisconnectReason::Unknown:
 			case NetDisconnectReason::Count:
 				break;
 		}
-		return "unknown reason";
+		return "an unknown reason (a newer peer's)";
 	}
 
 	NetDisconnectReason DisconnectReasonFromCode(uint32_t code)
 	{
-		return code < static_cast<uint32_t>(NetDisconnectReason::Count) ? static_cast<NetDisconnectReason>(code) : NetDisconnectReason::None;
+		return code < static_cast<uint32_t>(NetDisconnectReason::Unknown) ? static_cast<NetDisconnectReason>(code) : NetDisconnectReason::Unknown;
 	}
 
 	namespace NetProtocol {
 
 		namespace {
 
-			// Component entry flags.
-			constexpr uint8_t ComponentRemoved = 1;
-			constexpr uint8_t ComponentAdded = 2;
 			// Entity update flags.
 			constexpr uint8_t EntityHasParent = 1;
 
@@ -90,42 +89,28 @@ namespace Breccia {
 				if (!reader.ReadCount(component.Component, std::numeric_limits<uint32_t>::max()))
 					return Fail(reader, outError, "a component index is malformed");
 				const ReplicationSchema::Component* info = schema.FindComponent(component.Component);
-				if (!info)
-					return Fail(reader, outError, "unknown component index " + std::to_string(component.Component));
-				uint8_t flags = 0;
-				if (!reader.ReadU8(flags))
-					return Fail(reader, outError, "a component entry is truncated");
-				if ((flags & ~(ComponentRemoved | ComponentAdded)) != 0 || flags == (ComponentRemoved | ComponentAdded))
-					return Fail(reader, outError, "a component entry has invalid flags");
-				component.Removed = (flags & ComponentRemoved) != 0;
-				component.Added = (flags & ComponentAdded) != 0;
-				if ((component.Removed || component.Added) && info->IsCore)
-					return Fail(reader, outError, info->Info->Name + " cannot be added or removed");
+				const std::string name = info ? info->Info->Name : "component " + std::to_string(component.Component);
+				uint8_t change = 0;
+				if (!reader.ReadU8(change) || change > static_cast<uint8_t>(NetComponentChange::Added))
+					return Fail(reader, outError, "a " + name + " entry is truncated or has an invalid change");
+				component.Change = static_cast<NetComponentChange>(change);
 				uint32_t fieldCount = 0;
 				if (!reader.ReadCount(fieldCount, MaxFieldsPerComponent))
-					return Fail(reader, outError, "a field count is malformed or too large");
-				if (component.Removed && fieldCount != 0)
-					return Fail(reader, outError, "a removed component carries fields");
-				const size_t replicated = info->Info->ReplicatedFields.size();
-				if (component.Added && fieldCount != replicated)
-					return Fail(reader, outError, "an added " + info->Info->Name + " must carry every replicated field");
-				if (!component.Removed && !component.Added && fieldCount == 0)
-					return Fail(reader, outError, "a component entry carries nothing");
-				std::vector<bool> seen(replicated, false);
+					return Fail(reader, outError, "a " + name + " field count is malformed or too large");
 				component.Fields.resize(fieldCount);
 				for (NetFieldValue& field : component.Fields)
 				{
 					if (!reader.ReadCount(field.Field, std::numeric_limits<uint32_t>::max()))
-						return Fail(reader, outError, "a field index is malformed");
-					if (field.Field >= replicated)
-						return Fail(reader, outError, info->Info->Name + " has no replicated field " + std::to_string(field.Field));
-					if (seen[field.Field])
-						return Fail(reader, outError, "a field appears twice");
-					seen[field.Field] = true;
+						return Fail(reader, outError, "a " + name + " field index is malformed");
 					if (!NetValue::Decode(reader, field.Value))
-						return Fail(reader, outError, "a field value is malformed");
+						return Fail(reader, outError, "the value of " + name + " field " + std::to_string(field.Field) + " is malformed (truncated, too deep, not UTF-8 or with a repeated key)");
 				}
 				return true;
+			}
+
+			bool ReadParent(NetReader& reader, uint64_t& parent, std::string& outError)
+			{
+				return reader.ReadU64(parent) || Fail(reader, outError, "a parent ID is truncated");
 			}
 
 			bool ReadUpdate(NetReader& reader, const ReplicationSchema& schema, NetEntityUpdate& update, std::string& outError)
@@ -138,26 +123,19 @@ namespace Breccia {
 				if (flags & EntityHasParent)
 				{
 					uint64_t parent = 0;
-					if (!reader.ReadU64(parent))
-						return Fail(reader, outError, "a parent ID is truncated");
-					if (parent == update.Entity)
-						return Fail(reader, outError, "an entity cannot be its own parent");
+					if (!ReadParent(reader, parent, outError))
+						return false;
 					update.Parent = UUID(parent);
 				}
 				uint32_t componentCount = 0;
 				if (!reader.ReadCount(componentCount, MaxComponentsPerEntity))
 					return Fail(reader, outError, "a component count is malformed or too large");
-				if (componentCount == 0 && !update.Parent)
-					return Fail(reader, outError, "an entity update carries nothing");
-				std::unordered_set<uint32_t> components;
 				update.Components.resize(componentCount);
 				for (NetComponentUpdate& component : update.Components)
-				{
 					if (!ReadComponent(reader, schema, component, outError))
 						return false;
-					if (!components.insert(component.Component).second)
-						return Fail(reader, outError, "a component appears twice in one entity update");
-				}
+				if (std::string problem = CheckUpdate(update, schema); !problem.empty())
+					return Fail(reader, outError, std::move(problem));
 				return true;
 			}
 
@@ -166,16 +144,13 @@ namespace Breccia {
 				if (!ReadUuid(reader, spawn.Entity, outError))
 					return false;
 				uint64_t parent = 0;
-				if (!reader.ReadU64(parent))
-					return Fail(reader, outError, "a spawn's parent is truncated");
-				if (parent == spawn.Entity)
-					return Fail(reader, outError, "an entity cannot be its own parent");
+				if (!ReadParent(reader, parent, outError))
+					return false;
 				spawn.Parent = parent;
 				if (!NetValue::Decode(reader, spawn.Entities))
-					return Fail(reader, outError, "a spawn's entities are malformed");
-				// The records themselves are checked where they are created (SceneSerializer), as a scene file's are.
-				if (!spawn.Entities.is_array() || spawn.Entities.empty() || spawn.Entities.size() > MaxSpawnEntities)
-					return Fail(reader, outError, "a spawn must hold 1 to " + std::to_string(MaxSpawnEntities) + " entity records");
+					return Fail(reader, outError, "a spawn's entities are malformed (truncated, too deep, not UTF-8 or with a repeated key)");
+				if (std::string problem = CheckSpawn(spawn); !problem.empty())
+					return Fail(reader, outError, std::move(problem));
 				return true;
 			}
 
@@ -217,6 +192,62 @@ namespace Breccia {
 
 		}
 
+		std::string CheckUpdate(const NetEntityUpdate& update, const ReplicationSchema& schema)
+		{
+			if (!update.Entity.IsValid())
+				return "an entity ID is 0";
+			if (update.Parent && *update.Parent == update.Entity)
+				return "an entity cannot be its own parent";
+			if (update.Components.empty() && !update.Parent)
+				return "an entity update carries nothing";
+			if (update.Components.size() > MaxComponentsPerEntity)
+				return "an entity update has too many components";
+			std::unordered_set<uint32_t> components;
+			for (const NetComponentUpdate& component : update.Components)
+			{
+				const ReplicationSchema::Component* info = schema.FindComponent(component.Component);
+				if (!info)
+					return "unknown component index " + std::to_string(component.Component);
+				const std::string& name = info->Info->Name;
+				const size_t replicated = info->Info->ReplicatedFields.size();
+				if (!components.insert(component.Component).second)
+					return name + " appears twice in one entity update";
+				// Senders track only components with replicated fields: nothing else is added or removed after a spawn.
+				if (replicated == 0)
+					return name + " has no replicated fields";
+				if (component.Change != NetComponentChange::Changed && info->IsCore)
+					return name + " cannot be added or removed";
+				if (component.Change == NetComponentChange::Removed && !component.Fields.empty())
+					return "a removed " + name + " carries fields";
+				if (component.Change == NetComponentChange::Added && component.Fields.size() != replicated)
+					return "an added " + name + " must carry every replicated field";
+				if (component.Change == NetComponentChange::Changed && component.Fields.empty())
+					return "a changed " + name + " carries no field";
+				std::vector<bool> seen(replicated, false);
+				for (const NetFieldValue& field : component.Fields)
+				{
+					if (field.Field >= replicated)
+						return name + " has no replicated field " + std::to_string(field.Field);
+					if (seen[field.Field])
+						return name + " field " + std::to_string(field.Field) + " appears twice";
+					seen[field.Field] = true;
+				}
+			}
+			return {};
+		}
+
+		std::string CheckSpawn(const NetEntitySpawn& spawn)
+		{
+			if (!spawn.Entity.IsValid())
+				return "an entity ID is 0";
+			if (spawn.Parent == spawn.Entity)
+				return "an entity cannot be its own parent";
+			// The records themselves are checked where they are created (SceneSerializer), as a scene file's are.
+			if (!spawn.Entities.is_array() || spawn.Entities.empty() || spawn.Entities.size() > MaxSpawnEntities)
+				return "a spawn must hold 1 to " + std::to_string(MaxSpawnEntities) + " entity records";
+			return {};
+		}
+
 		std::vector<uint8_t> EncodeHello(const NetHello& hello)
 		{
 			NetWriter writer;
@@ -255,7 +286,7 @@ namespace Breccia {
 			for (const NetComponentUpdate& component : update.Components)
 			{
 				writer.WriteVarUInt(component.Component);
-				writer.WriteU8(static_cast<uint8_t>((component.Removed ? ComponentRemoved : 0) | (component.Added ? ComponentAdded : 0)));
+				writer.WriteU8(static_cast<uint8_t>(component.Change));
 				writer.WriteVarUInt(component.Fields.size());
 				for (const NetFieldValue& field : component.Fields)
 				{

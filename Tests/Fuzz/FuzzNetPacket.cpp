@@ -1,6 +1,7 @@
 // Network messages: every datagram a host or client receives comes from the network, so it is untrusted input. The first
-// byte picks what the rest is: a message to decode (and re-encode, which must read back the same), or a snapshot a
-// connected client applies to its scene, which must never end its session or crash it.
+// byte picks what the rest is: a message to decode (and re-encode, which must read back the same), then (bit 0) a snapshot
+// a connected client applies to its scene, or (bit 1) a client update a host applies to its own. Whatever decodes must
+// never end the session or crash the receiver.
 #include "FuzzCommon.h"
 
 #include <Breccia/Network/NetProtocol.h>
@@ -8,6 +9,8 @@
 #include <Breccia/Network/ReplicationSchema.h>
 #include <Breccia/Network/SimulatedNetwork.h>
 #include <Breccia/Physics/PhysicsWorld.h>
+#include <Breccia/Scene/Components.h>
+#include <Breccia/Scene/Entity.h>
 #include <Breccia/Scene/Scene.h>
 
 #include <memory>
@@ -68,8 +71,10 @@ namespace {
 
 		void Apply(NetState state)
 		{
-			// Sequence numbers only grow, or the client drops the snapshot as stale.
+			// Sequence numbers only grow, or the client drops the snapshot as stale; an acknowledgement of an update the
+			// client never sent is a reason to leave, which is not what this checks.
 			state.Sequence = ++m_Sequence;
+			state.Acknowledged = 0;
 			const std::vector<uint8_t> bytes = NetProtocol::EncodeState(NetMessageType::Snapshot, state);
 			if (bytes.empty())
 				__builtin_trap();
@@ -99,6 +104,77 @@ namespace {
 		size_t m_Applied = 0;
 	};
 
+	// A host scene with entities a client owns and others it does not, and a client played by hand that has joined as peer
+	// 1 (kept between inputs, rebuilt now and then).
+	class Host
+	{
+	public:
+		Host()
+			: m_Network({}, 1)
+		{
+			std::string error;
+			auto listening = m_Network.Listen(0, 2, error);
+			const uint16_t port = listening->GetListenPort();
+			m_Scene = std::make_shared<Scene>("FuzzHost");
+			// Entities 1-4: server-owned, owned by the client (with a light), owned by another client, a child of the first.
+			for (uint64_t id = 1; id <= 4; id++)
+				m_Scene->CreateEntityWithUUID(id, "Entity").AddComponent<NetworkedComponent>();
+			m_Scene->GetEntityByUUID(2).GetComponent<NetworkedComponent>() = { 1, NetworkAuthority::Owner };
+			m_Scene->GetEntityByUUID(2).AddComponent<PointLightComponent>();
+			m_Scene->GetEntityByUUID(3).GetComponent<NetworkedComponent>() = { 2, NetworkAuthority::Owner };
+			m_Scene->SetParent(m_Scene->GetEntityByUUID(4), m_Scene->GetEntityByUUID(1), false);
+			m_Scene->StartNetwork(CreateScope<NetworkSystem>(*m_Scene, NetworkRole::Host, std::move(listening), NetworkSettings{}, NetworkSystem::Identity{}));
+			m_Scene->OnRuntimeStart();
+			m_Client = m_Network.Connect(port);
+			std::vector<NetTransportEvent> events;
+			for (int i = 0; i < 10 && m_Peer == 0; i++)
+			{
+				Update();
+				m_Client->Poll(events);
+				for (const NetTransportEvent& event : events)
+					if (event.Type == NetTransportEvent::Kind::Connected)
+						m_Peer = event.Peer;
+			}
+			if (m_Peer == 0)
+				__builtin_trap();
+			m_Client->Send(m_Peer, NetChannel::Reliable, NetProtocol::EncodeHello({ NetProtocol::Version, ReplicationSchema::Get().GetHash(), "", "" }));
+			Update();
+			if (m_Scene->GetNetworkSystem()->GetConnections().size() != 1)
+				__builtin_trap();
+		}
+
+		~Host() { m_Scene->OnRuntimeStop(); }
+
+		void Apply(NetState state)
+		{
+			// A message the host would drop as stale, or kick for (an acknowledgement of a snapshot never sent), is not
+			// what this checks.
+			state.Sequence = ++m_Sequence;
+			state.Acknowledged = 0;
+			m_Client->Send(m_Peer, NetChannel::Unreliable, NetProtocol::EncodeState(NetMessageType::ClientUpdate, state));
+			Update();
+			if (m_Scene->GetNetworkSystem()->GetConnections().size() != 1)
+				__builtin_trap();
+			m_Applied++;
+		}
+
+		size_t GetApplied() const { return m_Applied; }
+
+	private:
+		void Update()
+		{
+			m_Network.Advance(Step);
+			m_Scene->OnUpdate(Step);
+		}
+
+		SimulatedNetwork m_Network;
+		std::shared_ptr<Scene> m_Scene;
+		Scope<NetTransport> m_Client;
+		NetPeerHandle m_Peer = 0;
+		uint32_t m_Sequence = 0;
+		size_t m_Applied = 0;
+	};
+
 }
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
@@ -116,7 +192,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 	(void)configured;
 	if (size == 0)
 		return 0;
-	const bool apply = (data[0] & 1) != 0;
+	const bool applyOnClient = (data[0] & 1) != 0;
+	const bool applyOnHost = (data[0] & 2) != 0;
 	const std::span<const uint8_t> bytes(data + 1, size - 1);
 
 	std::string error;
@@ -132,7 +209,17 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 	if (!partialHello && Reencode(*again) != encoded)
 		__builtin_trap();
 
-	if (apply && message->Type == NetMessageType::Snapshot)
+	if (applyOnHost && message->Type == NetMessageType::ClientUpdate)
+	{
+		static Host* s_Host = nullptr;
+		if (!s_Host || s_Host->GetApplied() >= 256)
+		{
+			delete s_Host;
+			s_Host = new Host();
+		}
+		s_Host->Apply(std::get<NetState>(message->Body));
+	}
+	if (applyOnClient && message->Type == NetMessageType::Snapshot)
 	{
 		// Never destroyed at exit: sol2's static strings, which its Lua state's teardown reads, may already be gone.
 		static Client* s_Client = nullptr;

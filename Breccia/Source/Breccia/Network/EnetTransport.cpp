@@ -1,14 +1,18 @@
 #include "Breccia/Network/EnetTransport.h"
 
+#include "Breccia/Core/FileSystem.h"
 #include "Breccia/Core/Log.h"
+#include "Breccia/Core/Platform.h"
 
 #include <enet/enet.h>
 
 #include <algorithm>
-#include <cmath>
+#include <cerrno>
 #include <map>
 #include <mutex>
+#include <system_error>
 #include <unordered_set>
+#include <utility>
 
 namespace Breccia {
 
@@ -18,24 +22,41 @@ namespace Breccia {
 		std::mutex s_LibraryMutex;
 		uint32_t s_LibraryUsers = 0;
 
-		bool AcquireLibrary(std::string& outError)
+		// One use of the ENet library, released when destroyed (move-only).
+		class LibraryUse
 		{
-			std::scoped_lock lock(s_LibraryMutex);
-			if (s_LibraryUsers == 0 && enet_initialize() != 0)
+		public:
+			LibraryUse() = default;
+			LibraryUse(LibraryUse&& other) noexcept
+				: m_Held(std::exchange(other.m_Held, false))
 			{
-				outError = "the network library could not start";
-				return false;
 			}
-			s_LibraryUsers++;
-			return true;
-		}
+			LibraryUse& operator=(LibraryUse&&) = delete;
+			~LibraryUse()
+			{
+				if (!m_Held)
+					return;
+				std::scoped_lock lock(s_LibraryMutex);
+				if (--s_LibraryUsers == 0)
+					enet_deinitialize();
+			}
 
-		void ReleaseLibrary()
-		{
-			std::scoped_lock lock(s_LibraryMutex);
-			if (--s_LibraryUsers == 0)
-				enet_deinitialize();
-		}
+			bool Acquire(std::string& outError)
+			{
+				std::scoped_lock lock(s_LibraryMutex);
+				if (s_LibraryUsers == 0 && enet_initialize() != 0)
+				{
+					outError = "the network library could not start";
+					return false;
+				}
+				s_LibraryUsers++;
+				m_Held = true;
+				return true;
+			}
+
+		private:
+			bool m_Held = false;
+		};
 
 		std::string DescribeAddress(const ENetAddress& address)
 		{
@@ -45,12 +66,24 @@ namespace Breccia {
 			return std::string(text) + ":" + std::to_string(address.port);
 		}
 
+		// The socket error ENet's last failed call left, for messages.
+		std::string DescribeSocketError()
+		{
+#if defined(_WIN32)
+			return Platform::GetErrorMessage(static_cast<uint32_t>(WSAGetLastError()));
+#else
+			return FileSystem::DescribeError(std::error_code(errno, std::generic_category()));
+#endif
+		}
+
 		class EnetHostTransport final : public NetTransport
 		{
 		public:
-			EnetHostTransport(ENetHost* host, const EnetTransportSettings& settings)
-				: m_Host(host)
+			EnetHostTransport(LibraryUse library, ENetHost* host, const EnetTransportSettings& settings, uint16_t listenPort)
+				: m_Library(std::move(library))
+				, m_Host(host)
 				, m_Settings(settings)
+				, m_ListenPort(listenPort)
 			{
 				m_Host->maximumPacketSize = m_Settings.MaxMessageBytes;
 				m_Host->maximumWaitingData = m_Settings.MaxMessageBytes * 2;
@@ -65,36 +98,43 @@ namespace Breccia {
 						enet_peer_disconnect(&peer, peer.eventData);
 				enet_host_flush(m_Host);
 				enet_host_destroy(m_Host);
-				ReleaseLibrary();
 			}
 
-			// The handle of a client transport's single connection, made before ENet reports it.
-			NetPeerHandle AddOutgoing(ENetPeer* peer)
+			// Registers a peer: an outgoing connection when it is made (before ENet reports it), an incoming one when ENet
+			// reports it.
+			NetPeerHandle Track(ENetPeer* peer)
 			{
-				ApplyTimeout(peer);
-				return Register(peer);
+				const auto milliseconds = static_cast<enet_uint32>(std::clamp(m_Settings.TimeoutSeconds, 0.1f, 3600.0f) * 1000.0f);
+				enet_peer_timeout(peer, 0, milliseconds, milliseconds);
+				const NetPeerHandle handle = m_NextHandle++;
+				peer->data = reinterpret_cast<void*>(static_cast<uintptr_t>(handle));
+				m_Peers[handle] = peer;
+				return handle;
 			}
 
-			void Send(NetPeerHandle handle, NetChannel channel, std::span<const uint8_t> data) override
+			bool Send(NetPeerHandle handle, NetChannel channel, std::span<const uint8_t> data) override
 			{
 				ENetPeer* peer = Find(handle);
 				if (!peer || peer->state != ENET_PEER_STATE_CONNECTED)
-					return;
+					return false;
 				// Unreliable messages larger than a datagram travel as unreliable fragments: losing one loses the message,
 				// which the next one repeats. Without the flag ENet would send them reliably.
 				const enet_uint32 flags = channel == NetChannel::Reliable ? ENET_PACKET_FLAG_RELIABLE : ENET_PACKET_FLAG_UNRELIABLE_FRAGMENT;
 				ENetPacket* packet = enet_packet_create(data.data(), data.size(), flags);
-				if (!packet)
-				{
-					BR_CORE_ERROR("Network: out of memory for a {}-byte message to {}", data.size(), DescribePeer(handle));
-					return;
-				}
-				if (enet_peer_send(peer, static_cast<enet_uint8>(channel), packet) != 0)
-				{
-					// A packet ENet did not queue is still ours.
+				if (packet && enet_peer_send(peer, static_cast<enet_uint8>(channel), packet) == 0)
+					return true;
+				// A packet ENet did not queue is still ours.
+				if (packet)
 					enet_packet_destroy(packet);
-					BR_CORE_ERROR("Network: could not send a {}-byte message to {} (the limit is {} bytes)", data.size(), DescribePeer(handle), m_Settings.MaxMessageBytes);
+				// Once per peer: a lasting cause would otherwise log at the tick rate.
+				if (m_ReportedSendFailures.insert(handle).second)
+				{
+					if (data.size() > m_Settings.MaxMessageBytes)
+						BR_CORE_ERROR("Network: could not send a {}-byte message to {}: the limit is {} bytes", data.size(), DescribePeer(handle), m_Settings.MaxMessageBytes);
+					else
+						BR_CORE_ERROR("Network: could not send a {}-byte message to {} (out of memory, or too many fragments queued); further failures to it are not logged", data.size(), DescribePeer(handle));
 				}
+				return false;
 			}
 
 			void Disconnect(NetPeerHandle handle, uint32_t code) override
@@ -107,6 +147,18 @@ namespace Breccia {
 				enet_peer_disconnect_later(peer, code);
 			}
 
+			void DisconnectAll(uint32_t code) override
+			{
+				// The map changes as peers go: take the handles first. A connection still being made (no reply yet) is
+				// disconnected at once, which tells a host that already accepted it.
+				std::vector<NetPeerHandle> handles;
+				handles.reserve(m_Peers.size());
+				for (const auto& [handle, peer] : m_Peers)
+					handles.push_back(handle);
+				for (NetPeerHandle handle : handles)
+					Disconnect(handle, code);
+			}
+
 			void Poll(std::vector<NetTransportEvent>& events) override
 			{
 				ENetEvent event;
@@ -115,10 +167,15 @@ namespace Breccia {
 					const int result = enet_host_service(m_Host, &event, 0);
 					if (result < 0)
 					{
-						if (!m_ReportedServiceError)
-							BR_CORE_ERROR("Network: the UDP socket reported an error; messages may be lost");
-						m_ReportedServiceError = true;
+						// The first failure of a run, then a count when the socket works again.
+						if (m_ServiceErrors++ == 0)
+							BR_CORE_ERROR("Network: the UDP socket failed ({}); this frame's messages are not sent or received", DescribeSocketError());
 						break;
+					}
+					if (m_ServiceErrors > 0)
+					{
+						BR_CORE_WARN("Network: the UDP socket works again after {} failed frame(s)", m_ServiceErrors);
+						m_ServiceErrors = 0;
 					}
 					if (result == 0)
 						break;
@@ -141,29 +198,15 @@ namespace Breccia {
 			}
 
 			uint16_t GetListenPort() const override { return m_ListenPort; }
-			void SetListenPort(uint16_t port) { m_ListenPort = port; }
 
 		private:
-			static constexpr uintptr_t NoHandle = 0;
-
-			void ApplyTimeout(ENetPeer* peer) const
-			{
-				const auto milliseconds = static_cast<enet_uint32>(std::clamp(m_Settings.TimeoutSeconds, 0.1f, 3600.0f) * 1000.0f);
-				enet_peer_timeout(peer, 0, milliseconds, milliseconds);
-			}
-
-			NetPeerHandle Register(ENetPeer* peer)
-			{
-				const NetPeerHandle handle = m_NextHandle++;
-				peer->data = reinterpret_cast<void*>(static_cast<uintptr_t>(handle));
-				m_Peers[handle] = peer;
-				return handle;
-			}
+			static constexpr NetPeerHandle NoHandle = 0;
 
 			void Unregister(NetPeerHandle handle, ENetPeer* peer)
 			{
-				peer->data = reinterpret_cast<void*>(NoHandle);
+				peer->data = nullptr;
 				m_Peers.erase(handle);
+				m_ReportedSendFailures.erase(handle);
 			}
 
 			ENetPeer* Find(NetPeerHandle handle) const
@@ -181,12 +224,9 @@ namespace Breccia {
 					case ENET_EVENT_TYPE_CONNECT:
 					{
 						NetPeerHandle handle = HandleOf(event.peer);
-						// An incoming connection; an outgoing one was registered when it was made.
+						// An incoming connection; an outgoing one was tracked when it was made.
 						if (handle == NoHandle)
-						{
-							ApplyTimeout(event.peer);
-							handle = Register(event.peer);
-						}
+							handle = Track(event.peer);
 						events.push_back({ NetTransportEvent::Kind::Connected, handle });
 						break;
 					}
@@ -219,12 +259,15 @@ namespace Breccia {
 				}
 			}
 
+			// Declared first, destroyed last: the host goes before the library it needs.
+			LibraryUse m_Library;
 			ENetHost* m_Host = nullptr;
 			EnetTransportSettings m_Settings;
 			std::map<NetPeerHandle, ENetPeer*> m_Peers;
+			std::unordered_set<NetPeerHandle> m_ReportedSendFailures;
 			NetPeerHandle m_NextHandle = 1;
 			uint16_t m_ListenPort = 0;
-			bool m_ReportedServiceError = false;
+			uint32_t m_ServiceErrors = 0;
 		};
 
 	}
@@ -238,7 +281,8 @@ namespace Breccia {
 				outError = "a host accepts 1 to " + std::to_string(ENET_PROTOCOL_MAXIMUM_PEER_ID) + " connections";
 				return nullptr;
 			}
-			if (!AcquireLibrary(outError))
+			LibraryUse library;
+			if (!library.Acquire(outError))
 				return nullptr;
 			ENetAddress address{};
 			address.host = ENET_HOST_ANY;
@@ -246,19 +290,17 @@ namespace Breccia {
 			ENetHost* host = enet_host_create(&address, maxPeers, static_cast<size_t>(NetChannel::Count), 0, 0);
 			if (!host)
 			{
-				ReleaseLibrary();
-				outError = "cannot listen on UDP port " + std::to_string(port) + " (is another program using it?)";
+				outError = "cannot listen on UDP port " + std::to_string(port) + " (" + DescribeSocketError() + "; is another program using it?)";
 				return nullptr;
 			}
-			auto transport = CreateScope<EnetHostTransport>(host, settings);
 			ENetAddress bound{};
 			if (enet_socket_get_address(host->socket, &bound) != 0)
 			{
-				outError = "cannot read the port the UDP socket is bound to";
+				outError = "cannot read the port the UDP socket is bound to (" + DescribeSocketError() + ")";
+				enet_host_destroy(host);
 				return nullptr;
 			}
-			transport->SetListenPort(bound.port);
-			return transport;
+			return CreateScope<EnetHostTransport>(std::move(library), host, settings, bound.port);
 		}
 
 		Scope<NetTransport> Connect(const std::string& hostName, uint16_t port, const EnetTransportSettings& settings, std::string& outError)
@@ -268,32 +310,31 @@ namespace Breccia {
 				outError = "the host's port cannot be 0";
 				return nullptr;
 			}
-			if (!AcquireLibrary(outError))
+			LibraryUse library;
+			if (!library.Acquire(outError))
 				return nullptr;
 			ENetAddress address{};
 			address.port = port;
 			// A numeric address first, so the common case never waits on name resolution.
 			if (enet_address_set_host_ip(&address, hostName.c_str()) != 0 && enet_address_set_host(&address, hostName.c_str()) != 0)
 			{
-				ReleaseLibrary();
 				outError = "cannot resolve the host '" + hostName + "'";
 				return nullptr;
 			}
 			ENetHost* host = enet_host_create(nullptr, 1, static_cast<size_t>(NetChannel::Count), 0, 0);
 			if (!host)
 			{
-				ReleaseLibrary();
-				outError = "cannot open a UDP socket";
+				outError = "cannot open a UDP socket (" + DescribeSocketError() + ")";
 				return nullptr;
 			}
-			auto transport = CreateScope<EnetHostTransport>(host, settings);
+			auto transport = CreateScope<EnetHostTransport>(std::move(library), host, settings, uint16_t{ 0 });
 			ENetPeer* peer = enet_host_connect(host, &address, static_cast<size_t>(NetChannel::Count), 0);
 			if (!peer)
 			{
 				outError = "cannot start a connection to " + DescribeAddress(address);
 				return nullptr;
 			}
-			transport->AddOutgoing(peer);
+			transport->Track(peer);
 			return transport;
 		}
 

@@ -586,17 +586,16 @@ namespace Breccia {
 		const auto* component = entity.TryGetComponent<RigidBodyComponent>();
 		if (!component)
 			return false;
-		const RigidBodyComponent effective = EffectiveRigidBody(entity, *component);
-		const RigidBodyComponent* rigidBody = &effective;
-		if (entity.HasComponent<CharacterControllerComponent>() || BodyNeedsRebuild(record.Settings, *rigidBody) || !colliders.SameChildren(record.Colliders))
+		const RigidBodyComponent rigidBody = EffectiveRigidBody(entity, *component);
+		if (entity.HasComponent<CharacterControllerComponent>() || BodyNeedsRebuild(record.Settings, rigidBody) || !colliders.SameChildren(record.Colliders))
 			return false;
 		const bool reshaped = colliders != record.Colliders;
 		// Rewriting the same values must not wake the body or its neighbours.
-		if (!reshaped && *rigidBody == record.Settings)
+		if (!reshaped && rigidBody == record.Settings)
 			return true;
 		JPH::BodyInterface& bodies = System->GetBodyInterface();
 		JPH::AABox bounds = bodies.GetTransformedShape(record.ID).GetWorldSpaceBounds();
-		const bool touchChanged = reshaped || SurfaceChanged(record.Settings, *rigidBody);
+		const bool touchChanged = reshaped || SurfaceChanged(record.Settings, rigidBody);
 		if (reshaped)
 		{
 			if (!ReplaceBodyColliders(entity, record, colliders))
@@ -604,15 +603,15 @@ namespace Breccia {
 			bounds.Encapsulate(bodies.GetTransformedShape(record.ID).GetWorldSpaceBounds());
 		}
 		std::vector<std::string> warnings = record.ShapeWarnings;
-		const BodySettings checked = CheckBodySettings(*rigidBody, Layers, warnings);
+		const BodySettings checked = CheckBodySettings(rigidBody, Layers, warnings);
 		bodies.SetFriction(record.ID, checked.Surface.Friction);
 		bodies.SetRestitution(record.ID, checked.Surface.Restitution);
 		BodyMaterial& material = ContactListener.Materials[record.ID.GetIndex()];
-		material.FrictionCombine = rigidBody->FrictionCombine;
-		material.RestitutionCombine = rigidBody->RestitutionCombine;
+		material.FrictionCombine = rigidBody.FrictionCombine;
+		material.RestitutionCombine = rigidBody.RestitutionCombine;
 		if (record.Settings.Type != RigidBodyType::Static)
 		{
-			bodies.SetGravityFactor(record.ID, rigidBody->GravityFactor);
+			bodies.SetGravityFactor(record.ID, rigidBody.GravityFactor);
 			bodies.SetMotionQuality(record.ID, checked.Quality);
 			{
 				JPH::BodyLockWrite lock(System->GetBodyLockInterface(), record.ID);
@@ -625,11 +624,11 @@ namespace Breccia {
 				JPH::MotionProperties* motion = body.GetMotionProperties();
 				motion->SetLinearDamping(checked.LinearDamping);
 				motion->SetAngularDamping(checked.AngularDamping);
-				body.SetAllowSleeping(rigidBody->AllowSleeping);
+				body.SetAllowSleeping(rigidBody.AllowSleeping);
 			}
 			// SwapBodyShape has applied the current mass with a new shape.
-			const bool newMass = record.Settings.Type == RigidBodyType::Dynamic && !reshaped && rigidBody->Mass != record.Settings.Mass;
-			if (newMass && !ApplyBodyMass(entity, record, rigidBody->Mass))
+			const bool newMass = record.Settings.Type == RigidBodyType::Dynamic && !reshaped && rigidBody.Mass != record.Settings.Mass;
+			if (newMass && !ApplyBodyMass(entity, record, rigidBody.Mass))
 				return false;
 			// Activating a kinematic body wakes what it touches, which only a change that reaches them should.
 			if (touchChanged || record.Settings.Type == RigidBodyType::Dynamic)
@@ -643,7 +642,7 @@ namespace Breccia {
 			bounds.ExpandBy(JPH::Vec3::sReplicate(TouchMargin));
 			bodies.ActivateBodiesInAABox(bounds, JPH::BroadPhaseLayerFilter(), JPH::ObjectLayerFilter());
 		}
-		record.Settings = *rigidBody;
+		record.Settings = rigidBody;
 		BodyWarnings.Report(entity, warnings);
 		return true;
 	}

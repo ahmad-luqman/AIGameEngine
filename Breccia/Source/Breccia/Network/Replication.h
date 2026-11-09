@@ -13,6 +13,7 @@
 #include <map>
 #include <optional>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace Breccia {
@@ -30,6 +31,9 @@ namespace Breccia {
 	{
 		uint32_t Component = 0;
 		std::vector<ReplicatedFieldValue> Fields;
+		// A field could not be encoded this tick (text that is not UTF-8): the component is present but nothing about it
+		// is sent until it can be (Fields is then empty). Never mistaken for a removal.
+		bool Unsendable = false;
 	};
 
 	// A networked entity as it is this tick.
@@ -37,7 +41,7 @@ namespace Breccia {
 	{
 		UUID Entity = 0;
 		UUID Parent = 0;
-		// Ancestors in the scene: parents go out before their children when both wait.
+		// Ancestors in the scene: among entities whose wait (priority totals) is equal, parents go first.
 		uint32_t Depth = 0;
 		float Priority = 1.0f;
 		uint32_t Owner = 0;
@@ -55,75 +59,105 @@ namespace Breccia {
 		using SpawnBuilder = std::function<std::optional<std::vector<uint8_t>>(const ReplicatedEntity&)>;
 
 		ReplicationWorld() = default;
+		// Entity IDs must be unique (a message names each entity once).
 		ReplicationWorld(std::vector<ReplicatedEntity> entities, SpawnBuilder spawnBuilder);
 
 		const std::vector<ReplicatedEntity>& GetEntities() const { return m_Entities; }
-		bool Contains(UUID entity) const { return m_Index.contains(entity); }
-		// Null when the spawn cannot be built.
+		bool Contains(UUID entity) const { return m_Ids.contains(entity); }
+		// Null when the spawn cannot be built (or the world has no builder: a client's).
 		const std::vector<uint8_t>* GetSpawnRecord(size_t index) const;
 
 	private:
-		std::vector<ReplicatedEntity> m_Entities;
-		std::unordered_map<UUID, size_t> m_Index;
-		SpawnBuilder m_SpawnBuilder;
 		// One per entity: whether the builder ran, and what it returned.
 		struct SpawnCache
 		{
 			bool Built = false;
 			std::optional<std::vector<uint8_t>> Record;
 		};
+
+		std::vector<ReplicatedEntity> m_Entities;
+		std::unordered_set<UUID> m_Ids;
+		SpawnBuilder m_SpawnBuilder;
 		mutable std::vector<SpawnCache> m_Spawns;
 	};
 
-	// Whether a sender includes a component's changes for an entity (false: the receiver decides them itself).
-	using ReplicationFilter = std::function<bool(const ReplicatedEntity& entity, uint32_t component)>;
+	// Which way a sender's messages go.
+	enum class ReplicationDirection : uint8_t
+	{
+		// Snapshots: spawns, despawns, component additions and removals, parents and field changes.
+		HostToClient,
+		// Client updates: field changes of entities the host already has, nothing else.
+		ClientToHost
+	};
+
+	// How much of a component a sender includes for an entity.
+	enum class ReplicationScope : uint8_t
+	{
+		Everything,
+		// Whether it exists (an addition carries the values it starts with), not its later field changes: the receiver decides
+		// those itself (the entity's owner).
+		PresenceOnly
+	};
+
+	using ReplicationFilter = std::function<ReplicationScope(const ReplicatedEntity& entity, uint32_t component)>;
 
 	struct ReplicationSenderOptions
 	{
-		// Host to client: spawns, despawns, component additions and removals, and parents. Off (client to host): only field
-		// changes of entities the receiver already has.
-		bool Spawns = true;
-		// Largest message the transport carries; a record that cannot fit in one is never sent (logged once).
+		ReplicationDirection Direction = ReplicationDirection::HostToClient;
+		// Largest message the receiver accepts (NetworkSystem::MaxHostMessageBytes, or MaxClientMessageBytes for client
+		// updates); a record that cannot fit in one is never sent (logged once). More than the message header.
 		size_t MaxMessageBytes = size_t{ 1024 } * 1024;
-		// Messages remembered until acknowledged. An acknowledgement of a forgotten one is ignored; what it carried is
-		// sent again.
+		// Messages remembered until acknowledged (at least 1). An acknowledgement of a forgotten one is ignored; what it
+		// carried is sent again.
 		uint32_t HistoryLength = 256;
 	};
 
-	// Builds one direction's state messages for one connection, sending only what the receiver has not acknowledged:
-	// every message carries each field whose value differs from the last one the receiver acknowledged, or that went out
-	// in a message not yet acknowledged, so the newest message the receiver applies always completes its state (older
-	// ones it receives later are dropped). Spawns repeat until acknowledged, then become field updates; despawns repeat
-	// until acknowledged. When the byte budget is short, entities that wait gain their Priority each tick and the
+	// Builds one direction's state messages for one connection, sending only what the receiver may not have: each message
+	// carries every value that differs from the last one the receiver acknowledged, or that a message not yet acknowledged
+	// carried differently, so once the receiver applies a message (and drops anything older) it holds every value that
+	// message and the older ones carried, and only records that waited for the budget follow later. Spawns repeat until
+	// acknowledged, then become field updates; despawns repeat until acknowledged, even if the entity is back meanwhile
+	// (its new spawn follows). When the byte budget is short, entities that wait gain their Priority each tick and the
 	// largest totals go first. Pure bookkeeping over ReplicationWorld: no scene, no transport.
 	class ReplicationSender
 	{
 	public:
 		explicit ReplicationSender(ReplicationSenderOptions options = {});
 
-		// The next message (Snapshot or ClientUpdate). acknowledged is the newest message of the other direction this
-		// side applied. budget is the bytes the records may use: records beyond it wait, except that the first one goes
-		// when budget is positive (a large spawn must go some time; the caller's budget runs into debt).
-		std::vector<uint8_t> Build(NetMessageType type, const ReplicationWorld& world, uint32_t acknowledged, size_t budget, const ReplicationFilter& filter = {});
-		// The receiver applied message `sequence` (and drops anything older it receives later).
-		void Acknowledge(uint32_t sequence);
+		// The next message (a Snapshot, or a ClientUpdate for ClientToHost). acknowledged is the newest message of the other
+		// direction this side applied. budget is the bytes the message may use: records beyond it wait, except that the
+		// first one goes when budget is positive (a large spawn must go some time; the caller's budget runs into debt).
+		std::vector<uint8_t> Build(const ReplicationWorld& world, uint32_t acknowledged, size_t budget, const ReplicationFilter& filter = {});
+		// The receiver applied message `sequence` (and drops anything older it receives later). False, changing nothing, for
+		// a sequence this sender never built: the peer is broken or lying.
+		bool Acknowledge(uint32_t sequence);
 
 		// Entities whose spawn the receiver acknowledged and that it has not been told to despawn.
 		size_t GetKnownEntityCount() const;
 		// Records of the last Build that waited for budget.
 		size_t GetDeferredRecordCount() const { return m_Deferred; }
-		uint32_t GetLastSequence() const { return m_NextSequence - 1; }
 
 	private:
-		// A value as the receiver last acknowledged it, and the newest message that carried it.
+		// One value as the receiver last acknowledged it, and what unacknowledged messages carried.
 		struct Tracked
 		{
-			std::vector<uint8_t> Acked;
-			bool HasAcked = false;
+			std::optional<std::vector<uint8_t>> Acked;
 			uint32_t AckedSequence = 0;
+			// The newest message that carried the value, and what it carried.
 			uint32_t SentSequence = 0;
+			std::vector<uint8_t> Sent;
+			// The newest message that carried a value other than Sent (0: none): until one at least as new is acknowledged,
+			// the receiver may hold that other value.
+			uint32_t StaleSequence = 0;
 
-			bool Pending(const std::vector<uint8_t>& current) const { return !HasAcked || Acked != current || SentSequence > AckedSequence; }
+			bool Pending(const std::vector<uint8_t>& current) const
+			{
+				if (!Acked || *Acked != current)
+					return true;
+				// Acknowledged as it is now: only an unacknowledged message carrying something else can undo that.
+				return (SentSequence > AckedSequence && Sent != current) || StaleSequence > AckedSequence;
+			}
+			void MarkSent(const std::vector<uint8_t>& value, uint32_t sequence);
 			void Acknowledge(const std::vector<uint8_t>& value, uint32_t sequence);
 		};
 
@@ -157,11 +191,10 @@ namespace Breccia {
 			struct Value
 			{
 				uint32_t Component = 0;
-				// Index into the component's fields, or PresenceField for the component's presence.
-				uint32_t Field = 0;
+				// Index into the component's fields; nullopt for the component's presence.
+				std::optional<uint32_t> Field;
 				std::vector<uint8_t> Bytes;
 			};
-			static constexpr uint32_t PresenceField = UINT32_MAX;
 
 			Kind Type = Kind::Update;
 			UUID Entity = 0;
@@ -177,6 +210,7 @@ namespace Breccia {
 
 		// The update record for a known entity (empty Components and no Parent: nothing to send).
 		NetEntityUpdate BuildUpdate(const ReplicatedEntity& entity, EntityTrack& track, const ReplicationFilter& filter, SentRecord& record) const;
+		static Tracked& TrackFor(EntityTrack& track, const SentRecord::Value& value);
 		void MarkSent(EntityTrack& track, const SentRecord& record, uint32_t sequence);
 
 		ReplicationSenderOptions m_Options;

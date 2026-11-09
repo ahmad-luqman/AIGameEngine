@@ -1452,11 +1452,12 @@ namespace Breccia {
 		Owner
 	};
 
-	// Marks an entity (with its descendants) as part of a network session's shared state (Network/NetworkSystem). The host
-	// spawns it on every client with the same UUID, sends the fields components declare in ComponentInfo::ReplicatedFields
-	// when they change, and despawns it when it is destroyed or loses this component. A descendant with a Networked
-	// component of its own is replicated separately. Owner is a peer ID, which a session assigns (the host is 0; clients
-	// are 1, 2, ... in the order they join, never reused), so a saved value means nothing until gameplay sets it.
+	// Marks an entity as part of a network session's shared state (Network/NetworkSystem). The host spawns it on every
+	// client with the same UUID, sends the fields its components declare in ComponentInfo::ReplicatedFields when they
+	// change, and despawns it when it is destroyed or loses this component. Its descendants travel inside the spawn and are
+	// never updated afterwards, unless they have a Networked component of their own (then they replicate separately). Owner
+	// is a peer ID, which a session assigns (the host is 0; clients are 1, 2, ... in the order they join, never reused), so
+	// a saved value names whichever client joins in that place.
 	struct NetworkedComponent
 	{
 		static constexpr float MaxPriority = 100.0f;

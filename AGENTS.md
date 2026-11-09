@@ -270,15 +270,19 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   `Advance`, which the unit tests use). It receives before scripts (outside the destruction deferral, so a client's own
   networked entities, removed when the host accepts it, are gone before the host's spawns arrive) and sends after the last
   system at the project's `Network.TickRate`. `NetworkedComponent` marks what replicates; `ComponentInfo::ReplicatedFields`
-  (top-level, never asset fields) is what updates after the spawn, which carries the tree as scene records with the host's
-  UUIDs (`SceneSerializer::CreateEntityTreeWithIds`, asset paths kept inside the project). Values travel as `NetValue`
-  (binary registry JSON) and land through `ComponentRegistry`. `ReplicationSender` is pure bookkeeping per connection and
-  direction: each message carries what differs from the last acknowledged value or rode an unacknowledged message, so the
-  newest one applied completes the state; priority accumulators and a token-bucket budget share `MaxBytesPerSecond`. The
-  handshake checks `NetProtocol::Version`, `ReplicationSchema::GetHash` and the project's Name/Version; every end has a
-  `NetDisconnectReason`. Owner-authority entities take their owner's fields (checked on the host); peers drive dynamic
-  bodies they do not decide kinematically (`PhysicsWorld::SetDrivenExternally`, an override the component never sees).
-  Clients draw runtime UUIDs from a salted stream; scene loads are refused during a session. See `Docs/Networking.md`.
+  (top-level, never asset fields) is what updates after the spawn, which carries the tree (non-networked descendants are
+  copied once) as scene records with the host's UUIDs (`SceneSerializer::CreateEntityTreeWithIds`, asset paths kept inside
+  the project); a spawn of an entity the client has is that entity. Values travel as `NetValue` (binary registry JSON) and
+  land through `ComponentRegistry`. `ReplicationSender` is pure bookkeeping per connection and direction: each message
+  carries what differs from the last acknowledged value or what an unacknowledged message carried differently, so once a
+  message is applied only records that waited for the budget are missing; despawns repeat until acknowledged even if the
+  entity is back; priority accumulators and a token-bucket budget share `MaxBytesPerSecond`. Decoders and senders share
+  `NetProtocol::CheckUpdate`/`CheckSpawn`. The handshake checks `NetProtocol::Version`, `ReplicationSchema::GetHash` (every
+  field, type and enum option) and the project's Name/Version; every end has a `NetDisconnectReason`. Owner-authority
+  entities take their owner's fields (checked on the host; the owner still hears component additions and removals); peers
+  drive dynamic bodies they do not decide kinematically (`PhysicsWorld::SetDrivenExternally`, an override the component
+  never sees, in sorted order). Clients draw runtime UUIDs from a salted stream; scene loads are refused during a session.
+  See `Docs/Networking.md`.
 - **Play mode runs a copy.** `Scene::Copy` duplicates the edit scene (same UUIDs) for play/simulate;
   stopping discards it. In the editor the game runs in the Game tab (primary camera at the project's window
   size, letterboxed; the game UI takes the pointer while the Game image is hovered and navigation while the Game
