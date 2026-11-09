@@ -11,8 +11,10 @@
 #include "Breccia/Renderer/GraphicsDevice.h"
 #include "Breccia/Renderer/VulkanLoader.h"
 
+#include <chrono>
 #include <ranges>
 #include <system_error>
+#include <thread>
 
 namespace Breccia {
 
@@ -204,6 +206,10 @@ namespace Breccia {
 
 			Input::EndFrame();
 			m_FrameCount++;
+
+			if (m_Specification.MinFrameSeconds > 0.0f)
+				if (const float remaining = m_Specification.MinFrameSeconds - frameTimer.Elapsed(); remaining > 0.0f)
+					std::this_thread::sleep_for(std::chrono::duration<float>(remaining));
 
 			if (m_Specification.MaxFrames > 0 && m_FrameCount >= m_Specification.MaxFrames)
 				m_Running = false;

@@ -258,6 +258,17 @@ namespace Breccia {
 			}
 			config.Physics = std::move(*physics);
 		}
+		if (const auto network = data.find("Network"); network != data.end())
+		{
+			std::string networkError;
+			auto settings = NetworkSettings::FromJson(*network, networkError);
+			if (!settings)
+			{
+				outError = "invalid project file '" + fileText + "': " + networkError;
+				return nullptr;
+			}
+			config.Network = *settings;
+		}
 		auto actions = ReadInputActions(project->GetInputFilePath(), outError);
 		if (!actions)
 			return nullptr;
@@ -350,6 +361,7 @@ namespace Breccia {
 			{ "FixedTimestep", m_Config.FixedTimestep },
 			{ "RandomSeed", m_Config.RandomSeed },
 			{ "ScriptInstructionLimit", m_Config.ScriptInstructionLimit },
+			{ "Network", m_Config.Network.ToJson() },
 		};
 		if (!FileSystem::WriteTextFile(GetProjectFilePath(), data.dump(1, '\t'), outError))
 		{

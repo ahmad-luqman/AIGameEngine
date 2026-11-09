@@ -7,6 +7,7 @@
 #include "Breccia/Core/Window.h"
 #include "Breccia/ImGui/ImGuiLayer.h"
 #include "Breccia/ImGui/StatisticsOverlay.h"
+#include "Breccia/Network/EnetTransport.h"
 #include "Breccia/Project/Project.h"
 #include "Breccia/Renderer/GraphicsDevice.h"
 #include "Breccia/Renderer/PlayStatistics.h"
@@ -74,6 +75,12 @@ namespace Breccia {
 		graphics.DynamicResolution = m_Options.DynamicResolution;
 		// Before the scripts' OnCreate, which may read the view (Input.GetViewSize).
 		UpdateGameView();
+		// Before play starts, so a client's runtime IDs come from its own stream from the first OnCreate.
+		if (m_Options.Network && !StartNetwork(error))
+		{
+			fail(error);
+			return;
+		}
 		m_Scene->OnRuntimeStart(m_Options.Overrides.Apply(graphics));
 		BR_CORE_INFO("Runtime: playing '{}'", m_Options.ScenePath);
 	}
@@ -101,6 +108,49 @@ namespace Breccia {
 		m_Frame++;
 		if (m_Scene->IsQuitRequested())
 			Application::Get().Close();
+	}
+
+	bool RuntimeLayer::StartNetwork(std::string& outError)
+	{
+		const NetworkSettings& settings = Project::GetActive()->GetConfig().Network;
+		const EnetTransportSettings transportSettings{ .TimeoutSeconds = settings.TimeoutSeconds, .MaxMessageBytes = NetworkSystem::MaxHostMessageBytes };
+		Scope<NetTransport> transport;
+		if (*m_Options.Network == NetworkRole::Host)
+		{
+			// A few spare slots: a client past MaxClients is told the host is full instead of never hearing back.
+			transport = EnetTransport::Listen(m_Options.NetworkPort, settings.MaxClients + 4, transportSettings, outError);
+			if (!transport)
+				return false;
+			// One parseable line: tests that ask for port 0 read the port from it.
+			BR_CORE_INFO("Network: hosting on UDP port {} (up to {} clients)", transport->GetListenPort(), settings.MaxClients);
+		}
+		else
+		{
+			transport = EnetTransport::Connect(m_Options.ConnectAddress, m_Options.NetworkPort, transportSettings, outError);
+			if (!transport)
+				return false;
+			BR_CORE_INFO("Network: connecting to {}:{}", m_Options.ConnectAddress, m_Options.NetworkPort);
+		}
+		m_Scene->StartNetwork(CreateScope<NetworkSystem>(*m_Scene, *m_Options.Network, std::move(transport), settings, NetworkSystem::Identity::FromActiveProject()));
+		return true;
+	}
+
+	void RuntimeLayer::CheckNetworkResults(const std::function<void(int)>& fail)
+	{
+		const NetworkSystem* network = m_Scene ? m_Scene->GetNetworkSystem() : nullptr;
+		if (!network)
+			return;
+		const NetworkStatistics& statistics = network->GetStatistics();
+		const bool host = network->GetRole() == NetworkRole::Host;
+		BR_CORE_INFO("Runtime: network {} connections={} remoteEntities={} spawns={} updates={} despawns={} sent={} ({} bytes) received={} ({} bytes) stale={} rejected={}",
+					 host ? "host" : "client", network->GetConnections().size(), network->GetRemoteEntityCount(), statistics.SpawnsApplied, statistics.UpdatesApplied, statistics.DespawnsApplied, statistics.MessagesSent,
+					 statistics.BytesSent, statistics.MessagesReceived, statistics.BytesReceived, statistics.StaleMessages, statistics.RejectedValues + statistics.RejectedRecords);
+		if (!host && network->GetState() != NetConnectionState::Connected)
+		{
+			const NetDisconnectReason reason = network->GetDisconnectReason();
+			BR_CORE_ERROR("Runtime: --connect given but the client was not connected at the end of the run ({})", reason == NetDisconnectReason::None ? "still connecting" : DescribeDisconnectReason(reason));
+			fail(8);
+		}
 	}
 
 	void RuntimeLayer::UpdateGameView()
@@ -239,6 +289,8 @@ namespace Breccia {
 		};
 		if (m_Options.MaxFrames == 0)
 			return;
+		// Before the scene stops below, which ends the session.
+		CheckNetworkResults(fail);
 		if (m_Options.FailOnScriptErrors && m_Scene)
 		{
 			// Stop the game here rather than in OnDetach, so errors its OnDestroy callbacks raise are counted too.

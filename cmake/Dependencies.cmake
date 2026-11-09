@@ -175,6 +175,17 @@ FetchContent_Declare(stb
 	GIT_TAG 2c980bb59875b0d32144a71867fbdebb2f77cd20
 	SOURCE_SUBDIR _BrecciaNoCMake)
 
+# ENet (UDP with reliable and unreliable channels), master after 1.3.18: it adds bounds checks on unreliable fragments
+# (657eaf9), fixes undefined behaviour in the fragment count (7c07702) and the byte order of fragment offsets on big-endian
+# hosts (5a9c537). Every datagram it parses comes from the network, so those matter. Move to a release tag once 1.3.19
+# ships. Its CMake project sets its include directory and feature macros for its own directory only, so the target is
+# defined below.
+FetchContent_Declare(enet
+	SYSTEM
+	GIT_REPOSITORY https://github.com/lsalzman/enet.git
+	GIT_TAG 5a9c537fd464b3c6d3c55e1d3bd47588faf71b42
+	SOURCE_SUBDIR _BrecciaNoCMake)
+
 # ---------------------------------------------------------------------------------------------
 # Options for CMake-based dependencies
 # ---------------------------------------------------------------------------------------------
@@ -239,7 +250,7 @@ endif()
 
 FetchContent_MakeAvailable(VulkanHeaders)
 FetchContent_MakeAvailable(glfw glm nvrhi spdlog entt json jolt sol2 doctest
-	lua imgui imguizmo miniaudio cgltf stb fsr1 meshoptimizer bc7enc basisu zstd)
+	lua imgui imguizmo miniaudio cgltf stb fsr1 meshoptimizer bc7enc basisu zstd enet)
 # A universal macOS build (CMAKE_OSX_ARCHITECTURES with arm64 and x86_64) takes Jolt's arm64 branch, which sets no x86
 # flags, so the x86-64 half would get SSE2 only. SSE4.2 and POPCNT are what Jolt's own Xcode builds give it, and every Mac
 # the deployment target allows has them; PUBLIC, since Jolt's headers pick its SIMD paths from them (Core.h).
@@ -300,6 +311,23 @@ target_include_directories(BrecciaCgltf SYSTEM INTERFACE "${cgltf_SOURCE_DIR}")
 
 add_library(BrecciaStb INTERFACE)
 target_include_directories(BrecciaStb SYSTEM INTERFACE "${stb_SOURCE_DIR}")
+
+# ENet (compiled as C). The feature macros are what its CMake project would detect on every supported system: POSIX has
+# all of them (macOS's poll() is skipped by unix.c itself, which uses select() there); Windows uses win32.c, which needs
+# none. HAS_OFFSETOF everywhere: without it ENet computes a field offset through a null pointer, which UBSan reports.
+add_library(BrecciaEnet STATIC
+	"${enet_SOURCE_DIR}/callbacks.c" "${enet_SOURCE_DIR}/compress.c" "${enet_SOURCE_DIR}/host.c" "${enet_SOURCE_DIR}/list.c"
+	"${enet_SOURCE_DIR}/packet.c" "${enet_SOURCE_DIR}/peer.c" "${enet_SOURCE_DIR}/protocol.c" "${enet_SOURCE_DIR}/unix.c"
+	"${enet_SOURCE_DIR}/win32.c")
+target_include_directories(BrecciaEnet SYSTEM PUBLIC "${enet_SOURCE_DIR}/include")
+set_target_properties(BrecciaEnet PROPERTIES LINKER_LANGUAGE C POSITION_INDEPENDENT_CODE ON)
+target_compile_definitions(BrecciaEnet PRIVATE HAS_OFFSETOF=1)
+if(WIN32)
+	target_link_libraries(BrecciaEnet PUBLIC winmm ws2_32)
+else()
+	target_compile_definitions(BrecciaEnet PRIVATE HAS_FCNTL=1 HAS_POLL=1 HAS_GETADDRINFO=1 HAS_GETNAMEINFO=1 HAS_INET_PTON=1
+		HAS_INET_NTOP=1 HAS_MSGHDR_FLAGS=1 HAS_SOCKLEN_T=1)
+endif()
 
 # nvrhi's Vulkan backend uses nvrhi's common code; express that so static link order is correct on GNU ld.
 target_link_libraries(nvrhi_vk PUBLIC nvrhi)

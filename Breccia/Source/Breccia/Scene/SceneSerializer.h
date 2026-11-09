@@ -68,6 +68,10 @@ namespace Breccia {
 		static nlohmann::json SerializeEntityTree(Entity root);
 		// Instantiates an entity tree with fresh UUIDs under parent (or as a root). Returns the new root.
 		static Entity DeserializeEntityTree(Scene& scene, const nlohmann::json& entities, Entity parent, std::string& outError);
+		// Instantiates an entity tree keeping its IDs (a network spawn), under parent (or as a root): records as
+		// SerializeEntityTree writes them, the root first with Parent 0, every ID nonzero and free in the scene. Returns the
+		// root; on failure (an ID in use, invalid records) nothing is left in the scene.
+		static Entity CreateEntityTreeWithIds(Scene& scene, const nlohmann::json& entities, Entity parent, std::string& outError);
 
 		static bool SavePrefab(Entity root, const std::filesystem::path& path, std::string& outError);
 		// A current-format scene document holding entity records, for DeserializeScene into a scratch scene.

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Breccia/Core/Layer.h"
+#include "Breccia/Network/NetworkSystem.h"
 #include "Breccia/Renderer/SceneRenderer.h"
 #include "Breccia/Scene/Scene.h"
 #include "Breccia/UI/UIRenderer.h"
@@ -8,6 +9,7 @@
 #include <nvrhi/nvrhi.h>
 
 #include <functional>
+#include <optional>
 #include <string>
 
 namespace Breccia {
@@ -37,6 +39,11 @@ namespace Breccia {
 		// resolution could not run (no GPU timers, nothing to adjust, a run too short for timer results, or no
 		// usable results).
 		bool RequireDynamicResolution = false;
+		// --host <port> (a listen server, or a dedicated one with --headless) or --connect <address[:port]>.
+		std::optional<NetworkRole> Network;
+		// Host: the port to listen on (0: any free one). Client: the host's port.
+		uint16_t NetworkPort = 0;
+		std::string ConnectAddress;
 	};
 
 	// Plays a scene: scripts, physics and audio run every frame and the primary camera's view is
@@ -60,6 +67,10 @@ namespace Breccia {
 		void ApplyCursorMode();
 		// Sets the game view (GameUI viewport) to the window, before scripts run and every frame.
 		void UpdateGameView();
+		// Starts the --host or --connect session on the scene; false (logged) when its socket cannot be opened.
+		bool StartNetwork(std::string& outError);
+		// Logs the session's totals and fails (through `fail`) a client that is not connected at the end of the run.
+		void CheckNetworkResults(const std::function<void(int)>& fail);
 
 		RuntimeOptions m_Options;
 		Ref<Scene> m_Scene;

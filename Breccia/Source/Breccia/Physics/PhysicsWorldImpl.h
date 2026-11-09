@@ -376,6 +376,10 @@ namespace Breccia {
 		// at a zero scale); ApplyScaleChanges builds them once it can. A live body or character whose transform
 		// turns degenerate keeps its record instead (BodyRecord/CharacterRecord::Degenerate).
 		std::unordered_set<UUID> Unbuilt;
+		// SetDrivenExternally: entities whose Dynamic body is built as Kinematic.
+		std::unordered_set<UUID> ExternallyDriven;
+		// The RigidBody a body is built from: the component, with a Dynamic Type made Kinematic for ExternallyDriven.
+		RigidBodyComponent EffectiveRigidBody(Entity entity, const RigidBodyComponent& component) const;
 		// Characters whose CharacterControllerComponent changed (collider changes go to DirtyEntities).
 		PhysicsInternal::DirtySet DirtyCharacters;
 		// Character warnings (sanitized settings, an ignored RigidBody, a missing collider).

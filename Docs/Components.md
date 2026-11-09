@@ -174,6 +174,10 @@ Fields: `Color` (number[4]), `Thickness` (number)
 
 Fields: `Prefab` (string), `Members` (object), `Baseline` (object)
 
+## Networked
+
+Fields: `Owner` (integer), `Authority` (enum: Server, Owner), `Priority` (number)
+
 ## List element types
 
 ### AnimationEvent

@@ -11,6 +11,7 @@
 #include "RuntimeLayer.h"
 
 #include <array>
+#include <charconv>
 #include <optional>
 #include <vector>
 
@@ -88,10 +89,58 @@ namespace Breccia {
 
 	}
 
+	namespace {
+
+		// Reads --host <port> and --connect <address[:port]> into options (a missing port is the project's); false, after
+		// logging, when they are malformed or both given.
+		bool ReadNetworkOptions(const CommandLine& commandLine, const NetworkSettings& settings, RuntimeOptions& options)
+		{
+			const std::optional<std::string> host = commandLine.GetValue("host");
+			const std::optional<std::string> connect = commandLine.GetValue("connect");
+			if (host && connect)
+			{
+				BR_CORE_CRITICAL("--host and --connect cannot be combined (a host plays its own game)");
+				return false;
+			}
+			const auto readPort = [](const std::string& text, int64_t min, uint16_t& port) {
+				int64_t value = -1;
+				const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), value);
+				if (error != std::errc() || end != text.data() + text.size() || value < min || value > 65535)
+					return false;
+				port = static_cast<uint16_t>(value);
+				return true;
+			};
+			if (host)
+			{
+				if (!readPort(*host, 0, options.NetworkPort))
+				{
+					BR_CORE_CRITICAL("--host must be a port in [0, 65535] (0 picks a free one), not '{}'", *host);
+					return false;
+				}
+				options.Network = NetworkRole::Host;
+			}
+			else if (connect)
+			{
+				// IPv4 addresses and names only (ENet has no IPv6), so the last ':' starts the port.
+				const size_t colon = connect->rfind(':');
+				options.ConnectAddress = connect->substr(0, colon);
+				options.NetworkPort = settings.Port;
+				if (options.ConnectAddress.empty() || (colon != std::string::npos && !readPort(connect->substr(colon + 1), 1, options.NetworkPort)))
+				{
+					BR_CORE_CRITICAL("--connect must be <address> or <address>:<port> with a port in [1, 65535], not '{}'", *connect);
+					return false;
+				}
+				options.Network = NetworkRole::Client;
+			}
+			return true;
+		}
+
+	}
+
 	Application* CreateApplication(const ApplicationCommandLineArgs& args)
 	{
 		ScriptEngine::DisableInstructionLimit();
-		const CommandLine commandLine(args.Arguments, { "project", "scene", "frames", "screenshot", "width", "height", "debug-view", "gpu", "render-scale", "dynamic-resolution", "min-render-scale" });
+		const CommandLine commandLine(args.Arguments, { "project", "scene", "frames", "screenshot", "width", "height", "debug-view", "gpu", "render-scale", "dynamic-resolution", "min-render-scale", "host", "connect" });
 		// An option without its value would otherwise run with the default silently (a test passing vacuously).
 		for (const std::string& error : commandLine.GetErrors())
 			BR_CORE_CRITICAL("{}", error);
@@ -195,6 +244,9 @@ namespace Breccia {
 		if (commandLine.GetValue("min-render-scale") && !options.DynamicResolution.Enabled)
 			BR_CORE_WARN("--min-render-scale has no effect: dynamic resolution is off (enable it in the project or with --dynamic-resolution <fps>)");
 
+		if (!ReadNetworkOptions(commandLine, project->GetConfig().Network, options))
+			return nullptr;
+
 		ApplicationSpecification specification;
 		specification.Name = project->GetConfig().Name;
 		specification.GpuSelector = commandLine.GetValue("gpu").value_or("");
@@ -227,6 +279,10 @@ namespace Breccia {
 			specification.FixedTimestep = 1.0f / 60.0f;
 		if (specification.Headless)
 		{
+			// A dedicated server (or a headless client) has no display to wait for: run at the frame rate instead of
+			// spinning. Other headless runs (tests) go as fast as they can.
+			if (options.Network)
+				specification.MinFrameSeconds = specification.FixedTimestep > 0.0f ? specification.FixedTimestep : 1.0f / 60.0f;
 			if (options.ShowStats)
 			{
 				BR_CORE_ERROR("--stats needs a GPU and cannot be combined with --headless");

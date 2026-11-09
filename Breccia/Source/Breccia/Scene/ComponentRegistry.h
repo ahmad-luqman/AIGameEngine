@@ -96,6 +96,10 @@ namespace Breccia {
 		// tracks must not touch: PropertyAnimation itself, a Prefab's tracking and a Script.
 		std::optional<std::vector<std::string>> AnimatableFields;
 		bool SupportsPropertyAnimation() const { return !AnimatableFields || !AnimatableFields->empty(); }
+		// The top-level fields a network session sends whenever they change (Network/ReplicationSchema), in wire order;
+		// a client receives the rest only when the entity spawns. Changing a list changes the wire format, which the
+		// session's schema hash catches (peers built from different lists refuse each other).
+		std::vector<std::string> ReplicatedFields;
 
 		std::function<bool(Entity)> Has;
 		// Adds a default-constructed component if missing.
