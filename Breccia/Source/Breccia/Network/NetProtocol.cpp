@@ -32,7 +32,7 @@ namespace Breccia {
 			case NetDisconnectReason::Timeout:
 				return "the connection timed out";
 			case NetDisconnectReason::HandshakeTimeout:
-				return "the client did not introduce itself in time";
+				return "the handshake did not finish in time";
 			case NetDisconnectReason::InvalidPacket:
 				return "a peer sent an invalid message";
 			case NetDisconnectReason::ConnectionFailed:
@@ -88,22 +88,25 @@ namespace Breccia {
 			{
 				if (!reader.ReadCount(component.Component, std::numeric_limits<uint32_t>::max()))
 					return Fail(reader, outError, "a component index is malformed");
-				const ReplicationSchema::Component* info = schema.FindComponent(component.Component);
-				const std::string name = info ? info->Info->Name : "component " + std::to_string(component.Component);
+				// Built only for a message: decoding is the hot path for untrusted input.
+				const auto name = [&] {
+					const ReplicationSchema::Component* info = schema.FindComponent(component.Component);
+					return info ? info->Info->Name : "component " + std::to_string(component.Component);
+				};
 				uint8_t change = 0;
 				if (!reader.ReadU8(change) || change > static_cast<uint8_t>(NetComponentChange::Added))
-					return Fail(reader, outError, "a " + name + " entry is truncated or has an invalid change");
+					return Fail(reader, outError, "a " + name() + " entry is truncated or has an invalid change");
 				component.Change = static_cast<NetComponentChange>(change);
 				uint32_t fieldCount = 0;
 				if (!reader.ReadCount(fieldCount, MaxFieldsPerComponent))
-					return Fail(reader, outError, "a " + name + " field count is malformed or too large");
+					return Fail(reader, outError, "a " + name() + " field count is malformed or too large");
 				component.Fields.resize(fieldCount);
 				for (NetFieldValue& field : component.Fields)
 				{
 					if (!reader.ReadCount(field.Field, std::numeric_limits<uint32_t>::max()))
-						return Fail(reader, outError, "a " + name + " field index is malformed");
+						return Fail(reader, outError, "a " + name() + " field index is malformed");
 					if (!NetValue::Decode(reader, field.Value))
-						return Fail(reader, outError, "the value of " + name + " field " + std::to_string(field.Field) + " is malformed (truncated, too deep, not UTF-8 or with a repeated key)");
+						return Fail(reader, outError, "the value of " + name() + " field " + std::to_string(field.Field) + " is malformed (truncated, too deep, not UTF-8 or with a repeated key)");
 				}
 				return true;
 			}
@@ -113,7 +116,7 @@ namespace Breccia {
 				return reader.ReadU64(parent) || Fail(reader, outError, "a parent ID is truncated");
 			}
 
-			bool ReadUpdate(NetReader& reader, const ReplicationSchema& schema, NetEntityUpdate& update, std::string& outError)
+			bool ReadUpdate(NetReader& reader, NetMessageType type, const ReplicationSchema& schema, NetEntityUpdate& update, std::string& outError)
 			{
 				if (!ReadUuid(reader, update.Entity, outError))
 					return false;
@@ -134,7 +137,7 @@ namespace Breccia {
 				for (NetComponentUpdate& component : update.Components)
 					if (!ReadComponent(reader, schema, component, outError))
 						return false;
-				if (std::string problem = CheckUpdate(update, schema); !problem.empty())
+				if (std::string problem = CheckUpdate(update, schema, type); !problem.empty())
 					return Fail(reader, outError, std::move(problem));
 				return true;
 			}
@@ -177,7 +180,7 @@ namespace Breccia {
 					return Fail(reader, outError, "the update count is malformed or too large");
 				state.Updates.resize(count);
 				for (NetEntityUpdate& update : state.Updates)
-					if (!ReadUpdate(reader, schema, update, outError) || !unique(update.Entity))
+					if (!ReadUpdate(reader, type, schema, update, outError) || !unique(update.Entity))
 						return false;
 				if (!reader.ReadCount(count, MaxRecords))
 					return Fail(reader, outError, "the despawn count is malformed or too large");
@@ -192,10 +195,13 @@ namespace Breccia {
 
 		}
 
-		std::string CheckUpdate(const NetEntityUpdate& update, const ReplicationSchema& schema)
+		std::string CheckUpdate(const NetEntityUpdate& update, const ReplicationSchema& schema, NetMessageType type)
 		{
 			if (!update.Entity.IsValid())
 				return "an entity ID is 0";
+			const bool fromClient = type == NetMessageType::ClientUpdate;
+			if (fromClient && update.Parent)
+				return "clients cannot change an entity's parent";
 			if (update.Parent && *update.Parent == update.Entity)
 				return "an entity cannot be its own parent";
 			if (update.Components.empty() && !update.Parent)
@@ -217,6 +223,10 @@ namespace Breccia {
 					return name + " has no replicated fields";
 				if (component.Change != NetComponentChange::Changed && info->IsCore)
 					return name + " cannot be added or removed";
+				if (fromClient && component.Change != NetComponentChange::Changed)
+					return "clients cannot add or remove components";
+				if (fromClient && name == "Networked")
+					return "clients cannot change who owns an entity";
 				if (component.Change == NetComponentChange::Removed && !component.Fields.empty())
 					return "a removed " + name + " carries fields";
 				if (component.Change == NetComponentChange::Added && component.Fields.size() != replicated)
@@ -397,12 +407,9 @@ namespace Breccia {
 				case NetMessageType::ClientUpdate:
 				{
 					NetState state;
+					// Every failure in ReadState says why.
 					if (!ReadState(reader, message.Type, schema, state, outError))
-					{
-						if (outError.empty())
-							outError = "the message is truncated";
 						return std::nullopt;
-					}
 					message.Body = std::move(state);
 					break;
 				}

@@ -64,6 +64,9 @@ namespace Breccia {
 		uint32_t MaxPeers = 0;
 		NetPeerHandle NextHandle = 1;
 		std::map<NetPeerHandle, SimulatedConnection> Connections;
+		// Attempts this side gave up on before they connected, with the code: a host that accepts one hears of it, as over
+		// ENet.
+		std::map<NetPeerHandle, std::pair<SimulatedConnection, uint32_t>> Abandoned;
 		std::vector<NetTransportEvent> Events;
 	};
 
@@ -163,7 +166,18 @@ namespace Breccia {
 			}
 			auto it = endpoint->Connections.find(flight.Handle);
 			if (it == endpoint->Connections.end())
+			{
+				// Accepted after this side gave up: tell the host now.
+				auto abandoned = endpoint->Abandoned.find(flight.Handle);
+				if (abandoned != endpoint->Abandoned.end() && flight.Kind == FlightKind::ConnectAccept)
+				{
+					auto [connection, code] = abandoned->second;
+					endpoint->Abandoned.erase(abandoned);
+					if (const float arrival = Arrival(connection, true); arrival >= 0.0f)
+						Queue({ .DeliverAt = arrival, .Endpoint = flight.FromEndpoint, .Handle = flight.FromHandle, .Kind = FlightKind::Disconnect, .Channel = NetChannel::Reliable, .Code = code });
+				}
 				return;
+			}
 			SimulatedConnection& connection = it->second;
 			connection.LastHeard = Time;
 			switch (flight.Kind)
@@ -203,6 +217,8 @@ namespace Breccia {
 					else
 						++it;
 				}
+				// An attempt nobody accepted in time is forgotten silently: this side already gave up on it.
+				std::erase_if(endpoint.Abandoned, [this](const auto& entry) { return Time - entry.second.first.LastHeard >= Settings.TimeoutSeconds; });
 			}
 		}
 
@@ -264,7 +280,11 @@ namespace Breccia {
 				SimulatedConnection connection = it->second;
 				endpoint->Connections.erase(it);
 				if (!connection.Connected)
+				{
+					if (connection.RemoteEndpoint != 0)
+						endpoint->Abandoned[peer] = { connection, code };
 					return;
+				}
 				if (const float arrival = m_State->Arrival(connection, true); arrival >= 0.0f)
 					m_State->Queue({ .DeliverAt = arrival, .Endpoint = connection.RemoteEndpoint, .Handle = connection.RemoteHandle, .Kind = FlightKind::Disconnect, .Channel = NetChannel::Reliable, .Code = code });
 			}
@@ -274,12 +294,9 @@ namespace Breccia {
 				SimulatedEndpoint* endpoint = m_State->FindEndpoint(m_Endpoint);
 				if (!endpoint)
 					return;
-				std::vector<NetPeerHandle> handles;
-				handles.reserve(endpoint->Connections.size());
-				for (const auto& [handle, connection] : endpoint->Connections)
-					handles.push_back(handle);
-				for (NetPeerHandle handle : handles)
-					Disconnect(handle, code);
+				// Disconnect removes each connection.
+				while (!endpoint->Connections.empty())
+					Disconnect(endpoint->Connections.begin()->first, code);
 			}
 
 			void Poll(std::vector<NetTransportEvent>& events) override
@@ -314,11 +331,7 @@ namespace Breccia {
 			uint32_t m_Endpoint = 0;
 		};
 
-	}
-
-	namespace {
-
-		bool IsValidLink(const SimulatedLinkSettings& settings)
+		[[maybe_unused]] bool IsValidLink(const SimulatedLinkSettings& settings)
 		{
 			// The comparisons are false for NaN, which they refuse too.
 			return settings.Latency >= 0.0f && settings.Jitter >= 0.0f && settings.Loss >= 0.0f && settings.Loss <= 1.0f && settings.TimeoutSeconds > 0.0f && std::isfinite(settings.Latency) && std::isfinite(settings.Jitter) && std::isfinite(settings.TimeoutSeconds);

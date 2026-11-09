@@ -55,6 +55,8 @@ namespace Breccia {
 		for (const ComponentInfo& info : components)
 		{
 			HashText(hash, info.Name);
+			// What may be added or removed (CheckUpdate refuses it for core components).
+			HashText(hash, info.IsCore ? "core" : "optional");
 			// Spawns carry every field, which the receiver reads strictly: a field one build lacks fails every spawn.
 			HashFields(hash, info.Fields, info.FieldTypes, info.EnumOptions);
 			HashText(hash, "replicated");

@@ -34,9 +34,11 @@ namespace Breccia {
 		ServerFull,
 		// Nothing arrived from the peer for the session's timeout.
 		Timeout,
-		// The client connected but never sent its Hello.
+		// The handshake did not finish within the session's timeout: a client connected but sent no Hello (the host's side),
+		// or the host never answered a client's Hello (the client's side).
 		HandshakeTimeout,
-		// The peer sent something that does not decode, or a message it must not send.
+		// The peer sent something that does not decode, a message it must not send (a client's over 64 KiB among them), or
+		// an acknowledgement of a message never sent.
 		InvalidPacket,
 		// The host could not be reached, or refused the connection at the transport level.
 		ConnectionFailed,
@@ -92,7 +94,7 @@ namespace Breccia {
 		Changed = 0,
 		// It is gone from the entity (no fields).
 		Removed,
-		// It is new on the entity (every replicated field is listed); repeated until acknowledged.
+		// It is new on the entity (every replicated field is listed).
 		Added
 	};
 
@@ -167,9 +169,10 @@ namespace Breccia {
 
 		// What is wrong with a record, or an empty string: an entity ID of 0 or its own parent, nothing to say, a component
 		// the schema does not have or that declares no replicated fields, a core component added or removed, a removed one
-		// with fields, an added one without every replicated field, a changed one without any, a field index out of range or
-		// repeated.
-		std::string CheckUpdate(const NetEntityUpdate& update, const ReplicationSchema& schema);
+		// with fields, an added one without every replicated field, a changed one without any, a component listed twice or
+		// more than MaxComponentsPerEntity, a field index out of range or repeated. In a ClientUpdate also a parent, a component added or removed, or a Networked change: those are the
+		// host's to decide.
+		std::string CheckUpdate(const NetEntityUpdate& update, const ReplicationSchema& schema, NetMessageType type = NetMessageType::Snapshot);
 		// The same for a spawn: its IDs, and 1 to MaxSpawnEntities records (whose contents SceneSerializer checks).
 		std::string CheckSpawn(const NetEntitySpawn& spawn);
 

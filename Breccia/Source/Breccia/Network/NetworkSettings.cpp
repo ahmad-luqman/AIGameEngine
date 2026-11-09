@@ -9,6 +9,8 @@ namespace Breccia {
 
 	namespace {
 
+		constexpr const char* PortRange = "Network.Port must be an integer in [1, 65535]";
+
 		bool ReadInteger(const nlohmann::json& data, const char* key, uint32_t& value, std::string& outError)
 		{
 			const auto it = data.find(key);
@@ -45,7 +47,7 @@ namespace Breccia {
 	std::string NetworkSettings::Validate() const
 	{
 		if (Port == 0)
-			return "Network.Port must be an integer in [1, 65535]";
+			return PortRange;
 		if (MaxClients < 1 || MaxClients > MaxClientLimit)
 			return fmt::format("Network.MaxClients must be an integer in [1, {}]", MaxClientLimit);
 		// The comparisons are false for NaN, which they refuse too.
@@ -73,7 +75,7 @@ namespace Breccia {
 			return std::nullopt;
 		if (port > 65535)
 		{
-			outError = "Network.Port must be an integer in [1, 65535]";
+			outError = PortRange;
 			return std::nullopt;
 		}
 		settings.Port = static_cast<uint16_t>(port);

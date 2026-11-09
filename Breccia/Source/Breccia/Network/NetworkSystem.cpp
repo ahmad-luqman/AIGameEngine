@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <unordered_map>
 
 namespace Breccia {
 
@@ -47,11 +48,24 @@ namespace Breccia {
 			return std::to_string(static_cast<uint64_t>(uuid));
 		}
 
-		// Logs a problem once per key (a kind, usually with the entity it concerns).
+		// Problems one peer gets logged, at most (the keys name entities a peer chooses, so they must not grow without end).
+		constexpr size_t MaxReportedProblems = 256;
+
+		// Logs a problem once per key (a kind, usually with the entity it concerns), up to MaxReportedProblems keys.
 		void Report(std::unordered_set<std::string>& reported, const std::string& key, const std::string& message)
 		{
-			if (reported.insert(key).second)
-				BR_CORE_WARN("Network: {}", message);
+			if (reported.size() > MaxReportedProblems || reported.contains(key))
+				return;
+			if (reported.size() == MaxReportedProblems)
+			{
+				// An empty key marks the set full: nothing else is inserted or logged. (insert({}) would insert nothing: it
+				// takes the empty initializer list.)
+				reported.insert(std::string());
+				BR_CORE_WARN("Network: {} problems were logged for this peer; further ones are not", MaxReportedProblems);
+				return;
+			}
+			reported.insert(key);
+			BR_CORE_WARN("Network: {} (not logged again)", message);
 		}
 
 		// Whether an asset reference a host sent stays inside the project: relative, without "..", so a client never
@@ -69,7 +83,8 @@ namespace Breccia {
 			if (!text->is_string())
 				return true;
 			const std::string& reference = text->get_ref<const std::string&>();
-			if (reference.empty() || reference.starts_with("asset-uuid:"))
+			// Built-in meshes ("builtin://Cube") name no file.
+			if (reference.empty() || reference.starts_with("asset-uuid:") || reference.starts_with("builtin://"))
 				return true;
 			// The file a sub-asset key ("Model.gltf#material/0") names, as the asset loader splits it: any other '#' is part
 			// of the path, so it is checked too.
@@ -137,13 +152,14 @@ namespace Breccia {
 	{
 		BR_CORE_ASSERT(m_Transport, "a network session needs a transport");
 		BR_CORE_ASSERT(m_Settings.Validate().empty(), "network settings out of range");
+		m_TickRate = m_Settings.TickRate;
 		m_State = role == NetworkRole::Host ? NetConnectionState::Connected : NetConnectionState::Connecting;
 	}
 
 	NetworkSystem::~NetworkSystem()
 	{
-		if (m_Role == NetworkRole::Host && GetAdmittedCount() > 0)
-			BR_CORE_INFO("Network: host stopped; {} client(s) disconnected", GetAdmittedCount());
+		if (const uint32_t admitted = GetAdmittedCount(); m_Role == NetworkRole::Host && admitted > 0)
+			BR_CORE_INFO("Network: host stopped; {} client(s) disconnected", admitted);
 		// Every connection, including a client's attempt the transport has not completed yet.
 		m_Transport->DisconnectAll(static_cast<uint32_t>(m_Role == NetworkRole::Host ? NetDisconnectReason::ServerShutdown : NetDisconnectReason::ClientQuit));
 		m_Transport->Flush();
@@ -154,18 +170,24 @@ namespace Breccia {
 					physics->SetDrivenExternally(entity, false);
 	}
 
+	double NetworkSystem::FullBudget() const
+	{
+		return static_cast<double>(m_Settings.MaxBytesPerSecond) * MaxBudgetSeconds;
+	}
+
 	uint16_t NetworkSystem::GetListenPort() const
 	{
 		return m_Transport->GetListenPort();
 	}
 
-	void NetworkSystem::Transmit(NetPeerHandle handle, NetChannel channel, const std::vector<uint8_t>& data, NetTraffic& traffic)
+	bool NetworkSystem::Transmit(NetPeerHandle handle, NetChannel channel, const std::vector<uint8_t>& data, NetTraffic& traffic)
 	{
-		// What the transport could not take (logged there) is not counted as sent.
+		// What the transport did not take is not counted as sent.
 		if (!m_Transport->Send(handle, channel, data))
-			return;
+			return false;
 		m_Statistics.Traffic.Sent(data.size());
 		traffic.Sent(data.size());
+		return true;
 	}
 
 	NetworkSystem::Connection* NetworkSystem::FindConnection(NetPeerHandle handle)
@@ -230,16 +252,19 @@ namespace Breccia {
 			case NetTransportEvent::Kind::Connected:
 				if (m_Role == NetworkRole::Host)
 				{
-					Connection connection{ event.Peer, m_Transport->DescribePeer(event.Peer) };
-					connection.ConnectedAt = m_Clock;
-					m_Connections.emplace(event.Peer, std::move(connection));
+					m_Connections.emplace(event.Peer, Connection{ .Handle = event.Peer, .Address = m_Transport->DescribePeer(event.Peer), .ConnectedAt = m_Clock });
 				}
 				else if (m_State == NetConnectionState::Connecting && !m_HostHandle)
 				{
 					m_HostHandle = event.Peer;
 					m_HostAddress = m_Transport->DescribePeer(event.Peer);
 					m_HelloSentAt = m_Clock;
-					Transmit(event.Peer, NetChannel::Reliable, NetProtocol::EncodeHello({ NetProtocol::Version, Schema().GetHash(), m_Identity.Game, m_Identity.GameVersion }), m_HostTraffic);
+					// Without the Hello the handshake cannot finish: give up now rather than time out.
+					if (!Transmit(event.Peer, NetChannel::Reliable, NetProtocol::EncodeHello({ NetProtocol::Version, Schema().GetHash(), m_Identity.Game, m_Identity.GameVersion }), m_HostTraffic))
+					{
+						BR_CORE_ERROR("Network: the Hello to {} could not be sent", m_HostAddress);
+						LeaveHost(NetDisconnectReason::ConnectionFailed, true);
+					}
 				}
 				break;
 			case NetTransportEvent::Kind::Disconnected:
@@ -266,17 +291,19 @@ namespace Breccia {
 				break;
 			}
 			case NetTransportEvent::Kind::Received:
-				m_Statistics.Traffic.Received(event.Data.size());
+				// Only from peers still known (one kicked earlier in the batch may still have messages queued).
 				if (m_Role == NetworkRole::Host)
 				{
 					if (Connection* connection = FindConnection(event.Peer))
 					{
+						m_Statistics.Traffic.Received(event.Data.size());
 						connection->Traffic.Received(event.Data.size());
 						HandleHostMessage(*connection, event.Data);
 					}
 				}
 				else if (m_HostHandle && event.Peer == *m_HostHandle)
 				{
+					m_Statistics.Traffic.Received(event.Data.size());
 					m_HostTraffic.Received(event.Data.size());
 					HandleClientMessage(event.Data);
 				}
@@ -374,10 +401,15 @@ namespace Breccia {
 			Kick(handle, NetDisconnectReason::ServerFull, std::to_string(admitted) + " clients are connected");
 			return;
 		}
+		// Without the Welcome the client never joins: refuse it rather than count it.
+		if (!Transmit(handle, NetChannel::Reliable, NetProtocol::EncodeWelcome({ m_NextPeerId, m_Settings.TickRate }), connection.Traffic))
+		{
+			Kick(handle, NetDisconnectReason::None, "its Welcome could not be sent");
+			return;
+		}
 		connection.PeerId = m_NextPeerId++;
 		// A full second of budget to start, so the first snapshots can carry the initial spawns.
-		connection.Tokens = static_cast<double>(m_Settings.MaxBytesPerSecond) * MaxBudgetSeconds;
-		Transmit(handle, NetChannel::Reliable, NetProtocol::EncodeWelcome({ connection.PeerId, m_Settings.TickRate }), connection.Traffic);
+		connection.Tokens = FullBudget();
 		BR_CORE_INFO("Network: client {} joined from {}", connection.PeerId, connection.Address);
 	}
 
@@ -404,11 +436,11 @@ namespace Breccia {
 				const NetWelcome& welcome = std::get<NetWelcome>(message->Body);
 				m_LocalPeerId = welcome.PeerId;
 				// The host decides the rate both directions run at, within what this build accepts.
-				m_Settings.TickRate = std::clamp(welcome.TickRate, NetworkSettings::MinTickRate, NetworkSettings::MaxTickRate);
-				if (m_Settings.TickRate != welcome.TickRate)
-					BR_CORE_WARN("Network: the host's tick rate {} is outside [{}, {}]; sending at {}", welcome.TickRate, NetworkSettings::MinTickRate, NetworkSettings::MaxTickRate, m_Settings.TickRate);
+				m_TickRate = std::clamp(welcome.TickRate, NetworkSettings::MinTickRate, NetworkSettings::MaxTickRate);
+				if (m_TickRate != welcome.TickRate)
+					BR_CORE_WARN("Network: the host's tick rate {} is outside [{}, {}]; sending at {}", welcome.TickRate, NetworkSettings::MinTickRate, NetworkSettings::MaxTickRate, m_TickRate);
 				m_State = NetConnectionState::Connected;
-				m_ClientTokens = static_cast<double>(m_Settings.MaxBytesPerSecond) * MaxBudgetSeconds;
+				m_ClientTokens = FullBudget();
 				BR_CORE_INFO("Network: connected to {} as client {}", m_HostAddress, m_LocalPeerId);
 				RemoveLocalNetworkedEntities();
 				return;
@@ -492,8 +524,9 @@ namespace Breccia {
 		Entity entity = m_Scene.GetEntityByUUID(uuid);
 		if (!entity)
 			return;
-		// Descendants the host replicates on their own outlive it (the host keeps them under an entity no longer
-		// networked): they move to the root and wait for that parent, as a child whose parent never arrived does.
+		// Descendants the host replicates on their own outlive it when it only stopped being networked (when it was
+		// destroyed, their own despawns follow): they move to the root and wait for that parent, as a child whose parent
+		// never arrived does.
 		std::vector<Entity> stack = entity.GetChildren();
 		while (!stack.empty())
 		{
@@ -503,7 +536,9 @@ namespace Breccia {
 			{
 				const UUID parent = descendant.GetParent().GetUUID();
 				m_Scene.SetParent(descendant, Entity{}, false);
-				WaitForParent(descendant.GetUUID(), parent);
+				// One already waiting for another parent (whose spawn the budget delayed) keeps waiting for that one.
+				if (!m_PendingParents.contains(descendant.GetUUID()))
+					WaitForParent(descendant.GetUUID(), parent);
 				continue;
 			}
 			for (Entity child : descendant.GetChildren())
@@ -520,21 +555,25 @@ namespace Breccia {
 		if (rootId == root.end() || !rootId->is_number_unsigned() || rootId->get<uint64_t>() != static_cast<uint64_t>(spawn.Entity))
 		{
 			m_Statistics.RejectedRecords++;
-			Report(m_Reported, "spawn-" + id, "the host sent a spawn of entity " + id + " whose first record is another entity; it is not shown");
+			Report(m_Reported, "spawn-root-" + id, "the host sent a spawn of entity " + id + " whose first record is another entity; it is not shown");
 			return;
 		}
 		// Spawned before (a repeat), or one this client has under that ID already: an authored entity the host made
 		// networked, or a member of a tree spawned earlier that is now replicated on its own.
 		if (Entity existing = m_Scene.GetEntityByUUID(spawn.Entity))
 		{
-			m_RemoteEntities.insert(spawn.Entity);
+			if (m_RemoteEntities.insert(spawn.Entity).second)
+			{
+				m_Statistics.EntitiesAdopted++;
+				BR_CORE_INFO("Network: the host spawned entity {} ('{}'), which this client has: it takes the host's replicated fields, parent and replicated components, and keeps the rest of its own", id, existing.GetName());
+			}
 			RefreshFromSpawn(existing, spawn);
 			return;
 		}
 		if (const std::string unsafe = FindUnsafeAssetReference(spawn.Entities); !unsafe.empty())
 		{
 			m_Statistics.RejectedRecords++;
-			Report(m_Reported, "spawn-" + id, "the host spawned entity " + id + ", whose " + unsafe + " names a file outside the project; it is not shown");
+			Report(m_Reported, "spawn-asset-" + id, "the host spawned entity " + id + ", whose " + unsafe + " names a file outside the project; it is not shown");
 			return;
 		}
 		Entity parent = spawn.Parent.IsValid() ? m_Scene.GetEntityByUUID(spawn.Parent) : Entity{};
@@ -543,27 +582,30 @@ namespace Breccia {
 		if (!created)
 		{
 			m_Statistics.RejectedRecords++;
-			Report(m_Reported, "spawn-" + id, "the host's spawn of entity " + id + " could not be created: " + error + "; it is not shown");
+			Report(m_Reported, "spawn-invalid-" + id, "the host's spawn of entity " + id + " could not be created: " + error + "; it is not shown");
 			return;
 		}
 		if (spawn.Parent.IsValid() && !parent)
 			WaitForParent(spawn.Entity, spawn.Parent);
 		else if (parent && created.GetParent() != parent)
-			Report(m_Reported, "parent-" + id, "entity " + id + " cannot go under entity " + IdText(spawn.Parent) + " (the hierarchy would be too deep); it stays at the root");
+			Report(m_Reported, "parent-" + id, "the host parented entity " + id + " under entity " + IdText(spawn.Parent) + ", where it cannot go (a cycle, or too deep); it stays where it is");
 		m_RemoteEntities.insert(spawn.Entity);
 		m_Statistics.SpawnsApplied++;
 	}
 
 	void NetworkSystem::RefreshFromSpawn(Entity entity, const NetEntitySpawn& spawn)
 	{
-		const nlohmann::json& root = spawn.Entities.front();
-		const auto components = root.find("Components");
-		if (components == root.end() || !components->is_object())
-			return;
 		// The repeated spawn is the host's state when it was sent, which the host will treat as acknowledged.
 		NetEntityUpdate update;
 		update.Entity = spawn.Entity;
 		update.Parent = spawn.Parent;
+		const nlohmann::json& root = spawn.Entities.front();
+		const auto components = root.find("Components");
+		if (components == root.end() || !components->is_object())
+		{
+			ApplyUpdate(entity, update, true, m_Reported);
+			return;
+		}
 		const std::vector<ReplicationSchema::Component>& schema = Schema().GetComponents();
 		for (uint32_t index = 0; index < schema.size(); index++)
 		{
@@ -586,6 +628,66 @@ namespace Breccia {
 				update.Components.push_back(std::move(change));
 		}
 		ApplyUpdate(entity, update, true, m_Reported);
+		CreateMissingDescendants(spawn);
+	}
+
+	void NetworkSystem::CreateMissingDescendants(const NetEntitySpawn& spawn)
+	{
+		// One subtree of records this client lacks, hanging from an entity it has.
+		struct Subtree
+		{
+			UUID Parent = 0;
+			nlohmann::json Records = nlohmann::json::array();
+		};
+		const auto readId = [](const nlohmann::json& record, const char* key) {
+			const auto value = record.is_object() ? record.find(key) : record.end();
+			return value != record.end() && value->is_number_unsigned() ? UUID(value->get<uint64_t>()) : UUID(0);
+		};
+		// The host writes parents before their children (SceneSerializer::SerializeEntityTree), so a missing record hangs
+		// either from an entity this client has, starting a subtree, or from a missing record met before it.
+		std::vector<Subtree> subtrees;
+		std::unordered_map<UUID, size_t> subtreeOf;
+		for (size_t i = 1; i < spawn.Entities.size(); i++)
+		{
+			const nlohmann::json& record = spawn.Entities[i];
+			const UUID id = readId(record, "ID");
+			const UUID parent = readId(record, "Parent");
+			if (id.IsValid() && m_Scene.GetEntityByUUID(id))
+				continue;
+			if (const auto found = subtreeOf.find(parent); id.IsValid() && found != subtreeOf.end())
+			{
+				subtrees[found->second].Records.push_back(record);
+				subtreeOf.emplace(id, found->second);
+			}
+			else if (id.IsValid() && parent.IsValid() && m_Scene.GetEntityByUUID(parent))
+			{
+				nlohmann::json root = record;
+				root["Parent"] = 0;
+				subtreeOf.emplace(id, subtrees.size());
+				subtrees.push_back({ parent, nlohmann::json::array({ std::move(root) }) });
+			}
+			else
+			{
+				m_Statistics.RejectedRecords++;
+				Report(m_Reported, "spawn-record-" + IdText(spawn.Entity), "the host's spawn of entity " + IdText(spawn.Entity) + " carries a record whose parent is not in it, or without an ID; it is not shown");
+			}
+		}
+		for (const Subtree& subtree : subtrees)
+		{
+			const std::string id = IdText(readId(subtree.Records.front(), "ID"));
+			if (const std::string unsafe = FindUnsafeAssetReference(subtree.Records); !unsafe.empty())
+			{
+				m_Statistics.RejectedRecords++;
+				Report(m_Reported, "spawn-asset-" + id, fmt::format("the host's spawn of entity {} carries a subtree at entity {} whose {} names a file outside the project; it is not shown", IdText(spawn.Entity), id, unsafe));
+				continue;
+			}
+			std::string error;
+			if (!SceneSerializer::CreateEntityTreeWithIds(m_Scene, subtree.Records, m_Scene.GetEntityByUUID(subtree.Parent), error))
+			{
+				m_Statistics.RejectedRecords++;
+				Report(m_Reported, "spawn-invalid-" + id, fmt::format("the host's spawn of entity {} carries a subtree at entity {} that could not be created: {}; it is not shown", IdText(spawn.Entity), id, error));
+			}
+		}
 	}
 
 	void NetworkSystem::ApplyUpdate(Entity entity, const NetEntityUpdate& update, bool fromHost, std::unordered_set<std::string>& reported)
@@ -593,44 +695,31 @@ namespace Breccia {
 		const std::string id = IdText(entity.GetUUID());
 		if (update.Parent && fromHost)
 			ApplyParent(entity, *update.Parent);
-		// Who owns the entity first: the rest of the update depends on it (a spawn adopting an entity adds its Networked).
-		std::vector<const NetComponentUpdate*> changes;
-		changes.reserve(update.Components.size());
-		for (const NetComponentUpdate& change : update.Components)
-			changes.push_back(&change);
-		std::ranges::stable_partition(changes, [](const NetComponentUpdate* change) { return change->Component == NetworkedComponentIndex(); });
-		bool authority = false;
-		for (size_t i = 0; i < changes.size(); i++)
-		{
-			const NetComponentUpdate& change = *changes[i];
-			// Decided once ownership is applied. Only a networked entity is ever this client's to decide.
-			if (i == 0 || changes[i - 1]->Component == NetworkedComponentIndex())
-				authority = fromHost && entity.HasComponent<NetworkedComponent>() && HasAuthority(entity);
+		const auto apply = [&](const NetComponentUpdate& change, bool authority) {
 			const ReplicationSchema::Component* component = Schema().FindComponent(change.Component);
-			if (!component)
-				continue;
+			BR_CORE_ASSERT(component, "component indices are checked when a message is decoded");
 			const ComponentInfo& info = *component->Info;
 			const bool networked = change.Component == NetworkedComponentIndex();
 			// This client decides the entity's values; the host still decides which components it has and who owns it.
 			if (authority && !networked && change.Change == NetComponentChange::Changed)
-				continue;
+				return;
 			if (change.Change == NetComponentChange::Removed)
 			{
 				// Losing Networked is a despawn, which the host sends as one.
 				if (!component->IsCore && !networked && info.Has(entity))
 					info.Remove(entity);
-				continue;
+				return;
 			}
 			// A client changes only what its entity already has.
 			if (!fromHost && !info.Has(entity))
 			{
 				m_Statistics.RejectedRecords++;
 				Report(reported, "missing-" + info.Name + "-" + id, "a client changed " + info.Name + " of entity " + id + ", which the host's entity does not have; ignored");
-				continue;
+				return;
 			}
 			// A component the host adds to an entity this client decides starts with the host's values.
 			if (authority && !networked && info.Has(entity))
-				continue;
+				return;
 			nlohmann::json patch = nlohmann::json::object();
 			for (const NetFieldValue& field : change.Fields)
 			{
@@ -642,10 +731,29 @@ namespace Breccia {
 			{
 				m_Statistics.RejectedValues++;
 				Report(reported, "value-" + info.Name + "-" + id, fmt::format("{} sent a value for entity {} that {} refuses: {}", fromHost ? "the host" : "a client", id, info.Name, error));
-				continue;
+				return;
 			}
 			m_Statistics.UpdatesApplied++;
-		}
+		};
+		// Who owns the entity first (an update names each component once): the rest depends on it, and a spawn adopting an
+		// entity adds its Networked. Only a networked entity is ever this client's to decide.
+		const auto found = std::ranges::find(update.Components, NetworkedComponentIndex(), &NetComponentUpdate::Component);
+		const NetComponentUpdate* ownership = found != update.Components.end() ? &*found : nullptr;
+		if (ownership)
+			apply(*ownership, false);
+		const bool authority = fromHost && entity.HasComponent<NetworkedComponent>() && HasAuthority(entity);
+		for (const NetComponentUpdate& change : update.Components)
+			if (&change != ownership)
+				apply(change, authority);
+	}
+
+	void NetworkSystem::TryParent(Entity child, Entity parent)
+	{
+		// SetParent to the same parent is not a no-op: it moves the child to the end of its siblings.
+		if (child.GetParent() == parent)
+			return;
+		if (!m_Scene.SetParent(child, parent, false))
+			Report(m_Reported, "parent-" + IdText(child.GetUUID()), "the host parented entity " + IdText(child.GetUUID()) + " under entity " + IdText(parent.GetUUID()) + ", where it cannot go (a cycle, or too deep); it stays where it is");
 	}
 
 	void NetworkSystem::WaitForParent(UUID child, UUID parent)
@@ -668,8 +776,7 @@ namespace Breccia {
 			WaitForParent(entity.GetUUID(), parentId);
 			return;
 		}
-		if (entity.GetParent() != parent && !m_Scene.SetParent(entity, parent, false))
-			Report(m_Reported, "parent-" + IdText(entity.GetUUID()), "the host parented entity " + IdText(entity.GetUUID()) + " where it cannot go (a cycle, or too deep)");
+		TryParent(entity, parent);
 	}
 
 	void NetworkSystem::ResolvePendingParents()
@@ -682,8 +789,7 @@ namespace Breccia {
 				it = m_PendingParents.erase(it);
 			else if (parent)
 			{
-				if (!m_Scene.SetParent(child, parent, false))
-					Report(m_Reported, "parent-" + IdText(it->first), "the host parented entity " + IdText(it->first) + " where it cannot go (a cycle, or too deep)");
+				TryParent(child, parent);
 				it = m_PendingParents.erase(it);
 			}
 			else
@@ -691,7 +797,7 @@ namespace Breccia {
 				// The parent may be an entity the host made at runtime without a Networked component, which no client has.
 				if (!it->second.Reported && m_Clock - it->second.Since >= PendingParentWarningSeconds)
 				{
-					BR_CORE_WARN("Network: entity {} still waits for its parent {}, which this client does not have (one the host created without a Networked component?); it stays at the root", IdText(it->first), IdText(it->second.Parent));
+					BR_CORE_WARN("Network: entity {} still waits for its parent {}, which this client does not have (one the host created or stopped networking, or whose spawn this client refused); it stays at the root", IdText(it->first), IdText(it->second.Parent));
 					it->second.Reported = true;
 				}
 				++it;
@@ -707,22 +813,21 @@ namespace Breccia {
 			const std::string id = IdText(update.Entity);
 			Entity entity = m_Scene.GetEntityByUUID(update.Entity);
 			const auto* networked = entity ? entity.TryGetComponent<NetworkedComponent>() : nullptr;
-			// Ownership may have changed while the update travelled (too late, not an error), but a client that keeps
-			// sending for entities it never owned is broken or cheating: logged once per entity.
-			if (!networked || networked->Authority != NetworkAuthority::Owner || networked->Owner != connection.PeerId)
+			// Ownership may have changed while the update travelled: too late, not worth a log line. An entity that does not
+			// exist or is not networked is a broken or cheating client: one key for all of those, whose IDs it chooses.
+			if (!networked)
 			{
 				m_Statistics.RejectedRecords++;
-				Report(connection.Reported, "not-owned-" + id, fmt::format("{} sent changes to entity {}, which it does not own (or no longer); ignored", client, id));
+				Report(connection.Reported, "not-networked", fmt::format("{} sent changes to entity {}, which is not a networked entity of the host's; ignored", client, id));
 				continue;
 			}
-			const bool hierarchy = update.Parent.has_value();
-			const bool structure = std::ranges::any_of(update.Components, [](const NetComponentUpdate& change) { return change.Change != NetComponentChange::Changed || change.Component == NetworkedComponentIndex(); });
-			if (hierarchy || structure)
+			if (networked->Authority != NetworkAuthority::Owner || networked->Owner != connection.PeerId)
 			{
 				m_Statistics.RejectedRecords++;
-				Report(connection.Reported, "structure", client + " tried to change an entity's parent, components or ownership, which only the host decides; ignored");
 				continue;
 			}
+			// Parents, components and ownership are the host's: the decoder already refused a client's attempt
+			// (NetProtocol::CheckUpdate for a ClientUpdate).
 			ApplyUpdate(entity, update, false, connection.Reported);
 		}
 	}
@@ -849,13 +954,13 @@ namespace Breccia {
 		const NetEntitySpawn spawn{ replicated.Entity, replicated.Parent, std::move(kept) };
 		if (std::string problem = NetProtocol::CheckSpawn(spawn); !problem.empty())
 		{
-			Report(m_Reported, "spawn-" + id, "cannot spawn '" + entity.GetName() + "' (entity " + id + ") on clients: " + problem + " (give parts of a large tree Networked components of their own)");
+			Report(m_Reported, "spawn-size-" + id, "cannot spawn '" + entity.GetName() + "' (entity " + id + ") on clients: " + problem + " (give parts of a large tree Networked components of their own)");
 			return std::nullopt;
 		}
 		NetWriter writer;
 		if (!NetProtocol::WriteSpawn(writer, spawn))
 		{
-			Report(m_Reported, "spawn-" + id, "cannot spawn '" + entity.GetName() + "' (entity " + id + ") on clients: its data holds text that is not UTF-8");
+			Report(m_Reported, "spawn-text-" + id, "cannot spawn '" + entity.GetName() + "' (entity " + id + ") on clients: its data holds text that is not UTF-8");
 			return std::nullopt;
 		}
 		return writer.TakeBytes();
@@ -868,7 +973,7 @@ namespace Breccia {
 			m_TickAccumulator += deltaTime;
 			m_SinceLastTick += deltaTime;
 		}
-		const float interval = 1.0f / m_Settings.TickRate;
+		const float interval = 1.0f / m_TickRate;
 		if (m_TickAccumulator < interval)
 			return;
 		// One tick per frame at most; a long frame does not queue a burst of them.
@@ -877,7 +982,7 @@ namespace Breccia {
 		m_SinceLastTick = 0.0f;
 		const double rate = m_Settings.MaxBytesPerSecond;
 		const auto refill = [&](double& tokens) {
-			tokens = std::min(tokens + rate * elapsed, rate * MaxBudgetSeconds);
+			tokens = std::min(tokens + rate * elapsed, FullBudget());
 			return tokens > 0.0 ? static_cast<size_t>(tokens) : size_t{ 0 };
 		};
 
