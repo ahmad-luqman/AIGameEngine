@@ -74,10 +74,10 @@ def check_sign_macos_folder():
         (folder / "run.sh").chmod(0o755)
         (folder / "Link").symlink_to("Game")
 
-        def flags(path):
+        def signature(path):
             return subprocess.run(["codesign", "-dv", str(path)], capture_output=True, text=True).stderr
 
-        # The linker's own signature says linker-signed; the script's ad hoc one does not.
+        # Mach-O code that is neither a .dylib nor executable stops the script.
         shutil.copy2(folder / "Game", folder / "Stray")
         (folder / "Stray").chmod(0o644)
         refused = subprocess.run(["bash", str(sign), str(folder)], capture_output=True, text=True)
@@ -85,14 +85,131 @@ def check_sign_macos_folder():
         (folder / "Stray").unlink()
         signed = subprocess.run(["bash", str(sign), str(folder)], capture_output=True, text=True)
         require(signed.returncode == 0 and "signed 2 files" in signed.stdout, f"sign-macos.sh on a folder: {signed.stdout}{signed.stderr}")
+        # The linker's own signature says linker-signed; the script's ad hoc one does not.
         for name in ("Game", "libThing.dylib"):
-            require("flags=0x2(adhoc)" in flags(folder / name), f"{name} was not signed: {flags(folder / name)}")
-        require("linker-signed" in flags(folder / "sub" / "Inner"), "a subfolder's executable was signed")
-        require("not signed at all" in flags(folder / "run.sh"), "a script was signed")
+            require("flags=0x2(adhoc)" in signature(folder / name), f"{name} was not signed: {signature(folder / name)}")
+        require("linker-signed" in signature(folder / "sub" / "Inner"), "a subfolder's executable was signed")
+        require("not signed at all" in signature(folder / "run.sh"), "a script was signed")
+        # A file it cannot read stops it before anything is signed, a library (which it takes by name) included.
+        for secret in ("Secret", "libSecret.dylib"):
+            (folder / secret).write_text("unreadable")
+            (folder / secret).chmod(0)
+            refused = subprocess.run(["bash", str(sign), str(folder)], capture_output=True, text=True)
+            (folder / secret).unlink()
+            require(refused.returncode == 1 and f"cannot read '{folder / secret}'" in refused.stderr, f"an unreadable {secret}: {refused.stderr}")
         empty = Path(temp, "Empty")
         empty.mkdir()
         refused = subprocess.run(["bash", str(sign), str(empty)], capture_output=True, text=True)
         require(refused.returncode == 1 and "holds no libraries or executables" in refused.stderr, f"an empty folder: {refused.stderr}")
+
+
+def call_main(package_release, arguments):
+    """package_release.main() in this process, with its exit code and output."""
+    import contextlib
+    import io
+    out, err = io.StringIO(), io.StringIO()
+    saved = sys.argv
+    sys.argv = ["package_release.py"] + arguments
+    code = 0
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            package_release.main()
+    except SystemExit as error:
+        code = error.code
+    finally:
+        sys.argv = saved
+    return code, out.getvalue(), err.getvalue()
+
+
+def patched(module, **replacements):
+    """Replaces module attributes for a with block."""
+    import contextlib
+
+    @contextlib.contextmanager
+    def scope():
+        saved = {name: getattr(module, name) for name in replacements}
+        for name, value in replacements.items():
+            setattr(module, name, value)
+        try:
+            yield
+        finally:
+            for name, value in saved.items():
+                setattr(module, name, value)
+    return scope()
+
+
+def check_decisions(package_release, build):
+    """package_release's decisions in this process, with its probes and the signing scripts stood in for."""
+    import argparse
+    import contextlib
+    import io
+    import types
+
+    def exits(function, *arguments):
+        err = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(err):
+                function(*arguments)
+        except SystemExit as error:
+            return error.code, err.getvalue()
+        return 0, err.getvalue()
+
+    with tempfile.TemporaryDirectory(prefix="BasaltDecisions-") as temp:
+        # check_architectures wants exactly the tools' architectures: extra ones and missing files fail too.
+        universal = Path(temp, "universal")
+        universal.write_bytes(b"\xca\xfe\xba\xbe" + struct.pack(">I", 2) + struct.pack(">iiIII", 0x01000007, 3, 4096, 1, 12) + struct.pack(">iiIII", 0x0100000C, 0, 8192, 1, 14))
+        code, err = exits(package_release.check_architectures, [universal], ("arm64",), "the tools")
+        require(code == 1 and "holds arm64, x86_64, the tools arm64: it holds architectures the tools do not" in err, f"extra architectures: {err}")
+        code, err = exits(package_release.check_architectures, [Path(temp, "missing")], ("arm64",), "the tools")
+        require(code == 1 and "missing is missing" in err, f"a missing library: {err}")
+
+        # rosetta_problem names why x86-64 code cannot run.
+        failed = types.SimpleNamespace(returncode=1, stderr="Bad CPU type in executable\n")
+        with patched(package_release.subprocess, run=lambda *a, **k: failed):
+            problem = package_release.rosetta_problem()
+        require(problem and "exited with code 1" in problem and "Bad CPU type" in problem, f"rosetta_problem on a failed probe: {problem}")
+
+        def missing_arch(*a, **k):
+            raise OSError("no such file: arch")
+        with patched(package_release.subprocess, run=missing_arch):
+            problem = package_release.rosetta_problem()
+        require(problem and "could not run" in problem and "no such file" in problem, f"rosetta_problem without arch: {problem}")
+
+        # A signing script that fails stops the release with its exit code, as does one that cannot start.
+        with patched(package_release.subprocess, run=lambda *a, **k: types.SimpleNamespace(returncode=3)):
+            code, err = exits(package_release.run_signing, ["sign"], "'X.app'")
+        require(code == 1 and "signing 'X.app' failed (exit code 3" in err, f"a failed signing: {err}")
+        with patched(package_release.subprocess, run=missing_arch):
+            code, err = exits(package_release.run_signing, ["sign"], "'X.app'")
+        require(code == 1 and "signing 'X.app' could not start" in err, f"a signing script that cannot start: {err}")
+
+        # Windows signing passes the target's certificate arguments, a signing service's included.
+        commands = []
+        target = package_release.Target(platform="windows-x64", architectures=(), run_x86_64=False, check_sample="Tetris",
+                                        windows_signing=("--dlib", "D.dll", "--dlib-metadata", "m.json", "--timestamp-url", "http://t"))
+        with patched(package_release, run_signing=lambda command, what: commands.append(command)):
+            package_release.sign_windows([Path("Export")], target, "Tetris")
+        require(commands and commands[0][2:] == ["Export", "--dlib", "D.dll", "--dlib-metadata", "m.json", "--timestamp-url", "http://t", "--description", "Tetris"], f"sign_windows: {commands}")
+        try:
+            package_release.Target(platform="macos-arm64", architectures=("arm64",), run_x86_64=True, check_sample="Tetris")
+            require(False, "a thin build was given an x86-64 half")
+        except ValueError:
+            pass
+
+        # On macOS: a universal CLI on a Mac that cannot run x86-64 code fails with --require-universal and only warns
+        # without it; a CLI that is no Mach-O code fails.
+        if sys.platform == "darwin":
+            def universal_cli(path):
+                return package_release.UNIVERSAL if Path(path).name == "basalt" else ()
+            with patched(package_release, mach_o_architectures=universal_cli, rosetta_problem=lambda: "no Rosetta here",
+                         package_engine=lambda *a: sys.exit(9), package_sample=lambda *a: sys.exit(9)):
+                code, out, err = call_main(package_release, ["--build", str(build), "--output", str(Path(temp, "a")), "--require-universal"])
+                require(code == 1 and "the x86-64 half cannot be started on this Mac" in err and "no Rosetta here" in err, f"--require-universal without Rosetta: {code} {err}")
+                code, out, err = call_main(package_release, ["--build", str(build), "--output", str(Path(temp, "b"))])
+                require(code == 9 and "the x86-64 half of the tools and samples is not started: no Rosetta here" in out, f"a universal build without Rosetta: {code} {out}{err}")
+            with patched(package_release, mach_o_architectures=lambda path: ()):
+                code, out, err = call_main(package_release, ["--build", str(build), "--output", str(Path(temp, "c"))])
+                require(code == 1 and "is not 64-bit Mach-O code" in err, f"a CLI that is no Mach-O code: {code} {err}")
 
 
 def check_mach_o_parser(package_release):
@@ -111,7 +228,8 @@ def check_mach_o_parser(package_release):
         fat64 = b"\xca\xfe\xba\xbf" + struct.pack(">I", 2) + struct.pack(">iiQQII", 0x0100000C, 0, 4096, 1, 14, 0) + struct.pack(">iiQQII", 0x01000007, 3, 8192, 1, 12, 0)
         require(architectures(fat64) == ("arm64", "x86_64"), "a 64-bit universal header")
         require(architectures(b"\xca\xfe\xba\xbe" + struct.pack(">I", 1) + struct.pack(">iiIII", 18, 0, 4096, 1, 12)) == ("cpu-0x12",), "an unknown CPU type")
-        # Sixteen slices is the most a universal file is taken to hold; 17 is a Java class file's version.
+        # Sixteen slices is the most a universal file is taken to hold, so seventeen is refused (a Java class file's version,
+        # read as the count, is 45 or more).
         entry = struct.pack(">iiIII", 0x0100000C, 0, 4096, 1, 14)
         require(architectures(b"\xca\xfe\xba\xbe" + struct.pack(">I", 16) + entry * 16) == ("arm64",), "sixteen slices")
         require(architectures(b"\xca\xfe\xba\xbe" + struct.pack(">I", 17) + entry * 17) == (), "seventeen slices")
@@ -138,6 +256,7 @@ def main():
     version, platform = package_release.engine_version(), package_release.platform_name(cli)
     exe = package_release.EXE
     check_mach_o_parser(package_release)
+    check_decisions(package_release, build)
     if sys.platform == "darwin":
         check_sign_macos_folder()
 
@@ -152,7 +271,8 @@ def main():
     for arguments in foreign:
         refused = run(["--build", str(build), "--output", "x"] + arguments)
         require(refused.returncode == 2 and ("is for" in refused.stderr or "are for" in refused.stderr), f"{arguments} on this platform: {refused.stderr}")
-    for arguments, message in ((["--windows-certificate", "Z" * 40], "40 hexadecimal digits"), (["--windows-certificate", "0" * 40, "--windows-dlib", "x"], "not allowed with"),
+    for arguments, message in ((["--windows-certificate", "Z" * 40], "40 hexadecimal digits"), (["--windows-certificate", "0" * 41], "40 hexadecimal digits"),
+                               (["--windows-timestamp-url", "http://t"], "goes with --windows-certificate"), (["--windows-certificate", "0" * 40, "--windows-dlib", "x"], "not allowed with"),
                                (["--windows-dlib", "x"], "go together")):
         refused = run(["--build", str(build), "--output", "x"] + arguments)
         require(refused.returncode == 2 and message in refused.stderr, f"{arguments}: {refused.stderr}")
@@ -224,6 +344,9 @@ def main():
         require(packaged.returncode == 0, f"package_release.py failed: {packaged.stdout}{packaged.stderr}")
         # The packaged tools were started (under Rosetta too, on a universal build).
         require(("package_release: started the packaged tools\n" in packaged.stdout) == with_engine, f"the packaged tools were not started: {packaged.stdout[-2000:]}")
+        universal_build = sys.platform == "darwin" and package_release.mach_o_architectures(cli) == package_release.UNIVERSAL
+        require(("started the packaged tools under Rosetta" in packaged.stdout) == (with_engine and universal_build and not package_release.rosetta_problem()),
+                f"the x86-64 tools were started or not when they should not have been: {packaged.stdout[-2000:]}")
         files = sorted(path.name for path in output.iterdir())
         checksums_name = f"SHA256SUMS-{platform}.txt"
         sample = next((name for name in files if name.startswith(f"Basalt-{version}-Tetris-{platform}")), None)

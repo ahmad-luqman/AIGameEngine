@@ -96,27 +96,31 @@ namespace Basalt {
 	// What RemoveAuthenticodeSignature found in a Windows executable.
 	enum class SignatureRemoval : uint8_t
 	{
-		// It had no signature, and its bytes are unchanged.
+		// An executable without a signature; its bytes are unchanged.
 		Unsigned,
 		// Its certificate table was cut off, and the table's directory entry and the header checksum were cleared.
-		Removed
+		Removed,
+		// The bytes do not start with an MS-DOS header ("MZ"): no executable, so no signature. They are unchanged.
+		NotExecutable
 	};
 	// Removes the Authenticode signature of a Windows executable (PE32 or PE32+) in place. The exporter strips it from
 	// the runtime it copies: a release's runtime, once signed, carries Basalt's publisher, while the game is its
 	// developer's to sign (scripts/sign-windows.py), and rewriting resources would leave a broken signature behind.
-	// Bytes that do not start with an MS-DOS header ("MZ") are no executable and hold no signature: Unsigned. nullopt, with
-	// the reason and the bytes unchanged, when an executable's headers do not read as PE32 or PE32+, or its certificate
-	// table lies where no signing tool puts one: anywhere but past the headers and every section's data, at the end of the
-	// file (zero padding may follow).
+	// nullopt, with the reason and the bytes unchanged, when an executable's headers do not read as PE32 or PE32+, or its
+	// certificate table is too small to hold a WIN_CERTIFICATE or lies where no signing tool puts one: anywhere but past the
+	// headers and every section's data, at the end of the file (zero padding may follow).
 	std::optional<SignatureRemoval> RemoveAuthenticodeSignature(std::vector<uint8_t>& image, std::string& outError);
 	// RemoveAuthenticodeSignature on a file, which is rewritten (and the removal logged) only when it was signed.
 	std::optional<SignatureRemoval> RemoveAuthenticodeSignature(const std::filesystem::path& executable, std::string& outError);
 
-	// How many leading bytes of a file MachOArchitectures needs at most (a universal header with every slice listed).
-	constexpr size_t MachOHeaderBytes = 8 + 16 * 32;
+	// The most slices MachOArchitectures takes a universal file to hold: Java class files share its magic number, and
+	// their next field, a version, is far larger. scripts/package_release.py uses the same limit.
+	constexpr uint32_t MaxMachOSlices = 16;
+	// How many leading bytes of a file MachOArchitectures needs at most (a 64-bit universal header with every slice listed).
+	constexpr size_t MachOHeaderBytes = 8 + size_t{ MaxMachOSlices } * 32;
 	// The architectures of a 64-bit Mach-O file, thin or universal, from its first bytes: "arm64", "x86_64", or
-	// "cpu-0x<type>" for other CPU types (subtypes are not told apart, so arm64e counts as arm64), sorted. Empty for
-	// anything else, a truncated header included. scripts/package_release.py reads them the same way.
+	// "cpu-0x<type>" for other CPU types (subtypes are not told apart, so arm64e counts as arm64), sorted and unique. Empty
+	// for anything else, a truncated header included. scripts/package_release.py reads them the same way.
 	std::vector<std::string> MachOArchitectures(const std::vector<uint8_t>& header);
 
 }

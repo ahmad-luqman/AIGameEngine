@@ -597,10 +597,9 @@ namespace Basalt {
 			outError = reason;
 			return std::nullopt;
 		};
-		// Bytes that are no executable at all hold no signature to remove (a stand-in runtime; the export's smoke test is
-		// what refuses one). One that starts like an executable must be readable as one.
+		// One that starts like an executable must read as one.
 		if (image.size() < 2 || image[0] != 'M' || image[1] != 'Z')
-			return SignatureRemoval::Unsigned;
+			return SignatureRemoval::NotExecutable;
 		if (image.size() < 64)
 			return fail("the executable's DOS header is truncated");
 		// The DOS header points at "PE\0\0" and the 20-byte COFF file header, which the optional header follows.
@@ -611,8 +610,9 @@ namespace Basalt {
 		const uint16_t sectionCount = read16(peHeader + 6);
 		const uint16_t optionalSize = read16(peHeader + 20);
 		const uint64_t sectionTable = optionalHeader + optionalSize;
-		// Each section header is 40 bytes; the table ends the headers.
-		const uint64_t headersEnd = sectionTable + uint64_t{ sectionCount } * 40;
+		constexpr uint64_t SectionHeaderSize = 40;
+		// The section table ends the headers.
+		const uint64_t headersEnd = sectionTable + uint64_t{ sectionCount } * SectionHeaderSize;
 		if (optionalSize < 2 || headersEnd > image.size())
 			return fail("the executable's headers are truncated");
 		// The data directories follow the PE32 or PE32+ fields; the fifth is the certificate table, whose "address" is a
@@ -637,7 +637,7 @@ namespace Basalt {
 		const uint64_t tableEnd = tableOffset + tableSize;
 		// Signing tools append the table after everything the loader maps: cutting it must not cut a section.
 		uint64_t dataEnd = headersEnd;
-		for (uint64_t section = sectionTable; section < headersEnd; section += 40)
+		for (uint64_t section = sectionTable; section < headersEnd; section += SectionHeaderSize)
 			dataEnd = std::max(dataEnd, uint64_t{ read32(section + 20) } + read32(section + 16));
 		if (tableOffset < dataEnd || tableEnd > image.size())
 			return fail("the executable's certificate table lies outside the file, or among its headers or sections");
@@ -665,8 +665,8 @@ namespace Basalt {
 		const std::optional<SignatureRemoval> removal = RemoveAuthenticodeSignature(*image, reason);
 		if (!removal)
 			return fail();
-		if (*removal == SignatureRemoval::Unsigned)
-			return SignatureRemoval::Unsigned;
+		if (*removal != SignatureRemoval::Removed)
+			return removal;
 		if (!FileSystem::WriteBinaryFile(executable, image->data(), image->size(), reason))
 			return fail();
 		BS_CORE_INFO("Exporter: removed the runtime's signature from '{}' (sign the game with scripts/sign-windows.py)", FileSystem::PathToUtf8(executable));
@@ -675,35 +675,47 @@ namespace Basalt {
 
 	std::vector<std::string> MachOArchitectures(const std::vector<uint8_t>& header)
 	{
-		const auto readBig32 = [&](size_t offset) { return static_cast<uint32_t>(header[offset] << 24 | header[offset + 1] << 16 | header[offset + 2] << 8 | header[offset + 3]); };
+		// mach/machine.h
+		constexpr uint32_t CpuTypeX86_64 = 0x01000007;
+		constexpr uint32_t CpuTypeArm64 = 0x0100000C;
+		const auto readLittle32 = [&](size_t offset) { return header[offset] | uint32_t{ header[offset + 1] } << 8 | uint32_t{ header[offset + 2] } << 16 | uint32_t{ header[offset + 3] } << 24; };
+		const auto readBig32 = [&](size_t offset) { return uint32_t{ header[offset] } << 24 | uint32_t{ header[offset + 1] } << 16 | uint32_t{ header[offset + 2] } << 8 | header[offset + 3]; };
+		if (header.size() < 8)
+			return {};
 		std::vector<uint32_t> types;
-		if (header.size() >= 8 && header[0] == 0xCF && header[1] == 0xFA && header[2] == 0xED && header[3] == 0xFE)
+		const uint32_t magic = readBig32(0);
+		if (magic == 0xCFFAEDFE)
 		{
 			// MH_MAGIC_64, little-endian on both architectures.
-			types.push_back(static_cast<uint32_t>(header[4] | header[5] << 8 | header[6] << 16 | static_cast<uint32_t>(header[7]) << 24));
+			types.push_back(readLittle32(4));
 		}
-		else if (header.size() >= 8 && header[0] == 0xCA && header[1] == 0xFE && header[2] == 0xBA && (header[3] == 0xBE || header[3] == 0xBF))
+		else if (magic == 0xCAFEBABE || magic == 0xCAFEBABF)
 		{
-			// FAT_MAGIC or FAT_MAGIC_64, big-endian, then one 20- or 32-byte entry per slice. Java class files share
-			// FAT_MAGIC; their next field is a version far above any real slice count.
+			// FAT_MAGIC or FAT_MAGIC_64, big-endian, then one 20- or 32-byte entry per slice.
 			const uint32_t count = readBig32(4);
-			const size_t entrySize = header[3] == 0xBE ? 20 : 32;
-			if (count == 0 || count > 16 || header.size() < 8 + count * entrySize)
+			const size_t entrySize = magic == 0xCAFEBABE ? 20 : 32;
+			if (count == 0 || count > MaxMachOSlices || header.size() < 8 + count * entrySize)
 				return {};
 			for (uint32_t i = 0; i < count; ++i)
 				types.push_back(readBig32(8 + i * entrySize));
 		}
-		const auto name = [](uint32_t type) -> std::string {
-			if (type == 0x0100000C)
-				return "arm64";
-			if (type == 0x01000007)
-				return "x86_64";
-			return fmt::format("cpu-{:#x}", type);
-		};
 		std::vector<std::string> names;
 		names.reserve(types.size());
 		for (uint32_t type : types)
-			names.push_back(name(type));
+		{
+			switch (type)
+			{
+				case CpuTypeArm64:
+					names.emplace_back("arm64");
+					break;
+				case CpuTypeX86_64:
+					names.emplace_back("x86_64");
+					break;
+				default:
+					names.push_back(fmt::format("cpu-{:#x}", type));
+					break;
+			}
+		}
 		std::sort(names.begin(), names.end());
 		names.erase(std::unique(names.begin(), names.end()), names.end());
 		return names;

@@ -18,7 +18,7 @@ work in this repository. Read it fully before changing code. Task-specific proce
 | `Tests/` | doctest unit tests (`BasaltTests`, headless), the feature-test project, and an optional GPU render test. |
 | `Samples/` | Example games built through the automation API (e.g. `Samples/Tetris`), tested by ctest. |
 | `cmake/` | Dependency pins (`Dependencies.cmake`), warnings, shader embedding, format check. |
-| `scripts/` | `build.sh`, `test.sh`, `format.sh`; release tooling `package_release.py`, `sign-macos.sh`. |
+| `scripts/` | `build.sh`, `test.sh`, `format.sh`; release tooling `package_release.py`, `sign-macos.sh`, `sign-windows.py`, `ci-universal-vulkan.sh` (macOS universal Vulkan libraries). |
 
 Engine modules (`Basalt/Source/Basalt/<Module>/`): `Core` (application, window, input incl. gamepads, log, file
 system, `.bpak` archives and file watching, command line, crash reports), `Events`, `Math`, `Renderer` (device, scene renderer, IBL, debug lines), `ImGui`, `Scene`

@@ -4,6 +4,7 @@
   package_release.py --build <dir> --output <dir> [--samples Tetris,Breakout] [--skip-engine]
                      [--sign-identity <Developer ID> [--notarize <profile>]] [--require-universal]
                      [--windows-certificate <SHA-1 thumbprint> | --windows-dlib <dll> --windows-dlib-metadata <json>]
+                     [--windows-timestamp-url <url>]
                      [--require-appimage] [--gzip-level 1-9]
   package_release.py --check-tag <tag>
 
@@ -19,12 +20,13 @@ The first form writes, for the host platform:
 <platform> is e.g. windows-x64, linux-x64, macos-arm64 or macos-universal (on macOS, from the build CLI's architectures).
 
 Signing: on macOS the tools (with their Vulkan libraries) and each sample's .app are signed by scripts/sign-macos.sh,
-with --sign-identity (and notarized with --notarize) or ad hoc. Every Mach-O file shipped must hold exactly the
-architectures the CLI holds, and --require-universal fails unless those are arm64 and x86_64 and this Mac can run the
-x86-64 half (Rosetta 2), which is then started too. On Windows --windows-certificate (a certificate store thumbprint) or
---windows-dlib with --windows-dlib-metadata (a signing service) signs the tools and each sample's folder through
-scripts/sign-windows.py. After packaging, the packaged CLI and runtime are started from the tools archive's folder, and
-each signed sample is smoke-tested again.
+with --sign-identity (and notarized with --notarize) or ad hoc. On Windows --windows-certificate (a certificate store
+thumbprint) or --windows-dlib with --windows-dlib-metadata (a signing service) signs the tools' bin/ and each sample's
+folder through scripts/sign-windows.py (timestamped by --windows-timestamp-url, or its default server). Each signed sample is smoke-tested again, and unless --skip-engine the packaged
+CLI and runtime are started from the tools archive's folder once it is archived.
+Architectures (macOS): every Mach-O file shipped must hold exactly the CLI's architectures. On a universal build the
+x86-64 half of the packaged tools and of each sample is started through Rosetta 2; a Mac without it only warns, unless
+--require-universal, which also fails unless the CLI holds both arm64 and x86_64.
 --gzip-level sets the gzip level of the .tar.gz archives (Linux; default 9); the ReleasePackaging test passes 1 there,
 since level 9 spends minutes on a Debug build's binaries. Other hosts write zip archives and ignore it, with a warning.
 The second form exits 1 unless the tag is v<version> for the version in CMakeLists.txt.
@@ -97,7 +99,8 @@ def mach_o_architectures(path):
 
 def platform_name(cli):
     """windows-x64, linux-x64 (or -arm64), macos-arm64 (or -x64) or macos-universal. On macOS the architectures come from
-    the build's CLI, since a universal build runs on either; a CLI that holds no single known one keeps the host's."""
+    the build's CLI, since a universal build runs on either: one architecture names the platform, arm64 + x86_64 is
+    macos-universal, and any other set keeps the host's."""
     system = {"win32": "windows", "darwin": "macos"}.get(sys.platform, "linux")
     machine = platform.machine()
     if system == "macos":
@@ -120,8 +123,10 @@ def check_architectures(files, wanted, what):
         if found == wanted:
             continue
         missing = sorted(set(wanted) - set(found))
-        detail = (f"Macs of the missing kind ({', '.join(missing)}) could not run it (build universal Vulkan libraries with scripts/ci-universal-vulkan.sh)"
-                  if missing else "it holds architectures the tools do not (use libraries built for the tools' architectures)")
+        if missing:
+            detail = f"Macs of the missing kind ({', '.join(missing)}) could not run it (build universal Vulkan libraries with scripts/ci-universal-vulkan.sh)"
+        else:
+            detail = "it holds architectures the tools do not (use libraries built for the tools' architectures)"
         fail(f"{what}: {file.name} holds {', '.join(found) or 'no Mach-O code'}, the tools {', '.join(wanted)}: {detail}")
 
 
@@ -143,8 +148,12 @@ def run(arguments, what, **kwargs):
     """subprocess.run that fails with a message (and the output so far) when the program does not finish in time."""
     try:
         return subprocess.run(arguments, capture_output=True, text=True, **kwargs)
+    except OSError as error:
+        fail(f"{what} could not start: {error}")
     except subprocess.TimeoutExpired as error:
-        fail(f"{what} did not finish within {error.timeout} s: {error.stdout or ''}{error.stderr or ''}")
+        # The partial output comes as bytes, whatever text=True asked for.
+        partial = b"".join(part if isinstance(part, bytes) else part.encode() for part in (error.stdout or b"", error.stderr or b""))
+        fail(f"{what} did not finish within {error.timeout} s: {partial.decode(errors='replace')}")
 
 
 def run_smoke(command, what, env):
@@ -171,9 +180,14 @@ def run_cli(cli, project, command, params, env, prefix=()):
 
 
 def run_signing(command, what):
-    """Runs a signing script, whose own output explains a failure; fails with a message rather than a traceback."""
+    """Runs a signing script, whose own output (on this script's stdout and stderr) explains a failure; fails with a
+    message rather than a traceback. A timeout stops the script, not what it started (notarytool, signtool)."""
+    # Our own lines first: the script writes to the same streams.
+    sys.stdout.flush()
     try:
         signed = subprocess.run(command, timeout=SIGN_TIMEOUT)
+    except OSError as error:
+        fail(f"signing {what} could not start: {error}")
     except subprocess.TimeoutExpired:
         fail(f"signing {what} did not finish within {SIGN_TIMEOUT} s")
     if signed.returncode != 0:
@@ -217,47 +231,45 @@ def find_vulkan_libraries():
 
 @dataclass(frozen=True)
 class Target:
-    """What main() works out about the build before packaging it."""
+    """What main() works out about the build and its signing before packaging it."""
     platform: str
-    # The CLI's Mach-O architectures, which every shipped Mach-O file must hold (macOS; () elsewhere).
-    architectures: tuple
+    # The CLI's Mach-O architectures, which every shipped Mach-O file must hold exactly (macOS; () elsewhere).
+    architectures: tuple[str, ...]
     # Whether the x86-64 half of a universal build is started too (through Rosetta 2).
     run_x86_64: bool
     # The sample whose project the packaged tools start on (the tools archive carries every sample in Samples/).
     check_sample: str
+    # scripts/sign-windows.py's certificate arguments (--thumbprint, or --dlib and --dlib-metadata, then any
+    # --timestamp-url); () signs nothing.
+    windows_signing: tuple[str, ...] = ()
+
+    def __post_init__(self):
+        if self.run_x86_64 and self.architectures != UNIVERSAL:
+            raise ValueError("only a universal build has an x86-64 half to start")
 
 
-def sign_macos(target, options):
+def sign_macos(path, options):
     """scripts/sign-macos.sh on a bundle or a folder of loose code: with the Developer ID (and notarized) when given,
     ad hoc otherwise."""
-    sign = ["bash", str(ROOT / "scripts" / "sign-macos.sh"), str(target)]
+    sign = ["bash", str(ROOT / "scripts" / "sign-macos.sh"), str(path)]
     if options.sign_identity:
         sign += ["--identity", options.sign_identity] + (["--notarize", options.notarize] if options.notarize else [])
-    run_signing(sign, f"'{target}'")
+    run_signing(sign, f"'{path}'")
 
 
-def sign_windows(paths, options, description=None):
-    """scripts/sign-windows.py on files or folders, with the certificate (--windows-certificate) or signing service
-    (--windows-dlib) given."""
-    sign = [sys.executable, str(ROOT / "scripts" / "sign-windows.py")] + [str(path) for path in paths]
-    if options.windows_certificate:
-        sign += ["--thumbprint", options.windows_certificate]
-    else:
-        sign += ["--dlib", options.windows_dlib, "--dlib-metadata", options.windows_dlib_metadata]
+def sign_windows(paths, target, description=None):
+    """scripts/sign-windows.py on files or folders (each folder's .exe and .dll files), with the target's certificate or
+    signing service."""
+    sign = [sys.executable, str(ROOT / "scripts" / "sign-windows.py")] + [str(path) for path in paths] + list(target.windows_signing)
     if description:
         sign += ["--description", description]
     run_signing(sign, ", ".join(Path(path).name for path in paths))
 
 
-def signs_windows(options):
-    return bool(options.windows_certificate or options.windows_dlib)
-
-
 def start_tools(folder, target, env):
     """Starts the packaged CLI (project.info) and runtime (headless) on a sample, from the tools archive's folder and so
     after any signing (proving the signatures let them run), and on a universal build their x86-64 half through Rosetta.
-    The editor needs a display and is not started. Any files they write stay in the staging folder, which is already
-    archived."""
+    The editor needs a display and is not started. Runs once the folder is archived, so files they write do not ship."""
     project = folder / "Samples" / target.check_sample
     for prefix in [()] + ([("arch", "-x86_64")] if target.run_x86_64 else []):
         what = f"the packaged tools{' under Rosetta' if prefix else ''}"
@@ -280,13 +292,14 @@ def package_engine(build, stage, output, name, options, target, env):
         # copyfile copies no mode, so the copies are writable for signing even when the originals are read-only.
         for source, library in zip(find_vulkan_libraries(), VULKAN_LIBRARIES):
             shutil.copyfile(source, bin_dir / library)
-        check_architectures([bin_dir / name for name in TOOLS + VULKAN_LIBRARIES], target.architectures, "the tools")
+        check_architectures([bin_dir / file for file in TOOLS + VULKAN_LIBRARIES], target.architectures, "the tools")
         manifest = bin_dir / "vulkan" / "icd.d"
         manifest.mkdir(parents=True)
         (manifest / "MoltenVK_icd.json").write_text(json.dumps({"file_format_version": "1.0.0", "ICD": {"library_path": "../../libMoltenVK.dylib", "api_version": "1.3.0", "is_portability_driver": True}}))
         sign_macos(bin_dir, options)
-    elif signs_windows(options):
-        sign_windows([bin_dir / f"{tool}{EXE}" for tool in TOOLS], options)
+    elif target.windows_signing:
+        # The folder: every executable and library bin/ holds.
+        sign_windows([bin_dir], target)
     shutil.copytree(ROOT / "Docs", folder / "Docs", ignore=IGNORED)
     shutil.copytree(ROOT / "Samples", folder / "Samples", ignore=IGNORED)
     for document in ("README.md", "LICENSE"):
@@ -308,7 +321,7 @@ def package_sample(cli, sample, stage, output, prefix, options, target, env):
         frameworks = package / "Contents" / "Frameworks"
         check_architectures([Path(result["executable"])] + [frameworks / library for library in VULKAN_LIBRARIES], target.architectures, sample.name)
         sign_macos(package, options)
-        # What ships is the signed bundle (hardened runtime with a Developer ID): it must still start.
+        # What ships is the signed bundle (ad hoc, or with a Developer ID and the hardened runtime): it must still start.
         run_cli(cli, sample, "project.smoke_test", smoke_test, env)
         if target.run_x86_64:
             run_smoke(["arch", "-x86_64", result["executable"]], f"{sample.name}: the x86-64 half under Rosetta", env)
@@ -320,9 +333,9 @@ def package_sample(cli, sample, stage, output, prefix, options, target, env):
         return destination
     elif sys.platform.startswith("linux") and options.require_appimage:
         fail(f"{sample.name}: no AppImage was built: {'; '.join(result.get('warnings', []))}")
-    elif signs_windows(options):
+    elif target.windows_signing:
         # The folder: every executable and library an export holds.
-        sign_windows([package], options, description=sample.name)
+        sign_windows([package], target, description=sample.name)
         run_cli(cli, sample, "project.smoke_test", smoke_test, env)
     return archive(package, output / name, options.gzip_level)
 
@@ -339,7 +352,7 @@ def write_checksums(files, destination):
 
 
 def thumbprint(value):
-    """argparse type: a SHA-1 thumbprint (scripts/sign-windows.py checks the same), refused before anything is built."""
+    """argparse type: a SHA-1 thumbprint (scripts/sign-windows.py checks the same), refused before anything is packaged."""
     if not re.fullmatch(r"[0-9a-fA-F]{40}", value):
         raise argparse.ArgumentTypeError("a SHA-1 thumbprint is 40 hexadecimal digits, without spaces")
     return value
@@ -359,6 +372,7 @@ def main():
     windows.add_argument("--windows-certificate", metavar="THUMBPRINT", type=thumbprint, help="sign the Windows tools and samples with this certificate (scripts/sign-windows.py)")
     windows.add_argument("--windows-dlib", metavar="DLL", help="sign the Windows tools and samples through this signing service library (with --windows-dlib-metadata)")
     parser.add_argument("--windows-dlib-metadata", metavar="JSON", help="the metadata file that --windows-dlib reads")
+    parser.add_argument("--windows-timestamp-url", metavar="URL", help="the RFC 3161 server that timestamps Windows signatures (default: scripts/sign-windows.py's)")
     parser.add_argument("--require-appimage", action="store_true", help="fail on Linux when appimagetool cannot build the AppImage")
     parser.add_argument("--gzip-level", type=int, choices=range(1, 10), metavar="1-9",
                         help="gzip level of the .tar.gz archives (Linux; default: 9)")
@@ -378,7 +392,9 @@ def main():
         parser.error("--sign-identity and --require-universal are for macOS")
     if bool(options.windows_dlib) != bool(options.windows_dlib_metadata):
         parser.error("--windows-dlib and --windows-dlib-metadata go together")
-    if signs_windows(options) and sys.platform != "win32":
+    if options.windows_timestamp_url and not (options.windows_certificate or options.windows_dlib):
+        parser.error("--windows-timestamp-url goes with --windows-certificate or --windows-dlib")
+    if (options.windows_certificate or options.windows_dlib) and sys.platform != "win32":
         parser.error("--windows-certificate and --windows-dlib are for Windows")
     if options.gzip_level is None:
         options.gzip_level = 9
@@ -413,7 +429,16 @@ def main():
         fail(f"the x86-64 half cannot be started on this Mac, so it would ship untested: {problem}")
     if problem:
         warn(f"the x86-64 half of the tools and samples is not started: {problem}")
-    target = Target(platform_name(cli), architectures, architectures == UNIVERSAL and not problem, samples[0].name)
+    if options.windows_certificate:
+        windows_signing = ("--thumbprint", options.windows_certificate)
+    elif options.windows_dlib:
+        windows_signing = ("--dlib", options.windows_dlib, "--dlib-metadata", options.windows_dlib_metadata)
+    else:
+        windows_signing = ()
+    if options.windows_timestamp_url:
+        windows_signing += ("--timestamp-url", options.windows_timestamp_url)
+    target = Target(platform=platform_name(cli), architectures=architectures, run_x86_64=architectures == UNIVERSAL and not problem,
+                    check_sample=samples[0].name, windows_signing=windows_signing)
 
     prefix = f"Basalt-{version}"
     with tempfile.TemporaryDirectory(prefix="basalt-release-") as temp:
