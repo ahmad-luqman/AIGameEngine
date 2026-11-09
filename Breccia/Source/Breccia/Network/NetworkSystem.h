@@ -134,7 +134,8 @@ namespace Breccia {
 		NetworkSystem(const NetworkSystem&) = delete;
 		NetworkSystem& operator=(const NetworkSystem&) = delete;
 
-		// Receives and applies what arrived, ends handshakes that took too long, parents children whose parent arrived, then
+		// Receives and applies what arrived, ends handshakes that took too long, parents children whose parent arrived (or
+		// whose move became possible), then
 		// drives bodies by authority. Called by Scene::OnUpdate before scripts.
 		void Receive(float deltaTime);
 		// Sends this tick's messages when one is due (at most one tick per frame). Called by Scene::OnUpdate after the
@@ -179,7 +180,7 @@ namespace Breccia {
 			bool IsAdmitted() const { return PeerId != 0; }
 		};
 
-		// An entity waiting for its parent to arrive.
+		// An entity waiting for its parent to arrive, or to be a place it can go (ResolvePendingParents retries each Receive).
 		struct PendingParent
 		{
 			UUID Parent = 0;
@@ -201,17 +202,17 @@ namespace Breccia {
 		void ApplyDespawn(UUID uuid);
 		void ApplyUpdate(Entity entity, const NetEntityUpdate& update, bool fromHost, std::unordered_set<std::string>& reported);
 		void ApplyParent(Entity entity, UUID parent);
-		// Puts child under parent (reported when it cannot go there).
-		void TryParent(Entity child, Entity parent);
+		// Puts child under parent; false when it cannot go there now (a cycle, or too deep).
+		bool TryParent(Entity child, Entity parent);
 		void WaitForParent(UUID child, UUID parent);
 		void ResolvePendingParents();
 		// Applies a repeated spawn to the entity an earlier one created (or an existing one it names): its root's replicated
-		// fields, which components with replicated fields it has, its parent, and the descendant records this client lacks
-		// (CreateMissingDescendants). The rest of the root record (other fields and components) is not applied, and
-		// descendants the client has keep their own values.
+		// fields, which components with replicated fields it has, its parent, and its descendants (ReconcileDescendants).
+		// The rest of the root record (other fields and components) is not applied.
 		void RefreshFromSpawn(Entity entity, const NetEntitySpawn& spawn);
-		// Creates the spawn's descendant records whose IDs this client does not have, under the entities they name.
-		void CreateMissingDescendants(const NetEntitySpawn& spawn);
+		// Creates the spawn's descendant records whose IDs this client does not have, under the entities they name, and
+		// moves those it has under the parents the spawn gives them (keeping their own values).
+		void ReconcileDescendants(const NetEntitySpawn& spawn);
 		void RemoveLocalNetworkedEntities();
 		void UpdateDrivenBodies();
 		ReplicationWorld CaptureWorld() const;

@@ -68,6 +68,16 @@ class Host:
         self.process.wait(timeout=TIMEOUT)
 
 
+BOB_SCRIPT = """local Bob = {}
+function Bob:OnCreate() self.Time = 0 end
+function Bob:OnUpdate(dt)
+	self.Time = self.Time + dt
+	self.Entity.Translation = Vec3(2, 1 + math.sin(self.Time * 3), 0)
+end
+return Bob
+"""
+
+
 def main():
     cli, runtime = Path(sys.argv[1]).resolve(), Path(sys.argv[2]).resolve()
     with tempfile.TemporaryDirectory() as temp:
@@ -89,8 +99,11 @@ def main():
                 {"command": "entity.create", "params": {"name": "Crate", "components": {
                     "Transform": {"Translation": [0, 4, 0]}, "Mesh": {"Mesh": "builtin://Cube"}, "RigidBody": {"Type": "Dynamic"},
                     "BoxCollider": {}, "Networked": {}}}},
+                # Keeps moving however late a client joins (the crate settles within a second).
+                {"command": "asset.write", "params": {"path": "Assets/Scripts/Bob.lua", "content": BOB_SCRIPT}},
                 {"command": "entity.create", "params": {"name": "Lamp", "components": {
-                    "Transform": {"Translation": [2, 1, 0]}, "PointLight": {"Intensity": 5}, "Networked": {"Priority": 2}}}},
+                    "Transform": {"Translation": [2, 1, 0]}, "PointLight": {"Intensity": 5}, "Networked": {"Priority": 2},
+                    "Script": {"Script": "Assets/Scripts/Bob.lua"}}}},
                 {"command": "scene.save", "params": {"path": "Assets/Scenes/Main.bscene"}},
                 {"command": "project.set", "params": {"startScene": "Assets/Scenes/Main.bscene", "network": {"TimeoutSeconds": 3}}},
             ]), encoding="utf-8")
@@ -118,7 +131,7 @@ def main():
             require("removed 2 networked entities" in joined.stdout, f"the client kept its own networked entities:\n{joined.stdout}")
             summary = re.search(r"Runtime: network client connections=1 remoteEntities=2 spawns=2 updates=(\d+) .* rejectedValues=0 rejectedRecords=0", joined.stdout)
             require(summary is not None, f"the client did not receive both networked entities cleanly:\n{joined.stdout}")
-            # The crate falls on the host: its transform keeps arriving.
+            # The lamp bobs on the host: its transform keeps arriving.
             require(int(summary.group(1)) > 5, f"the client received too few updates:\n{joined.stdout}")
             require(host.wait_for(r"Network: client 1 \(127\.0\.0\.1:\d+\) left: the client left", 30), f"the host did not hear the client leave:\n{host.text()}")
 

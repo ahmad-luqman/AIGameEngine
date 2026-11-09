@@ -478,8 +478,8 @@ TEST_SUITE("Network")
 		REQUIRE(transform);
 		REQUIRE(networked);
 		CHECK(transform->Info->ReplicatedFields == std::vector<std::string>{ "Translation", "Rotation", "Scale" });
-		CHECK(transform->IsCore);
-		CHECK_FALSE(networked->IsCore);
+		CHECK(transform->Info->IsCore);
+		CHECK_FALSE(networked->Info->IsCore);
 		CHECK(networked->Info->ReplicatedFields == std::vector<std::string>{ "Owner", "Authority" });
 		CHECK_FALSE(schema.FindComponent(static_cast<uint32_t>(schema.GetComponents().size())));
 		CHECK(schema.GetHash() != 0);
@@ -1703,6 +1703,119 @@ TEST_SUITE("Network")
 		third.Spawns.push_back(Spawn(62, nlohmann::json::object()));
 		host.Snapshot(third);
 		CHECK(host.Client().GetEntityByUUID(61).GetParent() == host.Client().GetEntityByUUID(62));
+	}
+
+	TEST_CASE("A new networked parent's spawn keeps the descendants the client already has")
+	{
+		const auto build = [](Scene& scene) { scene.CreateEntityWithUUID(710, "Lamp"); };
+		Session session;
+		Scene& host = session.StartHost(build);
+		Scene& client = session.AddClient(build);
+		REQUIRE(session.RunUntil([&] { return session.ClientNetwork(0).GetState() == NetConnectionState::Connected; }, 60));
+		// The host moves an authored entity under a parent it makes during play, with a child only it has.
+		Entity post = host.CreateEntity("Post");
+		Entity lamp = host.GetEntityByUUID(710);
+		host.SetParent(lamp, post, false);
+		const UUID capId = host.CreateChildEntity(lamp, "Cap").GetUUID();
+		post.AddComponent<NetworkedComponent>();
+		session.Run(10);
+		REQUIRE(client.GetEntityByUUID(post.GetUUID()));
+		REQUIRE(client.GetEntityByUUID(capId));
+		CHECK(client.GetEntityByUUID(710).GetParent() == client.GetEntityByUUID(post.GetUUID()));
+		CHECK(client.GetEntityByUUID(capId).GetParent() == client.GetEntityByUUID(710));
+		CHECK(client.FindEntitiesByName("Lamp").size() == 1);
+		CHECK(session.ClientNetwork(0).GetStatistics().RejectedRecords == 0);
+	}
+
+	TEST_CASE("A spawn's records the client has move under the new root in the message that creates it")
+	{
+		// Over a hand-driven host, so no repeated spawn (which adopts the root) can do it instead.
+		FakeHost host([](Scene& scene) { scene.CreateEntityWithUUID(90, "Lamp"); });
+		host.Welcome();
+		NetState state;
+		NetEntitySpawn spawn = Spawn(91, nlohmann::json::object());
+		spawn.Entities.push_back(Record(90, nlohmann::json::object(), 91));
+		spawn.Entities.push_back(Record(92, nlohmann::json::object(), 90));
+		state.Spawns.push_back(spawn);
+		host.Snapshot(state);
+		Scene& client = host.Client();
+		REQUIRE(client.GetEntityByUUID(91));
+		REQUIRE(client.GetEntityByUUID(92));
+		CHECK(client.GetEntityByUUID(90).GetParent() == client.GetEntityByUUID(91));
+		CHECK(client.GetEntityByUUID(92).GetParent() == client.GetEntityByUUID(90));
+		CHECK(client.FindEntitiesByName("Lamp").size() == 1);
+		CHECK(host.Network().GetStatistics().SpawnsApplied == 1);
+	}
+
+	TEST_CASE("A spawn whose parent is too deep for it goes there once it can")
+	{
+		FakeHost host([](Scene& scene) {
+			Entity parent = scene.CreateEntityWithUUID(1000, "Link");
+			for (uint64_t id = 1001; id <= 1000 + Scene::MaxHierarchyDepth; id++)
+			{
+				Entity link = scene.CreateEntityWithUUID(id, "Link");
+				scene.SetParent(link, parent, false);
+				parent = link;
+			}
+		});
+		host.Welcome();
+		Scene& client = host.Client();
+		const Entity deepest = client.GetEntityByUUID(1000 + Scene::MaxHierarchyDepth);
+		REQUIRE(deepest);
+		NetState state;
+		state.Spawns.push_back(Spawn(95, nlohmann::json::object(), 1000 + Scene::MaxHierarchyDepth));
+		host.Snapshot(state);
+		REQUIRE(client.GetEntityByUUID(95));
+		REQUIRE(client.GetEntityByUUID(95).GetParent() != deepest);
+		// The chain gets shorter on this client: the spawn goes where the host put it.
+		client.SetParent(deepest, Entity{}, false);
+		host.Advance(1);
+		CHECK(client.GetEntityByUUID(95).GetParent() == deepest);
+	}
+
+	TEST_CASE("A parent change that would make a cycle waits until the hierarchy allows it")
+	{
+		FakeHost host;
+		host.Welcome();
+		NetState first;
+		first.Spawns.push_back(Spawn(70, nlohmann::json::object()));
+		first.Spawns.push_back(Spawn(71, { { "Networked", nlohmann::json::object() } }, 70));
+		host.Snapshot(first);
+		Scene& client = host.Client();
+		REQUIRE(client.GetEntityByUUID(71).GetParent() == client.GetEntityByUUID(70));
+		// The host swapped them; the old parent's move comes first in the message, under its former child.
+		NetState swapped;
+		NetEntityUpdate under;
+		under.Entity = 70;
+		under.Parent = UUID(71);
+		NetEntityUpdate detached;
+		detached.Entity = 71;
+		detached.Parent = UUID(0);
+		swapped.Updates = { under, detached };
+		host.Snapshot(swapped);
+		CHECK(client.GetEntityByUUID(70).GetParent() == client.GetEntityByUUID(71));
+		CHECK_FALSE(client.GetEntityByUUID(71).GetParent());
+		// A cycle the host never resolves waits (warned once), and goes through once the other move arrives.
+		NetState cycle;
+		NetEntityUpdate back;
+		back.Entity = 71;
+		back.Parent = UUID(70);
+		cycle.Updates = { back };
+		const uint64_t since = Log::GetHistory().GetTotalCount();
+		host.Snapshot(cycle);
+		host.Advance(90);
+		CHECK_FALSE(client.GetEntityByUUID(71).GetParent());
+		uint64_t next = 0;
+		const auto messages = Log::GetHistory().GetMessagesSince(since, next);
+		CHECK(std::ranges::count_if(messages, [](const LogMessage& message) { return message.Text.find("cannot go under entity") != std::string::npos; }) == 1);
+		NetState resolved;
+		NetEntityUpdate root;
+		root.Entity = 70;
+		root.Parent = UUID(0);
+		resolved.Updates = { root };
+		host.Snapshot(resolved);
+		CHECK(client.GetEntityByUUID(71).GetParent() == client.GetEntityByUUID(70));
+		CHECK_FALSE(client.GetEntityByUUID(70).GetParent());
 	}
 
 	TEST_CASE("An owner hears of components the host adds or removes on its entity, and keeps its own values")

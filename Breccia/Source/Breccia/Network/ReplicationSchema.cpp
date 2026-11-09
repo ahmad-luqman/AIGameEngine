@@ -70,7 +70,7 @@ namespace Breccia {
 		: m_Hash(ComputeHash(ComponentRegistry::GetAll()))
 	{
 		for (const ComponentInfo& info : ComponentRegistry::GetAll())
-			m_Components.push_back({ &info, info.IsCore });
+			m_Components.push_back({ &info });
 	}
 
 	const ReplicationSchema& ReplicationSchema::Get()

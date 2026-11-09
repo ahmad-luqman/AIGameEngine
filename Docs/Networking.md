@@ -70,12 +70,14 @@ replicates separately, under its parent).
   networked during play, or a tree member that got a `Networked` component of its own. Such an entity takes the spawn's
   replicated fields, parent and components with replicated fields, and keeps the rest of its own (other fields and
   components, its children). Descendants in the spawn that the client lacks (made on the host during play) are created
-  under it, checked as a new spawn's are; those it has keep their own values.
+  under it, checked as a new spawn's are; those it has keep their own values and move where the spawn puts them. A new
+  entity's spawn holding entities the client has (an authored one the host moved under it) keeps them the same way.
 - **Updates.** Afterwards only the fields components declare in `ComponentInfo::ReplicatedFields` travel, and only when
   they change: `Transform` (Translation, Rotation, Scale), `Networked` (Owner, Authority), `Animator` (Clip, Speed),
   `Material` (AlbedoColor, EmissiveColor, EmissiveIntensity) and the lights' Color and Intensity. A component with
   replicated fields that is added or removed is added or removed on clients too; components without them, and fields
-  not listed, reach a client only inside a spawn. A changed parent replicates.
+  not listed, reach a client only inside a spawn. A changed parent replicates; a move the client's hierarchy refuses for
+  now (a cycle that another move in the same snapshot undoes, or too deep) waits and goes through once it can.
 - **Despawns.** Destroying the entity on the host destroys its descendants there too, so they all despawn. Removing its
   `Networked` component removes it, with its non-networked descendants, from clients; descendants with a `Networked`
   component of their own stay, moved to the root until the parent is networked again.

@@ -93,6 +93,8 @@ namespace Breccia {
 					const ReplicationSchema::Component* info = schema.FindComponent(component.Component);
 					return info ? info->Info->Name : "component " + std::to_string(component.Component);
 				};
+				// Added is the last kind: a new one must move this check.
+				static_assert(static_cast<uint8_t>(NetComponentChange::Added) == 2, "a new NetComponentChange must be decoded");
 				uint8_t change = 0;
 				if (!reader.ReadU8(change) || change > static_cast<uint8_t>(NetComponentChange::Added))
 					return Fail(reader, outError, "a " + name() + " entry is truncated or has an invalid change");
@@ -221,7 +223,7 @@ namespace Breccia {
 				// Senders track only components with replicated fields: nothing else is added or removed after a spawn.
 				if (replicated == 0)
 					return name + " has no replicated fields";
-				if (component.Change != NetComponentChange::Changed && info->IsCore)
+				if (component.Change != NetComponentChange::Changed && info->Info->IsCore)
 					return name + " cannot be added or removed";
 				if (fromClient && component.Change != NetComponentChange::Changed)
 					return "clients cannot add or remove components";

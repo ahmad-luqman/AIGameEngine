@@ -32,7 +32,7 @@ namespace Breccia {
 	class SimulatedNetwork
 	{
 	public:
-		// The settings must be finite and non-negative, with Loss in [0, 1].
+		// The settings must be finite and non-negative, with Loss in [0, 1] and TimeoutSeconds positive.
 		explicit SimulatedNetwork(SimulatedLinkSettings settings = {}, uint32_t seed = 1);
 		~SimulatedNetwork();
 

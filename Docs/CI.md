@@ -14,7 +14,8 @@ this page is the overview and the list of gaps to keep in mind when a change dep
 Every job that builds Breccia sets up its runner through `.github/actions/setup-breccia` (the Linux package list, the
 Homebrew packages, the Windows Vulkan SDK, MSVC and Ninja, and the dependency sources). Pull requests that change the
 action also run `release.yml`; `fuzz-nightly.yml` has no pull request trigger, so start it by hand after changing it (its
-header says when and how).
+header says when and how). Fuzz builds link two targets at a time (a Ninja job pool in `Tests/Fuzz/CMakeLists.txt`):
+each links the whole engine with sanitizers, and linking one per core ran a 16 GB runner out of memory mid-build.
 
 A `ci.yml` run took about 10 minutes in November 2026, set by the slowest clang-tidy shard. `main` has no branch
 protection, so renaming or removing jobs blocks nothing; check `gh api repos/ahmad-luqman/AIGameEngine/rulesets` and
