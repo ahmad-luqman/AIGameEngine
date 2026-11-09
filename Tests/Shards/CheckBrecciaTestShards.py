@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Checks that the ctest entries running BrecciaTests (its shards, Tests/CMakeLists.txt) run every test case exactly once
-(ctest BrecciaTestShards): each entry's registered command lists its test cases, and together they must equal the
+"""Checks that the ctest entries running BrecciaTests (its shards, Tests/CMakeLists.txt) run every test case exactly
+once (ctest BrecciaTestShards): each entry's registered command lists its test cases, and together they must equal the
 binary's full list, with no case in two entries and no entry empty. The entries must be every ctest entry that runs this
 binary, differ from the BrecciaTests entry only in their file filter, and share its properties (labels, which CI selects
 tests by, the timeout, the environment with the sanitizer options, the working directory); none may have a property

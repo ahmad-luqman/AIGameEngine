@@ -1,5 +1,7 @@
 # Breccia
 
+Formerly named Basalt (renamed in #76: other engines already use that name).
+
 A desktop 3D engine built for agent-driven development, for Windows, macOS and Linux: C++20, Vulkan through
 [nvrhi](https://github.com/NVIDIA-RTX/NVRHI), PBR with image-based lighting, soft shadows and SSAO, Jolt
 physics, Lua scripting, an editor — and a complete JSON automation API so AI agents can build and test games

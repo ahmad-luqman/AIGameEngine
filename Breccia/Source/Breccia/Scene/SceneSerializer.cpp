@@ -414,7 +414,7 @@ namespace Breccia {
 	json SceneSerializer::SerializeScene(Scene& scene)
 	{
 		json data;
-		data["Format"] = "BrecciaScene";
+		data["Format"] = SceneFormatName;
 		data["Version"] = FormatVersion;
 		data["Name"] = scene.GetName();
 		data["Renderer"] = SerializeRendererSettings(scene.GetRendererSettings());
@@ -437,13 +437,13 @@ namespace Breccia {
 
 		ObjectReader reader(data, "scene");
 		int64_t version = FormatVersion;
-		std::string format = "BrecciaScene";
+		std::string format = SceneFormatName;
 		std::string name = scene.GetName();
 		if (!reader.Integer("Version", version, 1, INT32_MAX, outError) || !reader.String("Format", format, outError) || !reader.String("Name", name, outError))
 			return false;
-		if (format != "BrecciaScene")
+		if (format != SceneFormatName)
 		{
-			outError = "'Format' is '" + format + "', expected 'BrecciaScene'";
+			outError = "'Format' is '" + format + "', expected '" + SceneFormatName + "'";
 			return false;
 		}
 		if (version > FormatVersion)
@@ -651,7 +651,7 @@ namespace Breccia {
 
 	json SceneSerializer::SceneDocument(json entities)
 	{
-		return { { "Format", "BrecciaScene" }, { "Version", FormatVersion }, { "Entities", std::move(entities) } };
+		return { { "Format", SceneFormatName }, { "Version", FormatVersion }, { "Entities", std::move(entities) } };
 	}
 
 	bool SceneSerializer::SavePrefab(Entity root, const std::filesystem::path& path, std::string& outError)
@@ -667,7 +667,7 @@ namespace Breccia {
 	{
 		std::vector<std::string> warnings;
 		json data;
-		data["Format"] = "BrecciaPrefab";
+		data["Format"] = PrefabFormatName;
 		data["Version"] = FormatVersion;
 		if (!Prefab::ToFileEntities(std::move(entities), path, rootKind, data["Entities"], warnings, outError))
 			return false;

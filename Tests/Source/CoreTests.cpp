@@ -738,7 +738,7 @@ TEST_SUITE("Core")
 		const std::vector<std::pair<nlohmann::json, const char*>> cases = {
 			{ nlohmann::json::array(), "must be an object" },
 			{ { { "Actions", {} }, { "Extra", 1 } }, "unknown key 'Extra'" },
-			{ { { "Format", "BrecciaScene" } }, "Format must be \"BrecciaInput\"" },
+			{ { { "Format", "BasaltInput" } }, "Format must be \"BrecciaInput\", not \"BasaltInput\"" },
 			{ { { "Version", 2 } }, "unsupported Version" },
 			{ { { "Actions", nlohmann::json::array({ "Jump" }) } }, "input action #1 must be an object" },
 			{ { { "Actions", "Jump" } }, "Actions must be an array" },

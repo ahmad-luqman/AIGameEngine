@@ -84,6 +84,8 @@ namespace Breccia {
 	{
 	public:
 		static constexpr const char* FileName = "Project.bproject";
+		// The project file's "Format" marker. A file without one is read; one with another marker is rejected.
+		static constexpr const char* FormatName = "BrecciaProject";
 		static constexpr const char* AssetDirectoryName = "Assets";
 		// The input actions file. Optional: a project without one has no actions.
 		static constexpr const char* InputFileName = "Input.binput";

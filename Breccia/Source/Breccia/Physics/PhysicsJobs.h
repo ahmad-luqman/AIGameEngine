@@ -19,9 +19,9 @@ namespace Breccia {
 
 	// Jolt dependencies and barriers backed by the engine pool, without a second set of workers.
 	// Process lifetime keeps queued job references valid after a world finishes with its barriers.
-	// Barriers are Breccia's own rather than JPH::JobSystemWithBarrier's: on Linux those wait in sem_wait and ignore its
-	// result, so a signal handler installed without SA_RESTART (libFuzzer's timer) ended a wait early and a physics step
-	// continued past running jobs.
+	// Barriers are Breccia's own rather than JPH::JobSystemWithBarrier's: on Linux those wait in sem_wait and ignore
+	// its result, so a signal handler installed without SA_RESTART (libFuzzer's timer) ended a wait early and a physics
+	// step continued past running jobs.
 	class PhysicsJobs final : public JPH::JobSystem
 	{
 	public:

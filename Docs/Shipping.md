@@ -88,9 +88,9 @@ Details tab) and, with a project icon, the icon: an `RT_GROUP_ICON` named `GLFW_
 loads as the window class icon) with PNG images from 16 to 256 px. Zip the folder to distribute it.
 
 Every Windows export, folder or package, removes the Authenticode signature of the runtime it copies (a release's
-runtime, once signed, names Breccia's publisher): the game is yours to sign (see below), and a package's resource rewrite
-would break the signature anyway. An export refuses a runtime whose certificate table is not where signing tools put it
-(past the headers and every section, at the end of the file).
+runtime, once signed, names Breccia's publisher): the game is yours to sign (see below), and a package's resource
+rewrite would break the signature anyway. An export refuses a runtime whose certificate table is not where signing tools
+put it (past the headers and every section, at the end of the file).
 
 **Linux: an AppImage.**
 
@@ -101,13 +101,14 @@ would break the signature anyway. An export refuses a runtime whose certificate 
 <Name>-<version>-<arch>.AppImage
 ```
 
-`<Name>.png` is the project icon (at most 512 px), or Breccia's own icon at 256 px when the project has none (an AppImage
-must have one). The AppDir is replaced on every export, and an export that builds an AppImage removes the game's
-earlier ones (other games' AppImages in the folder stay). The AppDir always gets built. The `.AppImage` file needs [appimagetool](https://github.com/AppImage/appimagetool):
-`appImageTool` in the command, else `$APPIMAGETOOL`, else `appimagetool` on `PATH`. Without it, the export succeeds
-with a warning, and the AppDir is the package. Exports run appimagetool with `APPIMAGE_EXTRACT_AND_RUN=1`, so it
-needs no FUSE. Players need a Vulkan driver (their distribution's `libvulkan1` and Mesa or a GPU vendor driver) and a
-glibc at least as new as the build machine's (Ubuntu 24.04: 2.39).
+`<Name>.png` is the project icon (at most 512 px), or Breccia's own icon at 256 px when the project has none (an
+AppImage must have one). The AppDir is replaced on every export, and an export that builds an AppImage removes the
+game's earlier ones (other games' AppImages in the folder stay). The AppDir always gets built. The `.AppImage` file
+needs [appimagetool](https://github.com/AppImage/appimagetool): `appImageTool` in the command, else `$APPIMAGETOOL`,
+else `appimagetool` on `PATH`. Without it, the export succeeds with a warning, and the AppDir is the package. Exports
+run appimagetool with `APPIMAGE_EXTRACT_AND_RUN=1`, so it needs no FUSE. Players need a Vulkan driver (their
+distribution's `libvulkan1` and Mesa or a GPU vendor driver) and a glibc at least as new as the build machine's (Ubuntu
+24.04: 2.39).
 
 ### Asset archive (`"archive": true`)
 

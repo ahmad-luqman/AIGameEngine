@@ -382,7 +382,7 @@ namespace Breccia {
 			return std::nullopt;
 		if (const auto format = data.find("Format"); format != data.end() && *format != FormatName)
 		{
-			outError = fmt::format("input actions: Format must be \"{}\"", FormatName);
+			outError = fmt::format("input actions: Format must be \"{}\", not {}", FormatName, format->dump());
 			return std::nullopt;
 		}
 		if (const auto version = data.find("Version"); version != data.end() && !(version->is_number_integer() && version->get<int64_t>() == FormatVersion))

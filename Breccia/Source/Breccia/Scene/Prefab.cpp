@@ -1094,9 +1094,9 @@ namespace Breccia {
 				outError = "prefab '" + name + "' is not a valid prefab file";
 				return false;
 			}
-			if (const auto format = data.find("Format"); format != data.end() && *format != "BrecciaPrefab")
+			if (const auto format = data.find("Format"); format != data.end() && *format != SceneSerializer::PrefabFormatName)
 			{
-				outError = "prefab '" + name + "' has 'Format' " + format->dump() + ", expected \"BrecciaPrefab\"";
+				outError = "prefab '" + name + "' has 'Format' " + format->dump() + ", expected \"" + SceneSerializer::PrefabFormatName + "\"";
 				return false;
 			}
 			const auto version = data.find("Version");

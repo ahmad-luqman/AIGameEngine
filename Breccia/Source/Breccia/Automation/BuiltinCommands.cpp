@@ -60,6 +60,9 @@ namespace Breccia {
 
 	namespace {
 
+		// The "Format" marker of replay files (replay.record_stop writes it, replay.run requires it).
+		constexpr const char* ReplayFormatName = "BrecciaReplay";
+
 		using json = nlohmann::json;
 		namespace Schema = CommandSchema;
 
@@ -2641,7 +2644,7 @@ namespace Breccia {
 				const uint32_t seed = session.GetRecordingSeed().value_or(Project::GetActiveRandomSeed());
 				const bool reloaded = session.HasReloadedScriptsWhileRecording();
 				const json events = session.StopRecording();
-				json replay = { { "Format", "BrecciaReplay" }, { "Version", 1 }, { "Frames", frames }, { "RandomSeed", seed }, { "Events", events } };
+				json replay = { { "Format", ReplayFormatName }, { "Version", 1 }, { "Frames", frames }, { "RandomSeed", seed }, { "Events", events } };
 				// The recorded run's final state: replay.run with assertHash checks a replay reproduces it.
 				if (playing)
 					replay["StateHash"] = SceneSerializer::ComputeStateHash(*playing);
@@ -2661,8 +2664,11 @@ namespace Breccia {
 				if (!text)
 					throw CommandError("cannot read '" + path + "'");
 				const json replay = ParseJson(*text);
-				if (!replay.is_object() || replay.value("Format", "") != "BrecciaReplay" || !replay.contains("Events") || !replay["Events"].is_array())
-					throw CommandError("'" + path + "' is not a Breccia replay file");
+				if (!replay.is_object() || replay.value("Format", "") != ReplayFormatName || !replay.contains("Events") || !replay["Events"].is_array())
+				{
+					const bool otherFormat = replay.is_object() && replay.contains("Format") && replay["Format"] != ReplayFormatName;
+					throw CommandError("'" + path + "' is not a Breccia replay file" + (otherFormat ? " ('Format' is " + replay["Format"].dump() + ")" : std::string()));
+				}
 				// Replays from before seeds were stored ran with Random::DefaultSeed, the only seed there was.
 				const auto storedSeed = replay.find("RandomSeed");
 				uint32_t recordedSeed = Random::DefaultSeed;

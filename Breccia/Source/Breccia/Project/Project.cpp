@@ -151,6 +151,11 @@ namespace Breccia {
 			outError = "'" + fileText + "' is not valid JSON";
 			return nullptr;
 		}
+		if (const auto format = data.find("Format"); format != data.end() && *format != FormatName)
+		{
+			outError = "'" + fileText + "' has 'Format' " + format->dump() + ", expected \"" + FormatName + "\"";
+			return nullptr;
+		}
 
 		Ref<Project> project = CreateRef<Project>();
 		project->m_Directory = filePath.parent_path();
@@ -325,7 +330,7 @@ namespace Breccia {
 		if (writeInput && !FileSystem::WriteTextFile(GetInputFilePath(), m_Config.InputActions.ToJson().dump(1, '\t'), outError))
 			return false;
 		const nlohmann::json data = {
-			{ "Format", "BrecciaProject" },
+			{ "Format", FormatName },
 			{ "Name", m_Config.Name },
 			{ "Version", m_Config.Version },
 			{ "Company", m_Config.Company },

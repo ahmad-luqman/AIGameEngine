@@ -2,9 +2,12 @@
 
 Breccia is a desktop 3D engine built for agent-driven development (C++20, CMake, Vulkan via nvrhi) for Windows, macOS
 and Linux. It is early alpha (0.1.0, unreleased), and its code is held to production standards: the rules below are not
-relaxed because of that. Scope and non-goals are in `ROADMAP.md` (Scope). This file is the source of truth for how to
-work in this repository. Read it fully before changing code. Task-specific procedures live in
-`.claude/skills/*/SKILL.md`.
+relaxed because of that. Until #76 the engine was named Basalt: older commits, PRs and agent notes use the old names
+(`Basalt` → `Breccia`, `basalt` → `breccia`, `BASALT_` → `BRECCIA_`, the `BS_` macro prefix → `BR_`). Files and per-user
+data from before the rename are not read: their `Format` markers (`BasaltScene` and so on) are rejected, and a build
+tree configured before it stops at configure (top-level `CMakeLists.txt`). Scope and non-goals are in `ROADMAP.md`
+(Scope). This file is the source of truth for how to work in this repository. Read it fully before changing code.
+Task-specific procedures live in `.claude/skills/*/SKILL.md`.
 
 ## Repository layout
 
@@ -245,15 +248,15 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   entry can be read in part (`PackArchive::ReadStored`, unhashed), which is how audio clips of 1 MiB or more are read from it, `AudioSource.Stream`
   or not, and MP3 and FLAC are always stored for that; `PackArchiveWriter` compresses a batch at a time on the job system and writes
   in path order, so its bytes stay deterministic.
-  Exports never keep the runtime's signature (a release's, once signed, is Breccia's publisher's): Windows exports remove
-  it (`RemoveAuthenticodeSignature`, a pure byte function) before resources are written, and macOS exports are signed ad
-  hoc (`/usr/bin/codesign`, which also drops the hardened runtime whose library validation would refuse the bundled
-  Vulkan libraries). macOS exports take the Vulkan libraries next to the runtime first (the tools archive's) and warn when
-  one lacks an architecture of the runtime (`MachOArchitectures`). Developers sign with `scripts/sign-macos.sh` (a bundle
-  or a folder of loose code) or `scripts/sign-windows.py` (signtool). macOS builds target macOS 13.3 by default
-  (`CMAKE_OSX_DEPLOYMENT_TARGET`, set in the top-level `CMakeLists.txt` before `project()`, stated in exported
-  `Info.plist`s). Tags run `.github/workflows/release.yml` (`scripts/package_release.py`, the signing scripts): macOS
-  universal (arm64 + x86_64, Jolt's x86-64 half at SSE4.2, with the loader and MoltenVK from
+  Exports never keep the runtime's signature (a release's, once signed, is Breccia's publisher's): Windows exports
+  remove it (`RemoveAuthenticodeSignature`, a pure byte function) before resources are written, and macOS exports are
+  signed ad hoc (`/usr/bin/codesign`, which also drops the hardened runtime whose library validation would refuse the
+  bundled Vulkan libraries). macOS exports take the Vulkan libraries next to the runtime first (the tools archive's) and
+  warn when one lacks an architecture of the runtime (`MachOArchitectures`). Developers sign with
+  `scripts/sign-macos.sh` (a bundle or a folder of loose code) or `scripts/sign-windows.py` (signtool). macOS builds
+  target macOS 13.3 by default (`CMAKE_OSX_DEPLOYMENT_TARGET`, set in the top-level `CMakeLists.txt` before `project()`,
+  stated in exported `Info.plist`s). Tags run `.github/workflows/release.yml` (`scripts/package_release.py`, the signing
+  scripts): macOS universal (arm64 + x86_64, Jolt's x86-64 half at SSE4.2, with the loader and MoltenVK from
   `scripts/ci-universal-vulkan.sh`, every shipped Mach-O checked for both and the x86-64 half started under Rosetta),
   macOS signed ad hoc or with a Developer ID, Windows signed when its secrets are set. See `Docs/Shipping.md`.
 - **Editor file dialogs.** Path prompts add native pickers (`Breccia-Editor/Source/FileDialogs`, nativefiledialog-extended,
@@ -347,7 +350,7 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
 scripts/build.sh            # Debug build into build/
 scripts/build.sh Release    # build-release/
 scripts/test.sh             # build + ctest (unit tests, format check, ...)
-./build/bin/BrecciaTests     # run unit tests directly; add -tc="*name*" to filter
+./build/bin/BrecciaTests    # run unit tests directly; add -tc="*name*" to filter
 ```
 
 - Requirements: CMake ≥ 3.25, Ninja, a C++20 compiler, `glslc` (Vulkan SDK or shaderc), a Vulkan 1.3

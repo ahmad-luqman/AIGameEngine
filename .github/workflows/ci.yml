@@ -15,8 +15,8 @@ concurrency:
 
 # Every build that compiles C++, including those in scripts/coverage.sh and scripts/fuzz.sh, compiles through ccache
 # (build-and-test uses sccache on Windows; the clang-tidy jobs compile only shaders and clear the launchers). The ccache
-# action sets ccache's compiler_check to content only on macOS and Windows. Every job that builds Breccia takes its build
-# tools and dependency sources from .github/actions/setup-breccia.
+# action sets ccache's compiler_check to content only on macOS and Windows. Every job that builds Breccia takes its
+# build tools and dependency sources from .github/actions/setup-breccia.
 env:
   CMAKE_C_COMPILER_LAUNCHER: ccache
   CMAKE_CXX_COMPILER_LAUNCHER: ccache

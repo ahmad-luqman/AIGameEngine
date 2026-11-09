@@ -259,7 +259,7 @@ namespace Breccia {
 		const auto format = data.find("Format");
 		if (format == data.end() || *format != FormatName)
 		{
-			outError = std::string("'Format' must be \"") + FormatName + "\"";
+			outError = std::string("'Format' must be \"") + FormatName + "\"" + (format == data.end() ? std::string(", and is missing") : ", not " + format->dump());
 			return ParseStatus::Malformed;
 		}
 		const auto version = data.find("Version");
