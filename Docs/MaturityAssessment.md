@@ -1,13 +1,13 @@
-# Basalt Engine — Maturity Assessment and Gap Analysis
+# Breccia Engine — Maturity Assessment and Gap Analysis
 
 Assessed on 2026-11-07 at `main` @ `4f823ab` (0.1.0, untagged). This replaces the 2026-10-21 report, which was a survey
 of `abffa75` with a delta on top. Scores read `new (old)`.
 
 ## 1. Verdict
 
-**Basalt is an early alpha with exceptional engineering process and a real agent interface, not yet a production
+**Breccia is an early alpha with exceptional engineering process and a real agent interface, not yet a production
 engine.** General score **34.8 / 100 (was 46.5, printed as 46)**, agent-authoring score **48.1 / 100 (was 63)**. On the old
-dimensions and weights, for a like-for-like comparison, the fall is 46.5 → 35 and 63 → 50. Basalt did not get worse. In fact it gained
+dimensions and weights, for a like-for-like comparison, the fall is 46.5 → 35 and 63 → 50. Breccia did not get worse. In fact it gained
 sessions 11–24 since the last report. The scores fell for three reasons:
 
 1. **The old scores were feature-list scores.** This pass read the code, built it from a clean clone and ran it past the
@@ -16,11 +16,11 @@ sessions 11–24 since the last report. The scores fell for three reasons:
 2. **Testing and a source audit found real defects:** physics silently fails at scale, a script loop hangs an agent's
    session, the validator accepts a format the engine cannot play, and the editor's automation port accepts commands
    wrapped in HTTP (section 4).
-3. **Competitors moved.** Unity and Unreal now ship official agent tooling and Godot's animation stack overtook Basalt's,
+3. **Competitors moved.** Unity and Unreal now ship official agent tooling and Godot's animation stack overtook Breccia's,
    so two of the old claims of superiority no longer stand. Godot's IK family, spring bones, retargeting and animation
-   editor beat Basalt's authoring, and Basalt's lead on the agent interface narrowed from 3 points over Unity to 1.
+   editor beat Breccia's authoring, and Breccia's lead on the agent interface narrowed from 3 points over Unity to 1.
 
-**What Basalt can ship today:** a contained, stylized desktop 3D game with a Latin-only UI and no multiplayer, no NPC
+**What Breccia can ship today:** a contained, stylized desktop 3D game with a Latin-only UI and no multiplayer, no NPC
 pathfinding and no open world, by a team that can fix engine problems itself. **What it cannot ship without new engine
 systems:** anything on console, mobile or web; dense levels; large worlds; localized releases; multiplayer.
 
@@ -38,9 +38,9 @@ Unlike the last report, this one ran the engine.
   scores. Their worst findings were then checked against the source or reproduced.
 - **Researched:** official release notes and docs for each competitor, on 2026-11-07. GitHub figures come from the
   GitHub API that day. Claims that could not be confirmed are in section 13, not stated as facts.
-- **Scores are judgment calls applied to the anchors in section 9,** not benchmarks. Treat Basalt, Godot, Unity and
+- **Scores are judgment calls applied to the anchors in section 9,** not benchmarks. Treat Breccia, Godot, Unity and
   Unreal as ±1 per cell; Bevy ±1 to 2 and Flax, O3DE and Fyrox ±2, because those were assessed from docs alone. No
-  competitor was built or run, so hands-on findings exist only for Basalt. That asymmetry is real: Basalt's defects were
+  competitor was built or run, so hands-on findings exist only for Breccia. That asymmetry is real: Breccia's defects were
   looked for, and competitors' were not. Their scale limits are not compared here.
 
 ## 3. Snapshot
@@ -151,7 +151,7 @@ table and the scores below stand as measured at `4f823ab`.
 
 ### Rendering and scale
 
-| Capability | Basalt | Godot 4.7 | Bevy 0.20 | Unity 6.6 | Unreal 5.8 | Flax 1.13 |
+| Capability | Breccia | Godot 4.7 | Bevy 0.20 | Unity 6.6 | Unreal 5.8 | Flax 1.13 |
 |---|---|---|---|---|---|---|
 | Global illumination | **None** | SDFGI, VoxelGI, lightmaps, SSIL | Lightmaps, irradiance volumes, Solari (experimental) | Lightmaps, Adaptive Probe Volumes | Lumen (software and hardware RT) | DDGI |
 | Reflections | IBL only | SSR, probes | SSR, parallax cubemaps | Probes; SSR in HDRP, URP in 6.7 | Lumen reflections | Unconfirmed |
@@ -167,12 +167,12 @@ table and the scores below stand as measured at `4f823ab`.
 | Texture streaming | **No** | In 4.8 | No first-party | Content Directories | World Partition, Nanite | Unconfirmed |
 | Large worlds | No (float32) | Custom double build | Community `big_space` | Unconfirmed | World Partition | Unconfirmed |
 
-Basalt has the same core as peers at the clustered PBR, cascaded-shadow, SSAO, TAA and bloom level. The gap is everything
+Breccia has the same core as peers at the clustered PBR, cascaded-shadow, SSAO, TAA and bloom level. The gap is everything
 above that core: Bevy, which has no editor, is ahead of it on rendering.
 
 ### Physics, animation, gameplay
 
-| Capability | Basalt | Godot 4.7 | Bevy 0.20 | Unity 6.6 | Unreal 5.8 | Flax 1.13 |
+| Capability | Breccia | Godot 4.7 | Bevy 0.20 | Unity 6.6 | Unreal 5.8 | Flax 1.13 |
 |---|---|---|---|---|---|---|
 | Physics backend | Jolt 5.6 | Jolt (default for new 3D) | None built in; Avian, Rapier | PhysX; Unity Physics (ECS) | Chaos | PhysX 5.1 |
 | Vehicles, cloth, soft bodies | **None** | Partial | Crates | Cloth | All, plus destruction, hair | Vehicles, cloth |
@@ -189,13 +189,13 @@ above that core: Bevy, which has no editor, is ahead of it on rendering.
 | Navigation | **None** | Yes | Crates | Yes | Recast, Mass, StateTree | Yes |
 | Networking | **None** | High-level multiplayer | Crates (lightyear, replicon) | Netcode for GameObjects and Entities | Replication, Iris | Replication, RPC |
 
-Basalt's runtime character stack remains its most impressive area: powered ragdolls with active balance and foot locking
+Breccia's runtime character stack remains its most impressive area: powered ragdolls with active balance and foot locking
 stand up well against Godot. It lost the outright lead because Godot's IK solvers are broader and its animation editor
-exists; Basalt's depth is also untested by any real character content.
+exists; Breccia's depth is also untested by any real character content.
 
 ### Platforms
 
-| Target | Basalt | Godot | Bevy | Unity | Unreal | Flax | O3DE | Defold |
+| Target | Breccia | Godot | Bevy | Unity | Unreal | Flax | O3DE | Defold |
 |---|---|---|---|---|---|---|---|---|
 | Editor | Win, macOS, Linux | Win, macOS, Linux | None | Win, macOS, Linux | Win, macOS, Linux | Win, macOS, Linux | Win, Linux (macOS exp.) | Win, macOS, Linux |
 | Windows, macOS, Linux | **Host OS only** | Yes, cross-export | Yes | Yes | Yes | Yes | Yes (macOS exp.) | Yes |
@@ -206,12 +206,12 @@ exists; Basalt's depth is also untested by any real character content.
 | Graphics APIs | Vulkan only (MoltenVK) | Vulkan, D3D12, Metal, GL | wgpu | D3D, Vulkan, Metal, GL | D3D12, Vulkan, Metal | Unconfirmed; WebGPU on web | Unconfirmed | Metal, Vulkan, others |
 
 Consoles are the hard gate for any new engine: even Godot goes through W4 Games ($800 per platform per year, or $2,000 for
-all) or porting houses. Linux is 3.95% of Steam and macOS 2.35%, so Basalt's reach is effectively Windows PC plus Steam
+all) or porting houses. Linux is 3.95% of Steam and macOS 2.35%, so Breccia's reach is effectively Windows PC plus Steam
 Deck, which is a viable niche but a narrow one. Mobile is about 57% of the market by revenue (Newzoo, press-reported).
 
 ### Tooling and ease of use
 
-| | Basalt | Godot | Bevy | Unity | Unreal |
+| | Breccia | Godot | Bevy | Unity | Unreal |
 |---|---|---|---|---|---|
 | Install | Build from source (6 min on M4 Max); **no binary release** | 74–162 MB download, no install | Rust toolchain, `cargo add` | Reported 8.7–14 GB | 150–200 GB free advised (forum, Linux) |
 | First-run path | Path prompt; empty project with no scene | Project manager | Code only | Hub | Home Panel |
@@ -221,12 +221,12 @@ Deck, which is a viable niche but a narrow one. Mobile is about 57% of the marke
 | Test framework for games | `assert.*`, `render.compare`, batch | GUT, gdUnit4 | `cargo test`, BRP | Unity Test Framework | Automation, Gauntlet, Screenshot tests |
 | Marketplace | None | Asset Store (new in 4.7) | 501 Bevy Assets | About 125K assets (third-party count) | Fab, 420K+ listings |
 
-Basalt is unusual here: excellent for a machine and poor for a person. The agent path takes seconds; the human path has
+Breccia is unusual here: excellent for a machine and poor for a person. The agent path takes seconds; the human path has
 no download, no tutorial and an editor that opens to a prompt.
 
 ### Agent tooling, the differentiator
 
-| Capability | Basalt | Unity CLI | Unreal (MCP, Python, automation) | Roblox Studio MCP | Godot (community tools) | Bevy BRP |
+| Capability | Breccia | Unity CLI | Unreal (MCP, Python, automation) | Roblox Studio MCP | Godot (community tools) | Bevy BRP |
 |---|---|---|---|---|---|---|
 | Status | Works, no external users | Beta 1.0.0-beta.17, free | Experimental in 5.8 | Built in since Mar 2026 | No official server | First-party BRP; community MCP |
 | Scene and asset edits | Yes, schema-validated | Yes, plus `unity eval` C# | Partial | Yes | Yes | Entities |
@@ -249,13 +249,13 @@ Three things changed since October.
 - **The first multi-engine benchmark complicates the "lightweight is better" assumption.** CEGame-Bench (preprint, 50
   tasks, 5 engines) found that same-game swaps favored Unreal and Unity over Godot, in the authors' words because
   "Heavyweight engines are harder to drive but easier to check." Only 16% of runs reached the ending and 4% were fully
-  solved. The swap measures engine plus toolchain, not engine alone, but Basalt's strict validation should benefit from
-  the same effect. That is a hypothesis: **Basalt has never been run through an agent benchmark, and no agent outside this
+  solved. The swap measures engine plus toolchain, not engine alone, but Breccia's strict validation should benefit from
+  the same effect. That is a hypothesis: **Breccia has never been run through an agent benchmark, and no agent outside this
   repo has used it.** The same studies report that agents rarely look at their own game (under 8% of tool calls in
-  UnityBench), so Basalt's headless blind spot may matter less than it appears, though visual checks remain the weakest
+  UnityBench), so Breccia's headless blind spot may matter less than it appears, though visual checks remain the weakest
   link in scene construction.
 
-Basalt's durable edge is deterministic replay plus headless assertions, which no competitor documents together. The rest of its lead is being competed away.
+Breccia's durable edge is deterministic replay plus headless assertions, which no competitor documents together. The rest of its lead is being competed away.
 
 ## 6. Gap analysis
 
@@ -296,17 +296,17 @@ tilemaps, cloth, vehicles, decals and reflections still have no code at all.
 
 ## 7. Positioning
 
-| Tier | Engines | Basalt against them |
+| Tier | Engines | Breccia against them |
 |---|---|---|
 | Mainstream | Unreal, Unity | Different category. A narrow technical lead in deterministic agent testing only |
 | Mature open source | Godot | Behind on everything a team notices first. Comparable on character runtime depth; ahead on determinism |
 | Complete but smaller | Flax, O3DE, Stride, Defold | Behind on features and shipping. Flax is the closest to a small Unreal; Defold has the best official agent tooling in this group, including an agent manual, OpenAPI and `llms.txt`, though it has no official MCP |
-| Code-first | Bevy, Fyrox | Bevy leads on rendering and platforms; Basalt leads on editor, physics integration and animation. Fyrox has a released 1.0, an editor and navigation; Basalt has the better renderer |
-| Single-lead renderers | Wicked Engine | Wicked has far more rendering (Surfel GI, DDGI, path tracing) and iOS and console code. Basalt leads on tests and tooling |
-| AI-native creation tools | Roblox Assistant and similar | A different market. Roblox publishes only inside Roblox; Basalt exports desktop games with no platform lock-in |
+| Code-first | Bevy, Fyrox | Bevy leads on rendering and platforms; Breccia leads on editor, physics integration and animation. Fyrox has a released 1.0, an editor and navigation; Breccia has the better renderer |
+| Single-lead renderers | Wicked Engine | Wicked has far more rendering (Surfel GI, DDGI, path tracing) and iOS and console code. Breccia leads on tests and tooling |
+| AI-native creation tools | Roblox Assistant and similar | A different market. Roblox publishes only inside Roblox; Breccia exports desktop games with no platform lock-in |
 
 **Name collision.** The engine Claude built in The Cherno's "Can AI Make a Game Engine?" video (October 2026) is also
-called Basalt. It is a separate, unreleased project from that video. Nothing about it counts as evidence for this repo,
+called Breccia. It is a separate, unreleased project from that video. Nothing about it counts as evidence for this repo,
 and the shared name is a discoverability and confusion risk at first release.
 
 Hazel could not be assessed: its site was unreachable on the day and its 3D engine is gated, so the "Hazel-class" column
@@ -343,7 +343,7 @@ sums to 100. The total is the sum of weight × score, divided by 10.
 Three dimensions are new: Debugging & profiling (split out of Editor & tooling), Ease of
 use & onboarding, and Licence & cost. Fyrox, O3DE and Flax columns are new; Hazel-class is dropped.
 
-| Dimension | G | A | Basalt | Godot 4.7 | Bevy 0.20 | Unity 6.6 | Unreal 5.8 | Flax 1.13 | O3DE 26.05 | Fyrox 1.0 |
+| Dimension | G | A | Breccia | Godot 4.7 | Bevy 0.20 | Unity 6.6 | Unreal 5.8 | Flax 1.13 | O3DE 26.05 | Fyrox 1.0 |
 |---|---|---|---|---|---|---|---|---|---|---|
 | Rendering features | 9 | 8 | **4 (6)** | 8 | 7 | 9 | 10 | 8 | 8 | 4 |
 | Render scalability | 7 | 3 | **3 (4)** | 6 | 6 | 8 | 10 | 7 | 6 | 3 |
@@ -367,14 +367,14 @@ use & onboarding, and Licence & cost. Fyrox, O3DE and Flax columns are new; Haze
 | **Total G** | | | **34.8** | 77.7 | 51.1 | 85.4 | 90.5 | 66.0 | 58.7 | 45.0 |
 | **Total A** | | | **48.1** | 74.8 | 53.4 | 81.3 | 83.3 | 59.5 | 58.2 | 42.4 |
 
-\* Closed source, estimated. Bevy's physics and networking come from third-party crates, counted as partial. Basalt's
+\* Closed source, estimated. Bevy's physics and networking come from third-party crates, counted as partial. Breccia's
 Licence & cost is 9 rather than 10 only because exports ship no third-party notices.
 
-The new totals are not directly comparable with the old ones, which used other weights. For Basalt, the old dimensions on
-the old weights give G 46.5 → 35 and A 63 → 50. Basalt's G rank is robust: it stays last even if every one of its cells
+The new totals are not directly comparable with the old ones, which used other weights. For Breccia, the old dimensions on
+the old weights give G 46.5 → 35 and A 63 → 50. Breccia's G rank is robust: it stays last even if every one of its cells
 is raised by 1. On A it sits between Fyrox and Bevy; the same +1 would pass Bevy but not Flax or Godot.
 
-**Why each Basalt score changed**
+**Why each Breccia score changed**
 
 | Dimension | Move | Reason |
 |---|---|---|
@@ -405,7 +405,7 @@ rendering features come after correctness and proof.
    a token, and add an OGG decoder or drop the format. Add a test past each limit.
 2. **Publish `v0.1.0`, unsigned, with a tutorial (days).** Binary downloads, a getting-started guide, a starter template and
    a default scene with ground and light. Replace "production-grade" in the README with what is true today.
-3. **Prove the agent claim (a week).** Run a CEGame-Bench-style task set on Basalt against Godot and Unity. It is the only
+3. **Prove the agent claim (a week).** Run a CEGame-Bench-style task set on Breccia against Godot and Unity. It is the only
    way to learn whether the differentiator works. Add headless rendering to `render.*` and return images over MCP first.
 4. **Ship one real 3D game end to end (2–4 weeks).** About 30 minutes of content with real art, exported on all three
    OSes. This is still the cheapest way to find what unit tests cannot, and it would exercise the animation stack for the
@@ -457,11 +457,11 @@ Not stated as fact above, or stated with the caveat shown:
   and authentication behavior of competitors was not tested.
 - **Market:** all benchmark papers are preprints. The widely quoted 41/31/26 Video Game Insights "revenue" split is units
   sold, per its PDF. No measured time-to-first-playable data exists for any engine.
-- **Basalt:** nothing here was measured on Windows, Linux or a discrete GPU, and a browser never exercised defect 4.
+- **Breccia:** nothing here was measured on Windows, Linux or a discrete GPU, and a browser never exercised defect 4.
 
 ## Sources
 
-Basalt: this repository at `4f823ab`; CI run 42032205003; [Tested hardware](TestedHardware.md).
+Breccia: this repository at `4f823ab`; CI run 42032205003; [Tested hardware](TestedHardware.md).
 
 **Unity:** [6.6 announcement](https://discussions.unity.com/t/unity-6-6-is-now-available/1735357) ·
 [6.7 beta](https://discussions.unity.com/t/unity-6-7-beta-is-now-available/1736830) ·

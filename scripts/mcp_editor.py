@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bridge a standard MCP stdio client to BasaltEditor's loopback TCP transport.
+"""Bridge a standard MCP stdio client to BrecciaEditor's loopback TCP transport.
 
 Run the editor first, then configure the MCP client to launch this script. The bridge
 forwards bytes without interpreting or executing commands; logs go only to stderr.
@@ -46,7 +46,7 @@ def main():
             if errors:
                 raise errors[0]
     except OSError as error:
-        print(f"basalt editor MCP: {error}", file=sys.stderr)
+        print(f"breccia editor MCP: {error}", file=sys.stderr)
         return 1
     return 0
 

@@ -1,13 +1,13 @@
 #include <doctest/doctest.h>
 
-#include <Basalt/Renderer/LightClusters.h>
+#include <Breccia/Renderer/LightClusters.h>
 
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <cmath>
 #include <limits>
 
-using namespace Basalt;
+using namespace Breccia;
 
 TEST_SUITE("LightClusters")
 {

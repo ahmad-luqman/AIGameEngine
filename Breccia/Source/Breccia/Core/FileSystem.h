@@ -1,0 +1,185 @@
+#pragma once
+
+#include "Breccia/Core/Assert.h"
+#include "Breccia/Core/PackArchive.h"
+
+#include <cstdint>
+#include <filesystem>
+#include <functional>
+#include <map>
+#include <optional>
+#include <set>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <vector>
+
+namespace Breccia {
+
+	// Whole-file read/write helpers, the read-only archive mount, and executable paths. Fallible functions report failure
+	// through their return value.
+	class FileSystem
+	{
+	public:
+		// A path the mounted archive holds (Mount) is read only from it: a damaged entry fails, with no fallback to disk.
+		// Other paths are read from disk. outError (optional) receives why a read failed and is written only on failure, so
+		// check the result, not the text; without it, an archive entry's failure is logged.
+		static std::optional<std::string> ReadTextFile(const std::filesystem::path& path, std::string* outError = nullptr);
+		static std::optional<std::vector<uint8_t>> ReadBinaryFile(const std::filesystem::path& path, std::string* outError = nullptr);
+		// The first size bytes of a file (all of it for size 0), from the mounted archive or disk; fails when the file is
+		// shorter. Reads at most size bytes from disk, so a caller's bound on size bounds the read (an archive entry is read
+		// whole, which checks its hash; a compressed one cannot be read in part anyway).
+		static std::optional<std::vector<uint8_t>> ReadBinaryFilePrefix(const std::filesystem::path& path, uint64_t size, std::string* outError = nullptr);
+		// The size of a regular file (an archive entry's uncompressed size); nullopt for a missing path or anything else
+		// (outError set when the path could not be inspected).
+		static std::optional<uint64_t> GetRegularFileSize(const std::filesystem::path& path, std::error_code& outError);
+
+		// A read-only archive over a directory: the runtime mounts an exported game's Assets.bpak over its project folder.
+		// ReadTextFile, ReadBinaryFile, Exists and GetRegularFileSize then answer for the files under root that the archive
+		// holds, and disk answers for the rest. Readers that bypass them look the mount up directly: cgltf's file callbacks,
+		// miniaudio's VFS (which reads long stored clips in part, unhashed) and font stamps through FindMounted, and
+		// AssetRegistry::Refresh through GetMountedArchive (the
+		// whole index). Lua's require searcher reads through ReadBinaryFile and asks FindMounted only whether a module
+		// exists. Writes are never redirected: a file written under root that the archive also holds is still read from
+		// the archive. One mount at a time (mounting again replaces it). Thread-safe.
+		static void Mount(const std::filesystem::path& root, Ref<PackArchive> archive);
+		static void Unmount();
+		// A file of the mounted archive. Holds the archive, so the entry stays valid even if it is unmounted meanwhile.
+		class MountedFile
+		{
+		public:
+			MountedFile() = default;
+			explicit operator bool() const { return m_Entry != nullptr; }
+			// Only for a found file (operator bool).
+			const PackArchive::Entry& GetEntry() const
+			{
+				BR_CORE_ASSERT(m_Entry, "GetEntry needs a found file");
+				return *m_Entry;
+			}
+			const Ref<PackArchive>& GetArchive() const { return m_Archive; }
+
+		private:
+			friend class FileSystem;
+			MountedFile(Ref<PackArchive> archive, const PackArchive::Entry* entry)
+				: m_Archive(std::move(archive))
+				, m_Entry(entry)
+			{
+			}
+
+			Ref<PackArchive> m_Archive;
+			const PackArchive::Entry* m_Entry = nullptr;
+		};
+		// The mounted archive's entry for path, when path lies under the mount root and the archive holds it.
+		static MountedFile FindMounted(const std::filesystem::path& path);
+		// The archive mounted exactly at root (in either its given or its link-resolved spelling), or null.
+		static Ref<PackArchive> GetMountedArchive(const std::filesystem::path& root);
+		// Reads a found mounted file. Why it cannot be read goes to outError when given, else to the log.
+		static std::optional<std::vector<uint8_t>> ReadMounted(const MountedFile& file, std::string* outError = nullptr);
+
+		// Writes atomically: data goes to a temporary sibling file (<name>.<process>-<count>.tmp, so concurrent writers
+		// never share one) that then replaces the target, so a crash never leaves a half-written scene or project on
+		// disk (only, at worst, that temporary file). The target's folder is created when missing.
+		// These log the reason of a failure.
+		static bool WriteTextFile(const std::filesystem::path& path, std::string_view text);
+		static bool WriteBinaryFile(const std::filesystem::path& path, const void* data, size_t size);
+		// Returns the reason of a failure instead of logging it.
+		static bool WriteTextFile(const std::filesystem::path& path, std::string_view text, std::string& outError);
+		static bool WriteBinaryFile(const std::filesystem::path& path, const void* data, size_t size, std::string& outError);
+
+		// A unique temporary sibling for an atomic write (<name>.<process>-<count>.tmp).
+		static std::filesystem::path MakeTemporaryPath(const std::filesystem::path& path);
+		// Renames source over target (retrying briefly on Windows, where a concurrent replace or a scanner holding the
+		// target fails a rename); on failure source is removed and outError says why.
+		static bool RenameReplacing(const std::filesystem::path& source, const std::filesystem::path& target, std::string& outError);
+		// Copies source over target. On Windows an executable that just exited stays locked for a moment (antivirus
+		// scanners open what they saw run; about 1 s measured) or mapped (its image, while the process ends), so sharing
+		// and lock violations and a still-mapped file are retried: up to CopyRetryAttempts copies, with waitBeforeRetry
+		// between them (default: sleep 50 ms, about 5 s in all). Other errors, and other platforms, fail at once.
+		// outError says why on failure and is cleared on success; running out of attempts is also logged.
+		static constexpr uint32_t CopyRetryAttempts = 100;
+		static bool CopyFileReplacing(const std::filesystem::path& source, const std::filesystem::path& target, std::error_code& outError, const std::function<void()>& waitBeforeRetry = {});
+
+		// Also true for a mounted archive's files and the folders that hold them.
+		static bool Exists(const std::filesystem::path& path);
+		// Inspects root/relative one component at a time, so a linked ancestor directory counts too. Returns true and
+		// sets outEntry at the first symlink, or at the first entry that cannot be inspected (outError set; a
+		// missing entry is not an error). False when the whole path is free of links.
+		static bool FindSymlink(const std::filesystem::path& root, const std::filesystem::path& relative, std::filesystem::path& outEntry, std::error_code& outError);
+		// The running executable (links resolved on macOS); <current folder>/Unknown, logged, when it cannot be found.
+		static std::filesystem::path GetExecutablePath();
+		static std::filesystem::path GetExecutableDirectory();
+		// Text and paths convert only through these three (AGENTS.md; DescribePath below is for messages and makes no key): on
+		// Windows std::filesystem::path(std::string) reads the ANSI code page and path::string() throws for names outside it. None of them throws (but std::bad_alloc). On
+		// Windows, text that is not valid UTF-8 (a Lua string, a percent-decoded URI) becomes a path with U+FFFD, which
+		// reads as missing unless a file really has that name (and a write creates one by that name); a name with unpaired
+		// surrogates (NTFS allows them) becomes text with U+FFFD, which no longer leads back to that file. Automation and
+		// scene JSON is valid UTF-8 already (the parser rejects the rest). Elsewhere the bytes are copied unchecked, so a name
+		// that is not UTF-8 stays that way (JSON then shows U+FFFD). Scans that make keys skip both such names: RecordNonUtf8Entry
+		// and SkipNonUtf8Entry.
+		// The path as UTF-8 text, for messages and keys.
+		static std::string PathToUtf8(const std::filesystem::path& path);
+		// The path as '/'-separated UTF-8 text on every platform: the form of asset keys ("Assets/Models/Ship.gltf").
+		static std::string PathToGenericUtf8(const std::filesystem::path& path);
+		// A path from UTF-8 text (asset references, JSON, Lua, command-line arguments).
+		static std::filesystem::path PathFromUtf8(std::string_view text);
+		// The path has a UTF-8 form that names it exactly: false on Windows for unpaired surrogates, elsewhere for bytes that
+		// are not UTF-8. No asset key or JSON document can hold such a name. On Windows no text can; elsewhere a raw string (a
+		// Lua string, a percent-decoded URI) still opens the file.
+		static bool HasUtf8Form(const std::filesystem::path& path);
+		// The path as '/'-separated, always valid UTF-8 text for messages, whatever it holds: unpaired surrogates read \uD800
+		// and stray bytes \xFF, so a report says what to look for. This text names no file: never parse it or use it as a key.
+		static std::string DescribePath(const std::filesystem::path& path);
+		// What reports say about a skipped entry. Renaming happens outside the engine, as no command can name it.
+		static constexpr const char* NonUtf8NameProblem = "its name is not valid Unicode, so neither it nor anything inside it can have an asset key (rename it on disk, and a file's .meta with it)";
+		// For a flat scan that makes text keys, first thing for each entry. True when the entry's own name lacks a UTF-8 form,
+		// with the entry added to outSkipped as DescribePath text relative to root (a sidecar beside its source counts as that
+		// source). Only the name counts: where root lies is part of no key.
+		static bool RecordNonUtf8Entry(const std::filesystem::directory_entry& entry, const std::filesystem::path& root, std::set<std::string>& outSkipped);
+		// RecordNonUtf8Entry for a recursive scan: a folder it skips is not entered, as nothing below it could have a key.
+		static bool SkipNonUtf8Entry(std::filesystem::recursive_directory_iterator& it, const std::filesystem::path& root, std::set<std::string>& outSkipped);
+		// What an error code says, as UTF-8: MSVC's std::error_code::message() is in the ANSI code page for system errors
+		// (the Win32 codes std::filesystem reports), so those come from Platform::GetErrorMessage there.
+		static std::string DescribeError(const std::error_code& error);
+		// The extension in lower case (".png" for "Wall.PNG"), for matching file types.
+		static std::string GetLowercaseExtension(const std::filesystem::path& path);
+		// A-Z folded to a-z, other bytes (UTF-8 included) unchanged, whatever the C locale: for case-insensitive file
+		// name and extension matches.
+		static std::string ToLowerAscii(std::string text);
+		// Normalized, '/'-separated UTF-8 form of a relative path ("Assets/./A/../B.png" -> "Assets/B.png"): the form of
+		// asset keys and FileWatcher paths.
+		static std::string NormalizeGeneric(const std::string& path);
+
+		// How a relative path matches the files on disk, compared one component at a time with exact UTF-8 names, so a
+		// case-insensitive file system (Windows, macOS) cannot hide a misspelling that breaks a game on Linux.
+		enum class PathMatch
+		{
+			Exact,
+			DifferentCase,
+			Missing,
+			// A folder could not be listed or the path is not a file (outProblem says which).
+			Unreadable
+		};
+		// Directory listings FindExactCase reads, kept across lookups (a validator checks many paths in a folder).
+		class DirectoryListings
+		{
+		public:
+			// The names in a folder that have a UTF-8 form (empty for a missing folder), or nullptr with the error.
+			const std::vector<std::string>* Get(const std::filesystem::path& directory, std::string& outError);
+
+		private:
+			struct Listing
+			{
+				std::vector<std::string> Names;
+				std::string Error;
+			};
+			std::map<std::string, Listing> m_Listings;
+		};
+		// root/relative against the disk; outActual receives the path as spelled on disk ('/'-separated) for Exact and
+		// DifferentCase.
+		static PathMatch FindExactCase(const std::filesystem::path& root, const std::filesystem::path& relative, std::string& outActual, std::string& outProblem, DirectoryListings* listings = nullptr);
+
+	private:
+		static bool WriteAtomically(const std::filesystem::path& path, const void* data, size_t size, std::string& outError);
+	};
+
+}

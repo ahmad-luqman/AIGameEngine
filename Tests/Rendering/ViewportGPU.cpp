@@ -3,20 +3,20 @@
 
 #include "GPUFixture.h"
 
-#include <Basalt/Animation/AnimationSystem.h>
-#include <Basalt/Asset/AssetManager.h>
-#include <Basalt/Asset/ImageUtils.h>
-#include <Basalt/Asset/MeshOptimizer.h>
-#include <Basalt/Core/FileSystem.h>
+#include <Breccia/Animation/AnimationSystem.h>
+#include <Breccia/Asset/AssetManager.h>
+#include <Breccia/Asset/ImageUtils.h>
+#include <Breccia/Asset/MeshOptimizer.h>
+#include <Breccia/Core/FileSystem.h>
 
 #include "../Source/TestUtils.h"
 #include "../Source/MeshTestUtils.h"
-#include <Basalt/Core/JobSystem.h>
-#include <Basalt/Core/MemoryTracker.h>
-#include <Basalt/Particles/ParticleSystem.h>
-#include <Basalt/Renderer/SceneRenderer.h>
-#include <Basalt/Scene/Entity.h>
-#include <Basalt/Scene/Scene.h>
+#include <Breccia/Core/JobSystem.h>
+#include <Breccia/Core/MemoryTracker.h>
+#include <Breccia/Particles/ParticleSystem.h>
+#include <Breccia/Renderer/SceneRenderer.h>
+#include <Breccia/Scene/Entity.h>
+#include <Breccia/Scene/Scene.h>
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -24,7 +24,7 @@
 #include <latch>
 #include <filesystem>
 
-using namespace Basalt;
+using namespace Breccia;
 
 namespace {
 	std::vector<uint8_t> Capture(SceneRenderer& renderer, Scene& scene, const RenderCamera& camera)
@@ -198,7 +198,7 @@ TEST_CASE("Viewport picking follows animated geometry and all mesh nodes map to 
 	scene.GetRendererSettings().SSAOEnabled = false;
 	scene.GetRendererSettings().ShadowsEnabled = false;
 	auto rig = scene.CreateEntityWithUUID(UUID(0xfedcba9876543210ULL), "Rig");
-	rig.AddComponent<AnimatorComponent>().Mesh = std::string(BASALT_ANIMATION_DATA_DIR) + "/TwoJoint.gltf";
+	rig.AddComponent<AnimatorComponent>().Mesh = std::string(BRECCIA_ANIMATION_DATA_DIR) + "/TwoJoint.gltf";
 	RenderCamera camera;
 	camera.Position = { 0, 1, 4 };
 	camera.View = glm::lookAtRH(camera.Position, glm::vec3(0, 1, 0), glm::vec3(0, 1, 0));
@@ -508,7 +508,7 @@ TEST_CASE("Interleaved coplanar material keys use documented batch-group order")
 	Scene scene;
 	scene.GetRendererSettings().SSAOEnabled = false;
 	scene.GetRendererSettings().ShadowsEnabled = false;
-	const auto texturePath = std::filesystem::path(BASALT_ANIMATION_DATA_DIR).parent_path() / "FeatureTest/Assets/Textures/Checker.png";
+	const auto texturePath = std::filesystem::path(BRECCIA_ANIMATION_DATA_DIR).parent_path() / "FeatureTest/Assets/Textures/Checker.png";
 	REQUIRE(AssetManager::GetTexture(texturePath.string()));
 	Entity middle;
 	for (uint32_t i = 0; i < 3; ++i)
@@ -659,9 +659,9 @@ TEST_CASE("Lit particle diffuse uses bounded light attenuation and receives skyl
 TEST_CASE("Static LOD selection draws reduced ranges while picking retains entity identity")
 {
 	auto graphics = CreateTestGraphics();
-	BasaltTest::TempDirectory directory("ImportedLODRender");
+	BrecciaTest::TempDirectory directory("ImportedLODRender");
 	AssetManager::TemporaryLoads temporary;
-	const auto key = FileSystem::PathToGenericUtf8(BasaltTest::WriteSphereGltf(directory.GetPath()));
+	const auto key = FileSystem::PathToGenericUtf8(BrecciaTest::WriteSphereGltf(directory.GetPath()));
 	auto source = AssetManager::GetMesh(key);
 	REQUIRE_MESSAGE(source, AssetManager::GetError(key));
 	REQUIRE_FALSE(source->Submeshes[0].LODs.empty());
@@ -737,7 +737,7 @@ TEST_CASE("Full thin transmission reveals an emissive destination instead of dar
 
 	// An opaque override (alpha 1) keeps full coverage with transmission: a white albedo map whose alpha is zero
 	// must not punch holes, so half transmission still lets exactly half of the background through.
-	BasaltTest::TempDirectory temp("TransmissionCoverage");
+	BrecciaTest::TempDirectory temp("TransmissionCoverage");
 	std::string error;
 	const std::vector<uint8_t> clear = { 255, 255, 255, 0 };
 	REQUIRE(WritePng(temp.GetPath() / "clear.png", clear, 1, 1, error));
@@ -758,7 +758,7 @@ TEST_CASE("Full thin transmission reveals an emissive destination instead of dar
 TEST_CASE("Clearcoat, transmission and UV-transformed maps render through shadows, SSAO and the prepass")
 {
 	auto graphics = CreateTestGraphics();
-	BasaltTest::TempDirectory temp("ExtendedMaterialScene");
+	BrecciaTest::TempDirectory temp("ExtendedMaterialScene");
 	std::string error;
 	std::vector<uint8_t> checker(size_t{ 8 } * 8 * 4);
 	for (size_t pixel = 0; pixel < 64; pixel++)

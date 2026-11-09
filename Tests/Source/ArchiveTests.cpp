@@ -1,20 +1,20 @@
 #include <doctest/doctest.h>
 
-#include <Basalt/Asset/AssetManager.h>
-#include <Basalt/Asset/AssetRegistry.h>
-#include <Basalt/Audio/AudioEngine.h>
-#include <Basalt/Audio/AudioSystem.h>
-#include <Basalt/Core/FileSystem.h>
-#include <Basalt/Core/Hash.h>
-#include <Basalt/Core/PackArchive.h>
-#include <Basalt/Project/Exporter.h>
-#include <Basalt/Project/Packaging.h>
-#include <Basalt/Project/Project.h>
-#include <Basalt/Scene/Components.h>
-#include <Basalt/Scene/Entity.h>
-#include <Basalt/Scene/Scene.h>
-#include <Basalt/Scene/SceneSerializer.h>
-#include <Basalt/UI/UIFonts.h>
+#include <Breccia/Asset/AssetManager.h>
+#include <Breccia/Asset/AssetRegistry.h>
+#include <Breccia/Audio/AudioEngine.h>
+#include <Breccia/Audio/AudioSystem.h>
+#include <Breccia/Core/FileSystem.h>
+#include <Breccia/Core/Hash.h>
+#include <Breccia/Core/PackArchive.h>
+#include <Breccia/Project/Exporter.h>
+#include <Breccia/Project/Packaging.h>
+#include <Breccia/Project/Project.h>
+#include <Breccia/Scene/Components.h>
+#include <Breccia/Scene/Entity.h>
+#include <Breccia/Scene/Scene.h>
+#include <Breccia/Scene/SceneSerializer.h>
+#include <Breccia/UI/UIFonts.h>
 
 #include "MeshTestUtils.h"
 #include "TestUtils.h"
@@ -28,7 +28,7 @@
 #include <thread>
 #include <vector>
 
-using namespace Basalt;
+using namespace Breccia;
 
 namespace {
 
@@ -55,7 +55,7 @@ namespace {
 	{
 		std::vector<uint8_t> data(size);
 		for (size_t i = 0; i < size; i++)
-			data[i] = static_cast<uint8_t>("Basalt archive "[i % 15]);
+			data[i] = static_cast<uint8_t>("Breccia archive "[i % 15]);
 		return data;
 	}
 
@@ -146,7 +146,7 @@ TEST_SUITE("Archive")
 {
 	TEST_CASE("Archives round-trip entries, compressing only what shrinks")
 	{
-		BasaltTest::TempDirectory directory("ArchiveRoundTrip");
+		BrecciaTest::TempDirectory directory("ArchiveRoundTrip");
 		const std::vector<uint8_t> noise = Noise(4096);
 		const std::vector<uint8_t> text = Repetitive(size_t{ 64 } * 1024);
 		const std::vector<std::tuple<std::string, std::vector<uint8_t>, uint64_t>> entries = {
@@ -163,7 +163,7 @@ TEST_SUITE("Archive")
 		auto reversed = entries;
 		std::reverse(reversed.begin(), reversed.end());
 		CHECK(BuildArchive(reversed, directory.GetPath() / "Again.bpak") == bytes);
-		CHECK_FALSE(BasaltTest::HasTempFiles(file.parent_path()));
+		CHECK_FALSE(BrecciaTest::HasTempFiles(file.parent_path()));
 
 		std::string error;
 		const Ref<PackArchive> archive = PackArchive::Open(file, error);
@@ -214,7 +214,7 @@ TEST_SUITE("Archive")
 
 	TEST_CASE("The writer reports its statistics and rejects bad entries")
 	{
-		BasaltTest::TempDirectory directory("ArchiveWriter");
+		BrecciaTest::TempDirectory directory("ArchiveWriter");
 		PackArchiveWriter writer;
 		std::string error;
 		CHECK(writer.AddData("Assets/A.txt", Repetitive(10000), 1, error));
@@ -237,7 +237,7 @@ TEST_SUITE("Archive")
 		CHECK_FALSE(missing.Write(directory.GetPath() / "Missing.bpak", error).has_value());
 		CHECK(error.find("cannot read") != std::string::npos);
 		CHECK_FALSE(FileSystem::Exists(directory.GetPath() / "Missing.bpak"));
-		CHECK_FALSE(BasaltTest::HasTempFiles(directory.GetPath()));
+		CHECK_FALSE(BrecciaTest::HasTempFiles(directory.GetPath()));
 
 		const std::filesystem::path file = directory.GetPath() / "Stats.bpak";
 		const auto statistics = writer.Write(file, error);
@@ -263,7 +263,7 @@ TEST_SUITE("Archive")
 
 	TEST_CASE("Damaged and forged archives are rejected before anything is allocated for them")
 	{
-		BasaltTest::TempDirectory directory("ArchiveDamage");
+		BrecciaTest::TempDirectory directory("ArchiveDamage");
 		const std::vector<uint8_t> valid = BuildArchive({ { "Assets/A.txt", Repetitive(5000), 5 }, { "Assets/B.bin", Noise(300), 6 } }, directory.GetPath() / "Valid.bpak");
 		std::string error;
 		REQUIRE(PackArchive::OpenMemory(valid, error));
@@ -410,7 +410,7 @@ TEST_SUITE("Archive")
 
 	TEST_CASE("A mounted archive answers reads under its root before the disk")
 	{
-		BasaltTest::TempDirectory directory("ArchiveMount");
+		BrecciaTest::TempDirectory directory("ArchiveMount");
 		const std::filesystem::path root = directory.GetPath() / "Game";
 		REQUIRE(FileSystem::WriteTextFile(root / "Project.bproject", "loose project"));
 		REQUIRE(FileSystem::WriteTextFile(root / "Assets" / "Loose.txt", "on disk"));
@@ -424,7 +424,7 @@ TEST_SUITE("Archive")
 		CHECK_FALSE(FileSystem::ReadTextFile(root / "Assets" / "Packed.txt"));
 		{
 			// "Game/." is the same folder as "Game".
-			BasaltTest::ScopedMount mount(root / ".", archive);
+			BrecciaTest::ScopedMount mount(root / ".", archive);
 			CHECK(FileSystem::GetMountedArchive(root) == archive);
 			CHECK(FileSystem::GetMountedArchive(root / "") == archive);
 			CHECK_FALSE(FileSystem::GetMountedArchive(root / "Assets"));
@@ -475,15 +475,15 @@ TEST_SUITE("Archive")
 		bytes[static_cast<size_t>(shadowed->Offset)] ^= 1;
 		const Ref<PackArchive> damaged = PackArchive::OpenMemory(bytes, error);
 		REQUIRE(damaged);
-		BasaltTest::ScopedMount mount(root, damaged);
+		BrecciaTest::ScopedMount mount(root, damaged);
 		// Without a place for the reason, the log gets it; with one, the caller does (and logs it with its own context).
 		uint64_t since = Log::GetHistory().GetTotalCount();
 		CHECK_FALSE(FileSystem::ReadTextFile(root / "Assets" / "Shadowed.txt"));
-		CHECK(BasaltTest::CountLogMessages(since, "'Assets/Shadowed.txt' is damaged in the archive") == 1);
+		CHECK(BrecciaTest::CountLogMessages(since, "'Assets/Shadowed.txt' is damaged in the archive") == 1);
 		since = Log::GetHistory().GetTotalCount();
 		std::string readError;
 		CHECK_FALSE(FileSystem::ReadTextFile(root / "Assets" / "Shadowed.txt", &readError));
-		CHECK(BasaltTest::CountLogMessages(since, "'Assets/Shadowed.txt' is damaged in the archive") == 0);
+		CHECK(BrecciaTest::CountLogMessages(since, "'Assets/Shadowed.txt' is damaged in the archive") == 0);
 		CHECK(readError == "'Assets/Shadowed.txt' is damaged in the archive (hash mismatch)");
 		// Disk failures say why too.
 		CHECK_FALSE(FileSystem::ReadTextFile(root / "Missing.txt", &readError));
@@ -498,14 +498,14 @@ TEST_SUITE("Archive")
 
 	TEST_CASE("Prefix reads return exactly the asked bytes, from disk and from a mounted archive")
 	{
-		BasaltTest::TempDirectory directory("ArchivePrefix");
+		BrecciaTest::TempDirectory directory("ArchivePrefix");
 		const std::filesystem::path root = directory.GetPath() / "Game";
 		REQUIRE(FileSystem::WriteTextFile(root / "Assets" / "Disk.txt", "0123456789"));
 		BuildArchive({ { "Assets/Packed.txt", Repetitive(5000), 0 } }, directory.GetPath() / "Assets.bpak");
 		std::string error;
 		const Ref<PackArchive> archive = PackArchive::Open(directory.GetPath() / "Assets.bpak", error);
 		REQUIRE_MESSAGE(archive, error);
-		BasaltTest::ScopedMount mount(root, archive);
+		BrecciaTest::ScopedMount mount(root, archive);
 
 		CHECK(FileSystem::ReadBinaryFilePrefix(root / "Assets" / "Disk.txt", 4) == Bytes("0123"));
 		CHECK(FileSystem::ReadBinaryFilePrefix(root / "Assets" / "Disk.txt", 10) == Bytes("0123456789"));
@@ -524,12 +524,12 @@ TEST_SUITE("Archive")
 
 	TEST_CASE("An archived export loads its scenes, models, textures, fonts, scripts and audio from the archive")
 	{
-		BasaltTest::TempProject temp("ArchiveExport");
+		BrecciaTest::TempProject temp("ArchiveExport");
 		REQUIRE(temp.IsValid());
 		const Ref<Project>& project = Project::GetActive();
 		const std::filesystem::path assets = temp.GetDirectory() / "Assets";
 		// The model's base color texture is an external PNG, which the importer loads by its own asset key.
-		const std::filesystem::path gltf = BasaltTest::WriteSphereGltf(assets / "Models");
+		const std::filesystem::path gltf = BrecciaTest::WriteSphereGltf(assets / "Models");
 		{
 			nlohmann::json model = nlohmann::json::parse(*FileSystem::ReadTextFile(gltf));
 			model["images"] = { { { "uri", "Sphere Albedo.png" } } };
@@ -554,10 +554,10 @@ TEST_SUITE("Archive")
 		REQUIRE(FileSystem::WriteBinaryFile(assets / "Textures" / "Icon.png", png.data(), png.size()));
 		std::error_code copyError;
 		std::filesystem::create_directories(assets / "Fonts", copyError);
-		std::filesystem::copy_file(std::filesystem::path(BASALT_TEST_DATA_DIR) / "Textures" / "UASTC.ktx2", assets / "Textures" / "UASTC.ktx2", copyError);
-		std::filesystem::copy_file(std::filesystem::path(BASALT_TEST_DATA_DIR) / "FeatureTest" / "Assets" / "Fonts" / "Karla-Regular.ttf", assets / "Fonts" / "Karla.ttf", copyError);
+		std::filesystem::copy_file(std::filesystem::path(BRECCIA_TEST_DATA_DIR) / "Textures" / "UASTC.ktx2", assets / "Textures" / "UASTC.ktx2", copyError);
+		std::filesystem::copy_file(std::filesystem::path(BRECCIA_TEST_DATA_DIR) / "FeatureTest" / "Assets" / "Fonts" / "Karla-Regular.ttf", assets / "Fonts" / "Karla.ttf", copyError);
 		REQUIRE_FALSE(copyError);
-		temp.WriteFile("Assets/Audio/Beep.wav", BasaltTest::MakeWav(0.5f));
+		temp.WriteFile("Assets/Audio/Beep.wav", BrecciaTest::MakeWav(0.5f));
 		temp.WriteFile("Assets/Scripts/Lib/Util.lua", "return { Triple = function(x) return 3 * x end }");
 		temp.WriteFile("Assets/Scripts/Pkg/init.lua", "return { Name = 'package' }");
 		temp.WriteFile("Assets/Scripts/Layered/init.lua", "return 'archive init'");
@@ -567,7 +567,7 @@ TEST_SUITE("Archive")
 		temp.WriteFile("Assets/Scripts/Lib/Shebang.lua", "\xEF\xBB\xBF#!/usr/bin/env lua\nlocal value = 7\nreturn { Value = value, Fail = function() error('boom') end }");
 		temp.WriteFile("Assets/Notes.txt", std::string(20000, 'n'));
 		temp.WriteFile("FakeRuntime", "binary");
-		const BasaltTest::ScopedFakeVulkanSdk sdk(temp);
+		const BrecciaTest::ScopedFakeVulkanSdk sdk(temp);
 
 		std::string error;
 		{
@@ -664,7 +664,7 @@ TEST_SUITE("Archive")
 		const uint64_t beforeMount = Log::GetHistory().GetTotalCount();
 		REQUIRE_MESSAGE(Exporter::MountExportedArchive(output, error), error);
 		REQUIRE(FileSystem::GetMountedArchive(output));
-		CHECK(BasaltTest::CountLogMessages(beforeMount, "both Assets.bpak and an Assets folder") == 1);
+		CHECK(BrecciaTest::CountLogMessages(beforeMount, "both Assets.bpak and an Assets folder") == 1);
 		const Ref<Project> exported = Project::Load(output, error);
 		REQUIRE_MESSAGE(exported, error);
 		Project::SetActive(exported);
@@ -706,7 +706,7 @@ TEST_SUITE("Archive")
 		CHECK_FALSE(FileSystem::ReadBinaryFile(output / "Assets" / "textures" / "Icon.png"));
 
 		{
-			const BasaltTest::HeadlessAudio audio;
+			const BrecciaTest::HeadlessAudio audio;
 			scene->OnRuntimeStart();
 			REQUIRE(scene->GetAudioSystem());
 			CHECK(scene->GetAudioSystem()->IsPlaying(speaker));
@@ -724,18 +724,18 @@ TEST_SUITE("Archive")
 				lateLevel = std::max(lateLevel, std::abs(mix[i]));
 			CHECK(lateLevel > 0.01f);
 			// Modules come from the archive too, found through both package.path templates.
-			CHECK(BasaltTest::Eval(*scene, "return require('Assets.Scripts.Lib.Util').Triple(3)") == "9");
-			CHECK(BasaltTest::Eval(*scene, "return require('Assets.Scripts.Pkg').Name") == "package");
-			CHECK(BasaltTest::Eval(*scene, "return require('Assets.Scripts.Lib.Priority')") == "archive");
-			CHECK(BasaltTest::Eval(*scene, "return require('Assets.Scripts.Lib.DiskOnly')") == "disk only");
-			CHECK(BasaltTest::Eval(*scene, "return require('Assets.Scripts.Layered')") == "loose");
-			CHECK(BasaltTest::Eval(*scene, "return require('Assets.Scripts.Lib.Shebang').Value") == "7");
-			const std::string failure = BasaltTest::Eval(*scene, "local ok, message = pcall(require('Assets.Scripts.Lib.Shebang').Fail) return message");
+			CHECK(BrecciaTest::Eval(*scene, "return require('Assets.Scripts.Lib.Util').Triple(3)") == "9");
+			CHECK(BrecciaTest::Eval(*scene, "return require('Assets.Scripts.Pkg').Name") == "package");
+			CHECK(BrecciaTest::Eval(*scene, "return require('Assets.Scripts.Lib.Priority')") == "archive");
+			CHECK(BrecciaTest::Eval(*scene, "return require('Assets.Scripts.Lib.DiskOnly')") == "disk only");
+			CHECK(BrecciaTest::Eval(*scene, "return require('Assets.Scripts.Layered')") == "loose");
+			CHECK(BrecciaTest::Eval(*scene, "return require('Assets.Scripts.Lib.Shebang').Value") == "7");
+			const std::string failure = BrecciaTest::Eval(*scene, "local ok, message = pcall(require('Assets.Scripts.Lib.Shebang').Fail) return message");
 			CHECK_MESSAGE(failure.find("Shebang.lua:3: boom") != std::string::npos, failure);
-			const std::string bad = BasaltTest::Eval(*scene, "return require('Assets.Scripts.Lib.Bad')");
+			const std::string bad = BrecciaTest::Eval(*scene, "return require('Assets.Scripts.Lib.Bad')");
 			CHECK_MESSAGE(bad.find("error loading module 'Assets.Scripts.Lib.Bad' from file") != std::string::npos, bad);
 			CHECK(bad.find("no file '") == std::string::npos);
-			const std::string missing = BasaltTest::Eval(*scene, "return require('Assets.Scripts.Missing')");
+			const std::string missing = BrecciaTest::Eval(*scene, "return require('Assets.Scripts.Missing')");
 			CHECK_MESSAGE(missing.find("no file '") != std::string::npos, missing);
 			// require puts "\n\t" before each searcher's lines; the engine's file searcher must not add another (no empty line).
 			CHECK_MESSAGE(missing.find("\n\t\n") == std::string::npos, missing);
@@ -745,11 +745,11 @@ TEST_SUITE("Archive")
 
 	TEST_CASE("Texture and material loads report a damaged archive entry")
 	{
-		BasaltTest::TempProject temp("ArchiveDamagedLoads");
+		BrecciaTest::TempProject temp("ArchiveDamagedLoads");
 		REQUIRE(temp.IsValid());
 		const std::vector<uint8_t> png = EncodeIconPng(MakeDefaultIcon(8));
 		const std::filesystem::path file = temp.GetDirectory() / "Damaged.bpak";
-		std::vector<uint8_t> bytes = BuildArchive({ { "Assets/Textures/T.png", png, 0 }, { "Assets/Materials/M.bmaterial", Bytes(R"({"Format":"BasaltMaterial","Version":1})"), 0 } }, file);
+		std::vector<uint8_t> bytes = BuildArchive({ { "Assets/Textures/T.png", png, 0 }, { "Assets/Materials/M.bmaterial", Bytes(R"({"Format":"BrecciaMaterial","Version":1})"), 0 } }, file);
 		std::string error;
 		Ref<PackArchive> archive = PackArchive::OpenMemory(bytes, error);
 		REQUIRE_MESSAGE(archive, error);
@@ -757,7 +757,7 @@ TEST_SUITE("Archive")
 			bytes[static_cast<size_t>(RequireEntry(*archive, path).Offset)] ^= 0x5A;
 		archive = PackArchive::OpenMemory(bytes, error);
 		REQUIRE_MESSAGE(archive, error);
-		BasaltTest::ScopedMount mount(temp.GetDirectory(), archive);
+		BrecciaTest::ScopedMount mount(temp.GetDirectory(), archive);
 		AssetManager::Clear();
 		CHECK_FALSE(AssetManager::GetTexture("Assets/Textures/T.png"));
 		CHECK_MESSAGE(AssetManager::GetError("Assets/Textures/T.png").find("damaged in the archive") != std::string::npos, AssetManager::GetError("Assets/Textures/T.png"));
@@ -768,12 +768,12 @@ TEST_SUITE("Archive")
 
 	TEST_CASE("Archived exports refuse what an archive cannot hold and report assets without UUIDs")
 	{
-		BasaltTest::TempProject temp("ArchiveExportProblems");
+		BrecciaTest::TempProject temp("ArchiveExportProblems");
 		REQUIRE(temp.IsValid());
 		const Ref<Project>& project = Project::GetActive();
 		temp.WriteFile("Assets/Scenes/Main.bscene", R"({"Entities":[]})");
 		temp.WriteFile("FakeRuntime", "binary");
-		const BasaltTest::ScopedFakeVulkanSdk sdk(temp);
+		const BrecciaTest::ScopedFakeVulkanSdk sdk(temp);
 		project->GetConfig().StartScene = "Assets/Scenes/Main.bscene";
 		const std::filesystem::path output = temp.GetDirectory().parent_path() / "ArchiveExportProblemsOut";
 		std::error_code error;
@@ -814,7 +814,7 @@ TEST_SUITE("Archive")
 
 #if !defined(_WIN32)
 		// A linked folder: the folder export copies it, so the archive must not silently leave it out.
-		BasaltTest::TempDirectory linked("ArchiveExportLinkedFolder");
+		BrecciaTest::TempDirectory linked("ArchiveExportLinkedFolder");
 		temp.WriteFile("../ArchiveExportLinkedFolder/Inside.txt", "linked");
 		std::filesystem::create_directory_symlink(linked.GetPath(), temp.GetDirectory() / "Assets" / "Linked");
 		result = Exporter::Export(*project, output, options);
@@ -852,7 +852,7 @@ TEST_SUITE("Archive")
 
 	TEST_CASE("The runtime refuses an archive that does not open")
 	{
-		BasaltTest::TempDirectory directory("ArchiveBroken");
+		BrecciaTest::TempDirectory directory("ArchiveBroken");
 		std::string error;
 		// Without an archive nothing is mounted and nothing fails.
 		CHECK(Exporter::MountExportedArchive(directory.GetPath(), error));
@@ -865,7 +865,7 @@ TEST_SUITE("Archive")
 
 	TEST_CASE("Stored entries read in part, from a file and from memory")
 	{
-		BasaltTest::TempDirectory directory("ArchiveStoredReads");
+		BrecciaTest::TempDirectory directory("ArchiveStoredReads");
 		const std::vector<uint8_t> noise = Noise(5000);
 		const std::vector<uint8_t> bytes = BuildArchive({ { "Assets/Noise.bin", noise, 0 }, { "Assets/Text.txt", Repetitive(5000), 0 } }, directory.GetPath() / "Stored.bpak");
 		std::string error;
@@ -901,7 +901,7 @@ TEST_SUITE("Archive")
 #if !defined(_WIN32)
 	TEST_CASE("A stored read of a file cut short reports it")
 	{
-		BasaltTest::TempDirectory directory("ArchiveStoredCut");
+		BrecciaTest::TempDirectory directory("ArchiveStoredCut");
 		const std::filesystem::path file = directory.GetPath() / "Cut.bpak";
 		const std::vector<uint8_t> noise = Noise(1 << 20);
 		BuildArchive({ { "Assets/Noise.bin", noise, 0 } }, file);
@@ -921,11 +921,11 @@ TEST_SUITE("Archive")
 
 	TEST_CASE("Stored clips stream from the archive, unlike whole reads that check their hash")
 	{
-		BasaltTest::TempProject temp("ArchiveStreamedAudio");
+		BrecciaTest::TempProject temp("ArchiveStreamedAudio");
 		REQUIRE(temp.IsValid());
 		// Noise for samples, which zstd cannot shrink, behind the 44 bytes of a WAV header. One clip is long enough to stream.
 		const auto noiseWav = [](float seconds) {
-			std::string wav = BasaltTest::MakeWav(seconds);
+			std::string wav = BrecciaTest::MakeWav(seconds);
 			const std::vector<uint8_t> noise = Noise(wav.size() - 44);
 			std::copy(noise.begin(), noise.end(), wav.begin() + 44);
 			return wav;
@@ -951,7 +951,7 @@ TEST_SUITE("Archive")
 		CHECK_FALSE(archive->Read(RequireEntry(*archive, "Assets/Audio/Noise.wav"), error));
 		CHECK(error.find("hash mismatch") != std::string::npos);
 
-		const BasaltTest::ScopedMount mount(temp.GetDirectory(), archive);
+		const BrecciaTest::ScopedMount mount(temp.GetDirectory(), archive);
 		const Ref<Scene> scene = CreateRef<Scene>();
 		auto& decoded = scene->CreateEntity("Decoded").AddComponent<AudioSourceComponent>();
 		decoded.Clip = "Assets/Audio/Noise.wav";
@@ -970,7 +970,7 @@ TEST_SUITE("Archive")
 		whole.Clip = "Assets/Audio/Whole.wav";
 		whole.PlayOnStart = true;
 		scene->CreateEntity("Listener").AddComponent<AudioListenerComponent>();
-		const BasaltTest::HeadlessAudio audio;
+		const BrecciaTest::HeadlessAudio audio;
 		const uint64_t logged = Log::GetHistory().GetTotalCount();
 		scene->OnRuntimeStart();
 		uint64_t next = 0;
@@ -994,7 +994,7 @@ TEST_SUITE("Archive")
 
 	TEST_CASE("An archive's bytes do not depend on how Write batches its entries")
 	{
-		BasaltTest::TempDirectory directory("ArchiveBatches");
+		BrecciaTest::TempDirectory directory("ArchiveBatches");
 		// More entries than one batch holds, in no particular order.
 		std::vector<std::tuple<std::string, std::vector<uint8_t>, uint64_t>> entries;
 		entries.reserve(PackArchiveWriter::MaxBatchEntries + 44);
@@ -1054,7 +1054,7 @@ TEST_SUITE("Archive")
 
 	TEST_CASE("Write reports the first entry in path order that fails, in any batch, and can run again")
 	{
-		BasaltTest::TempDirectory directory("ArchiveBatchFailure");
+		BrecciaTest::TempDirectory directory("ArchiveBatchFailure");
 		const std::filesystem::path sources = directory.GetPath() / "Sources";
 		const std::filesystem::path output = directory.GetPath() / "Output";
 		REQUIRE(FileSystem::WriteTextFile(sources / "A", std::string(100, 'a')));
@@ -1082,7 +1082,7 @@ TEST_SUITE("Archive")
 
 	TEST_CASE("A streamable file is stored, however well it compresses")
 	{
-		BasaltTest::TempDirectory directory("ArchiveStoreUncompressed");
+		BrecciaTest::TempDirectory directory("ArchiveStoreUncompressed");
 		const std::vector<uint8_t> text = Repetitive(5000);
 		REQUIRE(FileSystem::WriteBinaryFile(directory.GetPath() / "Source", text.data(), text.size()));
 		PackArchiveWriter writer;
@@ -1099,7 +1099,7 @@ TEST_SUITE("Archive")
 
 	TEST_CASE("Archived exports leave out originals only their compressed replacement stands for")
 	{
-		BasaltTest::TempProject temp("ArchiveOmittedOriginals");
+		BrecciaTest::TempProject temp("ArchiveOmittedOriginals");
 		REQUIRE(temp.IsValid());
 		const Ref<Project>& project = Project::GetActive();
 		std::string error;
@@ -1179,7 +1179,7 @@ TEST_SUITE("Archive")
 		project->GetConfig().Icon = "Assets/Textures/Icon.png";
 		REQUIRE_MESSAGE(project->Save(error), error);
 		temp.WriteFile("FakeRuntime", "binary");
-		const BasaltTest::ScopedFakeVulkanSdk sdk(temp);
+		const BrecciaTest::ScopedFakeVulkanSdk sdk(temp);
 
 		ExportOptions options;
 		options.RuntimeExecutable = temp.GetDirectory() / "FakeRuntime";
@@ -1247,7 +1247,7 @@ TEST_SUITE("Archive")
 #if !defined(_WIN32)
 	TEST_CASE("A file that cannot be searched keeps every original")
 	{
-		BasaltTest::TempProject temp("ArchiveUnsearchable");
+		BrecciaTest::TempProject temp("ArchiveUnsearchable");
 		REQUIRE(temp.IsValid());
 		const Ref<Project>& project = Project::GetActive();
 		temp.WriteFile("Assets/Scenes/Main.bscene", R"({"Entities":[]})");
@@ -1255,7 +1255,7 @@ TEST_SUITE("Archive")
 		temp.WriteFile("Assets/Textures/Wall.ktx2", "replacement");
 		temp.WriteFile("Assets/Scripts/Secret.lua", "return 1");
 		temp.WriteFile("FakeRuntime", "binary");
-		const BasaltTest::ScopedFakeVulkanSdk sdk(temp);
+		const BrecciaTest::ScopedFakeVulkanSdk sdk(temp);
 		project->GetConfig().StartScene = "Assets/Scenes/Main.bscene";
 		const std::filesystem::path secret = temp.GetDirectory() / "Assets" / "Scripts" / "Secret.lua";
 		std::filesystem::permissions(secret, std::filesystem::perms::none);
@@ -1280,7 +1280,7 @@ TEST_SUITE("Archive")
 
 	TEST_CASE("File archives read in parallel")
 	{
-		BasaltTest::TempDirectory directory("ArchiveParallel");
+		BrecciaTest::TempDirectory directory("ArchiveParallel");
 		std::vector<std::tuple<std::string, std::vector<uint8_t>, uint64_t>> entries;
 		entries.reserve(32);
 		for (uint32_t i = 0; i < 32; i++)
@@ -1321,7 +1321,7 @@ TEST_SUITE("Archive")
 #if !defined(_WIN32)
 	TEST_CASE("A mount answers through the root's linked and resolved spellings")
 	{
-		BasaltTest::TempDirectory directory("ArchiveLinkedRoot");
+		BrecciaTest::TempDirectory directory("ArchiveLinkedRoot");
 		const std::filesystem::path game = directory.GetPath() / "Game";
 		const std::filesystem::path link = directory.GetPath() / "Link";
 		std::filesystem::create_directories(game);
@@ -1331,7 +1331,7 @@ TEST_SUITE("Archive")
 		const Ref<PackArchive> archive = PackArchive::Open(directory.GetPath() / "Assets.bpak", error);
 		REQUIRE_MESSAGE(archive, error);
 		// Mounted through the link: the asset registry resolves its root, so the resolved spelling must answer too.
-		BasaltTest::ScopedMount mount(link, archive);
+		BrecciaTest::ScopedMount mount(link, archive);
 		CHECK(FileSystem::ReadTextFile(link / "Assets" / "Packed.txt") == "packed");
 		CHECK(FileSystem::ReadTextFile(std::filesystem::canonical(game) / "Assets" / "Packed.txt") == "packed");
 		CHECK(FileSystem::GetMountedArchive(link) == archive);
@@ -1348,9 +1348,9 @@ TEST_SUITE("Archive")
 		const std::vector<uint8_t> data = Noise(37);
 		const uint64_t hash = HashBytes64(data.data(), data.size());
 		// Pinned: archives written on one platform are read on every other (one value takes the word loop, one does not).
-		CHECK(HashBytes64("Basalt", 6) == 16311461269340139028ull);
-		CHECK(HashBytes64("Basalt archive hash", 19) == 11039812695304044231ull);
-		CHECK(HashBytes64("Basalt", 6) != HashBytes64("basalt", 6));
+		CHECK(HashBytes64("Breccia", 7) == 4190716647869965296ull);
+		CHECK(HashBytes64("Breccia archive hash", 20) == 16286125179012839668ull);
+		CHECK(HashBytes64("Breccia", 7) != HashBytes64("breccia", 7));
 		for (size_t i = 0; i < data.size(); i++)
 		{
 			auto changed = data;

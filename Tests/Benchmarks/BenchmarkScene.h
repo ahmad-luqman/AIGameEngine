@@ -1,15 +1,15 @@
 #pragma once
 
-#include "Basalt/Animation/AnimationSystem.h"
-#include "Basalt/Physics/PhysicsWorld.h"
-#include "Basalt/Renderer/RenderUtils.h"
-#include "Basalt/Core/Log.h"
-#include "Basalt/Scene/Entity.h"
-#include "Basalt/Scene/Scene.h"
+#include "Breccia/Animation/AnimationSystem.h"
+#include "Breccia/Physics/PhysicsWorld.h"
+#include "Breccia/Renderer/RenderUtils.h"
+#include "Breccia/Core/Log.h"
+#include "Breccia/Scene/Entity.h"
+#include "Breccia/Scene/Scene.h"
 
 #include <cmath>
 
-namespace BasaltBenchmark {
+namespace BrecciaBenchmark {
 
 	// Run.py pins the same scene counts/timestep and adds report protocol/build requirements.
 	inline constexpr uint32_t Meshes = 2048;
@@ -39,45 +39,45 @@ namespace BasaltBenchmark {
 
 		bool IsComplete() const
 		{
-			return Entities == BasaltBenchmark::Entities && Meshes == BasaltBenchmark::Meshes && Animators == BasaltBenchmark::Animators && Lights == BasaltBenchmark::Lights && Bodies == BasaltBenchmark::Bodies;
+			return Entities == BrecciaBenchmark::Entities && Meshes == BrecciaBenchmark::Meshes && Animators == BrecciaBenchmark::Animators && Lights == BrecciaBenchmark::Lights && Bodies == BrecciaBenchmark::Bodies;
 		}
 	};
 
-	inline WorkloadCounts CountWorkload(Basalt::Scene& scene)
+	inline WorkloadCounts CountWorkload(Breccia::Scene& scene)
 	{
 		WorkloadCounts counts;
 		counts.Entities = scene.GetEntityCount();
 		counts.Bodies = scene.GetPhysicsWorld() ? scene.GetPhysicsWorld()->GetBodyCount() : 0;
 		for (auto entity : scene.GetAllEntitiesOrdered())
 		{
-			if (entity.HasComponent<Basalt::MeshComponent>())
+			if (entity.HasComponent<Breccia::MeshComponent>())
 				++counts.Meshes;
-			if (entity.HasComponent<Basalt::AnimatorComponent>())
+			if (entity.HasComponent<Breccia::AnimatorComponent>())
 				++counts.Animators;
-			if (entity.HasComponent<Basalt::PointLightComponent>())
+			if (entity.HasComponent<Breccia::PointLightComponent>())
 				++counts.Lights;
 		}
 		return counts;
 	}
 
-	inline uint32_t CountPlayingAnimators(Basalt::Scene& scene)
+	inline uint32_t CountPlayingAnimators(Breccia::Scene& scene)
 	{
 		uint32_t playing = 0;
 		if (auto* animation = scene.GetAnimationSystem())
 			for (auto entity : scene.GetAllEntitiesOrdered())
-				if (entity.HasComponent<Basalt::AnimatorComponent>() && animation->IsPlaying(entity))
+				if (entity.HasComponent<Breccia::AnimatorComponent>() && animation->IsPlaying(entity))
 					++playing;
 		return playing;
 	}
 
 	// WaitIdle makes every result due by the final frame; even a short unresolved drop invalidates the gate.
-	inline bool HasValidGpuTiming(const Basalt::GpuStatistics& statistics)
+	inline bool HasValidGpuTiming(const Breccia::GpuStatistics& statistics)
 	{
 		return statistics.IsReady() && statistics.ConsecutiveDrops == 0 && std::isfinite(statistics.Timings.FrameMilliseconds) && statistics.Timings.FrameMilliseconds > 0;
 	}
 
 	// This fixed workload fits entirely in the camera. Reduced rendering must fail, not look faster.
-	inline std::string ValidateRenderedWorkload(const Basalt::SceneRendererStatistics& stats)
+	inline std::string ValidateRenderedWorkload(const Breccia::SceneRendererStatistics& stats)
 	{
 		if (stats.Instances != Meshes + Animators)
 			return fmt::format("mesh instances: expected {}, got {}", Meshes + Animators, stats.Instances);
@@ -95,9 +95,9 @@ namespace BasaltBenchmark {
 	}
 
 	// The same workload as the pre-instancing baseline: cube instances, overlapping lights and awake bodies.
-	inline void BuildScene(Basalt::Scene& scene)
+	inline void BuildScene(Breccia::Scene& scene)
 	{
-		using namespace Basalt;
+		using namespace Breccia;
 		uint64_t id = 1;
 		auto create = [&](const char* name) { return scene.CreateEntityWithUUID(UUID(id++), name); };
 		for (uint32_t i = 0; i < Meshes; ++i)
@@ -123,7 +123,7 @@ namespace BasaltBenchmark {
 			const uint32_t row = i / 32;
 			entity.GetTransform().Translation = { static_cast<float>(i % 32) * 2.0f - 31.0f, 0, static_cast<float>(row) * 2.0f - 3.0f };
 			auto& animator = entity.AddComponent<AnimatorComponent>();
-			animator.Mesh = BASALT_SOURCE_DIR "/Samples/MovementDemo/Assets/Models/Mannequin.gltf";
+			animator.Mesh = BRECCIA_SOURCE_DIR "/Samples/MovementDemo/Assets/Models/Mannequin.gltf";
 			animator.Clip = "Walk";
 		}
 		for (uint32_t i = 0; i < Lights; ++i)

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Runs clang-tidy (checks in .clang-tidy) over Basalt's own translation units, or one shard of them.
+"""Runs clang-tidy (checks in .clang-tidy) over Breccia's own translation units, or one shard of them.
 
-The files are the sources of every target cmake/CompilerWarnings.cmake gives Basalt's warnings, whose names the
-configure writes to <build>/ClangTidyTargets.txt: the same set -DBASALT_CLANG_TIDY=ON checks while compiling, so
+The files are the sources of every target cmake/CompilerWarnings.cmake gives Breccia's warnings, whose names the
+configure writes to <build>/ClangTidyTargets.txt: the same set -DBRECCIA_CLANG_TIDY=ON checks while compiling, so
 third-party code is never checked. CI splits them over several jobs with --shard; files are dealt out round-robin in
 path order, so every file belongs to exactly one shard however the sources change. Only a configured build tree is
-needed, plus the shader blobs EmbeddedShaders.cpp includes (cmake --build <build> --target BasaltShaders).
+needed, plus the shader blobs EmbeddedShaders.cpp includes (cmake --build <build> --target BrecciaShaders).
 
 Usage: scripts/clang_tidy.py [-p build] [--shard I/N] [-j jobs] [--clang-tidy exe] [--list] [file ...]
 Files restrict the run to those translation units, e.g. the ones a change touched.
@@ -68,7 +68,7 @@ def select_sources(build_dir):
         match = owned.search(entry["output"].replace("\\", "/"))
         if match:
             matched.add(match.group(2))
-            # A source compiled into two targets (some editor sources are also in BasaltTests) is listed once:
+            # A source compiled into two targets (some editor sources are also in BrecciaTests) is listed once:
             # clang-tidy checks every compile command it finds for a file.
             sources.add(os.path.realpath(os.path.join(entry["directory"], entry["file"])))
     # A target whose objects moved elsewhere (another generator or object layout) would otherwise drop out silently.
@@ -151,7 +151,7 @@ def main():
         requested = {os.path.realpath(path) for path in args.files}
         unknown = sorted(requested - set(sources))
         if unknown:
-            sys.exit(f"Not translation units of Basalt's targets in {args.build_dir}:\n  " + "\n  ".join(unknown))
+            sys.exit(f"Not translation units of Breccia's targets in {args.build_dir}:\n  " + "\n  ".join(unknown))
         sources = [source for source in sources if source in requested]
     index, count = args.shard
     selected = sources[index - 1::count]

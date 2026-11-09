@@ -1,10 +1,10 @@
 // MCP envelope, lifecycle, discovery and schema validation with only read-only engine tools allowed.
 #include "FuzzCommon.h"
 
-#include <Basalt/Automation/AutomationSession.h>
-#include <Basalt/Automation/CommandRegistry.h>
-#include <Basalt/Automation/McpServer.h>
-#include <Basalt/Core/JsonUtils.h>
+#include <Breccia/Automation/AutomationSession.h>
+#include <Breccia/Automation/CommandRegistry.h>
+#include <Breccia/Automation/McpServer.h>
+#include <Breccia/Core/JsonUtils.h>
 
 namespace {
 
@@ -21,11 +21,11 @@ namespace {
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 {
-	BasaltFuzz::Init();
-	static const Basalt::CommandRegistry registry;
-	Basalt::AutomationSession session;
-	Basalt::McpServer server;
-	const auto request = Basalt::ParseJson(BasaltFuzz::AsText(data, size));
+	BrecciaFuzz::Init();
+	static const Breccia::CommandRegistry registry;
+	Breccia::AutomationSession session;
+	Breccia::McpServer server;
+	const auto request = Breccia::ParseJson(BrecciaFuzz::AsText(data, size));
 	if (!IsSafe(request))
 		return 0;
 	server.HandleRequest(registry, session, request);

@@ -1,5 +1,5 @@
 {
-	"Format": "BasaltInput",
+	"Format": "BrecciaInput",
 	"Version": 1,
 	"Actions": [
 		{ "Name": "Jump", "Type": "Button", "Bindings": [{ "Key": "Space" }, { "GamepadButton": "A" }] },

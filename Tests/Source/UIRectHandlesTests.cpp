@@ -2,7 +2,7 @@
 
 #include <doctest/doctest.h>
 
-using namespace Basalt;
+using namespace Breccia;
 
 TEST_CASE("UI rect resize keeps the opposite corner fixed under rotation and scale")
 {

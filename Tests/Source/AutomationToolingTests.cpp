@@ -1,19 +1,19 @@
 #include <doctest/doctest.h>
 
-#include <Basalt/Asset/ImageUtils.h>
-#include <Basalt/Automation/AutomationConnection.h>
-#include <Basalt/Automation/AutomationEvents.h>
-#include <Basalt/Automation/AutomationServer.h>
-#include <Basalt/Automation/AutomationSession.h>
-#include <Basalt/Automation/CommandRegistry.h>
-#include <Basalt/Automation/McpServer.h>
-#include <Basalt/Core/JsonUtils.h>
-#include <Basalt/Core/Log.h>
-#include <Basalt/Scene/ComponentRegistry.h>
-#include <Basalt/Scene/Components.h>
-#include <Basalt/Scene/Entity.h>
-#include <Basalt/Scene/Scene.h>
-#include <Basalt/Scene/SceneSerializer.h>
+#include <Breccia/Asset/ImageUtils.h>
+#include <Breccia/Automation/AutomationConnection.h>
+#include <Breccia/Automation/AutomationEvents.h>
+#include <Breccia/Automation/AutomationServer.h>
+#include <Breccia/Automation/AutomationSession.h>
+#include <Breccia/Automation/CommandRegistry.h>
+#include <Breccia/Automation/McpServer.h>
+#include <Breccia/Core/JsonUtils.h>
+#include <Breccia/Core/Log.h>
+#include <Breccia/Scene/ComponentRegistry.h>
+#include <Breccia/Scene/Components.h>
+#include <Breccia/Scene/Entity.h>
+#include <Breccia/Scene/Scene.h>
+#include <Breccia/Scene/SceneSerializer.h>
 
 #include "AutomationTestUtils.h"
 #include "TestUtils.h"
@@ -26,11 +26,11 @@
 #include <sstream>
 #include <thread>
 
-using namespace Basalt;
+using namespace Breccia;
 using json = nlohmann::json;
-using BasaltTest::Contains;
-using BasaltTest::Run;
-using BasaltTest::RunError;
+using BrecciaTest::Contains;
+using BrecciaTest::Run;
+using BrecciaTest::RunError;
 
 namespace {
 
@@ -164,7 +164,7 @@ TEST_SUITE("Automation")
 {
 	TEST_CASE("events.poll returns play-state changes, collisions and script errors in the order they happened")
 	{
-		BasaltTest::TempProject project("EventsPoll");
+		BrecciaTest::TempProject project("EventsPoll");
 		const std::string faulty = project.WriteFile("Assets/Scripts/Faulty.lua", R"(
 			local Faulty = {}
 			function Faulty:OnUpdate(dt)
@@ -416,7 +416,7 @@ TEST_SUITE("Automation")
 		session.SetPaused(true);
 		std::string error;
 		REQUIRE(session.StartPlay(error, true));
-		session.Step(150, BasaltTest::Step);
+		session.Step(150, BrecciaTest::Step);
 		session.SetPaused(true);
 		session.SetPaused(true);
 		session.SetPaused(false);
@@ -459,7 +459,7 @@ TEST_SUITE("Automation")
 
 	TEST_CASE("Event subscriptions keep reporting after Lua Scene.Load switches the playing scene")
 	{
-		BasaltTest::TempProject project("EventsSceneLoad");
+		BrecciaTest::TempProject project("EventsSceneLoad");
 		Scene next("Next");
 		AddFallingBall(next);
 		std::string error;
@@ -491,21 +491,21 @@ TEST_SUITE("Automation")
 		AutomationSession session;
 		const uint64_t errors = Subscribe(registry, session, { "log" }, "error");
 		const uint64_t everything = Subscribe(registry, session, { "log" }, "trace");
-		BS_CORE_WARN("events test: a warning");
-		BS_CORE_ERROR("events test: an error");
+		BR_CORE_WARN("events test: a warning");
+		BR_CORE_ERROR("events test: an error");
 		const json errorEvents = Poll(registry, session, errors)["events"];
 		CHECK(TestLogTexts(errorEvents) == std::vector<std::string>{ "events test: an error" });
 		for (const json& event : errorEvents)
 		{
 			CHECK((event["level"] == "error" || event["level"] == "critical"));
 			if (event["text"] == "events test: an error")
-				CHECK(event["logger"] == "BASALT");
+				CHECK(event["logger"] == "BRECCIA");
 		}
 		CHECK(TestLogTexts(Poll(registry, session, everything)["events"]) == std::vector<std::string>{ "events test: a warning", "events test: an error" });
 
 		const size_t extra = 5;
 		for (size_t i = 0; i < AutomationEventHub::MaxQueuedEvents + extra; i++)
-			BS_CORE_TRACE("events test: line {}", i);
+			BR_CORE_TRACE("events test: line {}", i);
 		const json polled = Poll(registry, session, everything);
 		CHECK(polled["events"].size() == AutomationEventHub::MaxQueuedEvents);
 		CHECK(polled["dropped"].get<uint64_t>() >= extra);
@@ -593,7 +593,7 @@ TEST_SUITE("Automation")
 			auto connection = std::make_shared<AutomationConnection>();
 			return AutomationServer::ClientHandler{ [&, connection](const std::string& request) { return connection->HandleRequest(registry, session, request); }, [connection]() { return connection->TakePendingEvents(); } }; }, error));
 		{
-			BasaltTest::LineClient client(server.GetPort());
+			BrecciaTest::LineClient client(server.GetPort());
 			REQUIRE(client.Send(R"({"id":1,"command":"events.subscribe","params":{"types":["playState","log"],"minLevel":"warn"}})"));
 			const json subscribed = ParseJson(client.ReadLine());
 			REQUIRE(subscribed["ok"] == true);
@@ -610,7 +610,7 @@ TEST_SUITE("Automation")
 			CHECK_FALSE(frame.contains("ok"));
 
 			// Events raised between requests arrive on the idle tick, without a request.
-			BS_CORE_WARN("events test: streamed warning");
+			BR_CORE_WARN("events test: streamed warning");
 			const json warning = client.ReadFrame([](const json& f) { return f.value("text", "") == "events test: streamed warning"; });
 			REQUIRE(warning.is_object());
 			CHECK(warning["event"] == "log");
@@ -626,7 +626,7 @@ TEST_SUITE("Automation")
 			CHECK(ParseJson(client.ReadLine())["id"] == 3);
 			REQUIRE(client.Send(R"({"id":4,"command":"play.stop"})"));
 			CHECK(ParseJson(client.ReadLine())["id"] == 4);
-			BS_CORE_WARN("events test: after unsubscribing");
+			BR_CORE_WARN("events test: after unsubscribing");
 			REQUIRE(client.Send(R"({"id":5,"command":"scene.info"})"));
 			CHECK(ParseJson(client.ReadLine())["id"] == 5);
 			REQUIRE(client.Send(R"({"id":6,"command":"events.subscribe","params":{"types":["playState"]}})"));
@@ -660,7 +660,7 @@ TEST_SUITE("Automation")
 			std::string request = requestLine;
 			request += "\r\nHost: 127.0.0.1:7420\r\nOrigin: https://example.com\r\nContent-Type: text/plain\r\n\r\n";
 			request += R"({"command":"entity.create","params":{"name":"FromAWebPage"}})";
-			BasaltTest::LineClient client(server.GetPort());
+			BrecciaTest::LineClient client(server.GetPort());
 			REQUIRE(client.Send(request));
 			// The refusal itself can be lost: closing with the body unread may reset the connection.
 			while (!client.ReadLine().empty())
@@ -671,7 +671,7 @@ TEST_SUITE("Automation")
 
 		// A blank line first decides nothing.
 		{
-			BasaltTest::LineClient client(server.GetPort());
+			BrecciaTest::LineClient client(server.GetPort());
 			REQUIRE(client.Send(""));
 			REQUIRE(client.Send("POST / HTTP/1.1"));
 			CHECK(ParseJson(client.ReadLine())["error"] == "this port speaks newline-delimited JSON");
@@ -681,7 +681,7 @@ TEST_SUITE("Automation")
 		for (const char* frame : { "hello", "123", "\"text\"", "null", "  POST / HTTP/1.1", "\xEF\xBB\xBFhello" })
 		{
 			CAPTURE(frame);
-			BasaltTest::LineClient client(server.GetPort());
+			BrecciaTest::LineClient client(server.GetPort());
 			REQUIRE(client.Send(frame));
 			CHECK(ParseJson(client.ReadLine())["error"] == "this port speaks newline-delimited JSON");
 			CHECK(client.ReadLine().empty());
@@ -690,21 +690,21 @@ TEST_SUITE("Automation")
 
 		// Anything an automation client can send still gets through, whatever came first.
 		const std::string info = R"({"command":"scene.info"})";
-		const auto expectAnswered = [&](BasaltTest::LineClient& client) {
+		const auto expectAnswered = [&](BrecciaTest::LineClient& client) {
 			REQUIRE(client.Send(info));
 			CHECK(ParseJson(client.ReadLine())["ok"] == true);
 		};
 		for (const char* opening : { "", "\r" })
 		{
 			CAPTURE(opening);
-			BasaltTest::LineClient client(server.GetPort());
+			BrecciaTest::LineClient client(server.GetPort());
 			REQUIRE(client.Send(opening));
 			expectAnswered(client);
 		}
 		for (const char* opening : { "  \t", "\r\r", "\xEF\xBB\xBF" })
 		{
 			CAPTURE(opening);
-			BasaltTest::LineClient client(server.GetPort());
+			BrecciaTest::LineClient client(server.GetPort());
 			REQUIRE(client.Send(opening));
 			CHECK(ParseJson(client.ReadLine())["error"] == "invalid JSON");
 			expectAnswered(client);
@@ -712,13 +712,13 @@ TEST_SUITE("Automation")
 		for (const char* prefix : { "\xEF\xBB\xBF", " \t", "\r" })
 		{
 			CAPTURE(prefix);
-			BasaltTest::LineClient client(server.GetPort());
+			BrecciaTest::LineClient client(server.GetPort());
 			REQUIRE(client.Send(prefix + info));
 			CHECK(ParseJson(client.ReadLine())["ok"] == true);
 		}
 		{
 			// Malformed JSON stays an answered mistake, and only a first frame is judged.
-			BasaltTest::LineClient client(server.GetPort());
+			BrecciaTest::LineClient client(server.GetPort());
 			REQUIRE(client.Send("{bad}"));
 			CHECK(ParseJson(client.ReadLine())["error"] == "invalid JSON");
 			REQUIRE(client.Send("not json either"));
@@ -726,7 +726,7 @@ TEST_SUITE("Automation")
 			expectAnswered(client);
 		}
 		{
-			BasaltTest::LineClient client(server.GetPort());
+			BrecciaTest::LineClient client(server.GetPort());
 			REQUIRE(client.Send("[1,2]"));
 			CHECK(ParseJson(client.ReadLine()).is_array());
 			expectAnswered(client);
@@ -791,7 +791,7 @@ TEST_SUITE("Automation")
 
 	TEST_CASE("scene.diff compares snapshots, scene files and the current scene by entity ID")
 	{
-		BasaltTest::TempProject project("SceneDiff");
+		BrecciaTest::TempProject project("SceneDiff");
 		CommandRegistry registry;
 		AutomationSession session;
 		Run(registry, session, "scene.new", { { "name", "Diff" }, { "empty", true } });
@@ -957,7 +957,7 @@ TEST_SUITE("Automation")
 
 	TEST_CASE("render.compare renders through the host and compares with the reference")
 	{
-		BasaltTest::TempProject project("RenderCompare");
+		BrecciaTest::TempProject project("RenderCompare");
 		CommandRegistry registry;
 		AutomationSession session;
 		CHECK(Contains(RunError(registry, session, "render.compare", { { "reference", "Reference.png" } }), "render.compare needs a GPU host"));
@@ -1113,7 +1113,7 @@ TEST_SUITE("Automation")
 			loggers.emplace_back([&]() {
 				while (running)
 				{
-					BS_CORE_TRACE("events test: stress");
+					BR_CORE_TRACE("events test: stress");
 					published++;
 				}
 			});
@@ -1174,7 +1174,7 @@ TEST_SUITE("Automation")
 			return AutomationServer::ClientHandler{ [&, connection](const std::string& request) { return connection->HandleRequest(registry, session, request); }, [connection]() { return connection->TakePendingEvents(); } }; }, error));
 		const uint64_t logCursor = Log::GetHistory().GetTotalCount();
 		{
-			BasaltTest::LineClient client(server.GetPort(), 1024);
+			BrecciaTest::LineClient client(server.GetPort(), 1024);
 			REQUIRE(client.Send(R"({"id":1,"command":"events.subscribe","params":{"types":["log"],"minLevel":"trace"}})"));
 			REQUIRE(ParseJson(client.ReadLine())["ok"] == true);
 			// Never read again: the server's sends back up until the timeout disconnects the client.
@@ -1183,7 +1183,7 @@ TEST_SUITE("Automation")
 			while (session.GetEvents()->GetSubscriptionCount() != 0 && std::chrono::steady_clock::now() < deadline)
 			{
 				for (int i = 0; i < 200; i++)
-					BS_CORE_TRACE("events test: flood {}", padding);
+					BR_CORE_TRACE("events test: flood {}", padding);
 				std::this_thread::sleep_for(std::chrono::milliseconds(5));
 			}
 			CHECK(session.GetEvents()->GetSubscriptionCount() == 0);
@@ -1214,7 +1214,7 @@ TEST_SUITE("Automation")
 		CHECK(copy->GetEventListener() == nullptr);
 		// Contacts after the session is gone reach no listener (ASan would catch a dangling one).
 		for (int i = 0; i < 150; i++)
-			copy->OnUpdate(BasaltTest::Step);
+			copy->OnUpdate(BrecciaTest::Step);
 		copy->OnRuntimeStop();
 	}
 

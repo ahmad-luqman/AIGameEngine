@@ -1,11 +1,11 @@
 #include "FailingDevice.h"
 #include "GPUFixture.h"
 
-#include <Basalt/Renderer/SceneRenderer.h>
-#include <Basalt/Scene/Entity.h>
-#include <Basalt/Scene/Scene.h>
+#include <Breccia/Renderer/SceneRenderer.h>
+#include <Breccia/Scene/Entity.h>
+#include <Breccia/Scene/Scene.h>
 
-using namespace Basalt;
+using namespace Breccia;
 
 TEST_CASE("Temporal and reset-frame spatial allocation failures abort cleanly and require an explicit retry")
 {

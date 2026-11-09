@@ -3,25 +3,25 @@
 #include "AnimationTestUtils.h"
 #include "TestUtils.h"
 
-#include <Basalt/Animation/AnimatedModel.h>
-#include <Basalt/Animation/AnimationPose.h>
-#include <Basalt/Animation/AnimationSystem.h>
-#include <Basalt/Animation/InverseKinematics.h>
-#include <Basalt/Asset/AssetManager.h>
-#include <Basalt/Asset/MeshImporter.h>
-#include <Basalt/Core/Log.h>
-#include <Basalt/Math/Math.h>
-#include <Basalt/Physics/PhysicsWorld.h>
-#include <Basalt/Scene/ComponentRegistry.h>
-#include <Basalt/Scene/Entity.h>
-#include <Basalt/Scene/SceneSerializer.h>
-#include <Basalt/Scripting/ScriptEngine.h>
+#include <Breccia/Animation/AnimatedModel.h>
+#include <Breccia/Animation/AnimationPose.h>
+#include <Breccia/Animation/AnimationSystem.h>
+#include <Breccia/Animation/InverseKinematics.h>
+#include <Breccia/Asset/AssetManager.h>
+#include <Breccia/Asset/MeshImporter.h>
+#include <Breccia/Core/Log.h>
+#include <Breccia/Math/Math.h>
+#include <Breccia/Physics/PhysicsWorld.h>
+#include <Breccia/Scene/ComponentRegistry.h>
+#include <Breccia/Scene/Entity.h>
+#include <Breccia/Scene/SceneSerializer.h>
+#include <Breccia/Scripting/ScriptEngine.h>
 
 #include <glm/gtc/epsilon.hpp>
 #include <random>
 
-using namespace Basalt;
-using namespace BasaltTest;
+using namespace Breccia;
+using namespace BrecciaTest;
 using json = nlohmann::json;
 
 using namespace AnimationTest;
@@ -218,7 +218,7 @@ TEST_SUITE("Animation")
 
 	TEST_CASE("IK solves the Khronos Fox's rotated and scaled joints")
 	{
-		const auto source = LoadModel(std::filesystem::path(BASALT_TEST_DATA_DIR) / "Animation/Fox/Fox.glb");
+		const auto source = LoadModel(std::filesystem::path(BRECCIA_TEST_DATA_DIR) / "Animation/Fox/Fox.glb");
 		Rig rig(source);
 		const uint32_t upper = Node(*source, "b_LeftLeg01_015"), middle = Node(*source, "b_LeftLeg02_016"), end = Node(*source, "b_LeftFoot01_017");
 		const glm::vec3 a = Position(rig.Globals, upper), b = Position(rig.Globals, middle), c = Position(rig.Globals, end);
@@ -992,7 +992,7 @@ TEST_SUITE("Animation")
 		{
 			// The Armature variant poses the same skeleton, turned 90 degrees about Y.
 			const auto plain = LoadBiped();
-			const auto nested = LoadModel(std::filesystem::path(BASALT_TEST_DATA_DIR) / "Animation/BipedArmature.gltf");
+			const auto nested = LoadModel(std::filesystem::path(BRECCIA_TEST_DATA_DIR) / "Animation/BipedArmature.gltf");
 			const Rig a(plain), b(nested);
 			const glm::vec3 foot = Position(a.Globals, Node(*plain, "LeftFoot"));
 			CHECK(Near(Position(b.Globals, Node(*nested, "LeftFoot")), glm::vec3(foot.z, foot.y, -foot.x)));
@@ -1006,7 +1006,7 @@ TEST_SUITE("Animation")
 			ik.Pelvis = "Hips";
 			ik.Smoothing = 0;
 			if (nested)
-				biped.GetComponent<AnimatorComponent>().Mesh = (std::filesystem::path(BASALT_TEST_DATA_DIR) / "Animation/BipedArmature.gltf").string();
+				biped.GetComponent<AnimatorComponent>().Mesh = (std::filesystem::path(BRECCIA_TEST_DATA_DIR) / "Animation/BipedArmature.gltf").string();
 			else
 				biped.GetTransform().Scale = glm::vec3(2);
 			const float scale = nested ? 1.0f : 2.0f;

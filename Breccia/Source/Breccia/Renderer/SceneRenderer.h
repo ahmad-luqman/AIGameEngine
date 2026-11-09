@@ -1,0 +1,255 @@
+#pragma once
+
+#include "Breccia/Core/Base.h"
+#include "Breccia/Core/UUID.h"
+#include "Breccia/Renderer/DynamicResolution.h"
+#include "Breccia/Renderer/GpuProfiler.h"
+#include "Breccia/Renderer/RenderResources.h"
+#include "Breccia/UI/UIDrawCommand.h"
+
+#include <glm/glm.hpp>
+#include <nvrhi/nvrhi.h>
+
+#include <functional>
+#include <optional>
+#include <string>
+#include <vector>
+
+namespace Breccia {
+
+	class Scene;
+	class MeshSource;
+
+	struct RenderCamera
+	{
+		glm::mat4 View = glm::mat4(1.0f);
+		// nvrhi clip space (depth 0..1, +Y up), as produced by SceneCamera / EditorCamera.
+		glm::mat4 Projection = glm::mat4(1.0f);
+		glm::vec3 Position = { 0.0f, 0.0f, 0.0f };
+		float Near = 0.1f;
+		float Far = 1000.0f;
+		uint64_t Identity = 0; // Scene camera UUID; a switch invalidates temporal history even for nearby cameras.
+	};
+
+	struct SceneRendererStatistics
+	{
+		uint32_t DrawCalls = 0;
+		uint32_t Instances = 0; // Color-pass mesh instances, independent of batching; excludes particles.
+		uint32_t ShadowDrawCalls = 0;
+		// Triangles submitted in the color pass, excluding depth, shadows and fullscreen passes.
+		uint64_t Triangles = 0;
+		uint32_t CulledSubmeshes = 0;
+		uint32_t Lights = 0;
+		uint32_t LightsSkipped = 0;
+		uint32_t LocalShadowMaps = 0;
+		uint32_t LocalShadowsSkipped = 0;
+		uint32_t LocalShadowAtlasSize = 1; // One-texel fallback until the first active shadow.
+		bool TAAActive = false;            // The temporal resolve ran successfully.
+		bool TAAHistoryValid = false;      // History was eligible for blending; reset/rebake frames use FXAA.
+		bool FSR1Active = false;           // EASU and RCAS actually ran in this frame.
+		bool Failed = false;               // This frame could not be rendered; hosts must not report success.
+		uint32_t Materials = 0;
+		uint32_t SkinMatrices = 0;        // Uploaded once per visible instance/skin, shared by its mesh nodes.
+		uint32_t MorphWeights = 0;        // Active morph weights uploaded, once per visible morphed mesh node.
+		uint32_t MorphWeightsDropped = 0; // Active weights past the per-draw limit, not drawn.
+		// Particle billboards drawn (after frustum culling of whole emitters), and the ones skipped because
+		// the frame's particle budget (or particle buffer) was exhausted.
+		uint32_t Particles = 0;
+		uint32_t ParticlesSkipped = 0;
+	};
+
+	// GPU timer results dynamic resolution received since the renderer was created: Rejected ones were not
+	// positive and finite (broken or saturated timestamps), so they could not steer the scale.
+	struct DynamicResolutionSampleCounts
+	{
+		uint64_t Accepted = 0;
+		uint64_t Rejected = 0;
+	};
+
+	// Visible surface at the sampled render texel. UV uses top-left origin; depth is in 0..1.
+	struct ViewportPick
+	{
+		UUID EntityId = 0;
+		float Depth = 1;
+		glm::vec2 UV = glm::vec2(0);
+	};
+
+	struct SceneRendererSpecification
+	{
+		// Time the passes with GPU timer queries (GraphicsDevice::SupportsTimerQueries). Needed for
+		// GetGpuTimings and dynamic resolution; renderers whose output must not depend on GPU speed (the
+		// editor's screenshots) leave it off.
+		bool GpuTimers = false;
+		// Editor-only entity IDs; runtime renderers allocate no picking resources.
+		bool Picking = false;
+		// Interactive views stream CPU assets; captures leave this off for deterministic output.
+		bool AsyncLoading = false;
+	};
+
+	// Renders a Scene from a camera into an internal LDR image:
+	//   directional cascades + point/spot shadow atlas -> depth/normal prepass -> SSAO (+ bilateral blur) ->
+	//   cluster light-list build -> clustered forward PBR with IBL (opaque) -> skybox -> optional HDR TAA -> transparent PBR and particle billboards ->
+	//   optional histogram auto exposure + HDR bloom -> manual exposure + tonemapping + sRGB encode -> optional FXAA -> optional EASU + RCAS -> dithering -> output-resolution overlays.
+	// The scene renders at the current render scale; tonemap or FXAA resamples directly to the viewport,
+	// or FSR 1 upscales the perceptual-color output. With dynamic resolution the scale follows the GPU time
+	// measured by GpuProfiler; the targets keep the size of the configured render scale and the scene renders into
+	// their top-left corner, so scale changes never reallocate. The output texture can be shown through
+	// ImGui (editor viewport) or blitted to the swapchain.
+	class SceneRenderer
+	{
+	public:
+		explicit SceneRenderer(nvrhi::IDevice* device, const SceneRendererSpecification& specification = {});
+		~SceneRenderer();
+
+		SceneRenderer(const SceneRenderer&) = delete;
+		SceneRenderer& operator=(const SceneRenderer&) = delete;
+
+		// Creates pipelines and constant resources. Returns false (and logs) on failure.
+		bool Initialize();
+
+		void SetViewportSize(uint32_t width, uint32_t height);
+		uint32_t GetViewportWidth() const { return m_Width; }
+		uint32_t GetViewportHeight() const { return m_Height; }
+		// Fraction of the viewport size the scene renders at, clamped to [MinRenderScale, MaxRenderScale]
+		// (RenderMath.h); the highest scale when dynamic resolution is on. Takes effect at the next
+		// SetViewportSize or Render, which recreate the targets.
+		void SetRenderScale(float scale);
+		float GetRenderScale() const { return m_RenderScale; }
+		// Lets the render scale drop (down to the minimum) to keep the GPU time within the target frame time.
+		// Values are sanitized (SanitizeDynamicResolution). Inactive without GPU timers or when the minimum is
+		// not below the render scale (GetDynamicResolutionState; the next Render logs a warning).
+		void SetDynamicResolution(const DynamicResolutionSettings& settings);
+		const DynamicResolutionSettings& GetDynamicResolution() const { return m_DynamicResolution; }
+		DynamicResolutionState GetDynamicResolutionState() const;
+		bool IsDynamicResolutionActive() const;
+		const DynamicResolutionSampleCounts& GetDynamicResolutionSamples() const { return m_Diagnostics.Samples; }
+		// GPU frame time without transient environment baking and uploads. Recurring cluster work stays
+		// in the frame budget even though its cost is independent of render scale.
+		static float GetDynamicResolutionMilliseconds(const GpuFrameSample& sample);
+		// Scale of the last rendered frame (below the render scale while dynamic resolution has lowered it; a
+		// resize keeps it). Between a resize and the next Render it reads GetRenderScale(). GetRenderWidth/Height
+		// give the exact size of the area rendered.
+		float GetCurrentRenderScale() const { return m_CurrentRenderScale; }
+		uint32_t GetRenderWidth() const { return m_RenderWidth; }
+		uint32_t GetRenderHeight() const { return m_RenderHeight; }
+
+		// Clustered lighting is enabled by default. Disabling selects the all-lights diagnostic reference
+		// for image comparisons and profiling; it is not a serialized scene setting.
+		void SetClusteredLighting(bool enabled) { m_ClusteredLighting = enabled; }
+		bool IsClusteredLighting() const { return m_ClusteredLighting; }
+		// Diagnostic grayscale: fraction of the scene budget visited by the fragment's light loop.
+		// This replaces PBR color, letting GPU tests verify list consumption as well as list construction.
+		void SetVisualizeLightCount(bool enabled) { m_VisualizeLightCount = enabled; }
+
+		// Selection uses the same visible-surface IDs as picking. An empty selection disables outlines. No effect unless Picking is enabled.
+		void SetSelections(const std::vector<UUID>& entities) { m_Selection = entities; }
+		// Copies one texel on demand, in integer output-image coordinates (top-left origin).
+		// Synchronous: waits for the whole device, not just the copied texel.
+		// nullopt means unavailable/failed; UUID 0 means background. Valid only after a successful Render.
+		std::optional<UUID> Pick(uint32_t x, uint32_t y);
+		std::optional<ViewportPick> PickSurface(uint32_t x, uint32_t y);
+		// Call when replacing a scene; mappings otherwise describe the last successful Render.
+		void InvalidatePicking();
+
+		// Resets temporal AA and starts auto exposure at its metered target (deterministic captures).
+		void ResetExposure();
+		// Explicit camera cuts; captures reset this alongside exposure. Failed frames never keep history.
+		void ResetTemporalHistory();
+		// Previous UV, previous depth and validity from the opaque prepass (RGBA32F); null when TAA is off.
+		nvrhi::ITexture* GetMotionTexture() const;
+
+		// false submits individual draws in original order for validation and throughput comparisons.
+		// Grouping opaque keys can change exact coplanar depth-tie winners; transparent order is preserved.
+		void SetInstancingEnabled(bool enabled) { m_InstancingEnabled = enabled; }
+
+		// Resolves MaterialComponent::Material keys before AssetManager; a null result falls through to it. The preview
+		// renderer draws materials by value this way (material-file thumbnails, tooltip swatches, the Material Editor's
+		// draft); scene renderers leave it unset.
+		using MaterialResolver = std::function<Ref<const MaterialData>(const std::string& key)>;
+		void SetMaterialResolver(MaterialResolver resolver) { m_MaterialResolver = std::move(resolver); }
+
+		// Records and submits all passes for one frame.
+		void Render(Scene& scene, const RenderCamera& camera, float deltaTime);
+
+		// RGBA8 display-referred image of the last Render (shader resource state), at the viewport size.
+		nvrhi::ITexture* GetOutputTexture() const { return m_OutputTexture; }
+		// Scene depth of the last frame (D32). The scene covers its top-left GetRenderWidth() x GetRenderHeight()
+		// texels; the texture is larger while dynamic resolution renders below the render scale.
+		nvrhi::ITexture* GetDepthTexture() const { return m_DepthTexture; }
+		// Framebuffer with the output color and the scene depth at the viewport size attached (for overlays).
+		nvrhi::IFramebuffer* GetOverlayFramebuffer() const { return m_OverlayFramebuffer; }
+
+		// A project image for the game UI, uploaded on the given open command list on first use. UI textures
+		// are linear (UNORM): the UI draws display-referred colors into the UNORM swapchain, so the image's
+		// bytes must reach it unconverted. nullopt when the image does not load (logged once by AssetManager, or
+		// by RenderResources when the GPU texture cannot be created).
+		std::optional<UITexture> GetUITexture(const std::string& path, nvrhi::ICommandList* commandList);
+
+		// Draws the output image stretched over the target framebuffer.
+		void Blit(nvrhi::ICommandList* commandList, nvrhi::IFramebuffer* target);
+
+		// Copies the last output image to CPU memory (RGBA8, top row first). Waits for the GPU.
+		bool ReadOutputPixels(std::vector<uint8_t>& outPixels, uint32_t& outWidth, uint32_t& outHeight);
+
+		const SceneRendererStatistics& GetStatistics() const { return m_Statistics; }
+		// GPU time per pass, averaged over the last GpuProfiler::AverageWindow frames. SampleCount is 0 (every
+		// pass listed at 0 ms) until results arrive, and always without GPU timers.
+		const GpuTimings& GetGpuTimings() const { return m_Profiler.GetTimings(); }
+		bool HasGpuTimers() const { return m_Profiler.IsEnabled(); }
+		const GpuProfiler& GetGpuProfiler() const { return m_Profiler; }
+		RenderResources& GetResources() { return *m_Resources; }
+
+	private:
+		// Allocates the targets for the viewport size and m_RenderScale (and the dynamic resolution state).
+		void ResizeTargets(uint32_t width, uint32_t height);
+		// Picks this frame's render size from the configured scale and, with dynamic resolution, the GPU time
+		// of an earlier frame.
+		void UpdateRenderSize(const std::optional<GpuFrameSample>& sample);
+		// Warns (once per change of state) when dynamic resolution is enabled but cannot adjust anything.
+		void ReportDynamicResolutionState();
+
+		struct Impl;
+		Scope<Impl> m_Impl;
+		nvrhi::IDevice* m_Device = nullptr;
+		Scope<RenderResources> m_Resources;
+		GpuProfiler m_Profiler;
+
+		uint32_t m_Width = 0;
+		uint32_t m_Height = 0;
+		float m_RenderScale = 1.0f;
+		bool m_Picking = false;
+		bool m_InstancingEnabled = true;
+		bool m_AsyncLoading = false;
+		MaterialResolver m_MaterialResolver;
+		Ref<MeshSource> m_PlaceholderMesh;
+		std::vector<UUID> m_Selection;
+		bool m_ClusteredLighting = true;
+		bool m_VisualizeLightCount = false;
+		// Size of the scene targets: the viewport size times the render scale.
+		uint32_t m_TargetWidth = 0;
+		uint32_t m_TargetHeight = 0;
+		// The targets were created for dynamic resolution (overlay depth and resampling even at full size).
+		bool m_TargetsDynamic = false;
+		// Area of the targets the scene renders into this frame.
+		uint32_t m_RenderWidth = 0;
+		uint32_t m_RenderHeight = 0;
+		float m_CurrentRenderScale = 1.0f;
+		DynamicResolutionSettings m_DynamicResolution;
+		DynamicResolutionController m_DynamicController;
+		// What dynamic resolution reported and received (warnings, render.stats), not render state.
+		struct DynamicResolutionDiagnostics
+		{
+			DynamicResolutionState ReportedState = DynamicResolutionState::Off;
+			DynamicResolutionSampleCounts Samples;
+			// Rejected samples in a row; warned about once, at GpuProfiler::AverageWindow.
+			uint32_t RejectedInARow = 0;
+			bool WarnedRejected = false;
+		};
+		DynamicResolutionDiagnostics m_Diagnostics;
+		nvrhi::TextureHandle m_OutputTexture;
+		nvrhi::TextureHandle m_DepthTexture;
+		nvrhi::FramebufferHandle m_OverlayFramebuffer;
+		SceneRendererStatistics m_Statistics;
+	};
+
+}

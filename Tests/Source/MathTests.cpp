@@ -1,7 +1,7 @@
 #include <doctest/doctest.h>
 
-#include <Basalt/Math/Math.h>
-#include <Basalt/Math/Random.h>
+#include <Breccia/Math/Math.h>
+#include <Breccia/Math/Random.h>
 
 #include <glm/gtc/quaternion.hpp>
 
@@ -11,7 +11,7 @@
 #include <limits>
 #include <random>
 
-using namespace Basalt;
+using namespace Breccia;
 
 TEST_SUITE("Random")
 {

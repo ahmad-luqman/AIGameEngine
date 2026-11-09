@@ -2,9 +2,9 @@
 
 #include "UITestUtils.h"
 
-#include <Basalt/Scene/ComponentRegistry.h>
-#include <Basalt/Scene/Entity.h>
-#include <Basalt/Scene/Scene.h>
+#include <Breccia/Scene/ComponentRegistry.h>
+#include <Breccia/Scene/Entity.h>
+#include <Breccia/Scene/Scene.h>
 
 #include <doctest/doctest.h>
 #include <imgui.h>
@@ -14,7 +14,7 @@
 #include <optional>
 #include <string_view>
 
-using namespace Basalt;
+using namespace Breccia;
 using json = nlohmann::json;
 
 namespace {
@@ -42,7 +42,7 @@ namespace {
 	Frame DrawFrame(json& value)
 	{
 		ImGui::NewFrame();
-		BasaltTest::ImGuiTestContext::MarkTexturesUploaded();
+		BrecciaTest::ImGuiTestContext::MarkTexturesUploaded();
 		ImGui::SetNextWindowPos({ 0, 0 });
 		ImGui::SetNextWindowSize({ 600, 900 });
 		ImGui::Begin("Inspector");
@@ -144,7 +144,7 @@ TEST_SUITE("Editor")
 
 	TEST_CASE("The list widget draws nested lists without changing them, and its buttons edit the list")
 	{
-		BasaltTest::ImGuiTestContext context;
+		BrecciaTest::ImGuiTestContext context;
 		ImGuiIO& io = ImGui::GetIO();
 		const json spaces = { { { "Name", "Walk" }, { "Type", "1D" }, { "Samples", { { { "Clip", "Step" }, { "X", 0.0 }, { "Y", 0.0 }, { "Speed", 1.0 } } } } } };
 		json value = spaces;
@@ -273,7 +273,7 @@ TEST_SUITE("Editor")
 
 	TEST_CASE("The entity picker offers what its filter takes, and none")
 	{
-		BasaltTest::ImGuiTestContext context;
+		BrecciaTest::ImGuiTestContext context;
 		ImGuiIO& io = ImGui::GetIO();
 		Scene scene;
 		const Entity alpha = scene.CreateEntity("Alpha");
@@ -281,7 +281,7 @@ TEST_SUITE("Editor")
 		ImVec2 comboMin, comboMax;
 		const auto frame = [&](uint64_t current, bool skipAlpha) {
 			ImGui::NewFrame();
-			BasaltTest::ImGuiTestContext::MarkTexturesUploaded();
+			BrecciaTest::ImGuiTestContext::MarkTexturesUploaded();
 			ImGui::SetNextWindowPos({ 0, 0 });
 			ImGui::SetNextWindowSize({ 600, 900 });
 			ImGui::Begin("Inspector");

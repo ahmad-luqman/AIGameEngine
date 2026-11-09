@@ -1,0 +1,66 @@
+#pragma once
+
+#include <glm/glm.hpp>
+
+#include <cstdint>
+#include <filesystem>
+#include <span>
+#include <string>
+#include <vector>
+
+struct ma_engine;
+
+namespace Breccia {
+
+	// The output format of the device-less engine. Stereo at 48 kHz unless a test needs what some devices have
+	// (surround, a low rate).
+	struct AudioDevicelessFormat
+	{
+		uint32_t Channels = 2;
+		uint32_t SampleRate = 48000;
+	};
+	constexpr uint32_t MinDevicelessChannels = 1;
+	constexpr uint32_t MaxDevicelessChannels = 8;
+	constexpr uint32_t MinDevicelessSampleRate = 8000;
+	constexpr uint32_t MaxDevicelessSampleRate = 192000;
+
+	// Process-wide miniaudio engine. Falls back to a silent device-less engine when no audio device is
+	// available (headless runs, CI), so audio code paths behave the same everywhere.
+	// The device-less engine's resource manager has no job thread and no locking of its own: create and destroy
+	// sounds and call AdvanceDeviceless/ReadDeviceless from one thread (the main thread; the editor's automation
+	// server already hands its work to it). The mutex only makes the engine pointer and flags safe to read:
+	// Shutdown must not run while another thread still uses the engine. With a device, miniaudio's own job
+	// thread loads stream pages in real time instead.
+	class AudioEngine
+	{
+	public:
+		// headless: never open an output device. format applies when there is no device; false (logged), even when a
+		// device would open, when it is outside the Min/MaxDeviceless limits, and when a device-less engine already runs
+		// in another format.
+		static bool Init(bool headless, const AudioDevicelessFormat& format = {});
+		static void Shutdown();
+		static bool IsInitialized();
+		static bool HasDevice();
+
+		// Null when the engine is not initialized (audio is then silently skipped). The Application owns the
+		// engine's lifetime; standalone users (tests, tools) call Init/Shutdown themselves.
+		static ma_engine* GetEngine();
+
+		// velocity (world units per second) only drives the Doppler shift of sources with a Doppler factor.
+		static void SetListener(const glm::vec3& position, const glm::vec3& forward, const glm::vec3& up, const glm::vec3& velocity = glm::vec3(0.0f));
+		// Without an output device nothing pulls audio; this mixes (and discards) the given duration so
+		// playback state advances exactly as it would with a device, and runs the resource manager's pending jobs
+		// (stream page refills) as it goes. No-op when a device is present.
+		static void AdvanceDeviceless(float seconds);
+		// AdvanceDeviceless that also appends the mixed frames to output (interleaved, ma_engine_get_channels
+		// channels at ma_engine_get_sample_rate), so tests can measure what reached the speakers. False (output
+		// unchanged) when a device is present, the engine is not initialized, seconds is not finite or exceeds an
+		// hour, or the mix fails; true with nothing appended for seconds <= 0.
+		static bool ReadDeviceless(float seconds, std::vector<float>& output);
+
+		// Whether the decoders the engine plays with get audio out of this file (WAV, FLAC or MP3, whatever it is named), from
+		// its first frames; false, with the reason, when not. Needs no engine.
+		[[nodiscard]] static bool CanDecode(std::span<const uint8_t> file, std::string& outError);
+	};
+
+}

@@ -1,14 +1,14 @@
 #include <doctest/doctest.h>
 
-#include <Basalt/Core/Log.h>
-#include <Basalt/Particles/ParticleEmitterRules.h>
-#include <Basalt/Particles/ParticleSystem.h>
-#include <Basalt/Project/Project.h>
-#include <Basalt/Scene/ComponentRegistry.h>
-#include <Basalt/Scene/Entity.h>
-#include <Basalt/Scene/Scene.h>
-#include <Basalt/Scene/SceneSerializer.h>
-#include <Basalt/Scripting/ScriptEngine.h>
+#include <Breccia/Core/Log.h>
+#include <Breccia/Particles/ParticleEmitterRules.h>
+#include <Breccia/Particles/ParticleSystem.h>
+#include <Breccia/Project/Project.h>
+#include <Breccia/Scene/ComponentRegistry.h>
+#include <Breccia/Scene/Entity.h>
+#include <Breccia/Scene/Scene.h>
+#include <Breccia/Scene/SceneSerializer.h>
+#include <Breccia/Scripting/ScriptEngine.h>
 
 #include "TestUtils.h"
 
@@ -20,7 +20,7 @@
 #include <string>
 #include <vector>
 
-using namespace Basalt;
+using namespace Breccia;
 using json = nlohmann::json;
 
 namespace {
@@ -480,7 +480,7 @@ TEST_SUITE("Particles")
 
 	TEST_CASE("Particles repeat in every play session, follow the project seed and ignore registry order")
 	{
-		BasaltTest::TempProject project("ParticleSeed");
+		BrecciaTest::TempProject project("ParticleSeed");
 		REQUIRE(project.IsValid());
 		ParticleEmitterComponent emitter = QuietEmitter();
 		emitter.PlayOnStart = true;
@@ -635,8 +635,8 @@ TEST_SUITE("Particles")
 		ParticleSystem& particles = *scene.GetParticleSystem();
 		StepFrames(scene, 3);
 		// Once per emitter, naming the emitter and the broken field.
-		CHECK(BasaltTest::CountLogMessages(logStart, "has invalid values") == 2);
-		CHECK(BasaltTest::CountLogMessages(logStart, "'BrokenB' has invalid values (Drag must be between") == 1);
+		CHECK(BrecciaTest::CountLogMessages(logStart, "has invalid values") == 2);
+		CHECK(BrecciaTest::CountLogMessages(logStart, "'BrokenB' has invalid values (Drag must be between") == 1);
 		// MaxParticles 0 acts as 1; every value the particle carries stays finite, and the blend mode valid.
 		CHECK(particles.GetParticleCount(entity) == 1);
 		const ParticleRenderData data = RenderData(scene);
@@ -657,11 +657,11 @@ TEST_SUITE("Particles")
 		const std::vector<float> before = Snapshot(scene);
 		const uint64_t stepLog = Log::GetHistory().GetTotalCount();
 		particles.Update(0.0f); // a paused frame: legitimate, silent
-		CHECK(BasaltTest::CountLogMessages(stepLog, "ignoring a time step") == 0);
+		CHECK(BrecciaTest::CountLogMessages(stepLog, "ignoring a time step") == 0);
 		for (float step : { 0.0f, -1.0f, std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity() })
 			particles.Update(step);
 		CHECK(Snapshot(scene) == before);
-		CHECK(BasaltTest::CountLogMessages(stepLog, "ignoring a time step") == 1);
+		CHECK(BrecciaTest::CountLogMessages(stepLog, "ignoring a time step") == 1);
 		scene.OnRuntimeStop();
 	}
 
@@ -720,7 +720,7 @@ TEST_SUITE("Particles")
 
 	TEST_CASE("Emitters added through the registry during play honour PlayOnStart; failed adds change nothing")
 	{
-		BasaltTest::TempProject project("ParticleRegistryAdd");
+		BrecciaTest::TempProject project("ParticleRegistryAdd");
 		REQUIRE(project.IsValid());
 		Scene scene;
 		Entity manual = scene.CreateEntity("Manual");
@@ -742,7 +742,7 @@ TEST_SUITE("Particles")
 		CHECK(particles.GetParticleCount(automatic) == 7);
 
 		// A prefab whose emitter waits for a script to fire it.
-		project.WriteFile("Assets/Prefabs/Blast.bprefab", R"({ "Format": "BasaltPrefab", "Version": 1, "Entities": [
+		project.WriteFile("Assets/Prefabs/Blast.bprefab", R"({ "Format": "BrecciaPrefab", "Version": 1, "Entities": [
 			{ "ID": 1, "Name": "Blast", "Parent": 0, "Components": { "ParticleEmitter": { "PlayOnStart": false, "BurstCount": 9 } } } ] })");
 		Entity blast = SceneSerializer::InstantiatePrefab(scene, project.GetDirectory() / "Assets/Prefabs/Blast.bprefab", "Assets/Prefabs/Blast.bprefab", {}, error);
 		REQUIRE_MESSAGE(blast, error);
@@ -1009,7 +1009,7 @@ TEST_SUITE("Particles")
 
 	TEST_CASE("Simulate mode seeds particles from the project, like play mode")
 	{
-		BasaltTest::TempProject project("ParticleSimulateSeed");
+		BrecciaTest::TempProject project("ParticleSimulateSeed");
 		REQUIRE(project.IsValid());
 		Project::GetActive()->GetConfig().RandomSeed = 12345;
 		ParticleEmitterComponent emitter = QuietEmitter();
@@ -1168,13 +1168,13 @@ TEST_SUITE("Particles")
 		component.Drag = -1.0f;
 		component.Blend = static_cast<ParticleBlendMode>(7);
 		StepFrames(scene, 3);
-		CHECK(BasaltTest::CountLogMessages(logStart, "has invalid values (Drag must be between 0 and 10000 (got -1); Blend must be one of its 2 values (got 7))") == 1);
+		CHECK(BrecciaTest::CountLogMessages(logStart, "has invalid values (Drag must be between 0 and 10000 (got -1); Blend must be one of its 2 values (got 7))") == 1);
 		component = QuietEmitter();
 		StepFrames(scene, 2);
 		component.Rate = -5.0f;
 		StepFrames(scene, 2);
-		CHECK(BasaltTest::CountLogMessages(logStart, "has invalid values") == 2);
-		CHECK(BasaltTest::CountLogMessages(logStart, "Rate must be between") == 1);
+		CHECK(BrecciaTest::CountLogMessages(logStart, "has invalid values") == 2);
+		CHECK(BrecciaTest::CountLogMessages(logStart, "Rate must be between") == 1);
 		scene.OnRuntimeStop();
 
 		ParticleEmitterComponent broken;

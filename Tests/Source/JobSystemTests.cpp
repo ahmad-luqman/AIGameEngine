@@ -1,15 +1,15 @@
 #include <doctest/doctest.h>
 
-#include <Basalt/Core/JobSystem.h>
-#include <Basalt/Scene/Scene.h>
-#include <Basalt/Scene/Entity.h>
+#include <Breccia/Core/JobSystem.h>
+#include <Breccia/Scene/Scene.h>
+#include <Breccia/Scene/Entity.h>
 
 #include <atomic>
 #include <latch>
 #include <stdexcept>
 #include <vector>
 
-using namespace Basalt;
+using namespace Breccia;
 
 TEST_SUITE("JobSystem")
 {
@@ -43,7 +43,7 @@ TEST_SUITE("JobSystem")
 		for (const auto value : values)
 			CHECK(value == 1);
 		CHECK(pool.ParallelFor(0, 17, [](uint32_t, uint32_t) {}));
-#if defined(BS_DIST)
+#if defined(BR_DIST)
 		CHECK_FALSE(pool.ParallelFor(10, 0, [](uint32_t, uint32_t) {}));
 #endif
 		CHECK_FALSE(pool.ParallelFor(10, 1, {}));

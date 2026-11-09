@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Runs scripts/package_release.py the way the release workflow does, on one sample.
 
-Usage: ReleasePackaging.py <basalt CLI> [--with-engine]   (--with-engine: also the tools archive; needs BasaltEditor)
+Usage: ReleasePackaging.py <breccia CLI> [--with-engine]   (--with-engine: also the tools archive; needs BrecciaEditor)
 """
 import hashlib
 import importlib.util
@@ -63,7 +63,7 @@ def check_sign_macos_folder():
     """scripts/sign-macos.sh on a folder: it signs the libraries and Mach-O executables directly in it, leaves links,
     scripts and subfolders alone, and stops at Mach-O code it cannot place."""
     sign = ROOT / "scripts" / "sign-macos.sh"
-    with tempfile.TemporaryDirectory(prefix="Basalt Sign ") as temp:
+    with tempfile.TemporaryDirectory(prefix="Breccia Sign ") as temp:
         folder = Path(temp, "Game")
         folder.mkdir()
         (folder / "sub").mkdir()
@@ -154,7 +154,7 @@ def check_decisions(package_release, build):
             return error.code, err.getvalue()
         return 0, err.getvalue()
 
-    with tempfile.TemporaryDirectory(prefix="BasaltDecisions-") as temp:
+    with tempfile.TemporaryDirectory(prefix="BrecciaDecisions-") as temp:
         # check_architectures wants exactly the tools' architectures: extra ones and missing files fail too.
         universal = Path(temp, "universal")
         universal.write_bytes(b"\xca\xfe\xba\xbe" + struct.pack(">I", 2) + struct.pack(">iiIII", 0x01000007, 3, 4096, 1, 12) + struct.pack(">iiIII", 0x0100000C, 0, 8192, 1, 14))
@@ -200,7 +200,7 @@ def check_decisions(package_release, build):
         # without it; a CLI that is no Mach-O code fails.
         if sys.platform == "darwin":
             def universal_cli(path):
-                return package_release.UNIVERSAL if Path(path).name == "basalt" else ()
+                return package_release.UNIVERSAL if Path(path).name == "breccia" else ()
             with patched(package_release, mach_o_architectures=universal_cli, rosetta_problem=lambda: "no Rosetta here",
                          package_engine=lambda *a: sys.exit(9), package_sample=lambda *a: sys.exit(9)):
                 code, out, err = call_main(package_release, ["--build", str(build), "--output", str(Path(temp, "a")), "--require-universal"])
@@ -214,7 +214,7 @@ def check_decisions(package_release, build):
 
 def check_mach_o_parser(package_release):
     """mach_o_architectures on hand-made headers, on every platform."""
-    with tempfile.TemporaryDirectory(prefix="BasaltMachO-") as temp:
+    with tempfile.TemporaryDirectory(prefix="BrecciaMachO-") as temp:
         def architectures(data):
             path = Path(temp, "file")
             path.write_bytes(data)
@@ -239,13 +239,13 @@ def check_mach_o_parser(package_release):
             require(architectures(data) == (), f"not Mach-O: {data[:12]!r}")
     # The release name follows the CLI's architectures on macOS.
     if sys.platform == "darwin":
-        with tempfile.TemporaryDirectory(prefix="BasaltMachO-") as temp:
-            Path(temp, "basalt").write_bytes(fat)
-            require(package_release.platform_name(Path(temp, "basalt")) == "macos-universal", "a universal CLI")
-            Path(temp, "basalt").write_bytes(thin_arm64)
-            require(package_release.platform_name(Path(temp, "basalt")) == "macos-arm64", "an arm64 CLI")
-            Path(temp, "basalt").write_bytes(thin_x86_64)
-            require(package_release.platform_name(Path(temp, "basalt")) == "macos-x64", "an x86-64 CLI")
+        with tempfile.TemporaryDirectory(prefix="BrecciaMachO-") as temp:
+            Path(temp, "breccia").write_bytes(fat)
+            require(package_release.platform_name(Path(temp, "breccia")) == "macos-universal", "a universal CLI")
+            Path(temp, "breccia").write_bytes(thin_arm64)
+            require(package_release.platform_name(Path(temp, "breccia")) == "macos-arm64", "an arm64 CLI")
+            Path(temp, "breccia").write_bytes(thin_x86_64)
+            require(package_release.platform_name(Path(temp, "breccia")) == "macos-x64", "an x86-64 CLI")
 
 
 def main():
@@ -283,7 +283,7 @@ def main():
     # reaches the header (XFL, byte 8: 4 for level 1, 2 for level 9), and the tarball keeps the folder's name, the
     # executable bits and an AppDir's AppRun link.
     if sys.platform != "win32":
-        with tempfile.TemporaryDirectory(prefix="BasaltArchive-") as temp:
+        with tempfile.TemporaryDirectory(prefix="BrecciaArchive-") as temp:
             folder = Path(temp, "App.AppDir")
             (folder / "usr").mkdir(parents=True)
             (folder / "usr" / "tool").write_text("#!/bin/sh\n")
@@ -307,7 +307,7 @@ def main():
     unknown = run(["--build", str(build), "--output", "x", "--samples", "NoSuchSample"])
     require(unknown.returncode == 1 and "unknown samples: NoSuchSample" in unknown.stderr, f"an unknown sample: {unknown.stderr}")
 
-    with tempfile.TemporaryDirectory(prefix="Basalt Release ") as temp:
+    with tempfile.TemporaryDirectory(prefix="Breccia Release ") as temp:
         env = dict(os.environ)
         signtool_log = Path(temp, "signtool.jsonl")
         windows_signing = []
@@ -349,8 +349,8 @@ def main():
                 f"the x86-64 tools were started or not when they should not have been: {packaged.stdout[-2000:]}")
         files = sorted(path.name for path in output.iterdir())
         checksums_name = f"SHA256SUMS-{platform}.txt"
-        sample = next((name for name in files if name.startswith(f"Basalt-{version}-Tetris-{platform}")), None)
-        engine = next((name for name in files if name.startswith(f"Basalt-{version}-{platform}.")), None)
+        sample = next((name for name in files if name.startswith(f"Breccia-{version}-Tetris-{platform}")), None)
+        engine = next((name for name in files if name.startswith(f"Breccia-{version}-{platform}.")), None)
         require(sample and checksums_name in files and bool(engine) == with_engine and len(files) == 2 + with_engine, f"unexpected release files {files}")
 
         # Checks the tarballs, which only Linux writes: the sample unless appimagetool built an AppImage, and always the
@@ -381,7 +381,7 @@ def main():
         require(not any("/Assets/" in name for name in contents), f"the sample ships loose assets: {[name for name in contents if '/Assets/' in name][:5]}")
 
         if with_engine:
-            folder = f"Basalt-{version}-{platform}"
+            folder = f"Breccia-{version}-{platform}"
             contents = members(output / engine)
             wanted = {f"{folder}/bin/{tool}{exe}" for tool in package_release.TOOLS}
             wanted |= {f"{folder}/Samples/Tetris/Project.bproject", f"{folder}/Docs/Shipping.md", f"{folder}/LICENSE"}
@@ -402,7 +402,7 @@ def main():
             subprocess.run(["ditto", "-x", "-k", str(output / sample), str(extracted)], check=True)
             if with_engine:
                 subprocess.run(["ditto", "-x", "-k", str(output / engine), str(extracted)], check=True)
-                code += [extracted / f"Basalt-{version}-{platform}" / "bin" / name for name in package_release.TOOLS + package_release.VULKAN_LIBRARIES]
+                code += [extracted / f"Breccia-{version}-{platform}" / "bin" / name for name in package_release.TOOLS + package_release.VULKAN_LIBRARIES]
             for path in code:
                 verified = subprocess.run(["codesign", "--verify", "--strict", str(path)], capture_output=True, text=True)
                 described = subprocess.run(["codesign", "-dv", str(path)], capture_output=True, text=True).stderr
@@ -411,7 +411,7 @@ def main():
             # The tools (with --with-engine) and the sample's executable, each signed and then verified.
             calls = [json.loads(line) for line in signtool_log.read_text().splitlines()]
             signed = sorted(Path(argument).name for call in calls if call[0] == "sign" for argument in call if argument.endswith(".exe"))
-            expected = sorted(["Tetris.exe"] + (["basalt.exe", "BasaltEditor.exe", "BasaltRuntime.exe"] if with_engine else []))
+            expected = sorted(["Tetris.exe"] + (["breccia.exe", "BrecciaEditor.exe", "BrecciaRuntime.exe"] if with_engine else []))
             require(signed == expected and all("/sha1" in call and "ab" * 20 in call for call in calls if call[0] == "sign"), f"signtool calls: {calls}")
             require(["/d", "Tetris"] == next(call[call.index("/d"):call.index("/d") + 2] for call in calls if "/d" in call), f"the sample's description: {calls}")
             require(sum(call[0] == "verify" for call in calls) == 1 + with_engine, f"verifications: {calls}")

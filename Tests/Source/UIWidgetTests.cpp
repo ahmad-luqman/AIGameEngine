@@ -1,18 +1,18 @@
 #include <doctest/doctest.h>
 
-#include <Basalt/Core/Input.h>
-#include <Basalt/Core/Log.h>
-#include <Basalt/Events/KeyEvent.h>
-#include <Basalt/Project/Project.h>
-#include <Basalt/Scene/ComponentRegistry.h>
-#include <Basalt/Scene/Entity.h>
-#include <Basalt/Scene/Scene.h>
-#include <Basalt/Scripting/ScriptEngine.h>
-#include <Basalt/UI/GameUI.h>
-#include <Basalt/UI/UIInteraction.h>
-#include <Basalt/UI/UILayout.h>
-#include <Basalt/UI/UIRules.h>
-#include <Basalt/UI/UIWidgets.h>
+#include <Breccia/Core/Input.h>
+#include <Breccia/Core/Log.h>
+#include <Breccia/Events/KeyEvent.h>
+#include <Breccia/Project/Project.h>
+#include <Breccia/Scene/ComponentRegistry.h>
+#include <Breccia/Scene/Entity.h>
+#include <Breccia/Scene/Scene.h>
+#include <Breccia/Scripting/ScriptEngine.h>
+#include <Breccia/UI/GameUI.h>
+#include <Breccia/UI/UIInteraction.h>
+#include <Breccia/UI/UILayout.h>
+#include <Breccia/UI/UIRules.h>
+#include <Breccia/UI/UIWidgets.h>
 
 #include "TestUtils.h"
 #include "UITestUtils.h"
@@ -23,8 +23,8 @@
 #include <string>
 #include <vector>
 
-using namespace Basalt;
-using namespace BasaltTest;
+using namespace Breccia;
+using namespace BrecciaTest;
 
 namespace {
 
@@ -1325,7 +1325,7 @@ TEST_SUITE("UIWidgets")
 		WidgetInputScope input;
 		TempProject project("UISceneLoad");
 		project.WriteFile("Assets/Scenes/Level.bscene", R"({
-			"Format": "BasaltScene", "Version": 1, "Name": "Level",
+			"Format": "BrecciaScene", "Version": 1, "Name": "Level",
 			"Entities": [ { "ID": 7, "Name": "LevelButton", "Components": { "UIRect": { "AnchorMin": [0, 0], "AnchorMax": [0, 0], "Pivot": [0, 0], "Position": [100, 100], "Size": [200, 80] }, "UIButton": { "OnClick": "" } } } ]
 		})");
 		const std::string script = project.WriteFile("Assets/Scripts/Loader.lua", R"(
@@ -1361,7 +1361,7 @@ TEST_SUITE("UIWidgets")
 	{
 		WidgetInputScope input;
 		TempProject project("UISceneLoadImmediate");
-		project.WriteFile("Assets/Scenes/Empty.bscene", R"({ "Format": "BasaltScene", "Version": 1, "Name": "Empty", "Entities": [] })");
+		project.WriteFile("Assets/Scenes/Empty.bscene", R"({ "Format": "BrecciaScene", "Version": 1, "Name": "Empty", "Entities": [] })");
 		Scene scene;
 		AddScripted(scene, project, "Menu", "Assets/Scripts/Menu.lua", R"(
 			local Menu = {}

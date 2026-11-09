@@ -128,7 +128,7 @@ def check_nesting(call, require, editor=False):
 def main():
     cli = str(Path(sys.argv[1]).resolve())
     source = Path(sys.argv[2]).resolve()
-    with tempfile.TemporaryDirectory(prefix="BasaltPrefabs-") as temp:
+    with tempfile.TemporaryDirectory(prefix="BrecciaPrefabs-") as temp:
         project = Path(temp, "Project")
         # Saved/ holds the FeatureTest batch's replay, which that test may be writing right now (ctest -j).
         shutil.copytree(source, project, ignore=shutil.ignore_patterns("Saved"))

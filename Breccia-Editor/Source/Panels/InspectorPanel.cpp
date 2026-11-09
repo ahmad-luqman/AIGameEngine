@@ -1,0 +1,430 @@
+#include "Panels/InspectorPanel.h"
+
+#include "EditorColors.h"
+#include "Panels/JsonWidgets.h"
+
+#include "Breccia/Automation/EditorCommandSchemas.h"
+#include "Breccia/Animation/AnimatedModel.h"
+#include "Breccia/Asset/AssetManager.h"
+#include "Breccia/Core/Assert.h"
+#include "Breccia/Math/Math.h"
+#include "Breccia/Project/Project.h"
+#include "Breccia/Scene/ComponentRegistry.h"
+#include "Breccia/Scene/JointFields.h"
+#include "Breccia/Scene/Scene.h"
+#include "Breccia/Scripting/ScriptEngine.h"
+#include "Breccia/UI/GameUI.h"
+#include "Breccia/UI/UIFonts.h"
+#include "Breccia/UI/UIGeometry.h"
+#include "Breccia/UI/UILayout.h"
+#include "Breccia/UI/UIRules.h"
+
+#include <imgui.h>
+#include <imgui_stdlib.h>
+
+#include <algorithm>
+#include <functional>
+
+namespace Breccia {
+
+	const nlohmann::json* InspectorPanel::GetScriptDefaults(const std::string& scriptPath)
+	{
+		std::error_code error;
+		const auto writeTime = std::filesystem::last_write_time(Project::ResolvePath(scriptPath), error);
+		auto it = m_ScriptCache.find(scriptPath);
+		if (it == m_ScriptCache.end() || it->second.WriteTime != writeTime)
+		{
+			ScriptCacheEntry entry;
+			entry.WriteTime = writeTime;
+			if (auto properties = ScriptEngine::LoadScriptProperties(scriptPath, entry.Error))
+				entry.Properties = *properties;
+			it = m_ScriptCache.insert_or_assign(scriptPath, std::move(entry)).first;
+		}
+		if (!it->second.Error.empty())
+		{
+			ImGui::TextColored(EditorColors::Error(), "%s", it->second.Error.c_str());
+			return nullptr;
+		}
+		return &it->second.Properties;
+	}
+
+	void InspectorPanel::DrawAnchorPresets(Entity entity)
+	{
+		if (!ImGui::BeginCombo("Anchor Preset", "Choose...", ImGuiComboFlags_HeightLarge))
+			return;
+		// A preset changes how the rect follows its parent's size, never where it is now.
+		std::optional<std::string_view> chosen;
+		for (std::string_view name : GetUIAnchorPresetNames())
+		{
+			if (ImGui::Selectable(std::string(name).c_str()))
+				chosen = name;
+		}
+		if (ImGui::Selectable(std::string(UIStretchPreset).c_str()))
+			chosen = UIStretchPreset;
+		ImGui::EndCombo();
+		if (!chosen)
+			return;
+
+		Scene& scene = *entity.GetScene();
+		const UIRectComponent rect = SanitizeUIRect(entity.GetComponent<UIRectComponent>());
+		const UIBox parent = UILayout::GetParentRect(scene, entity, GameUI::GetCanvasSize());
+		const std::optional<UIRectComponent> preset = ApplyUIAnchorPreset(rect, *chosen, parent);
+		BR_CORE_ASSERT(preset, "the anchor preset list holds a name ApplyUIAnchorPreset does not know");
+		if (!preset)
+			return;
+		const auto vec2 = [](const glm::vec2& value) { return nlohmann::json::array({ value.x, value.y }); };
+		const nlohmann::json data = { { "AnchorMin", vec2(preset->AnchorMin) }, { "AnchorMax", vec2(preset->AnchorMax) }, { "Pivot", vec2(preset->Pivot) }, { "Position", vec2(preset->Position) }, { "Size", vec2(preset->Size) } };
+		if (m_Context.Execute("component.set", { { "entity", static_cast<uint64_t>(entity.GetUUID()) }, { "component", "UIRect" }, { "data", data } }))
+			m_Context.CommitHistory();
+	}
+
+	void InspectorPanel::DrawScriptProperties(Entity entity, const nlohmann::json& component)
+	{
+		const std::string script = component.value("Script", std::string());
+		if (script.empty())
+			return;
+		const nlohmann::json* defaults = GetScriptDefaults(script);
+		if (!defaults || defaults->empty())
+			return;
+
+		ImGui::SeparatorText("Properties");
+		const nlohmann::json overrides = component.value("Properties", nlohmann::json::object());
+		for (auto it = defaults->begin(); it != defaults->end(); ++it)
+		{
+			const bool overridden = overrides.contains(it.key());
+			nlohmann::json value = overridden ? overrides[it.key()] : it.value();
+			if (overridden)
+				ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::Highlight());
+			const JsonFieldResult result = DrawJsonField(it.key(), value);
+			if (overridden)
+				ImGui::PopStyleColor();
+
+			nlohmann::json newOverrides = overrides;
+			bool apply = result.Changed;
+			if (result.Changed)
+				newOverrides[it.key()] = value;
+			if (overridden && ImGui::BeginPopupContextItem())
+			{
+				if (ImGui::MenuItem("Reset to default"))
+				{
+					newOverrides.erase(it.key());
+					apply = true;
+				}
+				ImGui::EndPopup();
+			}
+			m_Context.EditField("component.set", { { "entity", static_cast<uint64_t>(entity.GetUUID()) }, { "component", "Script" }, { "data", { { "Properties", newOverrides } } } }, apply, result.Committed || (apply && !result.Changed));
+		}
+	}
+
+	namespace {
+
+		// The chain element's schema with its Layer offered as the project's layers, no layer (every one) first, and any
+		// unknown name of `chains` kept selectable so it stays visible until it is fixed.
+		std::shared_ptr<const ComponentObjectSchema> WithChainLayers(const ComponentObjectSchema& schema, const nlohmann::json& chains)
+		{
+			const Ref<Project>& project = Project::GetActive();
+			std::vector<std::string> names = project ? project->GetConfig().Physics.GetNames() : PhysicsLayers().GetNames();
+			names.insert(names.begin(), std::string());
+			for (const nlohmann::json& chain : chains)
+				if (const auto layer = chain.find("Layer"); layer != chain.end() && layer->is_string() && std::ranges::find(names, layer->get<std::string>()) == names.end())
+					names.push_back(layer->get<std::string>());
+			auto copy = std::make_shared<ComponentObjectSchema>(schema);
+			copy->EnumOptions["Layer"] = std::move(names);
+			return copy;
+		}
+
+		// Whether the entity gets a physics body when play starts (a RigidBody alone is not enough).
+		bool HasPhysicsBody(Entity entity)
+		{
+			return entity.HasComponent<RigidBodyComponent>() && !entity.HasComponent<CharacterControllerComponent>() &&
+				   (entity.HasComponent<BoxColliderComponent>() || entity.HasComponent<SphereColliderComponent>() || entity.HasComponent<CapsuleColliderComponent>() ||
+					entity.HasComponent<MeshColliderComponent>());
+		}
+
+		// Which entities a joint's reference field may name: entities with a physics body, but never the body
+		// the joint moves on both sides. BodyEntity's 0 (Self) already names the holder; a holder that is not
+		// the body may itself be the connected body.
+		std::function<bool(Entity)> JointReferenceFilter(Entity holder, const JointComponent& joint, const std::string& field)
+		{
+			if (field == "BodyEntity")
+			{
+				return [holder, connected = joint.ConnectedEntity](Entity candidate) {
+					return candidate != holder && candidate.GetUUID() != connected && HasPhysicsBody(candidate);
+				};
+			}
+			return [body = joint.BodyEntity != 0 ? joint.BodyEntity : holder.GetUUID()](Entity candidate) {
+				return candidate.GetUUID() != body && HasPhysicsBody(candidate);
+			};
+		}
+	}
+
+	void InspectorPanel::DrawEntityReference(Entity entity, const std::string& component, const std::string& field, uint64_t current, const std::function<bool(Entity)>& filter, const char* noneLabel)
+	{
+		if (const auto selected = DrawEntityPicker(*entity.GetScene(), field, current, filter, noneLabel))
+			if (m_Context.Execute("component.set", { { "entity", static_cast<uint64_t>(entity.GetUUID()) }, { "component", component }, { "data", { { field, *selected } } } }))
+				m_Context.CommitHistory();
+	}
+
+	void InspectorPanel::DrawMultiSelection()
+	{
+		Scene& scene = *m_Context.Session.GetScene();
+		const auto selection = m_Context.Session.GetSelections();
+		ImGui::Text("%zu entities selected", selection.size());
+		ImGui::TextWrapped("Shared components only. Mixed fields show the active entity's value; editing replaces that field on every selection.");
+		ImGui::BeginDisabled(m_Context.Session.IsPlaying() || m_Context.HasAutomationTransaction());
+		for (const auto& info : ComponentRegistry::GetAll())
+		{
+			if (info.Name == "Tag" || !std::all_of(selection.begin(), selection.end(), [&](UUID id) { const Entity entity = scene.GetEntityByUUID(id); return entity && info.Has(entity); }))
+				continue;
+			ImGui::PushID(info.Name.c_str());
+			if (ImGui::CollapsingHeader(info.Name.c_str(), ImGuiTreeNodeFlags_DefaultOpen))
+			{
+				std::vector<nlohmann::json> values;
+				values.reserve(selection.size());
+				for (UUID id : selection)
+					values.push_back(info.Serialize(scene.GetEntityByUUID(id)));
+				auto data = values.back();
+				for (const auto& field : info.Fields)
+				{
+					// Prefab tracking is edited through the prefab commands only (a single selected instance root shows it).
+					if (info.Name == "Prefab")
+						continue;
+					if (!data.contains(field))
+						continue;
+					const bool mixed = std::any_of(values.begin(), values.end(), [&](const auto& value) { return value[field] != data[field]; });
+					const auto type = info.FieldTypes.find(field);
+					BR_ASSERT(type != info.FieldTypes.end(), "every component field has a type");
+					if (type == info.FieldTypes.end())
+						continue;
+					if (mixed)
+					{
+						// Editing a list sends all of it, which would replace every other entity's different list.
+						if (type->second.Kind == ComponentFieldKind::List)
+						{
+							ImGui::TextDisabled("%s (mixed lists: edit one entity at a time)", field.c_str());
+							continue;
+						}
+						ImGui::TextDisabled("%s (mixed)", field.c_str());
+					}
+					// As in the single selection, but a filter that fits one entity of the selection may not fit another.
+					if (type->second.Kind == ComponentFieldKind::Entity)
+					{
+						const auto picked = DrawEntityPicker(scene, field, data[field].get<uint64_t>(), [&](Entity candidate) { return std::ranges::find(selection, candidate.GetUUID()) == selection.end(); }, EntityReferenceNone(info.Name, field));
+						if (picked && m_Context.Execute("editor.component_set", { { "component", info.Name }, { "data", { { field, *picked } } } }))
+							m_Context.CommitHistory();
+						continue;
+					}
+					const auto result = DrawJsonValue(field, data[field], type->second, info.EnumOptions, scene);
+					m_Context.EditField("editor.component_set", { { "component", info.Name }, { "data", { { field, data[field] } } } }, result.Changed, result.Committed);
+				}
+			}
+			ImGui::PopID();
+		}
+		ImGui::EndDisabled();
+	}
+
+	void InspectorPanel::OnImGuiRender()
+	{
+		ImGui::Begin(EditorCommandSchemas::InspectorTitle);
+		if (m_Context.HasAutomationTransaction())
+			ImGui::TextWrapped("Finish the active transaction using Commit/Cancel in the status bar to edit components.");
+		if (m_Context.Session.GetSelections().size() > 1)
+		{
+			DrawMultiSelection();
+			ImGui::End();
+			return;
+		}
+		Scene* scene = m_Context.Session.GetScene().get();
+		Entity entity = scene ? scene->GetEntityByUUID(m_Context.Session.GetSelection()) : Entity{};
+		if (!entity)
+		{
+			ImGui::TextDisabled("Select an entity to edit its components.");
+			ImGui::End();
+			return;
+		}
+
+		ImGui::BeginDisabled(m_Context.HasAutomationTransaction());
+		const uint64_t id = entity.GetUUID();
+		std::string name = entity.GetName();
+		ImGui::SetNextItemWidth(-1.0f);
+		if (ImGui::InputText("##Name", &name, ImGuiInputTextFlags_EnterReturnsTrue) && !name.empty())
+		{
+			if (m_Context.Execute("entity.rename", { { "entity", id }, { "name", name } }))
+				m_Context.CommitHistory();
+		}
+		ImGui::TextDisabled("ID %llu", static_cast<unsigned long long>(id));
+
+		for (const auto& warning : GetAnimationWarnings(entity))
+			ImGui::TextWrapped("%s", warning.c_str());
+
+		std::string componentToRemove;
+		for (const ComponentInfo& info : ComponentRegistry::GetAll())
+		{
+			if (info.Name == "Tag" || !info.Has(entity))
+				continue;
+
+			ImGui::PushID(info.Name.c_str());
+			const bool open = ImGui::CollapsingHeader(info.Name.c_str(), ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_AllowOverlap);
+			if (!info.IsCore)
+			{
+				ImGui::SameLine(ImGui::GetContentRegionMax().x - ImGui::GetFrameHeight());
+				if (ImGui::SmallButton("x"))
+					componentToRemove = info.Name;
+			}
+
+			if (open)
+			{
+				nlohmann::json data = info.Serialize(entity);
+				// Joint fields the joint does not use are hidden, except ones set away from their defaults: those
+				// stay visible and marked, so the warning they cause can be fixed here.
+				const bool isJoint = info.Name == "Joint";
+				const JointComponent joint = isJoint ? entity.GetComponent<JointComponent>() : JointComponent{};
+				const std::vector<std::string> ignoredJointFields = isJoint ? GetIgnoredJointFields(joint) : std::vector<std::string>{};
+				if (info.Name == "UIRect")
+					DrawAnchorPresets(entity);
+				if (DrawComponentPreview)
+					DrawComponentPreview(entity, info.Name);
+				for (const std::string& field : info.Fields)
+				{
+					// Prefab tracking is edited through the prefab commands only (a single selected instance root shows it).
+					if (info.Name == "Prefab")
+						continue;
+					if (!data.contains(field))
+						continue;
+					if (info.Name == "Script" && field == "Properties")
+						continue;
+					const bool ignored = std::ranges::find(ignoredJointFields, field) != ignoredJointFields.end();
+					if (isJoint && !ignored && !JointFieldApplies(joint, field))
+						continue;
+					if (std::find(info.EntityFields.begin(), info.EntityFields.end(), field) != info.EntityFields.end())
+					{
+						std::function<bool(Entity)> filter = [entity](Entity candidate) { return candidate != entity; };
+						if (isJoint)
+							filter = JointReferenceFilter(entity, joint, field);
+						else if (info.Name == "BoneAttachment")
+						{
+							// A descendant would move with the entity it holds (UpdateAttachments rejects it).
+							filter = [entity](Entity candidate) { return candidate != entity && !entity.GetScene()->IsDescendantOf(candidate, entity); };
+						}
+						DrawEntityReference(entity, info.Name, field, data[field].get<uint64_t>(), filter, EntityReferenceNone(info.Name, field));
+						continue;
+					}
+					if (const auto type = info.FieldTypes.find(field); type != info.FieldTypes.end() && type->second.Kind == ComponentFieldKind::List)
+					{
+						ComponentFieldType listType = type->second;
+						if (info.Name == "SpringBone" && field == "Chains")
+							listType.Element = WithChainLayers(*listType.Element, data[field]);
+						const JsonFieldResult result = DrawJsonList(field, data[field], listType, *scene);
+						m_Context.EditField("component.set", { { "entity", id }, { "component", info.Name }, { "data", { { field, data[field] } } } }, result.Changed, result.Committed);
+						continue;
+					}
+					auto options = info.EnumOptions.find(field);
+					const std::vector<std::string>* enumOptions = options != info.EnumOptions.end() ? &options->second : nullptr;
+					// Layer names come from the project, not the component, so the combo is built here.
+					std::vector<std::string> layerNames;
+					bool unknownLayer = false;
+					if ((info.Name == "RigidBody" || info.Name == "CharacterController") && field == "Layer")
+					{
+						const Ref<Project>& project = Project::GetActive();
+						layerNames = project ? project->GetConfig().Physics.GetNames() : PhysicsLayers().GetNames();
+						const std::string current = data[field].get<std::string>();
+						if (std::ranges::find(layerNames, current) == layerNames.end())
+						{
+							// Keep an unknown name selectable so it stays visible until it is fixed.
+							layerNames.push_back(current);
+							unknownLayer = true;
+						}
+						enumOptions = &layerNames;
+					}
+					const JsonFieldResult result = DrawJsonField(field, data[field], enumOptions);
+					if (unknownLayer)
+						ImGui::TextColored(EditorColors::Warning(), "Unknown layer (plays as Default)");
+					if (ignored)
+					{
+						ImGui::PushStyleColor(ImGuiCol_Text, EditorColors::Warning());
+						ImGui::TextWrapped("%s is ignored by this joint", field.c_str());
+						ImGui::PopStyleColor();
+					}
+					m_Context.EditField("component.set", { { "entity", id }, { "component", info.Name }, { "data", { { field, data[field] } } } }, result.Changed, result.Committed);
+				}
+				if (info.Name == "Script")
+					DrawScriptProperties(entity, data);
+				const bool isWidget = UIWidgetKindFromComponentName(info.Name).has_value();
+				if ((info.Name == "UIImage" || info.Name == "UIText" || isWidget) && !entity.HasComponent<UIRectComponent>())
+					ImGui::TextDisabled("No UIRect: fills the parent's UI rect (or the screen).");
+				if (isWidget && UILayout::CountWidgetComponents(entity) > 1)
+					ImGui::TextColored(EditorColors::Warning(), "Several widget components: the entity acts as its %s only.", UIWidgetComponentName(*UILayout::GetWidgetKind(entity)));
+				if (info.Name == "UIImage")
+				{
+					const std::string& texture = entity.GetComponent<UIImageComponent>().Texture;
+					if (const std::string error = AssetManager::GetError(texture); !error.empty())
+						ImGui::TextColored(EditorColors::Warning(), "Image not loaded (%s); drawing the Color instead.", error.c_str());
+				}
+				if (info.Name == "UIText")
+				{
+					const std::string& font = entity.GetComponent<UITextComponent>().Font;
+					if (const std::string error = UIFonts::GetError(font); !error.empty())
+						ImGui::TextColored(EditorColors::Warning(), "Font not loaded (%s); using the built-in font.", error.c_str());
+					else if (const std::string warning = UIFonts::GetWarning(font); !warning.empty())
+						ImGui::TextColored(EditorColors::Warning(), "Font: %s.", warning.c_str());
+				}
+				if (info.Name == "CharacterController")
+				{
+					// Physics shapes the character from these and skips it without one.
+					if (!entity.HasComponent<BoxColliderComponent>() && !entity.HasComponent<SphereColliderComponent>() && !entity.HasComponent<CapsuleColliderComponent>() &&
+						!entity.HasComponent<MeshColliderComponent>())
+						ImGui::TextColored(EditorColors::Warning(), "Add a collider (a CapsuleCollider fits most characters).");
+					if (entity.HasComponent<RigidBodyComponent>())
+						ImGui::TextColored(EditorColors::Warning(), "The RigidBody is ignored while the character controller is present.");
+				}
+				if (info.Name == "Joint")
+				{
+					// The joint moves BodyEntity's body, or this entity's when BodyEntity is Self.
+					const Entity body = joint.BodyEntity != 0 ? scene->GetEntityByUUID(joint.BodyEntity) : entity;
+					if (!body)
+						ImGui::TextColored(EditorColors::Warning(), "BodyEntity is missing; the joint is not built.");
+					else if (!HasPhysicsBody(body))
+						ImGui::TextColored(EditorColors::Warning(), joint.BodyEntity != 0 ? "BodyEntity needs a RigidBody and a collider for the joint to work." : "This entity needs a RigidBody and a collider for the joint to work.");
+					else
+					{
+						// Physics builds the joint frame from the body's transform and skips one it cannot decompose.
+						glm::vec3 translation;
+						glm::quat rotation;
+						glm::vec3 scale;
+						if (!Math::DecomposeTransform(scene->GetWorldTransform(body), translation, rotation, scale))
+							ImGui::TextColored(EditorColors::Warning(), "The body's transform is degenerate (e.g. a zero scale); the joint is not built.");
+					}
+				}
+			}
+			ImGui::PopID();
+		}
+
+		if (!componentToRemove.empty())
+		{
+			if (m_Context.Execute("component.remove", { { "entity", id }, { "component", componentToRemove } }))
+				m_Context.CommitHistory();
+		}
+
+		ImGui::Separator();
+		if (ImGui::Button("Add Component", ImVec2(-1.0f, 0.0f)))
+			ImGui::OpenPopup("AddComponent");
+		if (ImGui::BeginPopup("AddComponent"))
+		{
+			for (const ComponentInfo& info : ComponentRegistry::GetAll())
+			{
+				if (info.IsCore || info.Has(entity))
+					continue;
+				if (ImGui::MenuItem(info.Name.c_str()))
+				{
+					if (m_Context.Execute("component.set", { { "entity", id }, { "component", info.Name }, { "data", nlohmann::json::object() } }))
+						m_Context.CommitHistory();
+				}
+			}
+			ImGui::EndPopup();
+		}
+
+		ImGui::EndDisabled();
+		ImGui::End();
+	}
+
+}

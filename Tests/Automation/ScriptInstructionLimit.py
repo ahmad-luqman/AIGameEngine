@@ -1,9 +1,9 @@
 """The hosts that edit a game stop a script at ScriptInstructionLimit; the runtime, which plays one, never does (ctest
-ScriptInstructionLimit). One script, over the limit but finite, fails in the CLI and finishes in BasaltRuntime, which
+ScriptInstructionLimit). One script, over the limit but finite, fails in the CLI and finishes in BrecciaRuntime, which
 every exported game is. An endless one then fails in the CLI, which must answer rather than hang: the timeouts are the
 check.
 
-Usage: ScriptInstructionLimit.py <basalt CLI> <BasaltRuntime>
+Usage: ScriptInstructionLimit.py <breccia CLI> <BrecciaRuntime>
 """
 import json
 import os
@@ -32,7 +32,7 @@ def main():
         project = Path(temp) / "Limited"
 
         def run(*arguments):
-            return subprocess.run(arguments, capture_output=True, text=True, timeout=TIMEOUT, env={**os.environ, "BASALT_USER_DATA_DIR": str(Path(temp) / "User")})
+            return subprocess.run(arguments, capture_output=True, text=True, timeout=TIMEOUT, env={**os.environ, "BRECCIA_USER_DATA_DIR": str(Path(temp) / "User")})
 
         def batch(requests):
             path = Path(temp) / "batch.json"

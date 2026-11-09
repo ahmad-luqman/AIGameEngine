@@ -11,7 +11,7 @@ ASSETS = Path(__file__).resolve().parents[1] / "Data" / "FeatureTest" / "Assets"
 # AssetManager logs (once) the material files check_thumbnails breaks on purpose; the editor test allows these.
 EXPECTED_ERRORS = ("Material 'Assets/Broken.bmaterial'", "Material 'Assets/Missing.bmaterial'", "AssetManager 'Assets/Gone.gltf'")
 PREFAB = {
-    "Format": "BasaltPrefab",
+    "Format": "BrecciaPrefab",
     "Version": 1,
     "Entities": [
         {"ID": 1, "Name": "Orb", "Parent": 0, "Components": {

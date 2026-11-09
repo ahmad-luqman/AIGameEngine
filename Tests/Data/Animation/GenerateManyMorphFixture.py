@@ -39,7 +39,7 @@ primitive = dict(attributes=dict(POSITION=positions, NORMAL=normals), indices=in
 sparse_defaults = [round(0.05 + 0.045 * t, 3) if t < 20 else 0 for t in range(targets)]
 crowded = [round(0.2 + 0.02 * t, 3) if t < 36 else 0 for t in range(targets)]
 model = dict(
-    asset=dict(version='2.0', generator='Basalt test fixture'),
+    asset=dict(version='2.0', generator='Breccia test fixture'),
     buffers=[dict(byteLength=len(blob), uri='data:application/octet-stream;base64,' + base64.b64encode(blob).decode())],
     bufferViews=views, accessors=accessors,
     materials=[dict(name='Surface', pbrMetallicRoughness=dict(baseColorFactor=[0.7, 0.75, 0.8, 1], metallicFactor=0, roughnessFactor=0.5), doubleSided=True)],

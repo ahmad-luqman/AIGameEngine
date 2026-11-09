@@ -1,18 +1,18 @@
 #include <doctest/doctest.h>
 
-#include <Basalt/Asset/AssetManager.h>
-#include <Basalt/Asset/AssetRegistry.h>
-#include <Basalt/Automation/AutomationSession.h>
-#include <Basalt/Automation/CommandRegistry.h>
-#include <Basalt/Core/FileSystem.h>
-#include <Basalt/Core/FileWatcher.h>
-#include <Basalt/Core/Log.h>
-#include <Basalt/Core/PackArchive.h>
-#include <Basalt/Core/Platform.h>
-#include <Basalt/Core/TextEncoding.h>
-#include <Basalt/Project/Exporter.h>
-#include <Basalt/Project/Project.h>
-#include <Basalt/Project/ProjectValidator.h>
+#include <Breccia/Asset/AssetManager.h>
+#include <Breccia/Asset/AssetRegistry.h>
+#include <Breccia/Automation/AutomationSession.h>
+#include <Breccia/Automation/CommandRegistry.h>
+#include <Breccia/Core/FileSystem.h>
+#include <Breccia/Core/FileWatcher.h>
+#include <Breccia/Core/Log.h>
+#include <Breccia/Core/PackArchive.h>
+#include <Breccia/Core/Platform.h>
+#include <Breccia/Core/TextEncoding.h>
+#include <Breccia/Project/Exporter.h>
+#include <Breccia/Project/Project.h>
+#include <Breccia/Project/ProjectValidator.h>
 
 #include "AutomationTestUtils.h"
 #include "TestUtils.h"
@@ -24,11 +24,11 @@
 #include <string_view>
 #include <vector>
 
-using namespace Basalt;
-using BasaltTest::Contains;
-using BasaltTest::EscapedNonUtf8Name;
-using BasaltTest::NonUtf8Name;
-using BasaltTest::Run;
+using namespace Breccia;
+using BrecciaTest::Contains;
+using BrecciaTest::EscapedNonUtf8Name;
+using BrecciaTest::NonUtf8Name;
+using BrecciaTest::Run;
 using json = nlohmann::json;
 using Entries = std::set<std::string>;
 
@@ -81,7 +81,7 @@ namespace {
 			: m_Temp(name)
 		{
 			REQUIRE(m_Temp.IsValid());
-			Available = BasaltTest::CanCreateNonUtf8Names(m_Temp.GetDirectory());
+			Available = BrecciaTest::CanCreateNonUtf8Names(m_Temp.GetDirectory());
 			if (!Available)
 			{
 				MESSAGE("this file system refuses such names; Linux and Windows run the test");
@@ -107,7 +107,7 @@ namespace {
 			Write(assets / NonUtf8Name("Art", ".meta") / "Inside.png", "image");
 		}
 
-		const BasaltTest::TempProject& GetTemp() const { return m_Temp; }
+		const BrecciaTest::TempProject& GetTemp() const { return m_Temp; }
 		std::filesystem::path GetAssets() const { return m_Temp.GetDirectory() / "Assets"; }
 
 		// Folders, which every filter reports, as they may hold anything.
@@ -140,7 +140,7 @@ namespace {
 		bool Available = false;
 
 	private:
-		BasaltTest::TempProject m_Temp;
+		BrecciaTest::TempProject m_Temp;
 	};
 
 }
@@ -620,11 +620,11 @@ TEST_SUITE("Unicode")
 		NonUtf8Project project("NonUtf8Export");
 		if (!project.Available)
 			return;
-		const BasaltTest::TempProject& temp = project.GetTemp();
+		const BrecciaTest::TempProject& temp = project.GetTemp();
 		temp.WriteFile("FakeRuntime", "binary");
-		const BasaltTest::ScopedFakeVulkanSdk sdk(temp);
+		const BrecciaTest::ScopedFakeVulkanSdk sdk(temp);
 		Project::GetActive()->GetConfig().StartScene = "Assets/Scenes/Main.bscene";
-		const BasaltTest::TempDirectory directory("NonUtf8ExportOut");
+		const BrecciaTest::TempDirectory directory("NonUtf8ExportOut");
 		const std::filesystem::path output = directory.GetPath() / "Build";
 		ExportOptions options;
 		options.RuntimeExecutable = temp.GetDirectory() / "FakeRuntime";
@@ -678,7 +678,7 @@ TEST_SUITE("Unicode")
 		NonUtf8Project project("NonUtf8Links");
 		if (!project.Available)
 			return;
-		const BasaltTest::TempProject& temp = project.GetTemp();
+		const BrecciaTest::TempProject& temp = project.GetTemp();
 		const std::filesystem::path assets = project.GetAssets();
 		std::error_code linkError;
 		std::filesystem::create_directory_symlink(assets / "Scenes", assets / NonUtf8Name("LinkedFolder"), linkError);
@@ -715,9 +715,9 @@ TEST_SUITE("Unicode")
 
 		// A linked folder or a broken link would stop an archive, were they not skipped first.
 		temp.WriteFile("FakeRuntime", "binary");
-		const BasaltTest::ScopedFakeVulkanSdk sdk(temp);
+		const BrecciaTest::ScopedFakeVulkanSdk sdk(temp);
 		Project::GetActive()->GetConfig().StartScene = "Assets/Scenes/Main.bscene";
-		const BasaltTest::TempDirectory output("NonUtf8LinksOut");
+		const BrecciaTest::TempDirectory output("NonUtf8LinksOut");
 		ExportOptions options;
 		options.RuntimeExecutable = temp.GetDirectory() / "FakeRuntime";
 		options.Archive = true;
@@ -730,7 +730,7 @@ TEST_SUITE("Unicode")
 
 	TEST_CASE("Links to nothing do not stop an asset list, and an unreadable one does not stop a folder listing")
 	{
-		BasaltTest::TempProject temp("BrokenLinkLists");
+		BrecciaTest::TempProject temp("BrokenLinkLists");
 		REQUIRE(temp.IsValid());
 		const std::filesystem::path assets = temp.GetDirectory() / "Assets";
 		temp.WriteFile("Assets/Good.png", "image");
@@ -760,7 +760,7 @@ TEST_SUITE("Unicode")
 
 	TEST_CASE("asset.list says when it could not list everything")
 	{
-		BasaltTest::TempProject temp("AssetListNoFolder");
+		BrecciaTest::TempProject temp("AssetListNoFolder");
 		REQUIRE(temp.IsValid());
 		CommandRegistry registry;
 		AutomationSession session;
@@ -775,9 +775,9 @@ TEST_SUITE("Unicode")
 
 	TEST_CASE("A project under a folder with such a name keeps its keys")
 	{
-		BasaltTest::TempProject temp("NonUtf8Parent");
+		BrecciaTest::TempProject temp("NonUtf8Parent");
 		REQUIRE(temp.IsValid());
-		if (!BasaltTest::CanCreateNonUtf8Names(temp.GetDirectory()))
+		if (!BrecciaTest::CanCreateNonUtf8Names(temp.GetDirectory()))
 			return;
 		const std::filesystem::path directory = temp.GetDirectory() / NonUtf8Name("Parent") / "Game";
 		std::string error;

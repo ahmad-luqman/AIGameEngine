@@ -66,4 +66,4 @@ clip('Wave', 1.0, [('RightUpperArm', 'rotation', [(Z, -160)] * 5),
 # Additive breathing: the chest rises and settles (frame 0 is the reference).
 clip('Breathe', 3.0, [('Chest', 'rotation', rx(0, -3, -5, -3, 0)), ('Neck', 'rotation', rx(0, 2, 3, 2, 0))])
 
-model.write(Path(__file__).resolve().parent / 'Assets/Models/Mannequin.gltf', 'Basalt MovementDemo sample', [('Mannequin', [0.92, 0.55, 0.22, 1])])
+model.write(Path(__file__).resolve().parent / 'Assets/Models/Mannequin.gltf', 'Breccia MovementDemo sample', [('Mannequin', [0.92, 0.55, 0.22, 1])])

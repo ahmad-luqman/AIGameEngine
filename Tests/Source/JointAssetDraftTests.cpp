@@ -2,15 +2,15 @@
 #include "JointAssetDraft.h"
 #include "TestUtils.h"
 
-#include <Basalt/Asset/AssetManager.h>
-#include <Basalt/Core/FileSystem.h>
-#include <Basalt/Scene/Entity.h>
-#include <Basalt/Scene/Scene.h>
+#include <Breccia/Asset/AssetManager.h>
+#include <Breccia/Core/FileSystem.h>
+#include <Breccia/Scene/Entity.h>
+#include <Breccia/Scene/Scene.h>
 
 #include <doctest/doctest.h>
 
-using namespace Basalt;
-using namespace BasaltTest;
+using namespace Breccia;
+using namespace BrecciaTest;
 
 using AnimationTest::FixturePath;
 using AnimationTest::LoadModel;

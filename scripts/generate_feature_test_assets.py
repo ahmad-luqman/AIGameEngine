@@ -51,7 +51,7 @@ def glb_textured_cube():
         blob += b"\x00"
     count = len(positions)
     gltf = {
-        "asset": {"version": "2.0", "generator": "Basalt feature-test generator"},
+        "asset": {"version": "2.0", "generator": "Breccia feature-test generator"},
         "buffers": [{"byteLength": len(blob)}],
         "bufferViews": [
             {"buffer": 0, "byteOffset": 0, "byteLength": count * 12},

@@ -1,12 +1,12 @@
 #include <doctest/doctest.h>
 
-#include <Basalt/Asset/AssetManager.h>
-#include <Basalt/Core/JobSystem.h>
-#include <Basalt/Core/MemoryTracker.h>
+#include <Breccia/Asset/AssetManager.h>
+#include <Breccia/Core/JobSystem.h>
+#include <Breccia/Core/MemoryTracker.h>
 
 #include <sol/sol.hpp>
 
-using namespace Basalt;
+using namespace Breccia;
 
 TEST_SUITE("Memory")
 {

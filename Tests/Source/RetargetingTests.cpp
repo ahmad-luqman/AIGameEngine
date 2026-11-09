@@ -4,22 +4,22 @@
 #include "AutomationTestUtils.h"
 #include "TestUtils.h"
 
-#include <Basalt/Animation/AnimatedModel.h>
-#include <Basalt/Animation/AnimationClipSet.h>
-#include <Basalt/Animation/AnimationJointMap.h>
-#include <Basalt/Animation/AnimationSystem.h>
-#include <Basalt/Animation/Retargeting.h>
-#include <Basalt/Asset/Thumbnails.h>
-#include <Basalt/Core/JsonUtils.h>
-#include <Basalt/Core/Log.h>
-#include <Basalt/Project/ProjectValidator.h>
-#include <Basalt/Scene/ComponentRegistry.h>
-#include <Basalt/Scene/SceneSerializer.h>
+#include <Breccia/Animation/AnimatedModel.h>
+#include <Breccia/Animation/AnimationClipSet.h>
+#include <Breccia/Animation/AnimationJointMap.h>
+#include <Breccia/Animation/AnimationSystem.h>
+#include <Breccia/Animation/Retargeting.h>
+#include <Breccia/Asset/Thumbnails.h>
+#include <Breccia/Core/JsonUtils.h>
+#include <Breccia/Core/Log.h>
+#include <Breccia/Project/ProjectValidator.h>
+#include <Breccia/Scene/ComponentRegistry.h>
+#include <Breccia/Scene/SceneSerializer.h>
 
 #include <limits>
 
-using namespace Basalt;
-using namespace BasaltTest;
+using namespace Breccia;
+using namespace BrecciaTest;
 using AnimationTest::ClearAssetCache;
 using AnimationTest::Clip;
 using AnimationTest::FixturePath;
@@ -512,7 +512,7 @@ TEST_SUITE("Retargeting")
 		ClearAssetCache cacheGuard;
 		CommandRegistry registry;
 		AutomationSession session;
-		using BasaltTest::Run;
+		using BrecciaTest::Run;
 		for (const char* name : { "MixamoRig.gltf", "UnrealRig.gltf", "TwoJoint.gltf" })
 		{
 			const auto text = FileSystem::ReadTextFile(FixturePath(name));
@@ -549,11 +549,11 @@ TEST_SUITE("Retargeting")
 		CHECK(failing[1]["error"].get<std::string>().find("no joint matches") == 0);
 		CHECK(failing[1]["clips"].empty());
 		CHECK(failing[2]["warnings"][0].get<std::string>().find("Source 'mixamorig:Nope' is not in") != std::string::npos);
-		CHECK(BasaltTest::RunError(registry, session, "animator.retarget", { { "entity", "Missing" } }).find("Missing") != std::string::npos);
+		CHECK(BrecciaTest::RunError(registry, session, "animator.retarget", { { "entity", "Missing" } }).find("Missing") != std::string::npos);
 		Run(registry, session, "entity.create", { { "name", "Plain" } });
-		CHECK(BasaltTest::RunError(registry, session, "animator.retarget", { { "entity", "Plain" } }).find("has no Animator") != std::string::npos);
+		CHECK(BrecciaTest::RunError(registry, session, "animator.retarget", { { "entity", "Plain" } }).find("has no Animator") != std::string::npos);
 		Run(registry, session, "component.set", { { "entity", "Plain" }, { "component", "Animator" }, { "data", { { "Mesh", "Assets/Models/Gone.gltf" } } } });
-		CHECK(BasaltTest::RunError(registry, session, "animator.retarget", { { "entity", "Plain" } }).find("cannot load") != std::string::npos);
+		CHECK(BrecciaTest::RunError(registry, session, "animator.retarget", { { "entity", "Plain" } }).find("cannot load") != std::string::npos);
 		Run(registry, session, "entity.destroy", { { "entity", "Plain" } });
 		Run(registry, session, "component.set", { { "entity", "Hero" }, { "component", "Animator" }, { "data", animator } });
 
@@ -1362,8 +1362,8 @@ TEST_SUITE("Retargeting")
 		ClearAssetCache cacheGuard;
 		CommandRegistry registry;
 		AutomationSession session;
-		using BasaltTest::Run;
-		using BasaltTest::RunError;
+		using BrecciaTest::Run;
+		using BrecciaTest::RunError;
 		for (const char* name : { "MixamoRig.gltf", "UnrealRig.gltf" })
 		{
 			const auto text = FileSystem::ReadTextFile(FixturePath(name));
@@ -1467,7 +1467,7 @@ TEST_SUITE("Retargeting")
 	TEST_CASE("animator.match_joints reads two models without an Animator, joint map first")
 	{
 		ClearAssetCache clear;
-		BasaltTest::TempProject project("MatchJoints");
+		BrecciaTest::TempProject project("MatchJoints");
 		AutomationSession session;
 		CommandRegistry registry;
 		RegisterBuiltinCommands(registry);
@@ -1496,12 +1496,12 @@ TEST_SUITE("Retargeting")
 		const auto errorFor = [&](const nlohmann::json& patch) {
 			nlohmann::json params = models;
 			params.update(patch);
-			return BasaltTest::RunError(registry, session, "animator.match_joints", params);
+			return BrecciaTest::RunError(registry, session, "animator.match_joints", params);
 		};
 		CHECK(errorFor({ { "source", "Assets/Gone.gltf" } }).find("cannot load model 'Assets/Gone.gltf'") != std::string::npos);
 		CHECK(errorFor({ { "target", "Assets/Gone.gltf" } }).find("cannot load model 'Assets/Gone.gltf'") != std::string::npos);
 		CHECK(errorFor({ { "jointMap", "Assets/Gone.bjointmap" } }).find("cannot load joint map 'Assets/Gone.bjointmap'") != std::string::npos);
-		CHECK(BasaltTest::RunError(registry, session, "animator.match_joints", { { "source", "a.gltf" } }).find("target") != std::string::npos);
+		CHECK(BrecciaTest::RunError(registry, session, "animator.match_joints", { { "source", "a.gltf" } }).find("target") != std::string::npos);
 		// Two skeletons with nothing in common say so, rather than returning an empty list.
 		const auto text = FileSystem::ReadTextFile(FixturePath("TwoJoint.gltf"));
 		REQUIRE(text);
@@ -1568,13 +1568,13 @@ TEST_SUITE("Retargeting")
 		CommandRegistry registry;
 		RegisterBuiltinCommands(registry);
 		// Not "cannot load model": the models may be fine, and the project is what to open.
-		CHECK(BasaltTest::RunError(registry, session, "animator.match_joints", { { "source", "Assets/A.gltf" }, { "target", "Assets/B.gltf" } }).find("no project is open") != std::string::npos);
+		CHECK(BrecciaTest::RunError(registry, session, "animator.match_joints", { { "source", "Assets/A.gltf" }, { "target", "Assets/B.gltf" } }).find("no project is open") != std::string::npos);
 	}
 
 	TEST_CASE("A root at the skeleton's first node is reported")
 	{
 		ClearAssetCache clear;
-		BasaltTest::TempProject project("MatchJointsRoot");
+		BrecciaTest::TempProject project("MatchJointsRoot");
 		AutomationSession session;
 		CommandRegistry registry;
 		RegisterBuiltinCommands(registry);

@@ -3,16 +3,16 @@
 
 #include <doctest/doctest.h>
 
-#include <Basalt/Asset/Thumbnails.h>
-#include <Basalt/Core/FileSystem.h>
-#include <Basalt/Scene/ComponentRegistry.h>
-#include <Basalt/Scene/Prefab.h>
-#include <Basalt/Scene/SceneSerializer.h>
+#include <Breccia/Asset/Thumbnails.h>
+#include <Breccia/Core/FileSystem.h>
+#include <Breccia/Scene/ComponentRegistry.h>
+#include <Breccia/Scene/Prefab.h>
+#include <Breccia/Scene/SceneSerializer.h>
 
 #include <functional>
 
-using namespace Basalt;
-using namespace BasaltTest;
+using namespace Breccia;
+using namespace BrecciaTest;
 using json = nlohmann::json;
 
 namespace {
@@ -74,12 +74,12 @@ namespace {
 
 		json Run(const std::string& command, const json& params = json::object())
 		{
-			return BasaltTest::Run(Commands, Session, command, params);
+			return BrecciaTest::Run(Commands, Session, command, params);
 		}
 
 		std::string RunError(const std::string& command, const json& params = json::object())
 		{
-			return BasaltTest::RunError(Commands, Session, command, params);
+			return BrecciaTest::RunError(Commands, Session, command, params);
 		}
 
 		Entity EntityFrom(const json& result)
@@ -115,7 +115,7 @@ namespace {
 
 		std::string FileText(const std::string& path) const
 		{
-			const auto text = FileSystem::ReadTextFile(Basalt::Project::ResolvePath(path));
+			const auto text = FileSystem::ReadTextFile(Breccia::Project::ResolvePath(path));
 			REQUIRE(text);
 			return *text;
 		}
@@ -150,7 +150,7 @@ namespace {
 			json entities = json::array({ json{ { "ID", 1 }, { "Name", "Root" }, { "Parent", 0 } } });
 			for (int i = 0; i < count; ++i)
 				entities.push_back({ { "ID", 2 + i }, { "Parent", 1 }, { "Components", { { "Prefab", { { "Prefab", prefab } } } } } });
-			Directory.WriteFile(path, json{ { "Format", "BasaltPrefab" }, { "Version", SceneSerializer::FormatVersion }, { "Entities", entities } }.dump());
+			Directory.WriteFile(path, json{ { "Format", "BrecciaPrefab" }, { "Version", SceneSerializer::FormatVersion }, { "Entities", entities } }.dump());
 		}
 	};
 }
@@ -251,7 +251,7 @@ TEST_SUITE("PrefabNesting")
 		CHECK(f.Overrides(f.SquadTree).empty());
 		json entities;
 		std::string error;
-		REQUIRE(Prefab::ReadFile(Basalt::Project::ResolvePath(f.Elite), entities, error));
+		REQUIRE(Prefab::ReadFile(Breccia::Project::ResolvePath(f.Elite), entities, error));
 		CHECK(entities[0]["Components"]["Transform"]["Translation"] == json{ 0.0, 5.0, 0.0 });
 
 		// A placed instance keeps its place whatever the file's root does, nested or not.
@@ -466,7 +466,7 @@ TEST_SUITE("PrefabNesting")
 		// The rule holds for any caller, not only the commands: alone, the merge would break the instance around it.
 		json source;
 		std::string error;
-		REQUIRE(Prefab::ReadSource(Basalt::Project::ResolvePath(f.Soldier), source, error));
+		REQUIRE(Prefab::ReadSource(Breccia::Project::ResolvePath(f.Soldier), source, error));
 		CHECK(Prefab::Refresh(soldier, source, Prefab::RefreshMode::Merge, error) == Prefab::RefreshResult::Rejected);
 		CHECK(Contains(error, "nested in the instance 'Squad'"));
 		CHECK_FALSE(Prefab::ListsMembers(soldier.GetComponent<PrefabComponent>()));
@@ -702,7 +702,7 @@ TEST_SUITE("PrefabNesting")
 		// The instance is up to date with the file it now tracks, whatever its placement.
 		json source;
 		std::string error;
-		REQUIRE(Prefab::ReadSource(Basalt::Project::ResolvePath(f.Elite), source, error));
+		REQUIRE(Prefab::ReadSource(Breccia::Project::ResolvePath(f.Elite), source, error));
 		CHECK_FALSE(Prefab::IsOutdated(instance.GetComponent<PrefabComponent>(), source));
 
 		f.Edit(f.Soldier, [](Scene& scene) { GunLight(scene).Intensity = 29; });
@@ -721,11 +721,11 @@ TEST_SUITE("PrefabNesting")
 	{
 		NestingFixture f;
 		CHECK(Contains(f.RunError("prefab.variant", { { "base", "Assets/Prefabs/Missing.bprefab" }, { "path", "Assets/Prefabs/V.bprefab" } }), "Missing.bprefab"));
-		CHECK_FALSE(FileSystem::Exists(Basalt::Project::ResolvePath("Assets/Prefabs/V.bprefab")));
+		CHECK_FALSE(FileSystem::Exists(Breccia::Project::ResolvePath("Assets/Prefabs/V.bprefab")));
 		CHECK(Contains(f.RunError("prefab.variant", { { "base", f.Soldier }, { "path", f.Squad } }), "already exists"));
 		CHECK(Contains(f.RunError("prefab.variant", { { "base", "Assets/Soldier.txt" }, { "path", "Assets/Prefabs/V.bprefab" } }), "expected a .bprefab"));
 		f.Run("prefab.variant", { { "base", f.Soldier }, { "path", "Assets/Prefabs/V.bprefab" } });
-		std::filesystem::remove(Basalt::Project::ResolvePath(f.Soldier));
+		std::filesystem::remove(Breccia::Project::ResolvePath(f.Soldier));
 		CHECK(Contains(f.RunError("prefab.instantiate", { { "path", "Assets/Prefabs/V.bprefab" } }), "Soldier.bprefab"));
 		// Instances of it keep their state and say why, reached through the base they read.
 		const auto report = f.Session.ReloadAssets({ { f.Soldier, FileChangeType::Removed } });
@@ -771,7 +771,7 @@ TEST_SUITE("PrefabNesting")
 		json entities;
 		const auto read = [&](const std::string& path) {
 			error.clear();
-			return Prefab::ReadFile(Basalt::Project::ResolvePath(path), entities, error);
+			return Prefab::ReadFile(Breccia::Project::ResolvePath(path), entities, error);
 		};
 		// A chain one level past the limit; shorter ones read.
 		for (size_t i = 0; i <= Prefab::MaxNestingDepth; ++i)
@@ -817,7 +817,7 @@ TEST_SUITE("PrefabNesting")
 		write(json{ { "1", { { "ID", 99 } } } });
 		json expanded;
 		std::string error;
-		REQUIRE(Prefab::ReadFile(Basalt::Project::ResolvePath(path), expanded, error));
+		REQUIRE(Prefab::ReadFile(Breccia::Project::ResolvePath(path), expanded, error));
 		CHECK(expanded[0]["ID"] == 1);
 		// A file that means to nest and does not manage to is an error, never a missing subtree.
 		for (const json& link : { json(f.Soldier), json::object(), json{ { "Prefab", "" } }, json{ { "Prefab", nullptr } }, json{ { "Prefab", f.Soldier + ".txt" } } })
@@ -1189,7 +1189,7 @@ TEST_SUITE("PrefabNesting")
 		Entity outer = f.Session.GetScene()->CreateEntity("Outer");
 		f.InstantiateUnder(path, outer);
 		CHECK(Contains(f.RunError("prefab.create", { { "entity", IdOf(outer) }, { "path", "Assets/Prefabs/Deeper.bprefab" } }), "deeper than"));
-		CHECK_FALSE(FileSystem::Exists(Basalt::Project::ResolvePath("Assets/Prefabs/Deeper.bprefab")));
+		CHECK_FALSE(FileSystem::Exists(Breccia::Project::ResolvePath("Assets/Prefabs/Deeper.bprefab")));
 	}
 
 	TEST_CASE("asset.move keeps leftovers in old prefabs dead when it moves them to the current version")
@@ -1198,7 +1198,7 @@ TEST_SUITE("PrefabNesting")
 		f.Directory.WriteFile("Assets/Script.lua", "return {}");
 		const std::string path = "Assets/Prefabs/Old.bprefab";
 		const json root = { { "ID", 1 }, { "Name", "Old" }, { "Parent", 0 }, { "Components", { { "Script", { { "Script", "Assets/Script.lua" } } }, { "Prefab", { { "Prefab", f.Soldier } } } } } };
-		f.Directory.WriteFile(path, json{ { "Format", "BasaltPrefab" }, { "Version", 3 }, { "Entities", json::array({ root }) } }.dump());
+		f.Directory.WriteFile(path, json{ { "Format", "BrecciaPrefab" }, { "Version", 3 }, { "Entities", json::array({ root }) } }.dump());
 		const json moved = f.Run("asset.move", { { "from", "Assets/Script.lua" }, { "to", "Assets/Moved.lua" } });
 		CHECK(Contains(moved["warnings"].dump(), "removed a Prefab component from 'Old'"));
 		CHECK(ParseJson(f.FileText(path))["Version"] == SceneSerializer::FormatVersion);
@@ -1211,7 +1211,7 @@ TEST_SUITE("PrefabNesting")
 		NestingFixture f;
 		const std::string shouted = "Assets/Prefabs/SOLDIER.bprefab";
 		CHECK(Prefab::FileKeyOf("Assets/Prefabs/./Soldier.bprefab") == Prefab::FileKeyOf(f.Soldier));
-		if (!FileSystem::Exists(Basalt::Project::ResolvePath(shouted)))
+		if (!FileSystem::Exists(Breccia::Project::ResolvePath(shouted)))
 			return;
 		const std::string file = f.FileText(f.Soldier);
 		f.Run("prefab.open", { { "path", f.Soldier } });
@@ -1541,7 +1541,7 @@ TEST_SUITE("PrefabNesting")
 	{
 		NestingFixture f;
 		Entity instance = f.Instantiate(f.Squad);
-		std::filesystem::remove(Basalt::Project::ResolvePath(f.Soldier));
+		std::filesystem::remove(Breccia::Project::ResolvePath(f.Soldier));
 		const json unpacked = f.Run("prefab.unpack", { { "entity", IdOf(instance) } });
 		CHECK(Contains(unpacked["warnings"].dump(), "stays untracked"));
 
@@ -1549,7 +1549,7 @@ TEST_SUITE("PrefabNesting")
 		Entity holder = f.Session.GetScene()->CreateEntity("Holder");
 		f.Session.GetScene()->SetParent(instance, holder, false);
 		CHECK(Contains(f.RunError("prefab.create", { { "entity", IdOf(holder) }, { "path", path } }), "Soldier"));
-		CHECK_FALSE(FileSystem::Exists(Basalt::Project::ResolvePath(path)));
+		CHECK_FALSE(FileSystem::Exists(Breccia::Project::ResolvePath(path)));
 		CHECK_FALSE(holder.HasComponent<PrefabComponent>());
 	}
 
@@ -1663,7 +1663,7 @@ TEST_SUITE("PrefabNesting")
 		const std::string path = "Assets/Prefabs/Holder.bprefab";
 		CHECK(Contains(f.RunError("prefab.create", { { "entity", IdOf(holder) }, { "path", path } }), "not a valid prefab"));
 		CHECK(GunRadius(first) == 7);
-		CHECK_FALSE(FileSystem::Exists(Basalt::Project::ResolvePath(path)));
+		CHECK_FALSE(FileSystem::Exists(Breccia::Project::ResolvePath(path)));
 		f.Directory.WriteFile("Assets/Prefabs/Other.bprefab", other);
 
 		// When one nested instance merges and the next cannot, what merged is an edit of the open prefab like any other.
@@ -1794,7 +1794,7 @@ TEST_SUITE("PrefabNesting")
 		NestingFixture f;
 		const std::string shouted = "Assets/Prefabs/ELITE.bprefab";
 		f.Variant(f.Soldier, f.Elite);
-		if (!FileSystem::Exists(Basalt::Project::ResolvePath(shouted)))
+		if (!FileSystem::Exists(Breccia::Project::ResolvePath(shouted)))
 			return;
 		Entity instance = f.Instantiate(f.Elite);
 		Entity gun = Find(instance, "Gun");
@@ -1836,12 +1836,12 @@ TEST_SUITE("PrefabNesting")
 		json entities;
 		write("Assets/Prefabs/Top.bprefab", { deep });
 		write("Assets/Prefabs/Over.bprefab", { "Assets/Prefabs/Top.bprefab" });
-		CHECK(Prefab::ReadFile(Basalt::Project::ResolvePath("Assets/Prefabs/Over.bprefab"), entities, error));
+		CHECK(Prefab::ReadFile(Breccia::Project::ResolvePath("Assets/Prefabs/Over.bprefab"), entities, error));
 		for (const std::vector<std::string>& order : { std::vector<std::string>{ deep, "Assets/Prefabs/Longer.bprefab" }, std::vector<std::string>{ "Assets/Prefabs/Longer.bprefab", deep } })
 		{
 			write("Assets/Prefabs/Top.bprefab", order);
 			write("Assets/Prefabs/Over.bprefab", { "Assets/Prefabs/Top.bprefab" });
-			CHECK_FALSE(Prefab::ReadFile(Basalt::Project::ResolvePath("Assets/Prefabs/Over.bprefab"), entities, error));
+			CHECK_FALSE(Prefab::ReadFile(Breccia::Project::ResolvePath("Assets/Prefabs/Over.bprefab"), entities, error));
 			CHECK(Contains(error, "deeper than"));
 		}
 	}

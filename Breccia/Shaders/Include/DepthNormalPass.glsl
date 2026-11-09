@@ -1,0 +1,45 @@
+// All prepass variants share skin/material coverage; the editor variant additionally writes IDs.
+#include "Common.glsl"
+#include "Material.glsl"
+
+layout(location = 0) in vec3 v_WorldPosition;
+layout(location = 1) in vec3 v_Normal;
+layout(location = 2) in vec4 v_Tangent;
+layout(location = 3) in vec2 v_TexCoord;
+layout(location = 4) flat in uvec2 v_InstanceIndices;
+
+#ifdef BRECCIA_PICKING
+layout(location = 1) out uint o_EntityId;
+#endif
+#ifdef BRECCIA_MOTION
+#ifdef BRECCIA_PICKING
+layout(location = 2) out vec4 o_Motion;
+#else
+layout(location = 1) out vec4 o_Motion;
+#endif
+#endif
+
+// View-space normal for SSAO.
+layout(location = 0) out vec4 o_Normal;
+
+layout(location = 5) in vec2 v_TexCoord1;
+#ifdef BRECCIA_MOTION
+layout(location = 6) in vec4 v_PreviousClip;
+#endif
+
+void main()
+{
+	MaterialData material = u_Materials.Materials[v_InstanceIndices.x];
+	Surface surface = EvaluateSurface(material, v_Normal, v_Tangent, v_TexCoord, v_TexCoord1, v_WorldPosition, gl_FrontFacing);
+	if (material.Params.z > 0.0 && surface.Alpha < material.Params.z)
+		discard;
+#ifdef BRECCIA_PICKING
+	o_EntityId = v_InstanceIndices.y;
+#endif
+#ifdef BRECCIA_MOTION
+	vec3 previous = v_PreviousClip.xyz / v_PreviousClip.w;
+	// Absolute previous UV (top-left origin), previous depth, and geometry-history validity.
+	o_Motion = vec4(previous.xy * vec2(0.5, -0.5) + 0.5, previous.z, v_PreviousClip.w > 0.0 ? 1.0 : 0.0);
+#endif
+	o_Normal = vec4(normalize(mat3(u_View.View) * surface.Normal), 1.0);
+}

@@ -1,0 +1,114 @@
+#pragma once
+
+#include "Breccia/Animation/AnimationPose.h"
+
+#include <functional>
+#include <numbers>
+#include <optional>
+#include <span>
+#include <string>
+#include <vector>
+
+namespace Breccia {
+
+	struct SpringChain;
+	struct SpringChainCollider;
+	struct SpringCollider;
+
+	// Stateless pieces of spring bones (SpringBoneComponent): resolving a chain on a model and advancing its simulated
+	// points. AnimationSystem keeps the points between frames and turns the joints toward them (SolveAimChainIK).
+
+	// One simulated point: the child of a chain joint, and its velocity (world space).
+	struct SpringPoint
+	{
+		glm::vec3 Position = glm::vec3(0);
+		glm::vec3 Velocity = glm::vec3(0);
+	};
+
+	// A sphere (A == B) or capsule (the segment A..B) that points stay outside of, in world space.
+	struct SpringCollisionShape
+	{
+		glm::vec3 A = glm::vec3(0);
+		glm::vec3 B = glm::vec3(0);
+		float Radius = 0;
+	};
+
+	// Where a swept point first touches something: how far along its move (0..1), and the surface's normal there (away from
+	// the surface, toward the point).
+	struct SpringSweepHit
+	{
+		float Fraction = 0;
+		glm::vec3 Normal = glm::vec3(0);
+	};
+
+	// What SimulateSpringChain advances. Sizes: `Animated` holds the chain's joints and its tip (n + 1 positions), the
+	// points are the children of the n joints (n positions).
+	struct SpringSimulationRequest
+	{
+		// Where the animated pose puts the joints and the tip now, and at the previous simulation (world space). The
+		// chain's first joint follows them exactly, interpolated across the substeps.
+		std::span<const glm::vec3> Animated;
+		std::span<const glm::vec3> PreviousAnimated;
+		std::span<const SpringCollisionShape> Colliders;
+		// Other things points stay outside (physics bodies): the point, as a sphere of the callback's own radius (callers
+		// match Radius; a PhysicsShapeSnapshot of that radius queries with at least PhysicsShapeSnapshot::MinRadius), moved
+		// out of what it penetrates, or nullopt when it is clear. Empty: none.
+		std::function<std::optional<glm::vec3>(const glm::vec3&)> World;
+		// Sweeps each point's move through the colliders and WorldSweep after the constraints, so it stops at what it would
+		// otherwise pass through (see SpringChain::Continuous).
+		bool Continuous = false;
+		// The first thing `World` holds that the sphere moving from the first position to the second meets, or nullopt.
+		// A sphere that starts inside something and moves out of it meets nothing. Only asked when Continuous, and needed
+		// then whenever World is set.
+		std::function<std::optional<SpringSweepHit>(const glm::vec3&, const glm::vec3&)> WorldSweep;
+		// Pull (1/s², 0..SpringChain::MaxStiffness) toward the animated shape, velocity decay (1/s, nonnegative), and the
+		// points' radius against the colliders.
+		float Stiffness = 0;
+		float Damping = 0;
+		float Radius = 0;
+		// Radians (0..pi): how far each bone may swing away from where the animated shape (turned with the simulated bones
+		// before it) points it; pi leaves it free.
+		float MaxAngle = std::numbers::pi_v<float>;
+		// Gravity and wind (m/s²).
+		glm::vec3 Acceleration = glm::vec3(0);
+		float Seconds = 0;
+	};
+	// The longest substep is 1 / SpringStepRate seconds: a frame runs ceil(seconds * SpringStepRate) equal substeps.
+	inline constexpr float SpringStepRate = 120.0f;
+	// Substeps per frame at most. A longer frame (a hitch) simulates only its last MaxSpringSteps / SpringStepRate
+	// seconds; the points first move along with the chain's first joint for the rest, so the hitch does not whip them.
+	inline constexpr uint32_t MaxSpringSteps = 8;
+	// How many times each substep alternates pushing a point out of the colliders (then the world) and back to its bone
+	// length. A point that can stay outside every collider at its length usually ends up there; overlapping colliders
+	// can leave it slightly inside.
+	inline constexpr uint32_t SpringConstraintIterations = 4;
+	// How many surfaces a swept point can meet in one substep; it stops at the last.
+	inline constexpr uint32_t SpringSweepIterations = 3;
+	// A swept point held farther than this many bone lengths from the point before it lets go: what holds it is behind
+	// a chain that moved on, and a point left there would pull its bone through the obstacle anyway.
+	inline constexpr float SpringSweepStretch = 1.5f;
+	// Advances `points` (one per joint) by request.Seconds. Each point keeps its animated distance from the point
+	// before it (from the first joint for the first point), is pulled toward where the animated chain shape puts it
+	// relative to the simulated points before it, swings at most MaxAngle away from there, is pushed out of the
+	// colliders and the world, which win over the angle limit, and with Continuous stops at what it would have passed
+	// (a swept point can end nearer than its bone length, or up to SpringSweepStretch bone lengths away).
+	void SimulateSpringChain(const SpringSimulationRequest& request, std::span<SpringPoint> points);
+
+	// Fills outJoints with the chain's joints followed by its tip (Joint, then each joint's first child, ChainLength
+	// joints or, for ChainLength 0, down to the last joint that has a child, at most MaxChainLength) and returns empty,
+	// or returns why it cannot (an empty or unknown joint, a joint without a child, fewer than ChainLength joints and a
+	// tip in a line, a fixed-matrix joint other than the tip) and leaves outJoints empty.
+	[[nodiscard]] std::string ResolveSpringChain(const MeshSource& source, const SpringChain& chain, std::vector<uint32_t>& outJoints);
+	// Whether a chain's Colliders list names a collider. Entries without a Name (the inspector's unnamed additions) name
+	// none, and a chain that names none collides with every collider of its component.
+	bool NamesSpringColliders(const SpringChain& chain);
+	// Whether the chain's Colliders list names a collider called `name` (an empty name is never named).
+	bool SpringChainNames(const SpringChain& chain, const std::string& name);
+	// Whether a chain's Colliders entry names a collider `colliders` lacks (an unnamed entry names none, so never).
+	bool NamesMissingSpringCollider(const SpringChainCollider& named, std::span<const SpringCollider> colliders);
+	// The first node whose parent is `node`, or -1.
+	int32_t FirstChild(const MeshSource& source, uint32_t node);
+	// How many nodes have `node` as their parent.
+	size_t ChildCount(const MeshSource& source, uint32_t node);
+
+}

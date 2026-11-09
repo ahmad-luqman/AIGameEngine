@@ -1,12 +1,12 @@
 #include <doctest/doctest.h>
 
-#include <Basalt/Core/Log.h>
-#include <Basalt/Physics/PhysicsLayers.h>
-#include <Basalt/Physics/PhysicsWorld.h>
-#include <Basalt/Scene/ComponentRegistry.h>
-#include <Basalt/Scene/Entity.h>
-#include <Basalt/Scene/Scene.h>
-#include <Basalt/Scripting/ScriptEngine.h>
+#include <Breccia/Core/Log.h>
+#include <Breccia/Physics/PhysicsLayers.h>
+#include <Breccia/Physics/PhysicsWorld.h>
+#include <Breccia/Scene/ComponentRegistry.h>
+#include <Breccia/Scene/Entity.h>
+#include <Breccia/Scene/Scene.h>
+#include <Breccia/Scripting/ScriptEngine.h>
 
 #include "TestUtils.h"
 
@@ -18,7 +18,7 @@
 #include <optional>
 #include <string>
 
-using namespace Basalt;
+using namespace Breccia;
 
 namespace {
 
@@ -645,7 +645,7 @@ TEST_SUITE("Physics")
 		Simulate(scene, 2.0f * Step, [&]() { SetController(character, [](auto& c) { c.SlopeLimit = 30.0f; c.MaxStrength = 50.0f; }); });
 		CHECK(physics.GetLinearVelocity(character).y < fallSpeed);
 		CHECK(physics.GetLinearVelocity(character).x == doctest::Approx(1.0f).epsilon(0.01));
-		CHECK(BasaltTest::CountLogMessages(since, "Physics:") == 0);
+		CHECK(BrecciaTest::CountLogMessages(since, "Physics:") == 0);
 
 		// A changed layer rebuilds the character and keeps its velocity and Move: Ghost falls through the ground.
 		SetController(character, [](auto& c) { c.Layer = "Ghost"; });
@@ -661,7 +661,7 @@ TEST_SUITE("Physics")
 		character.RemoveComponent<CapsuleColliderComponent>();
 		scene.OnUpdate(Step);
 		CHECK_FALSE(physics.HasCharacter(character));
-		CHECK(BasaltTest::CountLogMessages(since, "no valid collider") == 1);
+		CHECK(BrecciaTest::CountLogMessages(since, "no valid collider") == 1);
 		character.AddComponent<SphereColliderComponent>();
 		scene.OnUpdate(Step);
 		CHECK(physics.HasCharacter(character));
@@ -671,7 +671,7 @@ TEST_SUITE("Physics")
 		scene.OnUpdate(Step);
 		CHECK(physics.HasCharacter(character));
 		CHECK_FALSE(physics.HasBody(character));
-		CHECK(BasaltTest::CountLogMessages(since, "RigidBody is ignored") == 1);
+		CHECK(BrecciaTest::CountLogMessages(since, "RigidBody is ignored") == 1);
 		character.RemoveComponent<CharacterControllerComponent>();
 		scene.OnUpdate(Step);
 		CHECK_FALSE(physics.HasCharacter(character));
@@ -733,18 +733,18 @@ TEST_SUITE("Physics")
 		Simulate(scene, 0.5f, [&]() { character.AddOrReplaceComponent<CharacterControllerComponent>(same); });
 		CHECK(physics.HasCharacter(character));
 		CHECK(physics.IsCharacterGrounded(character));
-		CHECK(BasaltTest::CountLogMessages(since, "SlopeLimit 120 must be within [1, 90] degrees; using 90") == 1);
-		CHECK(BasaltTest::CountLogMessages(since, "StepHeight -1") == 1);
-		CHECK(BasaltTest::CountLogMessages(since, "MaxStrength -5") == 1);
-		CHECK(BasaltTest::CountLogMessages(since, "Mass -1") == 1);
-		CHECK(BasaltTest::CountLogMessages(since, "JumpGrace -1 must be within [0, 10] seconds; using 0") == 1);
-		CHECK(BasaltTest::CountLogMessages(since, "unknown physics layer 'Nowhere'") == 1);
+		CHECK(BrecciaTest::CountLogMessages(since, "SlopeLimit 120 must be within [1, 90] degrees; using 90") == 1);
+		CHECK(BrecciaTest::CountLogMessages(since, "StepHeight -1") == 1);
+		CHECK(BrecciaTest::CountLogMessages(since, "MaxStrength -5") == 1);
+		CHECK(BrecciaTest::CountLogMessages(since, "Mass -1") == 1);
+		CHECK(BrecciaTest::CountLogMessages(since, "JumpGrace -1 must be within [0, 10] seconds; using 0") == 1);
+		CHECK(BrecciaTest::CountLogMessages(since, "unknown physics layer 'Nowhere'") == 1);
 
 		// Fixing a value logs the remaining problems once more.
 		SetController(character, [](auto& c) { c.SlopeLimit = 45.0f; });
 		Simulate(scene, 2.0f * Step);
-		CHECK(BasaltTest::CountLogMessages(since, "SlopeLimit") == 1);
-		CHECK(BasaltTest::CountLogMessages(since, "StepHeight -1") == 2);
+		CHECK(BrecciaTest::CountLogMessages(since, "SlopeLimit") == 1);
+		CHECK(BrecciaTest::CountLogMessages(since, "StepHeight -1") == 2);
 
 		// Move ignores non-finite velocities.
 		physics.MoveCharacter(character, { NAN, 0.0f, 0.0f });
@@ -755,7 +755,7 @@ TEST_SUITE("Physics")
 
 	TEST_CASE("Scripts drive a character and it enters triggers")
 	{
-		BasaltTest::TempProject project("ScriptCharacter");
+		BrecciaTest::TempProject project("ScriptCharacter");
 		const std::string script = project.WriteFile("Assets/Scripts/Walker.lua", R"(
 			local Walker = {}
 			function Walker:OnCreate() self.Triggers = 0; self.Frames = 0; self.GroundedFrames = 0 end
@@ -807,7 +807,7 @@ TEST_SUITE("Physics")
 	TEST_CASE("A fast character leaving a trigger still gets where it left")
 	{
 		// 40 m/s covers two thirds of a meter per step; the parting is measured with the character's own speed.
-		BasaltTest::TempProject project("FastCharacterExit");
+		BrecciaTest::TempProject project("FastCharacterExit");
 		const std::string script = project.WriteFile("Assets/Scripts/Exit.lua", R"(
 			local Exit = {}
 			function Exit:OnTriggerExit(other, contact)
@@ -848,9 +848,9 @@ TEST_SUITE("Physics")
 		const uint64_t since = Log::GetHistory().GetTotalCount();
 		scene.OnSimulationStart();
 		Simulate(scene, 0.5f);
-		CHECK(BasaltTest::CountLogMessages(since, "OverrideMaterial has no effect here (characters do not use collider materials)") == 1);
+		CHECK(BrecciaTest::CountLogMessages(since, "OverrideMaterial has no effect here (characters do not use collider materials)") == 1);
 		// The value it never uses is not checked either.
-		CHECK(BasaltTest::CountLogMessages(since, "Friction must not be negative") == 0);
+		CHECK(BrecciaTest::CountLogMessages(since, "Friction must not be negative") == 0);
 		scene.OnSimulationStop();
 	}
 
@@ -887,7 +887,7 @@ TEST_SUITE("Physics")
 		CHECK(steepGrounded == 0);
 		// SlopeLimit 0 would switch Jolt's slope check off and make every slope walkable.
 		const auto [flatOnly, flatGrounded] = climb(30.0f, 0.0f, since);
-		CHECK(BasaltTest::CountLogMessages(since, "SlopeLimit 0 must be within [1, 90] degrees; using 1") == 1);
+		CHECK(BrecciaTest::CountLogMessages(since, "SlopeLimit 0 must be within [1, 90] degrees; using 1") == 1);
 		CHECK(flatOnly.y < 0.0f);
 		CHECK(flatGrounded == 0);
 	}
@@ -910,7 +910,7 @@ TEST_SUITE("Physics")
 			physics.AddForce(character, { 0.0f, 500.0f, 0.0f });
 			scene.OnUpdate(Step);
 		}
-		CHECK(BasaltTest::CountLogMessages(since, "does nothing on character 'Character'") == 1);
+		CHECK(BrecciaTest::CountLogMessages(since, "does nothing on character 'Character'") == 1);
 		CHECK(glm::length(Position(character) - glm::vec3(0.0f, StandingHeight, 0.0f)) < 0.05f);
 
 		// A new layer rebuilds the character; a jump asked for on that very step still happens.
@@ -927,7 +927,7 @@ TEST_SUITE("Physics")
 
 	TEST_CASE("Destroying a character during play ends its trigger overlaps")
 	{
-		BasaltTest::TempProject project("CharacterDestroyed");
+		BrecciaTest::TempProject project("CharacterDestroyed");
 		const std::string script = project.WriteFile("Assets/Scripts/Zone.lua", R"(
 			local Zone = {}
 			function Zone:OnCreate() self.Enters = 0; self.Exits = 0 end
@@ -969,7 +969,7 @@ TEST_SUITE("Physics")
 		scene.OnSimulationStart();
 		PhysicsWorld& physics = *scene.GetPhysicsWorld();
 		REQUIRE(physics.HasCharacter(character));
-		CHECK(BasaltTest::CountLogMessages(since, "a character collides by the convex hull of its MeshCollider; set Convex") == 1);
+		CHECK(BrecciaTest::CountLogMessages(since, "a character collides by the convex hull of its MeshCollider; set Convex") == 1);
 		Simulate(scene, 1.5f);
 		CHECK(physics.IsCharacterGrounded(character));
 		// The unit cube rests on its base (plus Jolt's small character padding).

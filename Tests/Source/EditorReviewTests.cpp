@@ -1,19 +1,19 @@
 #include "EditorContext.h"
 #include "TestUtils.h"
 
-#include <Basalt/Automation/CommandSchema.h>
-#include <Basalt/Automation/EditorCommandSchemas.h>
-#include <Basalt/Automation/EditorSelection.h>
-#include <Basalt/Math/Math.h>
-#include <Basalt/Scene/Entity.h>
-#include <Basalt/Scene/SceneSerializer.h>
+#include <Breccia/Automation/CommandSchema.h>
+#include <Breccia/Automation/EditorCommandSchemas.h>
+#include <Breccia/Automation/EditorSelection.h>
+#include <Breccia/Math/Math.h>
+#include <Breccia/Scene/Entity.h>
+#include <Breccia/Scene/SceneSerializer.h>
 
 #include <doctest/doctest.h>
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <random>
 
-using namespace Basalt;
+using namespace Breccia;
 using json = nlohmann::json;
 
 namespace {
@@ -299,7 +299,7 @@ TEST_CASE("Editor selection modes and play-copy forest operations preserve edit 
 
 TEST_CASE("Editor every scene-mutating command increments revision and creates one named entry")
 {
-	BasaltTest::TempDirectory directory("EditorRevision");
+	BrecciaTest::TempDirectory directory("EditorRevision");
 	EditorFixture test;
 	test.Run("project.create", { { "path", directory.GetPath().string() }, { "name", "Revisions" } });
 	test.Context.OnSceneChanged();

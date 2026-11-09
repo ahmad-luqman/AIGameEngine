@@ -1,13 +1,13 @@
 #include <doctest/doctest.h>
 
-#include <Basalt/Asset/AssetManager.h>
-#include <Basalt/Core/JobSystem.h>
-#include <Basalt/Asset/ImageUtils.h>
-#include <Basalt/Asset/TextureSource.h>
-#include <Basalt/Asset/MeshImporter.h>
-#include <Basalt/Asset/MeshOptimizer.h>
-#include <Basalt/Asset/Thumbnails.h>
-#include <Basalt/Scene/Scene.h>
+#include <Breccia/Asset/AssetManager.h>
+#include <Breccia/Core/JobSystem.h>
+#include <Breccia/Asset/ImageUtils.h>
+#include <Breccia/Asset/TextureSource.h>
+#include <Breccia/Asset/MeshImporter.h>
+#include <Breccia/Asset/MeshOptimizer.h>
+#include <Breccia/Asset/Thumbnails.h>
+#include <Breccia/Scene/Scene.h>
 
 #include "MeshTestUtils.h"
 #include "TestUtils.h"
@@ -19,7 +19,7 @@
 #include <thread>
 #include <glm/gtc/epsilon.hpp>
 
-using namespace Basalt;
+using namespace Breccia;
 
 namespace {
 
@@ -71,7 +71,7 @@ namespace {
 	// A buffer embedding the given bytes as a base64 data URI.
 	nlohmann::json EmbeddedBufferJson(const std::string& buffer)
 	{
-		return { { "byteLength", buffer.size() }, { "uri", "data:application/octet-stream;base64," + BasaltTest::Base64(buffer.data(), buffer.size()) } };
+		return { { "byteLength", buffer.size() }, { "uri", "data:application/octet-stream;base64," + BrecciaTest::Base64(buffer.data(), buffer.size()) } };
 	}
 
 	// A binary glTF container. The caller pads the JSON chunk (or leaves it unpadded on purpose); no binary chunk when
@@ -110,7 +110,7 @@ TEST_SUITE("Assets")
 {
 	TEST_CASE("glTF extension materials retain independent texture transforms and UV1")
 	{
-		BasaltTest::TempProject project("GltfExtensions");
+		BrecciaTest::TempProject project("GltfExtensions");
 		auto binary = MakeQuadBuffer();
 		const float uv1[] = { 0.2f, 0.3f, 0.4f, 0.5f, 0.6f, 0.7f, 0.8f, 0.9f };
 		const auto uv1Offset = binary.size();
@@ -210,7 +210,7 @@ TEST_SUITE("Assets")
 
 	TEST_CASE("Quantized glTF positions and UVs decode without changing topology")
 	{
-		BasaltTest::TempProject project("GltfQuantized");
+		BrecciaTest::TempProject project("GltfQuantized");
 		const uint16_t positions[] = { 0, 0, 0, 0, 65535, 0, 0, 0, 65535, 65535, 0, 0, 0, 65535, 0, 0 };
 		const uint16_t uv[] = { 0, 65535, 65535, 65535, 65535, 0, 0, 0 };
 		const uint16_t indices[] = { 0, 1, 2, 0, 2, 3 };
@@ -247,7 +247,7 @@ TEST_SUITE("Assets")
 	TEST_CASE("Quantized normals and unnormalized integer positions keep their scale in the node")
 	{
 		// gltfpack's default: integer positions with the dequantizing scale on the node, normalized int8 normals.
-		BasaltTest::TempProject project("GltfQuantizedNormals");
+		BrecciaTest::TempProject project("GltfQuantizedNormals");
 		const uint16_t positions[] = { 0, 0, 0, 0, 1000, 0, 0, 0, 1000, 1000, 0, 0, 0, 1000, 0, 0 };
 		const uint16_t uv[] = { 0, 65535, 65535, 65535, 65535, 0, 0, 0 };
 		const uint16_t indices[] = { 0, 1, 2, 0, 2, 3 };
@@ -293,8 +293,8 @@ TEST_SUITE("Assets")
 
 	TEST_CASE("KHR_texture_basisu external and embedded images reach the texture cache")
 	{
-		BasaltTest::TempProject project("GltfBasisImages");
-		const auto bytes = FileSystem::ReadBinaryFile(std::filesystem::path(BASALT_TEST_DATA_DIR) / "Textures/UASTC.ktx2");
+		BrecciaTest::TempProject project("GltfBasisImages");
+		const auto bytes = FileSystem::ReadBinaryFile(std::filesystem::path(BRECCIA_TEST_DATA_DIR) / "Textures/UASTC.ktx2");
 		REQUIRE(bytes);
 		std::string binary = MakeQuadBuffer();
 		const auto imageOffset = binary.size();
@@ -322,7 +322,7 @@ TEST_SUITE("Assets")
 
 	TEST_CASE("Blocking mesh getters join dependency retries without publishing unrelated requests")
 	{
-		BasaltTest::TempProject project("BlockingAsyncRetry");
+		BrecciaTest::TempProject project("BlockingAsyncRetry");
 		AssetManager::Clear();
 		const auto binary = MakeQuadBuffer();
 		project.WriteFile("Assets/quad.bin", binary);
@@ -336,19 +336,19 @@ TEST_SUITE("Assets")
 		REQUIRE(AssetManager::GetMesh("Assets/quad.gltf"));
 		CHECK_FALSE(AssetManager::IsLoading("Assets/quad.gltf"));
 		CHECK_FALSE(AssetManager::FindLoadedMesh("builtin://Sphere"));
-		CHECK(BasaltTest::CountLogMessages(since, "Assets/quad.gltf': 'Assets/quad.bin' changed while loading; retrying") == 1);
+		CHECK(BrecciaTest::CountLogMessages(since, "Assets/quad.gltf': 'Assets/quad.bin' changed while loading; retrying") == 1);
 		AssetManager::Clear();
 	}
 
 	TEST_CASE("Pending imports retry only when their discovered dependencies changed")
 	{
-		BasaltTest::TempProject project("AsyncDependencyChange");
+		BrecciaTest::TempProject project("AsyncDependencyChange");
 		AssetManager::Clear();
 		const auto binary = MakeQuadBuffer();
 		project.WriteFile("Assets/quad.bin", binary);
 		project.WriteFile("Assets/normal.png", MakePng(0xFFFFFFFF));
 		const auto png = MakePng(0xFFFFFFFF);
-		project.WriteFile("Assets/quad.gltf", MakeGltfJson({ { "uri", "quad.bin" }, { "byteLength", binary.size() } }, { { { "uri", "data:image/png;base64," + BasaltTest::Base64(png.data(), png.size()) } }, { { "uri", "normal.png" } } }).dump());
+		project.WriteFile("Assets/quad.gltf", MakeGltfJson({ { "uri", "quad.bin" }, { "byteLength", binary.size() } }, { { { "uri", "data:image/png;base64," + BrecciaTest::Base64(png.data(), png.size()) } }, { { "uri", "normal.png" } } }).dump());
 		AssetManager::RequestTexture("Assets/quad.gltf#image/0");
 		JobSystem::Get().WaitIdle();
 		// Dependency metadata is still private to the completed result at this point.
@@ -408,7 +408,7 @@ TEST_SUITE("Assets")
 
 	TEST_CASE("glTF import: geometry, materials, embedded and external textures, hierarchy")
 	{
-		BasaltTest::TempProject project("GltfImport");
+		BrecciaTest::TempProject project("GltfImport");
 		const std::string redPng = MakePng(0xFF0000FF);
 		const std::string bluePng = MakePng(0x0000FFFF);
 		project.WriteFile("Assets/Models/normal.png", bluePng);
@@ -416,7 +416,7 @@ TEST_SUITE("Assets")
 		const std::string buffer = MakeQuadBuffer();
 		const nlohmann::json gltf = MakeGltfJson(
 			EmbeddedBufferJson(buffer),
-			{ { { "uri", "data:image/png;base64," + BasaltTest::Base64(redPng.data(), redPng.size()) } }, { { "uri", "normal.png" } } });
+			{ { { "uri", "data:image/png;base64," + BrecciaTest::Base64(redPng.data(), redPng.size()) } }, { { "uri", "normal.png" } } });
 		project.WriteFile("Assets/Models/Quad.gltf", gltf.dump());
 
 		AssetManager::Clear();
@@ -472,7 +472,7 @@ TEST_SUITE("Assets")
 	// converted with FileSystem::PathFromUtf8, never through the ANSI code page.
 	TEST_CASE("Models, their external files and textures named in CJK characters load")
 	{
-		BasaltTest::TempProject project("GltfImport-資産");
+		BrecciaTest::TempProject project("GltfImport-資産");
 		const std::string buffer = MakeQuadBuffer();
 		project.WriteFile("Assets/Models/四角 資料.bin", buffer);
 		project.WriteFile("Assets/Models/模様.png", MakePng(0xFF0000FF));
@@ -509,7 +509,7 @@ TEST_SUITE("Assets")
 	// The messages name the files: path::string() would throw on Windows for these names, turning the report into a crash.
 	TEST_CASE("Load errors name models and textures in CJK characters as UTF-8")
 	{
-		BasaltTest::TempProject project("LoadErrors-資産");
+		BrecciaTest::TempProject project("LoadErrors-資産");
 		const std::string broken = project.WriteFile("Assets/Models/壊れ.gltf", "{");
 		const std::string empty = project.WriteFile("Assets/Models/空.gltf", R"({"asset": {"version": "2.0"}, "scenes": [{"nodes": []}], "scene": 0})");
 		const std::string texture = project.WriteFile("Assets/Textures/壊れ.png", "not a png");
@@ -529,7 +529,7 @@ TEST_SUITE("Assets")
 
 	TEST_CASE("Binary glTF (.glb) with an image in a buffer view")
 	{
-		BasaltTest::TempProject project("GlbImport");
+		BrecciaTest::TempProject project("GlbImport");
 		std::string binary = MakeQuadBuffer();
 		const std::string png = MakePng(0x00FF00FF);
 		const size_t imageOffset = binary.size();
@@ -573,12 +573,12 @@ TEST_SUITE("Assets")
 
 	TEST_CASE("Changed files drop the loaded assets they affect")
 	{
-		BasaltTest::TempProject project("AssetReloadChanged");
+		BrecciaTest::TempProject project("AssetReloadChanged");
 		const std::string buffer = MakeQuadBuffer();
 		project.WriteFile("Assets/Models/Quad.bin", buffer);
 		project.WriteFile("Assets/Models/normal.png", MakePng(0x0000FFFF));
 		const std::string redPng = MakePng(0xFF0000FF);
-		const nlohmann::json gltf = MakeGltfJson({ { "byteLength", buffer.size() }, { "uri", "Quad.bin" } }, { { { "uri", "data:image/png;base64," + BasaltTest::Base64(redPng.data(), redPng.size()) } }, { { "uri", "normal.png" } } });
+		const nlohmann::json gltf = MakeGltfJson({ { "byteLength", buffer.size() }, { "uri", "Quad.bin" } }, { { { "uri", "data:image/png;base64," + BrecciaTest::Base64(redPng.data(), redPng.size()) } }, { { "uri", "normal.png" } } });
 		project.WriteFile("Assets/Models/Quad.gltf", gltf.dump());
 		project.WriteFile("Assets/Textures/Wall.png", MakePng(0xFFFFFFFF));
 
@@ -650,11 +650,11 @@ TEST_SUITE("Assets")
 		CHECK(AssetManager::FindLoadedMesh("builtin://Cube") == cube);
 
 		// A model loaded only inside the scope goes with its embedded images; a texture loaded before stays.
-		BasaltTest::TempProject project("TemporaryLoadsModel");
+		BrecciaTest::TempProject project("TemporaryLoadsModel");
 		const std::string buffer = MakeQuadBuffer();
 		const std::string redPng = MakePng(0xFF0000FF);
 		project.WriteFile("Assets/Models/normal.png", MakePng(0x0000FFFF));
-		project.WriteFile("Assets/Models/Quad.gltf", MakeGltfJson(EmbeddedBufferJson(buffer), { { { "uri", "data:image/png;base64," + BasaltTest::Base64(redPng.data(), redPng.size()) } }, { { "uri", "normal.png" } } }).dump());
+		project.WriteFile("Assets/Models/Quad.gltf", MakeGltfJson(EmbeddedBufferJson(buffer), { { { "uri", "data:image/png;base64," + BrecciaTest::Base64(redPng.data(), redPng.size()) } }, { { "uri", "normal.png" } } }).dump());
 		REQUIRE(AssetManager::GetTexture("Assets/Models/normal.png"));
 		{
 			AssetManager::TemporaryLoads temporary;
@@ -667,7 +667,7 @@ TEST_SUITE("Assets")
 
 	TEST_CASE("Asset failures are reported and cached until reloaded")
 	{
-		BasaltTest::TempProject project("AssetFailures");
+		BrecciaTest::TempProject project("AssetFailures");
 		AssetManager::Clear();
 		CHECK_FALSE(AssetManager::GetMesh("Assets/Models/Missing.gltf"));
 		CHECK(AssetManager::GetError("Assets/Models/Missing.gltf").find("not found") != std::string::npos);
@@ -691,7 +691,7 @@ TEST_SUITE("Assets")
 
 	TEST_CASE("HDR images decode to float RGBA and asset listing filters by extension")
 	{
-		BasaltTest::TempProject project("HdrAndListing");
+		BrecciaTest::TempProject project("HdrAndListing");
 		const float pixels[2 * 1 * 3] = { 4.0f, 2.0f, 1.0f, 0.5f, 0.25f, 0.125f };
 		std::string hdr;
 		stbi_write_hdr_to_func([](void* context, void* data, int size) { static_cast<std::string*>(context)->append(static_cast<const char*>(data), static_cast<size_t>(size)); }, &hdr, 2, 1, 3, pixels);
@@ -719,7 +719,7 @@ TEST_SUITE("Assets")
 	// read any file (absolute paths, '..' escapes, file: URIs).
 	TEST_CASE("glTF external files must stay inside the project")
 	{
-		BasaltTest::TempProject project("GltfSandbox");
+		BrecciaTest::TempProject project("GltfSandbox");
 		const std::string png = MakePng(0xFF0000FF);
 		project.WriteFile("Assets/Textures/ok.png", png);
 		project.WriteFile("Assets/Models/sub/ok.png", png);
@@ -754,7 +754,7 @@ TEST_SUITE("Assets")
 	// byte offset was odd. The glTF spec forbids that, so such files are rejected before validation.
 	TEST_CASE("glTF accessors must be aligned to their component size")
 	{
-		BasaltTest::TempProject project("GltfAlignment");
+		BrecciaTest::TempProject project("GltfAlignment");
 		const std::string buffer = MakeQuadBuffer() + std::string(4, '\0');
 		nlohmann::json gltf = MakeUntexturedGltfJson(EmbeddedBufferJson(buffer));
 		project.WriteFile("Assets/Models/Aligned.gltf", gltf.dump());
@@ -778,7 +778,7 @@ TEST_SUITE("Assets")
 	// bytes the uint16 indices (aligned within the buffer) were read through a misaligned pointer.
 	TEST_CASE("GLB chunks must be padded to 4 bytes")
 	{
-		BasaltTest::TempProject project("GlbPadding");
+		BrecciaTest::TempProject project("GlbPadding");
 		const std::string binary = MakeQuadBuffer();
 		// A JSON chunk this many bytes past a multiple of 4, with or without a binary chunk holding the quad.
 		auto glb = [&](size_t remainder, bool withBinary) {
@@ -808,7 +808,7 @@ TEST_SUITE("Assets")
 	// its buffer before checking the view's bounds.
 	TEST_CASE("glTF buffer views must lie inside their buffers")
 	{
-		BasaltTest::TempProject project("GltfViewBounds");
+		BrecciaTest::TempProject project("GltfViewBounds");
 		const std::string buffer = MakeQuadBuffer();
 		nlohmann::json gltf = MakeUntexturedGltfJson(EmbeddedBufferJson(buffer));
 		// A sparse override of the positions whose index view starts past the buffer.
@@ -825,11 +825,11 @@ TEST_SUITE("Assets")
 	// reading its file, so a 134-byte glTF claiming 10 GB made the importer request 10 GB.
 	TEST_CASE("glTF buffers may not declare more bytes than their data holds")
 	{
-		BasaltTest::TempProject project("GltfBufferLength");
+		BrecciaTest::TempProject project("GltfBufferLength");
 		const std::string buffer = MakeQuadBuffer();
 		project.WriteFile("Assets/Models/Quad.bin", buffer);
 		const std::string base64Prefix = "data:application/octet-stream;base64,";
-		const std::string dataUri = base64Prefix + BasaltTest::Base64(buffer.data(), buffer.size());
+		const std::string dataUri = base64Prefix + BrecciaTest::Base64(buffer.data(), buffer.size());
 		constexpr uint64_t Huge = 9999999999;
 		auto load = [&](const std::string& name, const nlohmann::json& gltf) {
 			project.WriteFile("Assets/Models/" + name, gltf.dump());
@@ -848,7 +848,7 @@ TEST_SUITE("Assets")
 			// 93 bytes encode to 124 characters without padding, so the bound is exact: 93 loads, 94 is rejected here
 			// rather than by cgltf's decoder.
 			const std::string padded = buffer + '\0';
-			const std::string unpaddedUri = base64Prefix + BasaltTest::Base64(padded.data(), padded.size());
+			const std::string unpaddedUri = base64Prefix + BrecciaTest::Base64(padded.data(), padded.size());
 			REQUIRE(unpaddedUri.back() != '=');
 			CHECK_MESSAGE(load("Exact.gltf", MakeUntexturedGltfJson({ { "byteLength", padded.size() }, { "uri", unpaddedUri } })), error("Exact.gltf"));
 			CHECK_FALSE(load("OneMore.gltf", MakeUntexturedGltfJson({ { "byteLength", padded.size() + 1 }, { "uri", unpaddedUri } })));
@@ -987,7 +987,7 @@ TEST_SUITE("Assets")
 	// gigabytes of vertices before reading nothing.
 	TEST_CASE("glTF accessors must fit their buffer views")
 	{
-		BasaltTest::TempProject project("GltfAccessorBounds");
+		BrecciaTest::TempProject project("GltfAccessorBounds");
 		const std::string buffer = MakeQuadBuffer();
 		const nlohmann::json quad = MakeUntexturedGltfJson(EmbeddedBufferJson(buffer));
 		auto load = [&](const std::string& name, const nlohmann::json& json) {
@@ -1024,7 +1024,7 @@ TEST_SUITE("Assets")
 	// is pinned, since a model at a limit takes seconds to import.
 	TEST_CASE("glTF geometry past the import limits is rejected before allocating")
 	{
-		BasaltTest::TempProject project("GltfGeometryLimits");
+		BrecciaTest::TempProject project("GltfGeometryLimits");
 		const std::string buffer = MakeQuadBuffer();
 		nlohmann::json gltf = MakeUntexturedGltfJson(EmbeddedBufferJson(buffer));
 		auto load = [&](const std::string& name, const nlohmann::json& json) {
@@ -1144,7 +1144,7 @@ TEST_SUITE("Assets")
 	// lenient; this is its clean equivalent.)
 	TEST_CASE("glTF primitives whose vertices are in too many triangles skip optimization")
 	{
-		BasaltTest::TempProject project("GltfValence");
+		BrecciaTest::TempProject project("GltfValence");
 		nlohmann::json gltf = MakeUntexturedGltfJson(EmbeddedBufferJson(MakeQuadBuffer()));
 		gltf["accessors"][2].erase("bufferView");
 		gltf["accessors"][2]["count"] = 46116;
@@ -1157,7 +1157,7 @@ TEST_SUITE("Assets")
 		CHECK(mesh->Submeshes[0].IndexCount == 46116);
 		CHECK(mesh->Submeshes[0].VertexCount == 1); // the vertex fetch remap still drops the unused vertices
 		CHECK(mesh->Submeshes[0].LODs.empty());
-		CHECK(BasaltTest::CountLogMessages(since, "Valence.gltf: mesh 'QuadMesh' primitive 0: the squares of its vertices' triangle counts sum past " + std::to_string(MeshOptimizer::MaxValenceCostPerIndex) + " per index") == 1);
+		CHECK(BrecciaTest::CountLogMessages(since, "Valence.gltf: mesh 'QuadMesh' primitive 0: the squares of its vertices' triangle counts sum past " + std::to_string(MeshOptimizer::MaxValenceCostPerIndex) + " per index") == 1);
 
 		// A primitive that repeats its accessors shares its geometry, which keeps its triangle order and gets no LODs, and
 		// says so in its own warning.
@@ -1175,9 +1175,9 @@ TEST_SUITE("Assets")
 		REQUIRE(repeatedMesh->Submeshes.size() == 2);
 		CHECK(repeatedMesh->Submeshes[1].BaseVertex == repeatedMesh->Submeshes[0].BaseVertex);
 		CHECK(repeatedMesh->Submeshes[1].LODs.empty());
-		CHECK(BasaltTest::CountLogMessages(repeatedSince, "Repeated.gltf: mesh 'QuadMesh' primitive 0: the squares") == 1);
-		CHECK(BasaltTest::CountLogMessages(repeatedSince, "Repeated.gltf: mesh 'QuadMesh' primitive 1: the squares") == 0);
-		CHECK(BasaltTest::CountLogMessages(repeatedSince, "Repeated.gltf: mesh 'QuadMesh' primitive 1: it shares mesh 'QuadMesh' primitive 0's geometry, which keeps its triangle order and gets no LODs (its vertices are in too many triangles)") == 1);
+		CHECK(BrecciaTest::CountLogMessages(repeatedSince, "Repeated.gltf: mesh 'QuadMesh' primitive 0: the squares") == 1);
+		CHECK(BrecciaTest::CountLogMessages(repeatedSince, "Repeated.gltf: mesh 'QuadMesh' primitive 1: the squares") == 0);
+		CHECK(BrecciaTest::CountLogMessages(repeatedSince, "Repeated.gltf: mesh 'QuadMesh' primitive 1: it shares mesh 'QuadMesh' primitive 0's geometry, which keeps its triangle order and gets no LODs (its vertices are in too many triangles)") == 1);
 
 		// Primitives draw on the model's allowance: two whose busy vertex fits it alone, but not twice, over the same indices
 		// (eight such primitives took 12 s in the fuzz build before). The second reads them through an accessor of its own:
@@ -1191,8 +1191,8 @@ TEST_SUITE("Assets")
 		const auto sharedSince = Log::GetHistory().GetTotalCount();
 		const auto shared = AssetManager::GetMesh("Assets/Models/Shared.gltf");
 		REQUIRE_MESSAGE(shared, AssetManager::GetError("Assets/Models/Shared.gltf"));
-		CHECK(BasaltTest::CountLogMessages(sharedSince, "Shared.gltf: mesh 'QuadMesh' primitive 0: the squares") == 0);
-		CHECK(BasaltTest::CountLogMessages(sharedSince, "Shared.gltf: mesh 'QuadMesh' primitive 1: the squares") == 1);
+		CHECK(BrecciaTest::CountLogMessages(sharedSince, "Shared.gltf: mesh 'QuadMesh' primitive 0: the squares") == 0);
+		CHECK(BrecciaTest::CountLogMessages(sharedSince, "Shared.gltf: mesh 'QuadMesh' primitive 1: the squares") == 1);
 		AssetManager::Clear();
 	}
 
@@ -1201,8 +1201,8 @@ TEST_SUITE("Assets")
 	// took 2.4 s in the fuzz build. Later ones now draw the first one's ranges with their own material.
 	TEST_CASE("glTF primitives that read the same accessors share one submesh's geometry")
 	{
-		BasaltTest::TempDirectory directory("GltfSharedPrimitives");
-		const auto spherePath = BasaltTest::WriteSphereGltf(directory.GetPath());
+		BrecciaTest::TempDirectory directory("GltfSharedPrimitives");
+		const auto spherePath = BrecciaTest::WriteSphereGltf(directory.GetPath());
 		nlohmann::json gltf = nlohmann::json::parse(*FileSystem::ReadTextFile(spherePath));
 		gltf["materials"] = { { { "name", "First" } }, { { "name", "Second" } }, { { "name", "Glass" }, { "alphaMode", "BLEND" } } };
 		nlohmann::json& primitives = gltf["meshes"][0]["primitives"];
@@ -1231,7 +1231,7 @@ TEST_SUITE("Assets")
 		const auto source = MeshImporter::LoadGltf(path, "Shared.gltf", error);
 		REQUIRE_MESSAGE(source, error);
 		// Sharing fully optimized geometry is not worth a word.
-		CHECK(BasaltTest::CountLogMessages(since, "Shared.gltf: mesh") == 0);
+		CHECK(BrecciaTest::CountLogMessages(since, "Shared.gltf: mesh") == 0);
 
 		REQUIRE(source->Meshes.size() == 2);
 		REQUIRE(source->Meshes[0].Submeshes.size() == 5);
@@ -1301,7 +1301,7 @@ TEST_SUITE("Assets")
 	// What the first of the primitives reading the same accessors met, the others meet too, in the same order.
 	TEST_CASE("glTF primitives that read the same accessors are skipped and checked like the first")
 	{
-		BasaltTest::TempProject project("GltfSharedPrimitiveChecks");
+		BrecciaTest::TempProject project("GltfSharedPrimitiveChecks");
 		nlohmann::json gltf = MakeUntexturedGltfJson(EmbeddedBufferJson(MakeQuadBuffer()));
 		gltf["materials"].push_back({ { "name", "SecondUV" }, { "pbrMetallicRoughness", { { "baseColorTexture", { { "index", 0 }, { "texCoord", 1 } } } } } });
 		gltf["textures"] = { { { "source", 0 } } };
@@ -1337,7 +1337,7 @@ TEST_SUITE("Assets")
 		auto since = Log::GetHistory().GetTotalCount();
 		CHECK_FALSE(load("Invalid.gltf", invalid));
 		for (const char* primitive : { "0", "1" })
-			CHECK(BasaltTest::CountLogMessages(since, std::string("Assets/Invalid.gltf: mesh 'QuadMesh' primitive ") + primitive + ": skipped, its index data is invalid (not whole triangles, or an index past its vertices)") == 1);
+			CHECK(BrecciaTest::CountLogMessages(since, std::string("Assets/Invalid.gltf: mesh 'QuadMesh' primitive ") + primitive + ": skipped, its index data is invalid (not whole triangles, or an index past its vertices)") == 1);
 
 		// A skip before them (unreadable positions) comes first, so the material is never checked.
 		nlohmann::json unreadable = gltf;
@@ -1348,7 +1348,7 @@ TEST_SUITE("Assets")
 		CHECK_FALSE(load("Unreadable.gltf", unreadable));
 		CHECK_MESSAGE(error.find("contains no triangle geometry") != std::string::npos, error);
 		for (const char* primitive : { "0", "1" })
-			CHECK(BasaltTest::CountLogMessages(since, std::string("Assets/Unreadable.gltf: mesh 'QuadMesh' primitive ") + primitive + ": skipped, its positions are unreadable") == 1);
+			CHECK(BrecciaTest::CountLogMessages(since, std::string("Assets/Unreadable.gltf: mesh 'QuadMesh' primitive ") + primitive + ": skipped, its positions are unreadable") == 1);
 	}
 
 	TEST_CASE("ShareSubmesh copies everything a submesh draws with, apart from its material")
@@ -1413,7 +1413,7 @@ TEST_SUITE("Assets")
 
 	TEST_CASE("glTF primitives with non-finite positions or empty indices are reported")
 	{
-		BasaltTest::TempProject project("GltfPrimitiveWarnings");
+		BrecciaTest::TempProject project("GltfPrimitiveWarnings");
 		std::string buffer = MakeQuadBuffer();
 		const float nan = std::numeric_limits<float>::quiet_NaN();
 		std::memcpy(buffer.data() + 4, &nan, sizeof(nan)); // the first position's y
@@ -1423,7 +1423,7 @@ TEST_SUITE("Assets")
 		const auto nonFinite = AssetManager::GetMesh("Assets/Models/NaN.gltf");
 		REQUIRE_MESSAGE(nonFinite, AssetManager::GetError("Assets/Models/NaN.gltf"));
 		CHECK(nonFinite->Submeshes[0].LODs.empty());
-		CHECK(BasaltTest::CountLogMessages(since, "NaN.gltf: mesh 'QuadMesh' primitive 0: optimization and LODs skipped for non-finite vertex positions") == 1);
+		CHECK(BrecciaTest::CountLogMessages(since, "NaN.gltf: mesh 'QuadMesh' primitive 0: optimization and LODs skipped for non-finite vertex positions") == 1);
 		// A primitive that repeats its accessors shares that geometry, and says so.
 		nlohmann::json repeated = MakeUntexturedGltfJson(EmbeddedBufferJson(buffer));
 		repeated["materials"].push_back({ { "name", "Other" } });
@@ -1437,8 +1437,8 @@ TEST_SUITE("Assets")
 		REQUIRE(repeatedNonFinite->Submeshes.size() == 2);
 		CHECK(repeatedNonFinite->Submeshes[1].BaseVertex == repeatedNonFinite->Submeshes[0].BaseVertex);
 		CHECK(repeatedNonFinite->Submeshes[1].LODs.empty());
-		CHECK(BasaltTest::CountLogMessages(since, "RepeatedNaN.gltf: mesh 'QuadMesh' primitive 1: optimization and LODs skipped") == 0);
-		CHECK(BasaltTest::CountLogMessages(since, "RepeatedNaN.gltf: mesh 'QuadMesh' primitive 1: it shares mesh 'QuadMesh' primitive 0's geometry, which had optimization and LODs skipped (non-finite vertex positions)") == 1);
+		CHECK(BrecciaTest::CountLogMessages(since, "RepeatedNaN.gltf: mesh 'QuadMesh' primitive 1: optimization and LODs skipped") == 0);
+		CHECK(BrecciaTest::CountLogMessages(since, "RepeatedNaN.gltf: mesh 'QuadMesh' primitive 1: it shares mesh 'QuadMesh' primitive 0's geometry, which had optimization and LODs skipped (non-finite vertex positions)") == 1);
 
 		// cgltf accepts an index accessor without elements; that primitive is skipped and the next one still loads.
 		nlohmann::json empty = MakeUntexturedGltfJson(EmbeddedBufferJson(MakeQuadBuffer()));
@@ -1451,7 +1451,7 @@ TEST_SUITE("Assets")
 		const auto skipped = AssetManager::GetMesh("Assets/Models/Empty.gltf");
 		REQUIRE_MESSAGE(skipped, AssetManager::GetError("Assets/Models/Empty.gltf"));
 		CHECK(skipped->Submeshes.size() == 1);
-		CHECK(BasaltTest::CountLogMessages(since, "Empty.gltf: mesh 'QuadMesh' primitive 0: skipped, its index accessor is empty") == 1);
+		CHECK(BrecciaTest::CountLogMessages(since, "Empty.gltf: mesh 'QuadMesh' primitive 0: skipped, its index accessor is empty") == 1);
 		AssetManager::Clear();
 	}
 
@@ -2039,7 +2039,7 @@ TEST_SUITE("Assets")
 
 	TEST_CASE("The thumbnail cache stores previews per source version and prunes removed sources")
 	{
-		BasaltTest::TempDirectory project("ThumbnailCache");
+		BrecciaTest::TempDirectory project("ThumbnailCache");
 		ThumbnailCache cache(project.GetPath());
 		CHECK(cache.GetDirectory() == project.GetPath() / "Cache" / "Thumbnails");
 		std::string error;
@@ -2097,7 +2097,7 @@ TEST_SUITE("Assets")
 
 	TEST_CASE("Thumbnail keys cover the files a preview also reads")
 	{
-		BasaltTest::TempDirectory project("ThumbnailDependencies");
+		BrecciaTest::TempDirectory project("ThumbnailDependencies");
 		ThumbnailCache cache(project.GetPath());
 		const std::filesystem::path& root = project.GetPath();
 		REQUIRE(FileSystem::WriteTextFile(root / "Assets/Models/Ship.gltf", R"({"asset": {"version": "2.0"},
@@ -2130,7 +2130,7 @@ TEST_SUITE("Assets")
 
 	TEST_CASE("Thumbnail cache entries of non-ASCII files survive pruning")
 	{
-		BasaltTest::TempDirectory project("ThumbnailUnicode");
+		BrecciaTest::TempDirectory project("ThumbnailUnicode");
 		ThumbnailCache cache(project.GetPath());
 		const std::string name = "Assets/\xC3\x84rger.png";
 		REQUIRE(FileSystem::WriteTextFile(project.GetPath() / FileSystem::PathFromUtf8(name), "x"));
@@ -2144,23 +2144,23 @@ TEST_SUITE("Assets")
 
 	TEST_CASE("New projects keep editor caches out of version control")
 	{
-		BasaltTest::TempProject temp("ProjectGitignore");
+		BrecciaTest::TempProject temp("ProjectGitignore");
 		REQUIRE(temp.IsValid());
 		CHECK(FileSystem::ReadTextFile(temp.GetDirectory() / ".gitignore").value_or("") == "Cache/\n");
 
 		// An existing ignore file (a fresh repository's) keeps its rules and gains the cache.
-		BasaltTest::TempDirectory directory("ProjectGitignoreExisting");
+		BrecciaTest::TempDirectory directory("ProjectGitignoreExisting");
 		REQUIRE(FileSystem::WriteTextFile(directory.GetPath() / ".gitignore", "*.tmp"));
 		std::string error;
 		REQUIRE_MESSAGE(Project::Create(directory.GetPath(), "Existing", error), error);
 		CHECK(FileSystem::ReadTextFile(directory.GetPath() / ".gitignore").value_or("") == "*.tmp\nCache/\n");
 		// Already ignored: nothing is added.
-		BasaltTest::TempDirectory ignored("ProjectGitignoreIgnored");
+		BrecciaTest::TempDirectory ignored("ProjectGitignoreIgnored");
 		REQUIRE(FileSystem::WriteTextFile(ignored.GetPath() / ".gitignore", "Cache/\nSaved/\n"));
 		REQUIRE(Project::Create(ignored.GetPath(), "Ignored", error));
 		CHECK(FileSystem::ReadTextFile(ignored.GetPath() / ".gitignore").value_or("") == "Cache/\nSaved/\n");
 		// Only a rule for the folder itself counts: "Cache/Thumbnails" leaves the rest of Cache/ tracked.
-		BasaltTest::TempDirectory partial("ProjectGitignorePartial");
+		BrecciaTest::TempDirectory partial("ProjectGitignorePartial");
 		REQUIRE(FileSystem::WriteTextFile(partial.GetPath() / ".gitignore", "Cache/Thumbnails\r\n"));
 		REQUIRE(Project::Create(partial.GetPath(), "Partial", error));
 		CHECK(FileSystem::ReadTextFile(partial.GetPath() / ".gitignore").value_or("") == "Cache/Thumbnails\r\nCache/\n");

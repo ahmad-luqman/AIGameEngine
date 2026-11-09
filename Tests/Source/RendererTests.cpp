@@ -1,19 +1,19 @@
 #include <doctest/doctest.h>
 
-#include <Basalt/Core/FileSystem.h>
-#include <Basalt/Core/Log.h>
-#include <Basalt/Renderer/DebugDraw.h>
-#include <Basalt/Renderer/DrawBatch.h>
-#include <Basalt/Renderer/DeviceSelection.h>
-#include <Basalt/Renderer/DynamicResolution.h>
-#include <Basalt/Renderer/GpuProfiler.h>
-#include <Basalt/Renderer/PlayStatistics.h>
-#include <Basalt/Renderer/RenderMath.h>
-#include <Basalt/Renderer/RenderUtils.h>
-#include <Basalt/Renderer/SceneLights.h>
-#include <Basalt/Renderer/ValidationLayerManifest.h>
-#include <Basalt/Scene/Entity.h>
-#include <Basalt/Scene/Scene.h>
+#include <Breccia/Core/FileSystem.h>
+#include <Breccia/Core/Log.h>
+#include <Breccia/Renderer/DebugDraw.h>
+#include <Breccia/Renderer/DrawBatch.h>
+#include <Breccia/Renderer/DeviceSelection.h>
+#include <Breccia/Renderer/DynamicResolution.h>
+#include <Breccia/Renderer/GpuProfiler.h>
+#include <Breccia/Renderer/PlayStatistics.h>
+#include <Breccia/Renderer/RenderMath.h>
+#include <Breccia/Renderer/RenderUtils.h>
+#include <Breccia/Renderer/SceneLights.h>
+#include <Breccia/Renderer/ValidationLayerManifest.h>
+#include <Breccia/Scene/Entity.h>
+#include <Breccia/Scene/Scene.h>
 
 #include "TestUtils.h"
 
@@ -28,7 +28,7 @@
 #include <limits>
 #include <vector>
 
-using namespace Basalt;
+using namespace Breccia;
 
 TEST_SUITE("DeviceSelection")
 {
@@ -649,7 +649,7 @@ TEST_SUITE("GpuProfiler")
 		RecordFrame(profiler, 1);
 		CHECK_FALSE(profiler.IsStalled());
 		CHECK(profiler.GetConsecutiveDrops() == 0);
-		CHECK(BasaltTest::CountLogMessages(since, "no GPU timer results for") == 1);
+		CHECK(BrecciaTest::CountLogMessages(since, "no GPU timer results for") == 1);
 	}
 
 	TEST_CASE("Profilers stay within the device's timer queries and give them back")
@@ -836,7 +836,7 @@ TEST_SUITE("SceneRenderer")
 		// Inject a failed frame without allocating a GPU. The statistics belong to this non-const
 		// renderer; changing them here exercises the same public capture path as an allocation failure.
 		const_cast<SceneRendererStatistics&>(renderer.GetStatistics()).Failed = true;
-		BasaltTest::TempDirectory temporary("FailedScreenshot");
+		BrecciaTest::TempDirectory temporary("FailedScreenshot");
 		const auto path = temporary.GetPath() / "capture.png";
 		REQUIRE(FileSystem::WriteTextFile(path, "previous image"));
 		std::string error;
@@ -873,10 +873,10 @@ TEST_SUITE("SceneRenderer")
 		SceneRenderer renderer(nullptr);
 		renderer.SetDynamicResolution({ true, std::numeric_limits<float>::quiet_NaN(), 9.0f });
 		CHECK(renderer.GetDynamicResolution() == DynamicResolutionSettings{ true, 60.0f, MaxRenderScale });
-		CHECK(BasaltTest::CountLogMessages(since, "dynamic resolution settings out of range") == 1);
+		CHECK(BrecciaTest::CountLogMessages(since, "dynamic resolution settings out of range") == 1);
 		// Valid settings pass through silently.
 		renderer.SetDynamicResolution({ true, 30.0f, 0.5f });
-		CHECK(BasaltTest::CountLogMessages(since, "dynamic resolution settings out of range") == 1);
+		CHECK(BrecciaTest::CountLogMessages(since, "dynamic resolution settings out of range") == 1);
 	}
 
 	TEST_CASE("A debug line stash lets a second view render without taking the frame's lines")
@@ -926,8 +926,8 @@ TEST_SUITE("ValidationLayerManifest")
 	TEST_CASE("A layer manifest naming its library without a path gets a copy with the absolute path")
 	{
 		using ValidationLayerManifest::CopyOutcome;
-		BasaltTest::TempDirectory prefix("LayerPrefix");
-		BasaltTest::TempDirectory output("LayerOutput");
+		BrecciaTest::TempDirectory prefix("LayerPrefix");
+		BrecciaTest::TempDirectory output("LayerOutput");
 		const std::filesystem::path manifest = prefix.GetPath() / "share" / "vulkan" / "explicit_layer.d" / ValidationLayerManifest::FileName;
 		// No manifest: nothing to do, and nothing to say.
 		ValidationLayerManifest::CopyResult result = ValidationLayerManifest::WriteAbsoluteCopy(prefix.GetPath(), output.GetPath());
@@ -959,7 +959,7 @@ TEST_SUITE("ValidationLayerManifest")
 		REQUIRE(FileSystem::WriteTextFile(layers / ValidationLayerManifest::FileName, "stale"));
 		CHECK(ValidationLayerManifest::WriteAbsoluteCopy(prefix.GetPath(), layers).Outcome == CopyOutcome::Written);
 		CHECK(nlohmann::json::parse(*FileSystem::ReadTextFile(layers / ValidationLayerManifest::FileName)) == copy);
-		CHECK_FALSE(BasaltTest::HasTempFiles(layers));
+		CHECK_FALSE(BrecciaTest::HasTempFiles(layers));
 
 		// A path that is absolute, or names a folder, works as installed.
 		MakeLayerPrefix(prefix.GetPath(), FileSystem::PathToUtf8(library), true);
@@ -988,10 +988,10 @@ TEST_SUITE("ValidationLayerManifest")
 
 	TEST_CASE("The first Homebrew prefix with a usable layer gets the copy, in a folder of its own")
 	{
-		BasaltTest::TempDirectory broken("LayerBroken");
-		BasaltTest::TempDirectory missing("LayerMissing");
-		BasaltTest::TempDirectory good("LayerGood");
-		BasaltTest::TempDirectory output("LayerFirstOutput");
+		BrecciaTest::TempDirectory broken("LayerBroken");
+		BrecciaTest::TempDirectory missing("LayerMissing");
+		BrecciaTest::TempDirectory good("LayerGood");
+		BrecciaTest::TempDirectory output("LayerFirstOutput");
 		REQUIRE(FileSystem::WriteTextFile(broken.GetPath() / "share" / "vulkan" / "explicit_layer.d" / ValidationLayerManifest::FileName, "{ not json"));
 		MakeLayerPrefix(good.GetPath(), "libVkLayer_khronos_validation.dylib", true);
 		std::vector<std::string> messages;

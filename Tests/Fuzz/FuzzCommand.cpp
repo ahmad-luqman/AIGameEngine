@@ -4,11 +4,11 @@
 // for minutes.
 #include "FuzzCommon.h"
 
-#include <Basalt/Automation/AutomationSession.h>
-#include <Basalt/Automation/CommandRegistry.h>
-#include <Basalt/Core/Input.h>
-#include <Basalt/Core/JsonUtils.h>
-#include <Basalt/Renderer/GraphicsSettings.h>
+#include <Breccia/Automation/AutomationSession.h>
+#include <Breccia/Automation/CommandRegistry.h>
+#include <Breccia/Core/Input.h>
+#include <Breccia/Core/JsonUtils.h>
+#include <Breccia/Renderer/GraphicsSettings.h>
 
 #include <set>
 #include <string>
@@ -46,18 +46,18 @@ namespace {
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 {
-	BasaltFuzz::Init();
-	static const Basalt::CommandRegistry registry;
-	nlohmann::json request = Basalt::ParseJson(BasaltFuzz::AsText(data, size));
+	BrecciaFuzz::Init();
+	static const Breccia::CommandRegistry registry;
+	nlohmann::json request = Breccia::ParseJson(BrecciaFuzz::AsText(data, size));
 	if (request.is_discarded())
 		return 0;
 	// Exercise the project/Lua graphics parser without allowing project.set to write files.
 	if (request.is_object() && request.contains("params") && request["params"].is_object() && request["params"].contains("graphics"))
 	{
-		Basalt::GraphicsSettings graphics;
+		Breccia::GraphicsSettings graphics;
 		std::string error;
-		if (Basalt::PatchGraphicsSettings(request["params"]["graphics"], graphics, error))
-			Basalt::SerializeGraphicsSettings(graphics);
+		if (Breccia::PatchGraphicsSettings(request["params"]["graphics"], graphics, error))
+			Breccia::SerializeGraphicsSettings(graphics);
 	}
 	if (request.is_array())
 	{
@@ -72,10 +72,10 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 		return 0;
 	}
 
-	Basalt::AutomationSession session;
+	Breccia::AutomationSession session;
 	registry.HandleRequest(session, request);
 	session.StopPlay();
-	Basalt::Input::Reset();
-	Basalt::Input::ForgetInjectedGamepads();
+	Breccia::Input::Reset();
+	Breccia::Input::ForgetInjectedGamepads();
 	return 0;
 }

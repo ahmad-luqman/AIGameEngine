@@ -306,7 +306,7 @@
 			"Parent": 204386022199232259
 		}
 	],
-	"Format": "BasaltScene",
+	"Format": "BrecciaScene",
 	"Name": "Untitled",
 	"Physics": {
 		"Gravity": [

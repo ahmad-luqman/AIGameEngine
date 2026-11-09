@@ -1,16 +1,16 @@
 #include <doctest/doctest.h>
 
-#include <Basalt/Animation/PropertyAnimation.h>
+#include <Breccia/Animation/PropertyAnimation.h>
 
 #include "AnimationTestUtils.h"
 #include "TestUtils.h"
 
-#include <Basalt/Animation/AnimatedModel.h>
-#include <Basalt/Physics/PhysicsWorld.h>
-#include <Basalt/Physics/RagdollRules.h>
-#include <Basalt/Scene/ComponentRegistry.h>
-#include <Basalt/Scene/SceneSerializer.h>
-#include <Basalt/Scene/SceneEventListener.h>
+#include <Breccia/Animation/AnimatedModel.h>
+#include <Breccia/Physics/PhysicsWorld.h>
+#include <Breccia/Physics/RagdollRules.h>
+#include <Breccia/Scene/ComponentRegistry.h>
+#include <Breccia/Scene/SceneSerializer.h>
+#include <Breccia/Scene/SceneEventListener.h>
 
 #include <glm/gtc/constants.hpp>
 
@@ -19,8 +19,8 @@
 #include <limits>
 #include <optional>
 
-using namespace Basalt;
-using namespace BasaltTest;
+using namespace Breccia;
+using namespace BrecciaTest;
 using namespace AnimationTest;
 using json = nlohmann::json;
 

@@ -3,15 +3,15 @@
 
 #include "GPUFixture.h"
 
-#include <Basalt/Core/Log.h>
-#include <Basalt/Renderer/Fsr1Settings.h>
-#include <Basalt/Renderer/Fsr1Upscaler.h>
-#include <Basalt/Renderer/GraphicsDevice.h>
-#include <Basalt/Renderer/SceneRenderer.h>
-#include <Basalt/Renderer/ShaderUtils.h>
-#include <Basalt/Renderer/VulkanLoader.h>
-#include <Basalt/Scene/Scene.h>
-#include <Basalt/Scene/Entity.h>
+#include <Breccia/Core/Log.h>
+#include <Breccia/Renderer/Fsr1Settings.h>
+#include <Breccia/Renderer/Fsr1Upscaler.h>
+#include <Breccia/Renderer/GraphicsDevice.h>
+#include <Breccia/Renderer/SceneRenderer.h>
+#include <Breccia/Renderer/ShaderUtils.h>
+#include <Breccia/Renderer/VulkanLoader.h>
+#include <Breccia/Scene/Scene.h>
+#include <Breccia/Scene/Entity.h>
 
 #include <glm/gtc/packing.hpp>
 
@@ -20,7 +20,7 @@
 #include <limits>
 #include <vector>
 
-using namespace Basalt;
+using namespace Breccia;
 
 TEST_CASE("FSR 1 clamps every tap to the active area including degenerate dimensions")
 {

@@ -1,8 +1,8 @@
 {
-	"Format": "BasaltProject",
+	"Format": "BrecciaProject",
 	"Name": "FeatureTest",
 	"Version": "1.2.3",
-	"Company": "Basalt Tests",
+	"Company": "Breccia Tests",
 	"Icon": "Assets/Textures/Icon.png",
 	"StartScene": "Assets/Scenes/FeatureTest.bscene",
 	"WindowWidth": 1280,

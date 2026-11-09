@@ -1,8 +1,8 @@
 #pragma once
 
-#include <Basalt/Automation/AutomationSession.h>
-#include <Basalt/Automation/CommandRegistry.h>
-#include <Basalt/Core/JsonUtils.h>
+#include <Breccia/Automation/AutomationSession.h>
+#include <Breccia/Automation/CommandRegistry.h>
+#include <Breccia/Core/JsonUtils.h>
 
 #include <doctest/doctest.h>
 #include <nlohmann/json.hpp>
@@ -22,10 +22,10 @@
 #include <cstring>
 #include <string>
 
-namespace BasaltTest {
+namespace BrecciaTest {
 
 	// Runs one command and returns its result; fails the test with the error message otherwise.
-	inline nlohmann::json Run(const Basalt::CommandRegistry& registry, Basalt::AutomationSession& session, const std::string& command, const nlohmann::json& params = nlohmann::json::object())
+	inline nlohmann::json Run(const Breccia::CommandRegistry& registry, Breccia::AutomationSession& session, const std::string& command, const nlohmann::json& params = nlohmann::json::object())
 	{
 		const nlohmann::json response = registry.HandleRequest(session, { { "id", 7 }, { "command", command }, { "params", params } });
 		INFO(command << ": " << response.dump());
@@ -35,7 +35,7 @@ namespace BasaltTest {
 	}
 
 	// Runs one command that must fail and returns its error.
-	inline std::string RunError(const Basalt::CommandRegistry& registry, Basalt::AutomationSession& session, const std::string& command, const nlohmann::json& params = nlohmann::json::object())
+	inline std::string RunError(const Breccia::CommandRegistry& registry, Breccia::AutomationSession& session, const std::string& command, const nlohmann::json& params = nlohmann::json::object())
 	{
 		const nlohmann::json response = registry.HandleRequest(session, { { "command", command }, { "params", params } });
 		INFO(command << ": " << response.dump());
@@ -128,7 +128,7 @@ namespace BasaltTest {
 				const std::string line = ReadLine();
 				if (line.empty())
 					return nullptr;
-				nlohmann::json frame = Basalt::ParseJson(line);
+				nlohmann::json frame = Breccia::ParseJson(line);
 				if (predicate(frame))
 					return frame;
 			}

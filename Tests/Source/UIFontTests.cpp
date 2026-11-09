@@ -1,10 +1,10 @@
 #include <doctest/doctest.h>
 
-#include <Basalt/Core/FileSystem.h>
-#include <Basalt/Core/Log.h>
-#include <Basalt/Project/Project.h>
-#include <Basalt/UI/TrueTypeValidator.h>
-#include <Basalt/UI/UIFonts.h>
+#include <Breccia/Core/FileSystem.h>
+#include <Breccia/Core/Log.h>
+#include <Breccia/Project/Project.h>
+#include <Breccia/UI/TrueTypeValidator.h>
+#include <Breccia/UI/UIFonts.h>
 
 #include "TestUtils.h"
 #include "UITestUtils.h"
@@ -27,8 +27,8 @@
 #include <string>
 #include <vector>
 
-using namespace Basalt;
-using namespace BasaltTest;
+using namespace Breccia;
+using namespace BrecciaTest;
 
 namespace {
 
@@ -630,7 +630,7 @@ TEST_SUITE("UIFonts")
 		CHECK_FALSE(UIFonts::LoadFromMemory(std::vector<uint8_t>(200, 0), "Junk", error));
 		CHECK(Contains(error, "not a TrueType font"));
 
-		BasaltTest::TempProject project("UIFonts");
+		BrecciaTest::TempProject project("UIFonts");
 		const std::vector<uint8_t> data = ReadKarla();
 		const std::filesystem::path fonts = project.GetDirectory() / "Assets/Fonts";
 		REQUIRE(FileSystem::WriteBinaryFile(fonts / "Karla.ttf", data.data(), data.size()));
@@ -693,7 +693,7 @@ TEST_SUITE("UIFonts")
 
 	TEST_CASE("UIFonts forgets a destroyed context's fonts, even without Clear")
 	{
-		BasaltTest::TempProject project("UIFontsContexts");
+		BrecciaTest::TempProject project("UIFontsContexts");
 		const std::vector<uint8_t> data = ReadKarla();
 		REQUIRE(FileSystem::WriteBinaryFile(project.GetDirectory() / "Assets/Fonts/Karla.ttf", data.data(), data.size()));
 		{

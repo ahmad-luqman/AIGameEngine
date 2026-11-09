@@ -1,0 +1,109 @@
+#pragma once
+
+#include "Breccia/Core/Base.h"
+
+#include <nvrhi/nvrhi.h>
+
+#include <functional>
+#include <string>
+#include <vector>
+
+namespace Breccia {
+
+	class Window;
+
+	struct GraphicsDeviceSpecification
+	{
+		std::string ApplicationName = "Breccia";
+		bool EnableValidation = false;
+		bool VSync = true;
+		uint32_t MaxFramesInFlight = 2;
+		uint32_t SwapchainImageCount = 3;
+		// Which GPU to use (--gpu); empty picks automatically. See SelectPhysicalDevice for the forms.
+		std::string DeviceSelector;
+	};
+
+	// Owns the Vulkan instance, device and swapchain and exposes them through nvrhi.
+	// Frame protocol: BeginFrame() -> record/submit nvrhi command lists -> Present().
+	// An offscreen device has no window or swapchain: it renders into device-owned images that
+	// Present() only captures, so GPU tests run without a display server (CI, cloud GPUs).
+	class GraphicsDevice
+	{
+	public:
+		// Returns nullptr (after logging the reason) if no suitable Vulkan device is available.
+		// VulkanLoader::Load() must have succeeded before the window was created.
+		static Scope<GraphicsDevice> Create(Window& window, const GraphicsDeviceSpecification& specification);
+		// Same, without a window: back buffers are width x height RGBA8 images that are never presented.
+		static Scope<GraphicsDevice> CreateOffscreen(uint32_t width, uint32_t height, const GraphicsDeviceSpecification& specification);
+		~GraphicsDevice();
+
+		GraphicsDevice(const GraphicsDevice&) = delete;
+		GraphicsDevice& operator=(const GraphicsDevice&) = delete;
+
+		// Acquires the next swapchain image. Returns false when nothing should be rendered this frame
+		// (window minimized or swapchain unavailable); Present() must not be called in that case.
+		bool BeginFrame();
+		void Present();
+		void WaitIdle();
+
+		void SetVSync(bool enabled);
+
+		// Reads the back buffer back right before the next Present (after all UI is drawn) and calls the
+		// callback with RGBA8 pixels, top row first. Waits for the GPU; meant for tools and automation.
+		using CaptureCallback = std::function<void(const std::vector<uint8_t>& rgba, uint32_t width, uint32_t height)>;
+		void RequestBackBufferCapture(CaptureCallback callback) { m_PendingCapture = std::move(callback); }
+		bool IsVSync() const { return m_Specification.VSync; }
+		bool IsOffscreen() const { return m_Window == nullptr; }
+
+		nvrhi::IDevice* GetDevice() const { return m_NvrhiDevice; }
+		nvrhi::ITexture* GetCurrentBackBuffer() const;
+		nvrhi::IFramebuffer* GetCurrentFramebuffer() const;
+		nvrhi::Format GetBackBufferFormat() const { return m_BackBufferFormat; }
+		uint32_t GetBackBufferWidth() const { return m_BackBufferWidth; }
+		uint32_t GetBackBufferHeight() const { return m_BackBufferHeight; }
+		uint32_t GetBackBufferCount() const;
+		uint32_t GetCurrentBackBufferIndex() const { return m_SwapchainIndex; }
+
+		const std::string& GetAdapterName() const { return m_AdapterName; }
+		uint64_t GetFrameIndex() const { return m_FrameIndex; }
+		// Number of errors reported by the Vulkan validation layers or nvrhi since creation.
+		uint32_t GetValidationErrorCount() const;
+		// True when the Khronos validation layer is active (it may be requested but unavailable).
+		bool IsValidationActive() const { return m_ValidationActive; }
+		// True when the graphics queue can time GPU work (timer queries: GpuProfiler, dynamic resolution).
+		bool SupportsTimerQueries() const { return m_TimerQueriesSupported; }
+
+	private:
+		struct Impl;
+
+		explicit GraphicsDevice(const GraphicsDeviceSpecification& specification);
+
+		// `window` is null for an offscreen device, which then uses width x height.
+		bool Initialize(Window* window, uint32_t width, uint32_t height);
+		bool CreateSwapchain();
+		bool CreateOffscreenTargets(uint32_t width, uint32_t height);
+		void DestroySwapchain();
+		bool RecreateSwapchainIfNeeded();
+
+	private:
+		GraphicsDeviceSpecification m_Specification;
+		Scope<Impl> m_Impl;
+		Window* m_Window = nullptr;
+
+		nvrhi::DeviceHandle m_NvrhiDevice;
+		nvrhi::Format m_BackBufferFormat = nvrhi::Format::UNKNOWN;
+		uint32_t m_BackBufferWidth = 0;
+		uint32_t m_BackBufferHeight = 0;
+		uint32_t m_RequestedWidth = 0;
+		uint32_t m_RequestedHeight = 0;
+		uint32_t m_SwapchainIndex = 0;
+		uint64_t m_FrameIndex = 0;
+		std::string m_AdapterName;
+		bool m_SwapchainDirty = false;
+		bool m_WarnedVSyncFallback = false;
+		bool m_ValidationActive = false;
+		bool m_TimerQueriesSupported = false;
+		CaptureCallback m_PendingCapture;
+	};
+
+}

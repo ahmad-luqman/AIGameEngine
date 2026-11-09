@@ -1,19 +1,19 @@
 // Regression tests for defects found in code review. Each test names the behaviour it protects.
 #include <doctest/doctest.h>
 
-#include <Basalt/Math/Math.h>
-#include <Basalt/Physics/PhysicsWorld.h>
-#include <Basalt/Scene/ComponentRegistry.h>
-#include <Basalt/Scene/Entity.h>
-#include <Basalt/Scene/Scene.h>
-#include <Basalt/Scene/SceneSerializer.h>
-#include <Basalt/Scripting/ScriptEngine.h>
+#include <Breccia/Math/Math.h>
+#include <Breccia/Physics/PhysicsWorld.h>
+#include <Breccia/Scene/ComponentRegistry.h>
+#include <Breccia/Scene/Entity.h>
+#include <Breccia/Scene/Scene.h>
+#include <Breccia/Scene/SceneSerializer.h>
+#include <Breccia/Scripting/ScriptEngine.h>
 
 #include "TestUtils.h"
 
 #include <glm/gtc/epsilon.hpp>
 
-using namespace Basalt;
+using namespace Breccia;
 
 namespace {
 
@@ -47,7 +47,7 @@ TEST_SUITE("Regressions")
 {
 	TEST_CASE("Destroying entities from OnDestroy neither recurses nor touches destroyed entities")
 	{
-		BasaltTest::TempProject project("RegressionOnDestroy");
+		BrecciaTest::TempProject project("RegressionOnDestroy");
 		const std::string killParent = project.WriteFile("Assets/Scripts/KillParent.lua", R"(
 			local K = {}
 			function K:OnDestroy()
@@ -79,7 +79,7 @@ TEST_SUITE("Regressions")
 
 	TEST_CASE("Removing a ScriptComponent stops the script and runs OnDestroy")
 	{
-		BasaltTest::TempProject project("RegressionRemoveScript");
+		BrecciaTest::TempProject project("RegressionRemoveScript");
 		const std::string script = project.WriteFile("Assets/Scripts/Ticker.lua", R"(
 			local T = {}
 			function T:OnUpdate(dt) Ticks = (Ticks or 0) + 1 end
@@ -114,7 +114,7 @@ TEST_SUITE("Regressions")
 
 	TEST_CASE("Resting (sleeping) bodies keep their contacts: no spurious End/Exit")
 	{
-		BasaltTest::TempProject project("RegressionSleep");
+		BrecciaTest::TempProject project("RegressionSleep");
 		const std::string counter = project.WriteFile("Assets/Scripts/Counter.lua", s_ContactCounter);
 
 		Scene scene;
@@ -154,7 +154,7 @@ TEST_SUITE("Regressions")
 
 	TEST_CASE("Rebuilding or destroying a body keeps contact begin/end balanced")
 	{
-		BasaltTest::TempProject project("RegressionRebuild");
+		BrecciaTest::TempProject project("RegressionRebuild");
 		const std::string counter = project.WriteFile("Assets/Scripts/Counter.lua", s_ContactCounter);
 
 		Scene scene;
@@ -305,7 +305,7 @@ TEST_SUITE("Regressions")
 
 	TEST_CASE("Duplicating a scripted entity while playing instantiates its script")
 	{
-		BasaltTest::TempProject project("RegressionDuplicate");
+		BrecciaTest::TempProject project("RegressionDuplicate");
 		const std::string script = project.WriteFile("Assets/Scripts/Counter.lua", R"(
 			local C = {}
 			function C:OnCreate() self.Updates = 0 end
@@ -329,13 +329,13 @@ TEST_SUITE("Regressions")
 	}
 }
 
-#include <Basalt/Core/Application.h>
+#include <Breccia/Core/Application.h>
 
 TEST_SUITE("Regressions")
 {
 	TEST_CASE("Script lifecycle: instances see each other in OnCreate; no OnDestroy without OnCreate; OnCreate once")
 	{
-		BasaltTest::TempProject project("RegressionLifecycle");
+		BrecciaTest::TempProject project("RegressionLifecycle");
 		const std::string reader = project.WriteFile("Assets/Scripts/Reader.lua", R"(
 			local R = {}
 			function R:OnCreate()

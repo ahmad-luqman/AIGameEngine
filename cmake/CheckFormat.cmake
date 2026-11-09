@@ -1,12 +1,12 @@
-# Fails if any Basalt source file is not formatted according to .clang-format.
+# Fails if any Breccia source file is not formatted according to .clang-format.
 # Usage: cmake -DCLANG_FORMAT=<path> -DSOURCE_DIR=<repo root> -P CheckFormat.cmake
 # The directories match scripts/format.sh's; change both together.
 
 file(GLOB_RECURSE files RELATIVE "${SOURCE_DIR}"
-	"${SOURCE_DIR}/Basalt/Source/*.cpp" "${SOURCE_DIR}/Basalt/Source/*.h"
-	"${SOURCE_DIR}/Basalt-Editor/Source/*.cpp" "${SOURCE_DIR}/Basalt-Editor/Source/*.h"
-	"${SOURCE_DIR}/Basalt-Runtime/Source/*.cpp" "${SOURCE_DIR}/Basalt-Runtime/Source/*.h"
-	"${SOURCE_DIR}/Basalt-CLI/Source/*.cpp" "${SOURCE_DIR}/Basalt-CLI/Source/*.h"
+	"${SOURCE_DIR}/Breccia/Source/*.cpp" "${SOURCE_DIR}/Breccia/Source/*.h"
+	"${SOURCE_DIR}/Breccia-Editor/Source/*.cpp" "${SOURCE_DIR}/Breccia-Editor/Source/*.h"
+	"${SOURCE_DIR}/Breccia-Runtime/Source/*.cpp" "${SOURCE_DIR}/Breccia-Runtime/Source/*.h"
+	"${SOURCE_DIR}/Breccia-CLI/Source/*.cpp" "${SOURCE_DIR}/Breccia-CLI/Source/*.h"
 	"${SOURCE_DIR}/Tests/Source/*.cpp" "${SOURCE_DIR}/Tests/Source/*.h"
 	"${SOURCE_DIR}/Tests/Rendering/*.cpp" "${SOURCE_DIR}/Tests/Rendering/*.h"
 	"${SOURCE_DIR}/Tests/Benchmarks/*.cpp" "${SOURCE_DIR}/Tests/Benchmarks/*.h"

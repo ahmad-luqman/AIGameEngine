@@ -65,7 +65,7 @@ cubic_face = accessor([0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0, 0], 1)
 nod_rotations = accessor([0, 0, 0, 1, 0.38268343, 0, 0, 0.92387953], 4)
 
 model = dict(
-    asset=dict(version='2.0', generator='Basalt test fixture'),
+    asset=dict(version='2.0', generator='Breccia test fixture'),
     buffers=[dict(byteLength=len(blob), uri='data:application/octet-stream;base64,' + base64.b64encode(blob).decode())],
     bufferViews=views, accessors=accessors,
     materials=[dict(name='Skin', pbrMetallicRoughness=dict(baseColorFactor=[0.9, 0.6, 0.5, 1], metallicFactor=0, roughnessFactor=0.6), doubleSided=True)],

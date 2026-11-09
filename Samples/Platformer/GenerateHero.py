@@ -129,5 +129,5 @@ model.clip('Land', 0.35, [('Hips', 'translation', [(0, 0.95, 0), (0, 0.8, 0), (0
                           ('LeftUpperArm', 'rotation', rz(40, 25, 15, 6)),
                           ('RightUpperArm', 'rotation', rz(-40, -25, -15, -6))])
 
-model.write(Path(__file__).resolve().parent / 'Assets/Models/Hero.gltf', 'Basalt Platformer sample',
+model.write(Path(__file__).resolve().parent / 'Assets/Models/Hero.gltf', 'Breccia Platformer sample',
             [('Hero', [0.25, 0.55, 0.95, 1]), ('Hair', [0.35, 0.18, 0.08, 1]), ('Cape', [0.85, 0.12, 0.15, 1])])

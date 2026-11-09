@@ -1,22 +1,22 @@
 #include <doctest/doctest.h>
 
-#include <Basalt/Asset/AssetManager.h>
-#include <Basalt/Core/JobSystem.h>
+#include <Breccia/Asset/AssetManager.h>
+#include <Breccia/Core/JobSystem.h>
 
-#include <Basalt/Automation/AutomationSession.h>
-#include <Basalt/Automation/CommandRegistry.h>
-#include <Basalt/Automation/McpServer.h>
-#include <Basalt/Automation/AutomationConnection.h>
-#include <Basalt/Automation/EditorPreferences.h>
-#include <Basalt/Core/JsonUtils.h>
-#include <Basalt/Core/FileSystem.h>
-#include <Basalt/Core/Input.h>
-#include <Basalt/Core/Log.h>
-#include <Basalt/Core/Platform.h>
-#include <Basalt/Project/Project.h>
-#include <Basalt/Scene/Entity.h>
-#include <Basalt/Scene/Scene.h>
-#include <Basalt/UI/GameUI.h>
+#include <Breccia/Automation/AutomationSession.h>
+#include <Breccia/Automation/CommandRegistry.h>
+#include <Breccia/Automation/McpServer.h>
+#include <Breccia/Automation/AutomationConnection.h>
+#include <Breccia/Automation/EditorPreferences.h>
+#include <Breccia/Core/JsonUtils.h>
+#include <Breccia/Core/FileSystem.h>
+#include <Breccia/Core/Input.h>
+#include <Breccia/Core/Log.h>
+#include <Breccia/Core/Platform.h>
+#include <Breccia/Project/Project.h>
+#include <Breccia/Scene/Entity.h>
+#include <Breccia/Scene/Scene.h>
+#include <Breccia/UI/GameUI.h>
 
 #include "AutomationTestUtils.h"
 #include "TestUtils.h"
@@ -25,14 +25,14 @@
 
 #include <limits>
 
-using namespace Basalt;
+using namespace Breccia;
 using json = nlohmann::json;
 
 namespace {
 
-	using BasaltTest::Run;
-	using BasaltTest::RunError;
-	using BasaltTest::SendLine;
+	using BrecciaTest::Run;
+	using BrecciaTest::RunError;
+	using BrecciaTest::SendLine;
 
 }
 
@@ -62,23 +62,23 @@ TEST_SUITE("Automation")
 		CHECK(Run(registry, session, "scene.info", { { "assertNoAnimationWarnings", false } })["animationWarnings"].size() == 1);
 
 		const auto cursor = Run(registry, session, "log.get")["next"];
-		BS_CORE_INFO("an info line");
+		BR_CORE_INFO("an info line");
 		CHECK(Run(registry, session, "log.get", { { "since", cursor }, { "assertNoWarnings", true } })["messages"].size() == 1);
-		BS_CORE_WARN("a warning line");
+		BR_CORE_WARN("a warning line");
 		// errorsOnly filters what is returned, not what the assertion looks at.
 		const std::string error = RunError(registry, session, "log.get", { { "since", cursor }, { "errorsOnly", true }, { "assertNoWarnings", true } });
 		CHECK(error.starts_with("1 warning(s) or worse logged: [warn] a warning line (next "));
 		// Many warnings: the first 20 are named.
 		const auto many = Run(registry, session, "log.get")["next"];
 		for (int i = 0; i < 25; i++)
-			BS_CORE_WARN("warning {}", i);
+			BR_CORE_WARN("warning {}", i);
 		const std::string listed = RunError(registry, session, "log.get", { { "since", many }, { "assertNoWarnings", true } });
 		CHECK(listed.starts_with("25 warning(s) or worse logged: [warn] warning 0; "));
 		CHECK(listed.find("[warn] warning 19; and 5 more (next ") != std::string::npos);
 		// Messages the history no longer holds cannot be checked.
 		const auto old = Run(registry, session, "log.get")["next"];
 		for (int i = 0; i < 2100; i++)
-			BS_CORE_INFO("filler {}", i);
+			BR_CORE_INFO("filler {}", i);
 		CHECK(RunError(registry, session, "log.get", { { "since", old }, { "assertNoWarnings", true } }).starts_with("52 message(s) since "));
 	}
 	TEST_CASE("Protocol: unknown commands, malformed requests, batches")
@@ -122,7 +122,7 @@ TEST_SUITE("Automation")
 
 	TEST_CASE("The render scale is a validated project setting that survives save and load")
 	{
-		BasaltTest::TempProject temp("RenderScaleProject");
+		BrecciaTest::TempProject temp("RenderScaleProject");
 		REQUIRE(temp.IsValid());
 		CommandRegistry registry;
 		AutomationSession session;
@@ -156,7 +156,7 @@ TEST_SUITE("Automation")
 
 	TEST_CASE("The script instruction limit is a validated project setting")
 	{
-		BasaltTest::TempProject temp("InstructionLimitProject");
+		BrecciaTest::TempProject temp("InstructionLimitProject");
 		REQUIRE(temp.IsValid());
 		CommandRegistry registry;
 		AutomationSession session;
@@ -173,7 +173,7 @@ TEST_SUITE("Automation")
 
 	TEST_CASE("The random seed is a validated project setting that survives save and load")
 	{
-		BasaltTest::TempProject temp("RandomSeedProject");
+		BrecciaTest::TempProject temp("RandomSeedProject");
 		REQUIRE(temp.IsValid());
 		CommandRegistry registry;
 		AutomationSession session;
@@ -217,7 +217,7 @@ TEST_SUITE("Automation")
 
 	TEST_CASE("Dynamic resolution settings are validated project settings that survive save and load")
 	{
-		BasaltTest::TempProject temp("DynamicResolutionProject");
+		BrecciaTest::TempProject temp("DynamicResolutionProject");
 		REQUIRE(temp.IsValid());
 		CommandRegistry registry;
 		AutomationSession session;
@@ -284,7 +284,7 @@ TEST_SUITE("Automation")
 
 	TEST_CASE("asset.preload reports async progress and joins mesh and texture dependencies")
 	{
-		BasaltTest::TempProject project("PreloadCommands");
+		BrecciaTest::TempProject project("PreloadCommands");
 		CommandRegistry registry;
 		AutomationSession session;
 		AssetManager::Clear();
@@ -292,7 +292,7 @@ TEST_SUITE("Automation")
 		CHECK(pending[0]["status"] == "pending");
 		JobSystem::Get().WaitIdle();
 		CHECK(Run(registry, session, "asset.preload", { { "paths", { "builtin://Cube" } } })[0]["status"] == "ready");
-		std::filesystem::copy_file(std::filesystem::path(BASALT_TEST_DATA_DIR) / "FeatureTest/Assets/Models/TexturedCube.glb", project.GetDirectory() / "Assets/model.glb");
+		std::filesystem::copy_file(std::filesystem::path(BRECCIA_TEST_DATA_DIR) / "FeatureTest/Assets/Models/TexturedCube.glb", project.GetDirectory() / "Assets/model.glb");
 		const auto embedded = Run(registry, session, "asset.preload", { { "paths", { "Assets/model.glb", "Assets/model.glb#image/0", "builtin://Sphere", "builtin://Plane" } }, { "wait", true } });
 		REQUIRE(embedded.size() == 4);
 		for (const auto& item : embedded)
@@ -340,7 +340,7 @@ TEST_SUITE("Automation")
 
 	TEST_CASE("Build, save, reopen and export a project through commands")
 	{
-		BasaltTest::TempProject temp("AutomationProject");
+		BrecciaTest::TempProject temp("AutomationProject");
 		Project::SetActive(nullptr);
 		const auto directory = temp.GetDirectory() / "Game";
 		CommandRegistry registry;
@@ -460,7 +460,7 @@ TEST_SUITE("Automation")
 	TEST_CASE("A project and assets named in CJK characters work through commands, scenes, prefabs and require")
 	{
 		// Deactivated (and removed) on scope exit; the commands create and open the project inside it.
-		BasaltTest::TempProject temp("Unicode-資産");
+		BrecciaTest::TempProject temp("Unicode-資産");
 		Project::SetActive(nullptr);
 		const std::filesystem::path directory = temp.GetDirectory() / FileSystem::PathFromUtf8("日本語");
 		CommandRegistry registry;
@@ -510,7 +510,7 @@ TEST_SUITE("Automation")
 
 	TEST_CASE("play.step reports a scene switched by Lua, and stopping returns to the edit scene")
 	{
-		BasaltTest::TempProject temp("AutomationSceneSwitch");
+		BrecciaTest::TempProject temp("AutomationSceneSwitch");
 		CommandRegistry registry;
 		AutomationSession session;
 		Run(registry, session, "entity.create", { { "name", "InA" } });
@@ -541,7 +541,7 @@ TEST_SUITE("Automation")
 
 	TEST_CASE("Play mode runs a copy of the scene, steps deterministically and accepts input")
 	{
-		BasaltTest::TempProject temp("AutomationPlay");
+		BrecciaTest::TempProject temp("AutomationPlay");
 		CommandRegistry registry;
 		AutomationSession session;
 		Run(registry, session, "asset.write", { { "path", "Assets/Scripts/Jumper.lua" }, { "content", R"(
@@ -579,7 +579,7 @@ TEST_SUITE("Automation")
 
 	TEST_CASE("Unicode text and scroll automation validate input and replay into widgets")
 	{
-		BasaltTest::TempProject temp("AutomationUIText");
+		BrecciaTest::TempProject temp("AutomationUIText");
 		CommandRegistry registry;
 		AutomationSession session;
 		Run(registry, session, "asset.write", { { "path", "Assets/Scripts/Focus.lua" }, { "content", "local F = {}; function F:OnCreate() UI.SetFocus(self.Entity) end; return F" } });
@@ -753,7 +753,7 @@ TEST_SUITE("Automation")
 
 	TEST_CASE("Recorded input replays to the same state")
 	{
-		BasaltTest::TempProject temp("AutomationReplay");
+		BrecciaTest::TempProject temp("AutomationReplay");
 		CommandRegistry registry;
 		AutomationSession session;
 		// Moves on key presses and spawns an entity (with a seeded runtime UUID) on every jump.
@@ -814,7 +814,7 @@ TEST_SUITE("Automation")
 		Run(registry, session, "project.set", { { "randomSeed", Random::DefaultSeed } });
 
 		// Replays from before seeds were stored ran with the default seed.
-		temp.WriteFile("Replays/Legacy.breplay", R"({ "Format": "BasaltReplay", "Version": 1, "Frames": 1, "Events": [] })");
+		temp.WriteFile("Replays/Legacy.breplay", R"({ "Format": "BrecciaReplay", "Version": 1, "Frames": 1, "Events": [] })");
 		Run(registry, session, "replay.run", { { "path", "Replays/Legacy.breplay" } });
 		Run(registry, session, "project.set", { { "randomSeed", 3 } });
 		CHECK(RunError(registry, session, "replay.run", { { "path", "Replays/Legacy.breplay" } }).find("has no RandomSeed (it was recorded before seeds were stored, with the default seed " + std::to_string(Random::DefaultSeed)) != std::string::npos);
@@ -826,27 +826,27 @@ TEST_SUITE("Automation")
 		CHECK(RunError(registry, session, "replay.run", { { "path", "Replays/Test.breplay" } }).find("recorded with random seed") != std::string::npos);
 		Run(registry, session, "project.set", { { "randomSeed", Random::DefaultSeed } });
 		CHECK(Run(registry, session, "replay.run", { { "path", "Replays/Test.breplay" }, { "assertHash", true } })["stateHash"] == live["stateHash"]);
-		temp.WriteFile("Replays/BadSeed.breplay", R"({ "Format": "BasaltReplay", "RandomSeed": -3, "Events": [] })");
+		temp.WriteFile("Replays/BadSeed.breplay", R"({ "Format": "BrecciaReplay", "RandomSeed": -3, "Events": [] })");
 		CHECK(RunError(registry, session, "replay.run", { { "path", "Replays/BadSeed.breplay" } }).find("invalid RandomSeed") != std::string::npos);
 
 		temp.WriteFile("Replays/Bad.breplay", R"({ "Format": "Other" })");
-		CHECK(RunError(registry, session, "replay.run", { { "path", "Replays/Bad.breplay" } }).find("not a Basalt replay") != std::string::npos);
+		CHECK(RunError(registry, session, "replay.run", { { "path", "Replays/Bad.breplay" } }).find("not a Breccia replay") != std::string::npos);
 		CHECK(RunError(registry, session, "replay.record_stop", { { "path", "Replays/X.breplay" } }).find("not recording") != std::string::npos);
 		Run(registry, session, "play.stop");
 		Input::Reset();
 	}
 }
 
-#include <Basalt/Automation/AutomationServer.h>
-#include <Basalt/Project/Exporter.h>
+#include <Breccia/Automation/AutomationServer.h>
+#include <Breccia/Project/Exporter.h>
 
 TEST_SUITE("Automation")
 {
 	TEST_CASE("Automation server answers newline-delimited requests on localhost")
 	{
-		Basalt::CommandRegistry registry;
-		Basalt::AutomationSession session;
-		Basalt::AutomationServer server;
+		Breccia::CommandRegistry registry;
+		Breccia::AutomationSession session;
+		Breccia::AutomationServer server;
 		std::string error;
 		REQUIRE_MESSAGE(server.Start(0, [&](const std::string& request) {
 			const json parsed = json::parse(request, nullptr, false);
@@ -859,7 +859,7 @@ TEST_SUITE("Automation")
 		const json second = json::parse(SendLine(server.GetPort(), R"({"command":"nope"})"));
 		CHECK(second["ok"] == false);
 
-		Basalt::AutomationServer duplicate;
+		Breccia::AutomationServer duplicate;
 		CHECK_FALSE(duplicate.Start(server.GetPort(), [](const std::string&) { return std::string(); }, error));
 		server.Stop();
 		CHECK_FALSE(server.IsRunning());
@@ -894,29 +894,29 @@ TEST_SUITE("Automation")
 
 	TEST_CASE("Exporter refuses unsafe or incomplete exports")
 	{
-		BasaltTest::TempProject temp("ExporterChecks");
-		const Basalt::Ref<Basalt::Project>& project = Basalt::Project::GetActive();
+		BrecciaTest::TempProject temp("ExporterChecks");
+		const Breccia::Ref<Breccia::Project>& project = Breccia::Project::GetActive();
 		REQUIRE(project);
 
-		Basalt::ExportResult result = Basalt::Exporter::Export(*project, temp.GetDirectory().parent_path() / "ExportOut");
+		Breccia::ExportResult result = Breccia::Exporter::Export(*project, temp.GetDirectory().parent_path() / "ExportOut");
 		CHECK_FALSE(result.Success);
 		CHECK(result.Error.find("StartScene") != std::string::npos);
 
 		temp.WriteFile("Assets/Scenes/Main.bscene", R"({"Entities":[]})");
 		project->GetConfig().StartScene = "Assets/Scenes/Main.bscene";
-		result = Basalt::Exporter::Export(*project, temp.GetDirectory().parent_path() / "ExportOut", { .RuntimeExecutable = temp.GetDirectory() / "NoSuchRuntime" });
+		result = Breccia::Exporter::Export(*project, temp.GetDirectory().parent_path() / "ExportOut", { .RuntimeExecutable = temp.GetDirectory() / "NoSuchRuntime" });
 		CHECK(result.Error.find("runtime executable not found") != std::string::npos);
 
 		temp.WriteFile("FakeRuntime", "binary");
-		result = Basalt::Exporter::Export(*project, temp.GetDirectory() / "Inside", { .RuntimeExecutable = temp.GetDirectory() / "FakeRuntime" });
+		result = Breccia::Exporter::Export(*project, temp.GetDirectory() / "Inside", { .RuntimeExecutable = temp.GetDirectory() / "FakeRuntime" });
 		CHECK(result.Error.find("outside the project") != std::string::npos);
 
 		const auto occupied = temp.GetDirectory().parent_path() / "ExporterOccupied";
 		std::filesystem::create_directories(occupied);
-		Basalt::FileSystem::WriteTextFile(occupied / "precious.txt", "do not delete");
-		result = Basalt::Exporter::Export(*project, occupied, { .RuntimeExecutable = temp.GetDirectory() / "FakeRuntime" });
+		Breccia::FileSystem::WriteTextFile(occupied / "precious.txt", "do not delete");
+		result = Breccia::Exporter::Export(*project, occupied, { .RuntimeExecutable = temp.GetDirectory() / "FakeRuntime" });
 		CHECK(result.Error.find("not empty") != std::string::npos);
-		CHECK(Basalt::FileSystem::Exists(occupied / "precious.txt"));
+		CHECK(Breccia::FileSystem::Exists(occupied / "precious.txt"));
 		std::filesystem::remove_all(occupied);
 	}
 }
@@ -963,8 +963,8 @@ TEST_SUITE("Automation")
 
 	TEST_CASE("input.gamepad drives an injected gamepad, is recorded and replays")
 	{
-		BasaltTest::TempProject temp("AutomationGamepad");
-		BasaltTest::ScopedGameInput restore;
+		BrecciaTest::TempProject temp("AutomationGamepad");
+		BrecciaTest::ScopedGameInput restore;
 		CommandRegistry registry;
 		AutomationSession session;
 		Input::ForgetInjectedGamepads();
@@ -1043,7 +1043,7 @@ TEST_SUITE("Automation")
 
 	TEST_CASE("Recording starts with the injected gamepads; replays run with the headless view whatever the host")
 	{
-		BasaltTest::TempProject temp("AutomationReplayHost");
+		BrecciaTest::TempProject temp("AutomationReplayHost");
 		CommandRegistry registry;
 		AutomationSession session;
 		Input::ForgetInjectedGamepads();
@@ -1096,7 +1096,7 @@ TEST_SUITE("Automation")
 		CHECK_FALSE(restored.PointerEnabled);
 		CHECK_FALSE(restored.NavigationEnabled);
 		// A replay that fails restores the host too, and names the event that failed.
-		const json bad = { { "Format", "BasaltReplay" }, { "Version", 1 }, { "Frames", 2 }, { "RandomSeed", Project::GetActiveRandomSeed() }, { "Events", json::array({ { { "frame", 1 }, { "command", "input.gamepad" }, { "params", { { "button", "A" } } } } }) } };
+		const json bad = { { "Format", "BrecciaReplay" }, { "Version", 1 }, { "Frames", 2 }, { "RandomSeed", Project::GetActiveRandomSeed() }, { "Events", json::array({ { { "frame", 1 }, { "command", "input.gamepad" }, { "params", { { "button", "A" } } } } }) } };
 		Run(registry, session, "asset.write", { { "path", "Replays/Bad.breplay" }, { "content", bad.dump() } });
 		const std::string error = RunError(registry, session, "replay.run", { { "path", "Replays/Bad.breplay" } });
 		INFO(error);
@@ -1111,8 +1111,8 @@ TEST_SUITE("Automation")
 
 	TEST_CASE("input.actions reports the project's actions, and the session's with their state while playing")
 	{
-		BasaltTest::TempProject temp("AutomationInputActions");
-		BasaltTest::ScopedGameInput restore;
+		BrecciaTest::TempProject temp("AutomationInputActions");
+		BrecciaTest::ScopedGameInput restore;
 		CommandRegistry registry;
 		AutomationSession session;
 		Run(registry, session, "project.set", { { "inputActions", { { "Actions", { { { "Name", "Jump" }, { "Bindings", { { { "Key", "Space" } } } } }, { { "Name", "MoveX" }, { "Type", "Axis" }, { "Bindings", { { { "Key", "D" } }, { { "Key", "A" }, { "Scale", -1 } } } } } } } } } });
@@ -1151,8 +1151,8 @@ TEST_SUITE("Automation")
 
 	TEST_CASE("A replay records routing changes between recorded commands, so it gates input the same way")
 	{
-		BasaltTest::TempProject temp("AutomationReplayRouting");
-		BasaltTest::ScopedGameInput restore;
+		BrecciaTest::TempProject temp("AutomationReplayRouting");
+		BrecciaTest::ScopedGameInput restore;
 		CommandRegistry registry;
 		AutomationSession session;
 		// Releases and holds of Space move the probe, so the state hash shows what the game saw.
@@ -1186,8 +1186,8 @@ TEST_SUITE("Automation")
 
 	TEST_CASE("Injected input reaches the game only through the host's routing, like a real keyboard")
 	{
-		BasaltTest::TempProject temp("AutomationInjectedRouting");
-		BasaltTest::ScopedGameInput restore;
+		BrecciaTest::TempProject temp("AutomationInjectedRouting");
+		BrecciaTest::ScopedGameInput restore;
 		CommandRegistry registry;
 		AutomationSession session;
 		Run(registry, session, "project.set", { { "inputActions", { { "Actions", { { { "Name", "Jump" }, { "Bindings", { { { "Key", "Space" } } } } } } } } } });
@@ -1207,8 +1207,8 @@ TEST_SUITE("Automation")
 
 	TEST_CASE("Hosts give the game its view before OnCreate, except for replays")
 	{
-		BasaltTest::TempProject temp("AutomationBeforeRuntimeStart");
-		BasaltTest::ScopedGameInput restore;
+		BrecciaTest::TempProject temp("AutomationBeforeRuntimeStart");
+		BrecciaTest::ScopedGameInput restore;
 		CommandRegistry registry;
 		AutomationSession session;
 		Run(registry, session, "asset.write", { { "path", "Assets/Scripts/View.lua" }, { "content", R"(
@@ -1243,8 +1243,8 @@ TEST_SUITE("Automation")
 
 	TEST_CASE("A recording begun before play replays what came before play start before OnCreate")
 	{
-		BasaltTest::TempProject temp("AutomationReplayPlayStart");
-		BasaltTest::ScopedGameInput restore;
+		BrecciaTest::TempProject temp("AutomationReplayPlayStart");
+		BrecciaTest::ScopedGameInput restore;
 		CommandRegistry registry;
 		AutomationSession session;
 		Run(registry, session, "asset.write", { { "path", "Assets/Scripts/Start.lua" }, { "content", R"(
@@ -1283,8 +1283,8 @@ TEST_SUITE("Automation")
 
 	TEST_CASE("A replay with a malformed event is refused before it changes anything")
 	{
-		BasaltTest::TempProject temp("AutomationReplayMalformed");
-		BasaltTest::ScopedGameInput restore;
+		BrecciaTest::TempProject temp("AutomationReplayMalformed");
+		BrecciaTest::ScopedGameInput restore;
 		CommandRegistry registry;
 		AutomationSession session;
 		bool hookCalled = false;
@@ -1292,7 +1292,7 @@ TEST_SUITE("Automation")
 		const GameUI::HostState host{ { 3.0f, 4.0f }, { 500.0f, 300.0f }, false, true, glm::vec2(1000.0f, 600.0f) };
 		GameUI::SetHostState(host);
 		const auto replayWith = [&](const json& events) {
-			const json replay = { { "Format", "BasaltReplay" }, { "Version", 1 }, { "Frames", 1 }, { "RandomSeed", Project::GetActiveRandomSeed() }, { "Events", events } };
+			const json replay = { { "Format", "BrecciaReplay" }, { "Version", 1 }, { "Frames", 1 }, { "RandomSeed", Project::GetActiveRandomSeed() }, { "Events", events } };
 			Run(registry, session, "asset.write", { { "path", "Replays/Bad.breplay" }, { "content", replay.dump() } });
 			return RunError(registry, session, "replay.run", { { "path", "Replays/Bad.breplay" } });
 		};
@@ -1312,14 +1312,14 @@ TEST_SUITE("Automation")
 
 	TEST_CASE("project.set keeps the settings when saving them fails, and input.actions needs a project or Play")
 	{
-		BasaltTest::ScopedGameInput restore;
+		BrecciaTest::ScopedGameInput restore;
 		{
 			CommandRegistry registry;
 			AutomationSession session;
 			Project::SetActive(nullptr);
 			CHECK(RunError(registry, session, "input.actions").find("no project") != std::string::npos);
 		}
-		BasaltTest::TempProject temp("AutomationProjectSetRollback");
+		BrecciaTest::TempProject temp("AutomationProjectSetRollback");
 		CommandRegistry registry;
 		AutomationSession session;
 		CHECK(RunError(registry, session, "project.set", { { "inputActions", nullptr } }).find("inputActions") != std::string::npos);
@@ -1364,8 +1364,8 @@ TEST_SUITE("Automation")
 
 	TEST_CASE("A replay records and restores the game resolution scripts see the mouse in")
 	{
-		BasaltTest::TempProject temp("AutomationReplayResolution");
-		BasaltTest::ScopedGameInput restore;
+		BrecciaTest::TempProject temp("AutomationReplayResolution");
+		BrecciaTest::ScopedGameInput restore;
 		CommandRegistry registry;
 		AutomationSession session;
 		Run(registry, session, "asset.write", { { "path", "Assets/Scripts/Mouse.lua" }, { "content", R"(
@@ -1404,7 +1404,7 @@ TEST_SUITE("Automation")
 
 		// A bad resolution is an error naming the event; a null one means the viewport size, like older replays.
 		const auto viewReplay = [](const json& params) {
-			return json{ { "Format", "BasaltReplay" }, { "Version", 1 }, { "Frames", 1 }, { "RandomSeed", Project::GetActiveRandomSeed() }, { "Events", json::array({ { { "frame", 0 }, { "command", "view" }, { "params", params } } }) } };
+			return json{ { "Format", "BrecciaReplay" }, { "Version", 1 }, { "Frames", 1 }, { "RandomSeed", Project::GetActiveRandomSeed() }, { "Events", json::array({ { { "frame", 0 }, { "command", "view" }, { "params", params } } }) } };
 		};
 		Run(registry, session, "asset.write", { { "path", "Replays/BadResolution.breplay" }, { "content", viewReplay({ { "origin", { 0, 0 } }, { "size", { 100, 100 } }, { "resolution", { 100, -1 } } }).dump() } });
 		CHECK(RunError(registry, session, "replay.run", { { "path", "Replays/BadResolution.breplay" } }).find("'resolution' must be [width, height] with positive values") != std::string::npos);
@@ -1415,8 +1415,8 @@ TEST_SUITE("Automation")
 
 	TEST_CASE("A replay maps mouse positions through the view it was recorded in")
 	{
-		BasaltTest::TempProject temp("AutomationReplayView");
-		BasaltTest::ScopedGameInput restore;
+		BrecciaTest::TempProject temp("AutomationReplayView");
+		BrecciaTest::ScopedGameInput restore;
 		CommandRegistry registry;
 		AutomationSession session;
 		Input::ForgetInjectedGamepads();
@@ -1447,7 +1447,7 @@ TEST_SUITE("Automation")
 		CHECK(GameUI::GetHostState() == GameUI::HostState{});
 
 		// A bad view event is an error naming the event.
-		const json bad = { { "Format", "BasaltReplay" }, { "Version", 1 }, { "Frames", 1 }, { "RandomSeed", Project::GetActiveRandomSeed() }, { "Events", json::array({ { { "frame", 0 }, { "command", "view" }, { "params", { { "origin", { 0, 0 } }, { "size", { 0, 100 } } } } } }) } };
+		const json bad = { { "Format", "BrecciaReplay" }, { "Version", 1 }, { "Frames", 1 }, { "RandomSeed", Project::GetActiveRandomSeed() }, { "Events", json::array({ { { "frame", 0 }, { "command", "view" }, { "params", { { "origin", { 0, 0 } }, { "size", { 0, 100 } } } } } }) } };
 		Run(registry, session, "asset.write", { { "path", "Replays/BadView.breplay" }, { "content", bad.dump() } });
 		CHECK(RunError(registry, session, "replay.run", { { "path", "Replays/BadView.breplay" } }).find("event 0 (frame 0, view): 'size' must be [width, height] with positive values") != std::string::npos);
 		Run(registry, session, "play.stop");
@@ -1493,10 +1493,10 @@ TEST_SUITE("Automation")
 
 	TEST_CASE("ui.layout reports images and fonts that will not load")
 	{
-		BasaltTest::TempProject project("UILayoutProblems");
+		BrecciaTest::TempProject project("UILayoutProblems");
 		project.WriteFile("Assets/Fonts/Bad.ttf", std::string(500, 'x'));
 		// Images and fonts that load are no problem.
-		const std::filesystem::path data = std::filesystem::path(BASALT_TEST_DATA_DIR) / "FeatureTest/Assets";
+		const std::filesystem::path data = std::filesystem::path(BRECCIA_TEST_DATA_DIR) / "FeatureTest/Assets";
 		std::filesystem::create_directories(project.GetDirectory() / "Assets/Textures");
 		std::filesystem::copy_file(data / "Textures/UIPanel.png", project.GetDirectory() / "Assets/Textures/Panel.png");
 		std::filesystem::copy_file(data / "Fonts/Karla-Regular.ttf", project.GetDirectory() / "Assets/Fonts/Karla.ttf");
@@ -1525,8 +1525,8 @@ TEST_CASE("Log cursors and error filters retain their schema-to-handler contract
 	CommandRegistry registry;
 	AutomationSession session;
 	const auto cursor = Run(registry, session, "log.get")["next"];
-	BS_CORE_WARN("Schema log warning");
-	BS_CORE_ERROR("Schema log error");
+	BR_CORE_WARN("Schema log warning");
+	BR_CORE_ERROR("Schema log error");
 	const auto result = Run(registry, session, "log.get", { { "since", cursor }, { "errorsOnly", true } });
 	REQUIRE(result["messages"].size() == 1);
 	CHECK(result["messages"][0]["text"] == "Schema log error");
@@ -1537,7 +1537,7 @@ TEST_SUITE("Automation")
 {
 	TEST_CASE("asset.refresh and asset.write hot reload scripts while the game runs")
 	{
-		BasaltTest::TempProject temp("AutomationHotReload");
+		BrecciaTest::TempProject temp("AutomationHotReload");
 		CommandRegistry registry;
 		AutomationSession session;
 		CHECK(Run(registry, session, "asset.refresh")["changed"].empty());
@@ -1662,7 +1662,7 @@ TEST_SUITE("Automation")
 
 	TEST_CASE("Asset reloads reach the host, and Simulate does not hot reload scripts")
 	{
-		BasaltTest::TempProject temp("AutomationReloadHook");
+		BrecciaTest::TempProject temp("AutomationReloadHook");
 		CommandRegistry registry;
 		AutomationSession session;
 		std::vector<AssetReloadReport> reports;
@@ -1696,13 +1696,13 @@ TEST_SUITE("Automation")
 		CommandRegistry registry;
 		AutomationSession session;
 		{
-			BasaltTest::TempProject first("AutomationRefreshFirst");
+			BrecciaTest::TempProject first("AutomationRefreshFirst");
 			Run(registry, session, "project.open", { { "path", first.GetDirectory().string() } });
 			first.WriteFile("Assets/a.txt", "a");
 			CHECK(Run(registry, session, "asset.refresh")["changed"].size() == 1);
 		}
 		CHECK(RunError(registry, session, "asset.refresh").find("no project is open") != std::string::npos);
-		BasaltTest::TempProject second("AutomationRefreshSecond");
+		BrecciaTest::TempProject second("AutomationRefreshSecond");
 		second.WriteFile("Assets/b.txt", "b");
 		Run(registry, session, "project.open", { { "path", second.GetDirectory().string() } });
 		// What the newly opened project held is the baseline.
@@ -1723,7 +1723,7 @@ TEST_SUITE("Automation")
 		preferences.SetCameraSpeed(0.0f);
 		CHECK(preferences.GetCameraSpeed() == EditorPreferences::MinCameraSpeed);
 
-		BasaltTest::TempDirectory directory("EditorPreferences");
+		BrecciaTest::TempDirectory directory("EditorPreferences");
 		const std::filesystem::path& root = directory.GetPath();
 		for (int i = 0; i < 12; i++)
 			preferences.AddRecentProject(root / ("Project" + std::to_string(i)));
@@ -1804,10 +1804,10 @@ TEST_SUITE("Automation")
 		CHECK(EditorPreferences::SetAside(file, error) == aside);
 		CHECK(FileSystem::ReadTextFile(*aside) == std::optional<std::string>("{ second"));
 
-		BasaltTest::ScopedEnvVar userData(Platform::UserDataDirectoryVariable, (root / "UserData").string());
+		BrecciaTest::ScopedEnvVar userData(Platform::UserDataDirectoryVariable, (root / "UserData").string());
 		const auto preferencesDirectory = EditorPreferences::GetDirectory(error);
 		REQUIRE(preferencesDirectory);
-		CHECK(*preferencesDirectory == root / "UserData" / "BasaltEditor");
+		CHECK(*preferencesDirectory == root / "UserData" / "BrecciaEditor");
 		CHECK(EditorPreferences::ThemeFromName("Light") == EditorTheme::Light);
 		CHECK_FALSE(EditorPreferences::ThemeFromName("light"));
 	}
@@ -1818,7 +1818,7 @@ TEST_SUITE("Automation")
 {
 	TEST_CASE("asset.refresh fails while Assets/ cannot be read, and reports nothing as removed")
 	{
-		BasaltTest::TempProject temp("AutomationUnreadable");
+		BrecciaTest::TempProject temp("AutomationUnreadable");
 		temp.WriteFile("Assets/Textures/T.png", "x");
 		CommandRegistry registry;
 		AutomationSession session;

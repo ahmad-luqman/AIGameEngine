@@ -2,22 +2,22 @@
 
 #include "TestUtils.h"
 
-#include <Basalt/Animation/AnimatedModel.h>
-#include <Basalt/Animation/AnimationPose.h>
-#include <Basalt/Animation/AnimationSystem.h>
-#include <Basalt/Animation/BlendSpace.h>
-#include <Basalt/Asset/AssetManager.h>
-#include <Basalt/Asset/MeshImporter.h>
-#include <Basalt/Physics/PhysicsWorld.h>
-#include <Basalt/Project/ProjectValidator.h>
-#include <Basalt/Automation/AutomationSession.h>
-#include <Basalt/Automation/CommandRegistry.h>
-#include <Basalt/Core/Log.h>
-#include <Basalt/Scene/Entity.h>
-#include <Basalt/Scene/ComponentRegistry.h>
-#include <Basalt/Scene/SceneEventListener.h>
-#include <Basalt/Scene/SceneSerializer.h>
-#include <Basalt/Scripting/ScriptEngine.h>
+#include <Breccia/Animation/AnimatedModel.h>
+#include <Breccia/Animation/AnimationPose.h>
+#include <Breccia/Animation/AnimationSystem.h>
+#include <Breccia/Animation/BlendSpace.h>
+#include <Breccia/Asset/AssetManager.h>
+#include <Breccia/Asset/MeshImporter.h>
+#include <Breccia/Physics/PhysicsWorld.h>
+#include <Breccia/Project/ProjectValidator.h>
+#include <Breccia/Automation/AutomationSession.h>
+#include <Breccia/Automation/CommandRegistry.h>
+#include <Breccia/Core/Log.h>
+#include <Breccia/Scene/Entity.h>
+#include <Breccia/Scene/ComponentRegistry.h>
+#include <Breccia/Scene/SceneEventListener.h>
+#include <Breccia/Scene/SceneSerializer.h>
+#include <Breccia/Scripting/ScriptEngine.h>
 
 #include <glm/gtc/epsilon.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -26,14 +26,14 @@
 #include <fstream>
 #include <limits>
 
-using namespace Basalt;
-using namespace BasaltTest;
+using namespace Breccia;
+using namespace BrecciaTest;
 using json = nlohmann::json;
 
 namespace {
 	std::filesystem::path FixturePath()
 	{
-		return std::filesystem::path(BASALT_TEST_DATA_DIR) / "Animation/TwoJoint.gltf";
+		return std::filesystem::path(BRECCIA_TEST_DATA_DIR) / "Animation/TwoJoint.gltf";
 	}
 	Ref<MeshSource> LoadFixture()
 	{
@@ -266,7 +266,7 @@ TEST_SUITE("Animation")
 	TEST_CASE("Khronos Fox imports all clips and yields finite independently sampled skin palettes")
 	{
 		std::string error;
-		const auto path = std::filesystem::path(BASALT_TEST_DATA_DIR) / "Animation/Fox/Fox.glb";
+		const auto path = std::filesystem::path(BRECCIA_TEST_DATA_DIR) / "Animation/Fox/Fox.glb";
 		auto source = MeshImporter::LoadGltf(path, path.string(), error);
 		REQUIRE_MESSAGE(source, error);
 		REQUIRE(source->Animations.size() == 3);
@@ -371,7 +371,7 @@ TEST_SUITE("Animation")
 		SUBCASE("wrong output count")
 		{
 			data["accessors"][8]["count"] = 2;
-			// cgltf rejects count mismatches before the Basalt animation importer runs.
+			// cgltf rejects count mismatches before the Breccia animation importer runs.
 			expected = "validation failed";
 		}
 		SUBCASE("unbounded zero-initialized times")
@@ -1325,7 +1325,7 @@ TEST_SUITE("Animation")
 	TEST_CASE("Animation events reach scripts after OnLateUpdate and the event listener, also in simulation")
 	{
 		ClearAssetCache clear;
-		BasaltTest::TempProject project("AnimationEventScripts");
+		BrecciaTest::TempProject project("AnimationEventScripts");
 		const std::string script = project.WriteFile("Assets/Scripts/Rig.lua", R"(
 			local Rig = {}
 			function Rig:OnCreate() self.Log = "" self.Late = 0 end
@@ -1370,7 +1370,7 @@ TEST_SUITE("Animation")
 	TEST_CASE("Events of an entity destroyed by an earlier event callback are not delivered")
 	{
 		ClearAssetCache clear;
-		BasaltTest::TempProject project("AnimationEventDestroy");
+		BrecciaTest::TempProject project("AnimationEventDestroy");
 		const std::string script = project.WriteFile("Assets/Scripts/Doom.lua", R"(
 			local Doom = {}
 			function Doom:OnAnimationEvent(name, clip)

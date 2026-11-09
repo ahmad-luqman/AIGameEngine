@@ -1,4 +1,4 @@
-"""Passes command-line arguments outside every single-byte code page to the basalt CLI and the runtime (ctest
+"""Passes command-line arguments outside every single-byte code page to the breccia CLI and the runtime (ctest
 UnicodeArguments).
 
 Windows hands a program's narrow argv over in the ANSI code page (1252 on CI), which has no CJK characters: the CLI and
@@ -8,7 +8,7 @@ not \\u escapes), a batch file and a scene, all named in CJK characters. With th
 (as a folder and as Assets.bpak) into a CJK folder and played from there without --project, as a player who installed
 it under their own (Japanese, say) user folder would: the start scene's script requires a CJK module.
 
-Usage: UnicodeArguments.py <basalt CLI> [<BasaltRuntime>]
+Usage: UnicodeArguments.py <breccia CLI> [<BrecciaRuntime>]
 """
 import json
 import os
@@ -44,9 +44,9 @@ def response(text):
 def main():
     cli = Path(sys.argv[1]).resolve()
     runtime = Path(sys.argv[2]).resolve() if len(sys.argv) > 2 else None
-    with tempfile.TemporaryDirectory(prefix="BasaltUnicode-") as temp:
+    with tempfile.TemporaryDirectory(prefix="BrecciaUnicode-") as temp:
         root = Path(temp)
-        env = dict(os.environ, BASALT_USER_DATA_DIR=str(root / "UserData"))
+        env = dict(os.environ, BRECCIA_USER_DATA_DIR=str(root / "UserData"))
         # CJK ideographs only: no characters that Unicode normalization changes (macOS file systems compare normalized).
         project = root / "資産 日本語"
         created = response(run([cli, "--no-save", "project.create", json.dumps({"path": str(project), "name": "日本語"}, ensure_ascii=False)], env)[0])

@@ -4,7 +4,7 @@
 // a GPU, the test fonts, and big-endian access into font files for tests that corrupt or rebuild one table.
 // (Destroying the context also clears UIFonts, through its shutdown hook.)
 
-#include <Basalt/Core/FileSystem.h>
+#include <Breccia/Core/FileSystem.h>
 
 #include <doctest/doctest.h>
 #include <imgui.h>
@@ -17,11 +17,11 @@
 #include <utility>
 #include <vector>
 
-namespace BasaltTest {
+namespace BrecciaTest {
 
 	inline std::vector<uint8_t> ReadFont(const std::filesystem::path& relativeToTestData)
 	{
-		std::optional<std::vector<uint8_t>> data = Basalt::FileSystem::ReadBinaryFile(std::filesystem::path(BASALT_TEST_DATA_DIR) / relativeToTestData);
+		std::optional<std::vector<uint8_t>> data = Breccia::FileSystem::ReadBinaryFile(std::filesystem::path(BRECCIA_TEST_DATA_DIR) / relativeToTestData);
 		REQUIRE_MESSAGE(data, relativeToTestData.string());
 		return *data;
 	}

@@ -2656,7 +2656,7 @@
 			"Parent": 0
 		}
 	],
-	"Format": "BasaltScene",
+	"Format": "BrecciaScene",
 	"Name": "MovementDemo",
 	"Physics": {
 		"Gravity": [

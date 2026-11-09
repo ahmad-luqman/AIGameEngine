@@ -3,13 +3,13 @@
 
 #include "GPUFixture.h"
 
-#include <Basalt/Core/Log.h>
-#include <Basalt/Renderer/GraphicsDevice.h>
-#include <Basalt/Renderer/LightClusters.h>
-#include <Basalt/Renderer/SceneRenderer.h>
-#include <Basalt/Renderer/VulkanLoader.h>
-#include <Basalt/Scene/Entity.h>
-#include <Basalt/Scene/Scene.h>
+#include <Breccia/Core/Log.h>
+#include <Breccia/Renderer/GraphicsDevice.h>
+#include <Breccia/Renderer/LightClusters.h>
+#include <Breccia/Renderer/SceneRenderer.h>
+#include <Breccia/Renderer/VulkanLoader.h>
+#include <Breccia/Scene/Entity.h>
+#include <Breccia/Scene/Scene.h>
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -19,7 +19,7 @@
 #include <cstring>
 #include <vector>
 
-using namespace Basalt;
+using namespace Breccia;
 
 namespace {
 	std::vector<uint32_t> ReadBuffer(nvrhi::IDevice* device, nvrhi::IBuffer* source)
@@ -295,7 +295,7 @@ TEST_CASE("Clustered lighting GPU timing benchmark")
 		REQUIRE(buildMs >= 0);
 		if (clustered)
 			REQUIRE(buildMs > 0);
-		BS_CORE_INFO("Cluster benchmark (960x540, 256 buffered lights): enabled={} build={:.3f} ms lighting={:.3f} ms", clustered, buildMs, lightingMs);
+		BR_CORE_INFO("Cluster benchmark (960x540, 256 buffered lights): enabled={} build={:.3f} ms lighting={:.3f} ms", clustered, buildMs, lightingMs);
 	}
 
 	graphics->WaitIdle();

@@ -29,7 +29,7 @@ class Builder:
         return len(self.accessors) - 1
 
     def model(self, **parts):
-        return dict(asset=dict(version='2.0', generator='Basalt test fixture'),
+        return dict(asset=dict(version='2.0', generator='Breccia test fixture'),
                     buffers=[dict(byteLength=len(self.blob), uri='data:application/octet-stream;base64,' + base64.b64encode(self.blob).decode())],
                     bufferViews=self.views, accessors=self.accessors, **parts)
 

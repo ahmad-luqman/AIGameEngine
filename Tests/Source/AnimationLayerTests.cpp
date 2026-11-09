@@ -4,23 +4,23 @@
 #include "AutomationTestUtils.h"
 #include "TestUtils.h"
 
-#include <Basalt/Animation/AnimatedModel.h>
-#include <Basalt/Animation/AnimationMask.h>
-#include <Basalt/Animation/AnimationPose.h>
-#include <Basalt/Animation/AnimationSystem.h>
-#include <Basalt/Animation/FadingWeight.h>
-#include <Basalt/Asset/AssetManager.h>
-#include <Basalt/Asset/MeshImporter.h>
-#include <Basalt/Core/JsonUtils.h>
-#include <Basalt/Core/Log.h>
-#include <Basalt/Project/ProjectValidator.h>
-#include <Basalt/Scene/ComponentRegistry.h>
-#include <Basalt/Scene/Entity.h>
-#include <Basalt/Scene/SceneSerializer.h>
-#include <Basalt/Scripting/ScriptEngine.h>
+#include <Breccia/Animation/AnimatedModel.h>
+#include <Breccia/Animation/AnimationMask.h>
+#include <Breccia/Animation/AnimationPose.h>
+#include <Breccia/Animation/AnimationSystem.h>
+#include <Breccia/Animation/FadingWeight.h>
+#include <Breccia/Asset/AssetManager.h>
+#include <Breccia/Asset/MeshImporter.h>
+#include <Breccia/Core/JsonUtils.h>
+#include <Breccia/Core/Log.h>
+#include <Breccia/Project/ProjectValidator.h>
+#include <Breccia/Scene/ComponentRegistry.h>
+#include <Breccia/Scene/Entity.h>
+#include <Breccia/Scene/SceneSerializer.h>
+#include <Breccia/Scripting/ScriptEngine.h>
 
-using namespace Basalt;
-using namespace BasaltTest;
+using namespace Breccia;
+using namespace BrecciaTest;
 using json = nlohmann::json;
 
 using namespace AnimationTest;
@@ -882,8 +882,8 @@ TEST_SUITE("Animation")
 		ClearAssetCache clear;
 		CommandRegistry registry;
 		AutomationSession session;
-		using BasaltTest::Run;
-		using BasaltTest::RunError;
+		using BrecciaTest::Run;
+		using BrecciaTest::RunError;
 		const auto model = FileSystem::ReadTextFile(BipedPath());
 		REQUIRE(model);
 		project.WriteFile("Assets/Models/Biped.gltf", *model);

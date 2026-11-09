@@ -4,16 +4,16 @@ cmake_minimum_required(VERSION 3.25)
 # uses it, so a call into a newer API fails to compile on every machine instead of failing at run time on an older Mac.
 # Exported Info.plists state it (LSMinimumSystemVersion), and scripts/ci-universal-vulkan.sh builds the release's Vulkan
 # loader for it, reading the value from the set() line below: keep it a literal there. 13.3 is the first with the whole
-# C++20 library Basalt uses (floating-point std::to_chars among it); the MoltenVK release that script pins declares an
+# C++20 library Breccia uses (floating-point std::to_chars among it); the MoltenVK release that script pins declares an
 # older minimum (12.0 at v1.4.2). A value given with -D or MACOSX_DEPLOYMENT_TARGET wins; an empty one (what CMake caches
 # by itself, or an empty variable) does not.
 if(NOT CMAKE_OSX_DEPLOYMENT_TARGET AND "$ENV{MACOSX_DEPLOYMENT_TARGET}" STREQUAL "")
 	set(CMAKE_OSX_DEPLOYMENT_TARGET "13.3" CACHE STRING "Minimum macOS version" FORCE)
 endif()
 
-project(Basalt
+project(Breccia
 	VERSION 0.1.0
-	DESCRIPTION "Basalt - a simple, production-grade 3D game engine"
+	DESCRIPTION "Breccia - a simple, production-grade 3D game engine"
 	LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -30,11 +30,11 @@ set(CMAKE_CXX_FLAGS_DIST "${CMAKE_CXX_FLAGS_RELEASE}" CACHE STRING "" FORCE)
 set(CMAKE_C_FLAGS_DIST "${CMAKE_C_FLAGS_RELEASE}" CACHE STRING "" FORCE)
 set(CMAKE_EXE_LINKER_FLAGS_DIST "${CMAKE_EXE_LINKER_FLAGS_RELEASE}" CACHE STRING "" FORCE)
 
-option(BASALT_PROFILE "Enable Tracy CPU profiling (compiled out in Dist)" OFF)
+option(BRECCIA_PROFILE "Enable Tracy CPU profiling (compiled out in Dist)" OFF)
 
-option(BASALT_BUILD_EDITOR "Build the Basalt editor" ON)
-option(BASALT_BUILD_RUNTIME "Build the Basalt runtime (exported game player)" ON)
-option(BASALT_BUILD_TESTS "Build Basalt unit tests" ON)
+option(BRECCIA_BUILD_EDITOR "Build the Breccia editor" ON)
+option(BRECCIA_BUILD_RUNTIME "Build the Breccia runtime (exported game player)" ON)
+option(BRECCIA_BUILD_TESTS "Build Breccia unit tests" ON)
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
@@ -48,23 +48,23 @@ include(Dependencies)
 include(CompilerWarnings)
 include(Shaders)
 
-add_subdirectory(Basalt)
+add_subdirectory(Breccia)
 
-if(BASALT_BUILD_EDITOR)
-	add_subdirectory(Basalt-Editor)
+if(BRECCIA_BUILD_EDITOR)
+	add_subdirectory(Breccia-Editor)
 endif()
 
-if(BASALT_BUILD_RUNTIME)
-	add_subdirectory(Basalt-Runtime)
+if(BRECCIA_BUILD_RUNTIME)
+	add_subdirectory(Breccia-Runtime)
 endif()
 
-add_subdirectory(Basalt-CLI)
+add_subdirectory(Breccia-CLI)
 
-if(BASALT_BUILD_TESTS)
+if(BRECCIA_BUILD_TESTS)
 	enable_testing()
 	add_subdirectory(Tests)
 endif()
 
-if(BASALT_FUZZ)
+if(BRECCIA_FUZZ)
 	add_subdirectory(Tests/Fuzz)
 endif()

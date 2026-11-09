@@ -1,7 +1,7 @@
 {
 	"DynamicResolution": false,
 	"FixedTimestep": 0.01666666753590107,
-	"Format": "BasaltProject",
+	"Format": "BrecciaProject",
 	"Fullscreen": false,
 	"MinRenderScale": 0.5,
 	"Name": "Breakout",

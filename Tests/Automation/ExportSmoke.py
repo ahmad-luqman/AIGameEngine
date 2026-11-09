@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate, export and smoke-test a project through the basalt CLI, as a release pipeline would (no GPU)."""
+"""Validate, export and smoke-test a project through the breccia CLI, as a release pipeline would (no GPU)."""
 import json
 import os
 from pathlib import Path
@@ -14,7 +14,7 @@ import tempfile
 import zlib
 
 SCENE = {
-    "Format": "BasaltScene",
+    "Format": "BrecciaScene",
     "Version": 1,
     "Name": "Main",
     "Entities": [
@@ -167,9 +167,9 @@ def check_package(exported, output, has_icon=True):
         desktop = (app_dir / "Smoke_Game.desktop").read_text()
         require("Name=Smoke Game\n" in desktop and "Exec=Smoke_Game\n" in desktop and "X-AppImage-Version=2.5.0.7\n" in desktop, f"desktop entry: {desktop}")
         require((app_dir / "Project.bproject").is_file(), "AppDir contents")
-        # The project icon padded to a square, or Basalt's default icon (with a warning).
+        # The project icon padded to a square, or Breccia's default icon (with a warning).
         require(png_size(app_dir / "Smoke_Game.png") == ((300, 300) if has_icon else (256, 256)), f"AppDir icon size {png_size(app_dir / 'Smoke_Game.png')}")
-        require(has_icon or any("uses Basalt's default icon" in warning for warning in warnings), f"default icon warning: {warnings}")
+        require(has_icon or any("uses Breccia's default icon" in warning for warning in warnings), f"default icon warning: {warnings}")
         missing_tool = any("appimagetool was not found" in warning for warning in warnings)
         if missing_tool:
             require(package == app_dir and not os.environ.get("APPIMAGETOOL"), f"no AppImage although APPIMAGETOOL is set: {exported}")
@@ -186,11 +186,11 @@ def check_hardened_runtime(cli, project, temp, env):
     tools = temp / "Hardened Tools"
     tools.mkdir()
     shutil.copy2(cli, tools / cli.name)
-    shutil.copy2(cli.parent / "BasaltRuntime", tools / "BasaltRuntime")
-    hardened = subprocess.run(["codesign", "--force", "--sign", "-", "--options", "runtime", str(tools / "BasaltRuntime")], capture_output=True, text=True)
-    require(hardened.returncode == 0 and "runtime" in code_signature(tools / "BasaltRuntime"), f"cannot give the runtime the hardened runtime: {hardened.stderr}")
+    shutil.copy2(cli.parent / "BrecciaRuntime", tools / "BrecciaRuntime")
+    hardened = subprocess.run(["codesign", "--force", "--sign", "-", "--options", "runtime", str(tools / "BrecciaRuntime")], capture_output=True, text=True)
+    require(hardened.returncode == 0 and "runtime" in code_signature(tools / "BrecciaRuntime"), f"cannot give the runtime the hardened runtime: {hardened.stderr}")
     # A universal loader, which holds every architecture the runtime can, and a MoltenVK built for another one.
-    runtime_architectures = lipo_archs(tools / "BasaltRuntime")
+    runtime_architectures = lipo_archs(tools / "BrecciaRuntime")
     other = "x86_64" if "x86_64" not in runtime_architectures else "arm64"
     for name, architectures in (("libvulkan.1.dylib", ["arm64", "x86_64"]), ("libMoltenVK.dylib", [other])):
         flags = [flag for architecture in architectures for flag in ("-arch", architecture)]
@@ -218,8 +218,8 @@ def check_hardened_runtime(cli, project, temp, env):
 def main():
     cli, model = map(lambda value: str(Path(value).resolve()), sys.argv[1:3])
     # Spaces in every path: the smoke test must quote the exported executable and run it from its own folder.
-    with tempfile.TemporaryDirectory(prefix="Basalt Export ") as temp:
-        env = dict(os.environ, BASALT_USER_DATA_DIR=str(Path(temp, "User Data")))
+    with tempfile.TemporaryDirectory(prefix="Breccia Export ") as temp:
+        env = dict(os.environ, BRECCIA_USER_DATA_DIR=str(Path(temp, "User Data")))
         if sys.platform == "darwin":
             # Export bundles the Vulkan loader and MoltenVK; headless runs never load them, so stand-ins do.
             sdk = Path(temp, "Vulkan SDK", "lib")
@@ -321,7 +321,7 @@ def main():
         fails("project.export", {"output": str(package_output), "package": True, "validate": False}, "cannot decode icon")
         require(project_file.is_file(), "a refused export removed the previous package")
         (project / "Assets" / "Textures" / "Icon.png").write_bytes(icon_bytes)
-        # Without an icon: no icon file or resource, and Basalt's icon in an AppImage.
+        # Without an icon: no icon file or resource, and Breccia's icon in an AppImage.
         ok("project.set", {"icon": ""})
         plain = ok("project.export", {"output": str(package_output), "package": True, "smokeTestFrames": 5})
         check_package(plain, package_output, has_icon=False)

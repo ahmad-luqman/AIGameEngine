@@ -7,13 +7,13 @@ set(FETCHCONTENT_QUIET ON)
 set(FETCHCONTENT_UPDATES_DISCONNECTED ON)
 
 include(DependencySources)
-basalt_use_dependency_sources("${CMAKE_CURRENT_LIST_FILE}")
+breccia_use_dependency_sources("${CMAKE_CURRENT_LIST_FILE}")
 
 # Some dependencies still declare cmake_minimum_required < 3.5, which CMake 4.x rejects.
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 
 # A compiler launcher (ccache, sccache in CI) cannot cache MSVC objects that write their debug information into a shared
-# PDB (/Zi): embed it in each object (/Z7) instead. Set before any target exists, it applies to dependencies and Basalt
+# PDB (/Zi): embed it in each object (/Z7) instead. Set before any target exists, it applies to dependencies and Breccia
 # alike.
 if(MSVC AND CMAKE_CXX_COMPILER_LAUNCHER AND NOT DEFINED CMAKE_MSVC_DEBUG_INFORMATION_FORMAT)
 	set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<$<CONFIG:Debug,RelWithDebInfo>:Embedded>")
@@ -96,27 +96,27 @@ FetchContent_Declare(fsr1
 	GIT_REPOSITORY https://github.com/GPUOpen-Effects/FidelityFX-FSR.git
 	GIT_TAG a21ffb8f6c13233ba336352bdff293894c706575
 	GIT_SUBMODULES "" # sample applications/media are not needed
-	SOURCE_SUBDIR _BasaltNoCMake)
+	SOURCE_SUBDIR _BrecciaNoCMake)
 
 FetchContent_Declare(lua
 	SYSTEM
 	GIT_REPOSITORY https://github.com/lua/lua.git
 	GIT_TAG v5.4.9
 	GIT_SHALLOW TRUE
-	SOURCE_SUBDIR _BasaltNoCMake)
+	SOURCE_SUBDIR _BrecciaNoCMake)
 
 FetchContent_Declare(imgui
 	SYSTEM
 	GIT_REPOSITORY https://github.com/ocornut/imgui.git
 	GIT_TAG v1.92.9-docking
 	GIT_SHALLOW TRUE
-	SOURCE_SUBDIR _BasaltNoCMake)
+	SOURCE_SUBDIR _BrecciaNoCMake)
 
 FetchContent_Declare(imguizmo
 	SYSTEM
 	GIT_REPOSITORY https://github.com/CedricGuillemet/ImGuizmo.git
 	GIT_TAG 18cef5e031d8c6973d80284c67f60549fafd78c1
-	SOURCE_SUBDIR _BasaltNoCMake)
+	SOURCE_SUBDIR _BrecciaNoCMake)
 
 # dev branch after 0.11.25 (bug fixes only): 0.11.25 reads a freed resource-manager node whenever a
 # sound fails to load (found by ASan). Move back to a release tag once 0.11.26 ships.
@@ -124,7 +124,7 @@ FetchContent_Declare(miniaudio
 	SYSTEM
 	GIT_REPOSITORY https://github.com/mackron/miniaudio.git
 	GIT_TAG 78c8a43a5f99980fa4cbf34ac5720c3f77073c4d
-	SOURCE_SUBDIR _BasaltNoCMake)
+	SOURCE_SUBDIR _BrecciaNoCMake)
 
 FetchContent_Declare(meshoptimizer
 	SYSTEM
@@ -137,7 +137,7 @@ FetchContent_Declare(cgltf
 	GIT_REPOSITORY https://github.com/jkuhlmann/cgltf.git
 	GIT_TAG v1.15
 	GIT_SHALLOW TRUE
-	SOURCE_SUBDIR _BasaltNoCMake)
+	SOURCE_SUBDIR _BrecciaNoCMake)
 
 # Basis bundles Zstd 1.4.9, which mishandles Tests/Data/Textures/ZstdRegression.ktx2 (a fuzz find), so the
 # transcoder links this pinned libzstd instead. It still compiles against Basis's bundled zstd.h, which is fine: the
@@ -162,18 +162,18 @@ set(ZSTD_BUILD_DICTBUILDER OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(bc7enc SYSTEM
 	GIT_REPOSITORY https://github.com/richgel999/bc7enc_rdo.git
 	GIT_TAG b9438627eef73a1157e84201b6fa6eb2ffd6d9f0
-	SOURCE_SUBDIR _BasaltNoCMake)
+	SOURCE_SUBDIR _BrecciaNoCMake)
 FetchContent_Declare(basisu SYSTEM
 	GIT_REPOSITORY https://github.com/BinomialLLC/basis_universal.git
 	GIT_TAG v1_60_snapshot_final # c54f46f8aaa44eff1bc6e1d919e61e18b2b8f7d1; fixes LP64 debug overloads
 	GIT_SHALLOW TRUE
-	SOURCE_SUBDIR _BasaltNoCMake)
+	SOURCE_SUBDIR _BrecciaNoCMake)
 
 FetchContent_Declare(stb
 	SYSTEM
 	GIT_REPOSITORY https://github.com/nothings/stb.git
 	GIT_TAG 2c980bb59875b0d32144a71867fbdebb2f77cd20
-	SOURCE_SUBDIR _BasaltNoCMake)
+	SOURCE_SUBDIR _BrecciaNoCMake)
 
 # ---------------------------------------------------------------------------------------------
 # Options for CMake-based dependencies
@@ -229,7 +229,7 @@ set(JPH_USE_CPU_COMPUTE OFF CACHE BOOL "" FORCE)
 # MSVC) and makes a few vector operations deterministic, at roughly 8% speed. It only holds when every
 # platform builds the same Jolt source with the same defines, hence the exact pin above.
 set(CROSS_PLATFORM_DETERMINISTIC ON CACHE BOOL "" FORCE)
-# 32-bit object layers: Basalt packs motion type, collision layer and collision mask into them.
+# 32-bit object layers: Breccia packs motion type, collision layer and collision mask into them.
 set(OBJECT_LAYER_BITS 32 CACHE STRING "" FORCE)
 # Jolt adds /Zi to every MSVC configuration, which a compiler launcher cannot cache (see above). Its Debug builds keep
 # the debug information CMake's own setting selects; its Release and Dist builds now have none, like the rest.
@@ -261,20 +261,20 @@ endif()
 # ---------------------------------------------------------------------------------------------
 
 # Lua 5.4 (compiled as C)
-file(GLOB BASALT_LUA_SOURCES "${lua_SOURCE_DIR}/l*.c")
-list(REMOVE_ITEM BASALT_LUA_SOURCES "${lua_SOURCE_DIR}/lua.c" "${lua_SOURCE_DIR}/luac.c" "${lua_SOURCE_DIR}/ltests.c" "${lua_SOURCE_DIR}/onelua.c")
-add_library(BasaltLua STATIC ${BASALT_LUA_SOURCES})
-target_include_directories(BasaltLua SYSTEM PUBLIC "${lua_SOURCE_DIR}")
-set_target_properties(BasaltLua PROPERTIES LINKER_LANGUAGE C POSITION_INDEPENDENT_CODE ON)
+file(GLOB BRECCIA_LUA_SOURCES "${lua_SOURCE_DIR}/l*.c")
+list(REMOVE_ITEM BRECCIA_LUA_SOURCES "${lua_SOURCE_DIR}/lua.c" "${lua_SOURCE_DIR}/luac.c" "${lua_SOURCE_DIR}/ltests.c" "${lua_SOURCE_DIR}/onelua.c")
+add_library(BrecciaLua STATIC ${BRECCIA_LUA_SOURCES})
+target_include_directories(BrecciaLua SYSTEM PUBLIC "${lua_SOURCE_DIR}")
+set_target_properties(BrecciaLua PROPERTIES LINKER_LANGUAGE C POSITION_INDEPENDENT_CODE ON)
 if(UNIX AND NOT APPLE)
-	target_compile_definitions(BasaltLua PRIVATE LUA_USE_LINUX)
-	target_link_libraries(BasaltLua PRIVATE m dl)
+	target_compile_definitions(BrecciaLua PRIVATE LUA_USE_LINUX)
+	target_link_libraries(BrecciaLua PRIVATE m dl)
 elseif(APPLE)
-	target_compile_definitions(BasaltLua PRIVATE LUA_USE_MACOSX)
+	target_compile_definitions(BrecciaLua PRIVATE LUA_USE_MACOSX)
 endif()
 
-# Dear ImGui (docking branch) + GLFW platform backend. The renderer backend is Basalt's own (nvrhi).
-add_library(BasaltImGui STATIC
+# Dear ImGui (docking branch) + GLFW platform backend. The renderer backend is Breccia's own (nvrhi).
+add_library(BrecciaImGui STATIC
 	"${imgui_SOURCE_DIR}/imgui.cpp"
 	"${imgui_SOURCE_DIR}/imgui_demo.cpp"
 	"${imgui_SOURCE_DIR}/imgui_draw.cpp"
@@ -282,35 +282,35 @@ add_library(BasaltImGui STATIC
 	"${imgui_SOURCE_DIR}/imgui_widgets.cpp"
 	"${imgui_SOURCE_DIR}/misc/cpp/imgui_stdlib.cpp"
 	"${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp")
-target_include_directories(BasaltImGui SYSTEM PUBLIC "${imgui_SOURCE_DIR}" "${imgui_SOURCE_DIR}/backends" "${imgui_SOURCE_DIR}/misc/cpp")
-target_link_libraries(BasaltImGui PUBLIC glfw)
-# GLFW must not pull in OpenGL headers (Basalt is Vulkan-only; GL headers are absent on CI images).
-target_compile_definitions(BasaltImGui PUBLIC IMGUI_DEFINE_MATH_OPERATORS GLFW_INCLUDE_NONE)
+target_include_directories(BrecciaImGui SYSTEM PUBLIC "${imgui_SOURCE_DIR}" "${imgui_SOURCE_DIR}/backends" "${imgui_SOURCE_DIR}/misc/cpp")
+target_link_libraries(BrecciaImGui PUBLIC glfw)
+# GLFW must not pull in OpenGL headers (Breccia is Vulkan-only; GL headers are absent on CI images).
+target_compile_definitions(BrecciaImGui PUBLIC IMGUI_DEFINE_MATH_OPERATORS GLFW_INCLUDE_NONE)
 
-add_library(BasaltImGuizmo STATIC "${imguizmo_SOURCE_DIR}/src/ImGuizmo.cpp")
-target_include_directories(BasaltImGuizmo SYSTEM PUBLIC "${imguizmo_SOURCE_DIR}/src")
-target_link_libraries(BasaltImGuizmo PUBLIC BasaltImGui)
+add_library(BrecciaImGuizmo STATIC "${imguizmo_SOURCE_DIR}/src/ImGuizmo.cpp")
+target_include_directories(BrecciaImGuizmo SYSTEM PUBLIC "${imguizmo_SOURCE_DIR}/src")
+target_link_libraries(BrecciaImGuizmo PUBLIC BrecciaImGui)
 
-# Header-only single-file libraries; implementations are compiled once inside Basalt.
-add_library(BasaltMiniaudio INTERFACE)
-target_include_directories(BasaltMiniaudio SYSTEM INTERFACE "${miniaudio_SOURCE_DIR}")
+# Header-only single-file libraries; implementations are compiled once inside Breccia.
+add_library(BrecciaMiniaudio INTERFACE)
+target_include_directories(BrecciaMiniaudio SYSTEM INTERFACE "${miniaudio_SOURCE_DIR}")
 
-add_library(BasaltCgltf INTERFACE)
-target_include_directories(BasaltCgltf SYSTEM INTERFACE "${cgltf_SOURCE_DIR}")
+add_library(BrecciaCgltf INTERFACE)
+target_include_directories(BrecciaCgltf SYSTEM INTERFACE "${cgltf_SOURCE_DIR}")
 
-add_library(BasaltStb INTERFACE)
-target_include_directories(BasaltStb SYSTEM INTERFACE "${stb_SOURCE_DIR}")
+add_library(BrecciaStb INTERFACE)
+target_include_directories(BrecciaStb SYSTEM INTERFACE "${stb_SOURCE_DIR}")
 
 # nvrhi's Vulkan backend uses nvrhi's common code; express that so static link order is correct on GNU ld.
 target_link_libraries(nvrhi_vk PUBLIC nvrhi)
 
 # The Vulkan loader is opened dynamically at runtime (vulkan.hpp dynamic dispatch), so nothing links against it;
-# Basalt only needs the Vulkan::Headers target.
+# Breccia only needs the Vulkan::Headers target.
 
 unset(CMAKE_POLICY_VERSION_MINIMUM)
 
 # Tracy is fetched only for explicitly profiled builds. Keep shipping builds independent of its client.
-if(BASALT_PROFILE AND NOT CMAKE_BUILD_TYPE STREQUAL "Dist")
+if(BRECCIA_PROFILE AND NOT CMAKE_BUILD_TYPE STREQUAL "Dist")
 	set(TRACY_ENABLE ON CACHE BOOL "" FORCE)
 	set(TRACY_ON_DEMAND ON CACHE BOOL "" FORCE)
 	set(TRACY_ONLY_LOCALHOST ON CACHE BOOL "" FORCE)
@@ -318,7 +318,7 @@ if(BASALT_PROFILE AND NOT CMAKE_BUILD_TYPE STREQUAL "Dist")
 	# While a profiler is connected, Tracy installs crash handlers (signal handlers on Linux, an unhandled-exception filter
 	# on Windows). Sanitizer builds turn them off so the sanitizers report crashes themselves (Core/CrashReporter likewise
 	# stays off under AddressSanitizer).
-	if(BASALT_SANITIZE)
+	if(BRECCIA_SANITIZE)
 		set(TRACY_NO_CRASH_HANDLER ON CACHE BOOL "" FORCE)
 	else()
 		set(TRACY_NO_CRASH_HANDLER OFF CACHE BOOL "" FORCE)
@@ -330,36 +330,36 @@ if(BASALT_PROFILE AND NOT CMAKE_BUILD_TYPE STREQUAL "Dist")
 	FetchContent_MakeAvailable(tracy)
 endif()
 
-add_library(BasaltTextureCodecs STATIC
+add_library(BrecciaTextureCodecs STATIC
 	"${bc7enc_SOURCE_DIR}/bc7enc.cpp" "${bc7enc_SOURCE_DIR}/bc7decomp.cpp"
 	"${basisu_SOURCE_DIR}/transcoder/basisu_transcoder.cpp")
-target_link_libraries(BasaltTextureCodecs PRIVATE libzstd_static)
-target_include_directories(BasaltTextureCodecs SYSTEM PUBLIC "${bc7enc_SOURCE_DIR}" "${basisu_SOURCE_DIR}/transcoder")
-target_compile_definitions(BasaltTextureCodecs PUBLIC BASISD_SUPPORT_KTX2_ZSTD=1)
+target_link_libraries(BrecciaTextureCodecs PRIVATE libzstd_static)
+target_include_directories(BrecciaTextureCodecs SYSTEM PUBLIC "${bc7enc_SOURCE_DIR}" "${basisu_SOURCE_DIR}/transcoder")
+target_compile_definitions(BrecciaTextureCodecs PUBLIC BASISD_SUPPORT_KTX2_ZSTD=1)
 # v1_60 uses std::terminate without including <exception>; libc++ 21 stopped including it transitively.
 # Supply the missing standard header without patching third-party sources.
 if(MSVC)
-	target_compile_options(BasaltTextureCodecs PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:/FIexception>")
+	target_compile_options(BrecciaTextureCodecs PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:/FIexception>")
 else()
-	target_compile_options(BasaltTextureCodecs PRIVATE -fno-strict-aliasing "$<$<COMPILE_LANGUAGE:CXX>:-include>" "$<$<COMPILE_LANGUAGE:CXX>:exception>")
+	target_compile_options(BrecciaTextureCodecs PRIVATE -fno-strict-aliasing "$<$<COMPILE_LANGUAGE:CXX>:-include>" "$<$<COMPILE_LANGUAGE:CXX>:exception>")
 endif()
 
 # File pickers belong only to the editor. Linux uses the portal backend; systems without D-Bus development files
 # (found through pkg-config) still build the editor, with typed-path prompts only.
-if(BASALT_BUILD_EDITOR)
-	set(BASALT_NATIVE_DIALOGS_AVAILABLE ON)
+if(BRECCIA_BUILD_EDITOR)
+	set(BRECCIA_NATIVE_DIALOGS_AVAILABLE ON)
 	if(UNIX AND NOT APPLE)
 		find_package(PkgConfig QUIET)
 		if(PkgConfig_FOUND)
-			pkg_check_modules(BASALT_DBUS QUIET dbus-1)
+			pkg_check_modules(BRECCIA_DBUS QUIET dbus-1)
 		endif()
-		if(NOT BASALT_DBUS_FOUND)
-			set(BASALT_NATIVE_DIALOGS_AVAILABLE OFF)
+		if(NOT BRECCIA_DBUS_FOUND)
+			set(BRECCIA_NATIVE_DIALOGS_AVAILABLE OFF)
 			message(STATUS "D-Bus development files unavailable; using text-path file prompts")
 		endif()
 		set(NFD_PORTAL ON CACHE BOOL "Use XDG portal dialogs" FORCE)
 	endif()
-	if(BASALT_NATIVE_DIALOGS_AVAILABLE)
+	if(BRECCIA_NATIVE_DIALOGS_AVAILABLE)
 		set(NFD_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 		set(NFD_INSTALL OFF CACHE BOOL "" FORCE)
 		FetchContent_Declare(nativefiledialog SYSTEM

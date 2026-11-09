@@ -1,7 +1,7 @@
 # Shipping a game
 
-How a Basalt project becomes something players download: the project's identity (name, version, company, icon), the
-export, platform packages, the asset archive, signing, crash reports, and the release pipeline that builds Basalt itself.
+How a Breccia project becomes something players download: the project's identity (name, version, company, icon), the
+export, platform packages, the asset archive, signing, crash reports, and the release pipeline that builds Breccia itself.
 
 ## Project identity
 
@@ -15,15 +15,15 @@ Set these in Project Settings > General or with `project.set`:
 | Icon | `icon` | A PNG under `Assets/` (at most 4096 px; square and 512 px or more looks best). The window icon on Windows and Linux X11, and the icon of every package |
 
 ```bash
-basalt --project MyGame project.set '{"version": "1.2.0", "company": "Acme Games", "icon": "Assets/Textures/Icon.png"}'
-basalt --project MyGame project.info     # also shows the derived bundleIdentifier
+breccia --project MyGame project.set '{"version": "1.2.0", "company": "Acme Games", "icon": "Assets/Textures/Icon.png"}'
+breccia --project MyGame project.info     # also shows the derived bundleIdentifier
 ```
 
 - The icon is an asset reference, like the start scene: the project file stores its UUID and path, so `asset.move`
   and `asset.rename` keep it, and `asset.delete` warns when it deletes it. An icon that is not square is centered on a
   transparent square, never stretched.
 - The macOS bundle identifier is `com.<company>.<name>`. Each part keeps its ASCII letters and digits (letter case
-  included) with one `-` for each inner run of other characters; a company without any becomes `basalt`, a name
+  included) with one `-` for each inner run of other characters; a company without any becomes `breccia`, a name
   without any `game`. Changing the name or company changes it, and macOS then treats the game as a new app (its
   permissions and preferences).
 - `project.validate` reports an icon that is missing, not a PNG or too large (errors), and one under 256 px (a
@@ -39,9 +39,9 @@ the project, and empty or a previous export of the same game (its project file a
 Export with a `Dist` build of the tools for distribution.
 
 ```bash
-basalt --project MyGame project.export '{"output": "Dist/MyGame", "smokeTestFrames": 120}'                   # a folder
-basalt --project MyGame project.export '{"output": "Dist/MyGame", "package": true, "smokeTestFrames": 120}'  # a package
-basalt --project MyGame project.export '{"output": "Dist/MyGame", "package": true, "archive": true}'         # Assets in one file
+breccia --project MyGame project.export '{"output": "Dist/MyGame", "smokeTestFrames": 120}'                   # a folder
+breccia --project MyGame project.export '{"output": "Dist/MyGame", "package": true, "smokeTestFrames": 120}'  # a package
+breccia --project MyGame project.export '{"output": "Dist/MyGame", "package": true, "archive": true}'         # Assets in one file
 ```
 
 The result names the `executable` (what the smoke test ran), the `package` (what to distribute) and any `warnings`
@@ -79,8 +79,8 @@ would not start on such Macs; `lipo -archs` on the files says which they hold.
 
 Every macOS export, folder or bundle, is signed ad hoc as its last step (`/usr/bin/codesign`, part of macOS): the
 libraries, then the executable or the bundle, which seals everything under `Contents`. A release's runtime, once signed
-with Basalt's Developer ID, has the hardened runtime, whose library validation would refuse Vulkan libraries signed by
-anyone else, and would name Basalt's publisher as the game's; the ad hoc signature names no one. Sign the export with
+with Breccia's Developer ID, has the hardened runtime, whose library validation would refuse Vulkan libraries signed by
+anyone else, and would name Breccia's publisher as the game's; the ad hoc signature names no one. Sign the export with
 your own identity before distributing it (see below).
 
 **Windows: a folder.** The same layout as a folder export, but the executable carries a version resource (Explorer's
@@ -88,7 +88,7 @@ Details tab) and, with a project icon, the icon: an `RT_GROUP_ICON` named `GLFW_
 loads as the window class icon) with PNG images from 16 to 256 px. Zip the folder to distribute it.
 
 Every Windows export, folder or package, removes the Authenticode signature of the runtime it copies (a release's
-runtime, once signed, names Basalt's publisher): the game is yours to sign (see below), and a package's resource rewrite
+runtime, once signed, names Breccia's publisher): the game is yours to sign (see below), and a package's resource rewrite
 would break the signature anyway. An export refuses a runtime whose certificate table is not where signing tools put it
 (past the headers and every section, at the end of the file).
 
@@ -101,7 +101,7 @@ would break the signature anyway. An export refuses a runtime whose certificate 
 <Name>-<version>-<arch>.AppImage
 ```
 
-`<Name>.png` is the project icon (at most 512 px), or Basalt's own icon at 256 px when the project has none (an AppImage
+`<Name>.png` is the project icon (at most 512 px), or Breccia's own icon at 256 px when the project has none (an AppImage
 must have one). The AppDir is replaced on every export, and an export that builds an AppImage removes the game's
 earlier ones (other games' AppImages in the folder stay). The AppDir always gets built. The `.AppImage` file needs [appimagetool](https://github.com/AppImage/appimagetool):
 `appImageTool` in the command, else `$APPIMAGETOOL`, else `appimagetool` on `PATH`. Without it, the export succeeds
@@ -119,7 +119,7 @@ reads every entry and checks its hash); the result of `project.export` reports `
 compressed), size (uncompressed bytes), archiveSize (bytes on disk), omitted (original images left out)}`.
 
 ```bash
-basalt archive.inspect '{"path": "Dist/MyGame/Assets.bpak", "verify": true}'
+breccia archive.inspect '{"path": "Dist/MyGame/Assets.bpak", "verify": true}'
 ```
 
 - **Contents.** Every file under `Assets/` except the `.meta` sidecars and the two groups below (compressed texture originals, names no key can hold). Each entry carries its asset's UUID in the
@@ -146,7 +146,7 @@ basalt archive.inspect '{"path": "Dist/MyGame/Assets.bpak", "verify": true}'
   own; `validation`, when it runs, reports them for both forms.
 - **Compression.** Each file except MP3 and FLAC audio is compressed with zstd (level 9) on the job system, up to 256 files
   or 256 MiB of them at a time (a larger file goes alone), and kept compressed only when that makes it smaller. Files are
-  written in path order, so the same files and Basalt build give the same bytes however many cores the machine has.
+  written in path order, so the same files and Breccia build give the same bytes however many cores the machine has.
   PNG/JPEG images usually end up stored as they are. MP3 and FLAC files always are, without trying zstd, which saves 0.1 to
   5% of them and would stop a long clip being read in part (the engine plays WAV, FLAC and MP3). `.ktx2` textures without
   supercompression (BC7 from `asset.compress_texture`, plain UASTC) usually shrink further, while ETC1S and
@@ -169,7 +169,7 @@ basalt archive.inspect '{"path": "Dist/MyGame/Assets.bpak", "verify": true}'
   file exactly. Each index entry is the path's length (u32) and UTF-8 bytes (normalized, `/`-separated, sorted
   byte-wise and unique), the asset UUID (u64, 0 without one), the data's offset, stored size and size (u64 each), the
   method (u8: 0 stored, 1 zstd) and the file's hash (u64). Both hashes are `HashBytes64` (`Core/Hash.h`) of the
-  uncompressed file and of the index bytes. The same files always give the same archive with the same Basalt build (no
+  uncompressed file and of the index bytes. The same files always give the same archive with the same Breccia build (no
   timestamps), so rebuilds can be compared byte for byte. Archives are read as untrusted input: every count, offset and
   size is checked before anything is allocated, a compressed entry may not claim more than its stored bytes can hold
   (128 KiB per 3 bytes), and a zstd frame must declare exactly the indexed size (`Tests/Fuzz/FuzzPackArchive`).
@@ -237,7 +237,7 @@ The runtime, the editor and the CLI write a report when they crash: a fatal sign
 parameters and pure virtual calls there. A report holds:
 
 - the application (the executable's name: an exported game's is the project name with spaces as `_` and characters
-  other than letters, digits, `-` and `_` dropped; the CLI is `basalt`),
+  other than letters, digits, `-` and `_` dropped; the CLI is `breccia`),
   the project's name and version (runtime reports), the platform, the process ID and the time;
 - the reason (`SIGSEGV (invalid memory access) at 0x…`, `EXCEPTION_ACCESS_VIOLATION …`), and the message of an
   uncaught C++ exception that ended the process;
@@ -250,7 +250,7 @@ parameters and pure virtual calls there. A report holds:
   for `addr2line -e` on the same build.
 
 Reports go to `<user data>/<application>/Crashes/crash-<unix time>-<process>.txt` (the per-user data directory that
-save data uses, `BASALT_USER_DATA_DIR` included), so a signed `.app` or a read-only install is normally left alone. Only
+save data uses, `BRECCIA_USER_DATA_DIR` included), so a signed `.app` or a read-only install is normally left alone. Only
 when there is no user data directory, or the report cannot be created there, does the reporter try `CrashReports/` next
 to the executable. The folders are created only when something crashes (up to eight missing levels; a deeper chain, or
 a report folder path over 1024 bytes, falls back to `CrashReports/`).
@@ -284,16 +284,16 @@ stays, and no message box shows, since it could hang on a lock the watchdog held
 threads waiting for it, these limits cannot fire. Opening the report gets 5 seconds. Threads the engine does not start
 (miniaudio's, a graphics driver's) have neither stack, so their stack overflows end the process without a report.
 
-## Releasing Basalt
+## Releasing Breccia
 
-`.github/workflows/release.yml` runs on `v<version>` tags. The tag must match `project(Basalt VERSION ...)` in
+`.github/workflows/release.yml` runs on `v<version>` tags. The tag must match `project(Breccia VERSION ...)` in
 `CMakeLists.txt`, or the run fails before building. On Windows, macOS and Linux it builds the `Dist` configuration and
 runs `scripts/package_release.py`, which writes:
 
-- `Basalt-<version>-<platform>.zip` (`.tar.gz` on Linux): the editor, runtime and CLI in `bin/`, plus `Docs/`,
+- `Breccia-<version>-<platform>.zip` (`.tar.gz` on Linux): the editor, runtime and CLI in `bin/`, plus `Docs/`,
   `Samples/`, `README.md` and `LICENSE`. On macOS it also holds the Vulkan loader and MoltenVK next to the tools, so they
   run without the Vulkan SDK.
-- `Basalt-<version>-<Sample>-<platform>.*`: every sample exported as a package with its assets in `Assets.bpak`, and
+- `Breccia-<version>-<Sample>-<platform>.*`: every sample exported as a package with its assets in `Assets.bpak`, and
   smoke-tested headless. These are a
   zipped `.app` (macOS; smoke-tested again after signing), a zipped folder (Windows; smoke-tested again after signing,
   when signing is set up) or an `.AppImage` that is also

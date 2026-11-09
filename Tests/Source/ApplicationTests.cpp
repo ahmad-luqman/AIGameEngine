@@ -1,10 +1,10 @@
 #include <doctest/doctest.h>
 
-#include <Basalt/Core/Application.h>
+#include <Breccia/Core/Application.h>
 
 #include <thread>
 
-using namespace Basalt;
+using namespace Breccia;
 
 namespace {
 

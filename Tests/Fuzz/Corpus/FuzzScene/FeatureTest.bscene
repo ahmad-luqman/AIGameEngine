@@ -1,5 +1,5 @@
 {
-	"Format": "BasaltScene",
+	"Format": "BrecciaScene",
 	"Version": 1,
 	"Name": "FeatureTest",
 	"Renderer": { "Exposure": 0.8, "Tonemapper": "ACES", "SSAOEnabled": true, "ShadowsEnabled": true, "ShadowDistance": 40 },

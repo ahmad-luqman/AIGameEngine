@@ -12,18 +12,18 @@ Run all steps on each GPU. Steps 1–3 are automated; step 4 needs a person at t
 1. **Build Release with GPU tests.**
    ```bash
    # Linux / macOS
-   cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DBASALT_GPU_TESTS=ON
+   cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DBRECCIA_GPU_TESTS=ON
    cmake --build build-release
    ```
    ```bat
    :: Windows (Developer Command Prompt for VS, Vulkan SDK installed)
-   cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DBASALT_GPU_TESTS=ON
+   cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DBRECCIA_GPU_TESTS=ON
    cmake --build build-release
    ```
 2. **Pick the GPU and render the feature scene offscreen with validation.** The runtime lists every GPU
    at startup as `GPU N: <name> (<type>, ...)`; select one by index or by a unique part of its name.
    ```bash
-   build-release/bin/BasaltRuntime --project Tests/Data/FeatureTest --frames 90 --offscreen \
+   build-release/bin/BrecciaRuntime --project Tests/Data/FeatureTest --frames 90 --offscreen \
        --require-validation --gpu nvidia --screenshot lit.png
    ```
    Exit code 0 means the validation layer was active and reported no errors (3 = validation errors,
@@ -34,17 +34,17 @@ Run all steps on each GPU. Steps 1–3 are automated; step 4 needs a person at t
 3. **Compare with the golden images.** There are no references for vendor drivers yet. Compare against
    the MoltenVK set, which lavapipe also matches within tolerance:
    ```bash
-   build-release/bin/basalt image.compare '{"actual": "lit.png", "reference": "Tests/Data/Golden/moltenvk/FeatureTest_Lit.png", "diff": "lit.diff.png"}'
+   build-release/bin/breccia image.compare '{"actual": "lit.png", "reference": "Tests/Data/Golden/moltenvk/FeatureTest_Lit.png", "diff": "lit.diff.png"}'
    ```
    A small `differingPercent` (well under 1%) concentrated on texture edges is driver noise. Anything
    structural (flipped image, black or missing shadows, wrong normals) is a bug: open the diff image and
-   follow the basalt-debug-rendering skill. For a driver family that will be tested regularly, add a
+   follow the breccia-debug-rendering skill. For a driver family that will be tested regularly, add a
    reference set with `scripts/update_golden.sh <nvidia|amd|intel>` after checking the images by eye.
-4. **Interactive check in the editor** (`BasaltEditor --project Samples/Tetris --gpu <G>`), with the
+4. **Interactive check in the editor** (`BrecciaEditor --project Samples/Tetris --gpu <G>`), with the
    validation layer installed:
    - resize the window, maximize, minimize and restore;
    - move, rotate and scale an entity with the gizmos;
-   - play, pause and stop; play Tetris for a minute in `BasaltRuntime --project Samples/Tetris`;
+   - play, pause and stop; play Tetris for a minute in `BrecciaRuntime --project Samples/Tetris`;
    - the console (and the terminal) shows no `[Vulkan]` or `[nvrhi]` errors.
 
 ## Setting up each kind of machine

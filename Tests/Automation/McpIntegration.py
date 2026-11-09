@@ -20,8 +20,8 @@ def request(identifier, method, params=None):
 
 
 def main():
-    basalt = sys.argv[1]
-    with tempfile.TemporaryDirectory(prefix="BasaltMcp-") as temp:
+    breccia = sys.argv[1]
+    with tempfile.TemporaryDirectory(prefix="BrecciaMcp-") as temp:
         messages = [
             request(1, "initialize", {"protocolVersion": "2025-11-25", "capabilities": {},
                                      "clientInfo": {"name": "integration", "version": "1"}}),
@@ -40,7 +40,7 @@ def main():
             request(12, "tools/call", {"name": "scene.save", "arguments": {"path": "Assets/Scenes/MCP.bscene"}}),
         ]
         payload = "\n".join(json.dumps(message) for message in messages) + "\n\n\r\n{bad}\n" + json.dumps(request(13, "ping")) + "\n"
-        process = subprocess.run([basalt, "--verbose", "mcp"], input=payload, text=True, capture_output=True, timeout=60)
+        process = subprocess.run([breccia, "--verbose", "mcp"], input=payload, text=True, capture_output=True, timeout=60)
         require(process.returncode == 0, process.stderr)
         replies = [json.loads(line) for line in process.stdout.splitlines()]
         require(len(replies) == 16, f"Unexpected stdout messages: {process.stdout}")
@@ -60,7 +60,7 @@ def main():
             request(22, "tools/call", {"name": "entity.create", "arguments": {"name": "Play-only"}}),
         ]
         edit_payload = "\n".join(json.dumps(message) for message in edits) + "\n"
-        command = [basalt, "--project", temp, "--scene", "Assets/Scenes/MCP.bscene", "mcp"]
+        command = [breccia, "--project", temp, "--scene", "Assets/Scenes/MCP.bscene", "mcp"]
         saved = subprocess.run(command, input=edit_payload, text=True, capture_output=True, timeout=60)
         require(saved.returncode == 0, saved.stderr)
         require(all(not reply.get("result", {}).get("isError", False)
@@ -73,20 +73,20 @@ def main():
                 and "not auto-saved" in partial.stderr, "Missing transport/save diagnostics")
         require("Must-not-save" not in pathlib.Path(temp, "Assets/Scenes/MCP.bscene").read_text(),
                 "Failed session unexpectedly auto-saved")
-        help_result = subprocess.run([basalt, "help", "entity.create"], capture_output=True, text=True, check=True, timeout=30)
+        help_result = subprocess.run([breccia, "help", "entity.create"], capture_output=True, text=True, check=True, timeout=30)
         schema = json.loads(help_result.stdout)["result"]["inputSchema"]
         tool = next(tool for tool in by_id[2]["result"]["tools"] if tool["name"] == "entity.create")
         require(tool["inputSchema"] == schema, "CLI and MCP schema drift")
-        failure = subprocess.run([basalt, "--project", str(pathlib.Path(temp, "missing")), "mcp"], capture_output=True, text=True, timeout=30)
+        failure = subprocess.run([breccia, "--project", str(pathlib.Path(temp, "missing")), "mcp"], capture_output=True, text=True, timeout=30)
         require(failure.returncode != 0 and not failure.stdout, "Startup failure polluted MCP stdout")
         # Text that is not UTF-8 (here a Lua string) still prints as JSON, with replacement characters.
         invalid = [{"command": "scene.new", "params": {"empty": True}}, {"command": "play.start"},
                    {"command": "lua.exec", "params": {"code": "return 'bad \\255 byte'"}}]
-        batch = subprocess.run([basalt, "--no-save", "batch", "-"], input=json.dumps(invalid).encode(), capture_output=True, timeout=60)
+        batch = subprocess.run([breccia, "--no-save", "batch", "-"], input=json.dumps(invalid).encode(), capture_output=True, timeout=60)
         require(batch.returncode == 0, batch.stderr.decode("utf-8", "replace"))
         replies = json.loads(batch.stdout.decode("utf-8"))
         require(replies[2]["result"]["result"] == "bad \ufffd byte", f"invalid UTF-8 output: {replies[2]}")
-        single = subprocess.run([basalt, "lua.exec", json.dumps({"code": "return 1"})], capture_output=True, timeout=60)
+        single = subprocess.run([breccia, "lua.exec", json.dumps({"code": "return 1"})], capture_output=True, timeout=60)
         require(single.returncode != 0 and json.loads(single.stdout.decode("utf-8"))["ok"] is False, "one-shot output is not JSON")
     print("MCP stdio integration passed")
 

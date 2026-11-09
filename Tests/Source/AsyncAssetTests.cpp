@@ -1,22 +1,22 @@
 #include <doctest/doctest.h>
 
-#include <Basalt/Asset/AssetManager.h>
-#include <Basalt/Core/JobSystem.h>
-#include <Basalt/Core/MemoryTracker.h>
-#include <Basalt/Project/Project.h>
+#include <Breccia/Asset/AssetManager.h>
+#include <Breccia/Core/JobSystem.h>
+#include <Breccia/Core/MemoryTracker.h>
+#include <Breccia/Project/Project.h>
 
 #include "TestUtils.h"
 
 #include <latch>
 
-using namespace Basalt;
+using namespace Breccia;
 
 TEST_SUITE("AsyncAssets")
 {
 	TEST_CASE("Blocking getters publish only their own keys and mesh dependencies")
 	{
 		AssetManager::Clear();
-		const std::string texture = std::string(BASALT_TEST_DATA_DIR) + "/FeatureTest/Assets/Textures/Checker.png";
+		const std::string texture = std::string(BRECCIA_TEST_DATA_DIR) + "/FeatureTest/Assets/Textures/Checker.png";
 		AssetManager::RequestMesh("builtin://Cube");
 		AssetManager::RequestMesh("builtin://Sphere");
 		AssetManager::RequestTexture(texture);
@@ -47,7 +47,7 @@ TEST_SUITE("AsyncAssets")
 		for (uint32_t i = 0; i < pool.GetWorkerCount(); ++i)
 			(void)pool.Submit([&] { started.count_down(); release.wait(); });
 		started.wait();
-		const std::string mesh = std::string(BASALT_TEST_DATA_DIR) + "/FeatureTest/Assets/Models/TexturedCube.glb";
+		const std::string mesh = std::string(BRECCIA_TEST_DATA_DIR) + "/FeatureTest/Assets/Models/TexturedCube.glb";
 		const auto image = mesh + "#image/0";
 		AssetManager::RequestMesh(mesh);
 		AssetManager::RequestTexture(image);
@@ -88,7 +88,7 @@ TEST_SUITE("AsyncAssets")
 	TEST_CASE("Blocking getters join pending work and embedded textures chain to their mesh")
 	{
 		AssetManager::Clear();
-		const std::string mesh = std::string(BASALT_TEST_DATA_DIR) + "/FeatureTest/Assets/Models/TexturedCube.glb";
+		const std::string mesh = std::string(BRECCIA_TEST_DATA_DIR) + "/FeatureTest/Assets/Models/TexturedCube.glb";
 		const std::string texture = mesh + "#image/0";
 		CHECK_FALSE(AssetManager::RequestTexture(texture));
 		CHECK(AssetManager::IsLoading(mesh));
@@ -131,7 +131,7 @@ TEST_SUITE("AsyncAssets")
 
 	TEST_CASE("Readable malformed images fail decoding without leaking a charge")
 	{
-		BasaltTest::TempProject project("AsyncInvalidImage");
+		BrecciaTest::TempProject project("AsyncInvalidImage");
 		project.WriteFile("Assets/bad.png", "this is not an image");
 		AssetManager::Clear();
 		JobSystem::Get().WaitIdle();
@@ -194,7 +194,7 @@ TEST_SUITE("AsyncAssets")
 	TEST_CASE("Publishing a parent leaves its completed result intact for queued image jobs")
 	{
 		AssetManager::Clear();
-		const std::string mesh = std::string(BASALT_TEST_DATA_DIR) + "/FeatureTest/Assets/Models/TexturedCube.glb";
+		const std::string mesh = std::string(BRECCIA_TEST_DATA_DIR) + "/FeatureTest/Assets/Models/TexturedCube.glb";
 		AssetManager::RequestMesh(mesh);
 		auto& pool = JobSystem::Get();
 		pool.WaitIdle();
@@ -220,7 +220,7 @@ TEST_SUITE("AsyncAssets")
 	TEST_CASE("Unrelated saves preserve a pending file mesh and its memory charge")
 	{
 		AssetManager::Clear();
-		const std::string mesh = std::string(BASALT_TEST_DATA_DIR) + "/FeatureTest/Assets/Models/TexturedCube.glb";
+		const std::string mesh = std::string(BRECCIA_TEST_DATA_DIR) + "/FeatureTest/Assets/Models/TexturedCube.glb";
 		AssetManager::RequestMesh(mesh);
 		JobSystem::Get().WaitIdle();
 		const auto bytes = MemoryTracker::Get(MemoryCategory::Assets).Bytes;
@@ -235,12 +235,12 @@ TEST_SUITE("AsyncAssets")
 	TEST_CASE("Completed project assets are replaced on project switch while builtins survive")
 	{
 		AssetManager::Clear();
-		BasaltTest::TempProject first("AsyncProjectA");
-		std::filesystem::copy_file(std::filesystem::path(BASALT_TEST_DATA_DIR) / "FeatureTest/Assets/Models/TexturedCube.glb", first.GetDirectory() / "Assets/model.glb");
+		BrecciaTest::TempProject first("AsyncProjectA");
+		std::filesystem::copy_file(std::filesystem::path(BRECCIA_TEST_DATA_DIR) / "FeatureTest/Assets/Models/TexturedCube.glb", first.GetDirectory() / "Assets/model.glb");
 		auto builtin = AssetManager::GetMesh("builtin://Cube");
 		REQUIRE(AssetManager::GetMesh("Assets/model.glb"));
 		REQUIRE(AssetManager::GetTexture("Assets/model.glb#image/0"));
-		BasaltTest::TempProject second("AsyncProjectB");
+		BrecciaTest::TempProject second("AsyncProjectB");
 		second.WriteFile("Assets/model.glb", "invalid glb");
 		CHECK(AssetManager::GetMesh("builtin://Cube") == builtin);
 		CHECK_FALSE(AssetManager::GetMesh("Assets/model.glb"));

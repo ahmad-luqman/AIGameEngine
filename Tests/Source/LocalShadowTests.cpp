@@ -1,10 +1,10 @@
 #include <doctest/doctest.h>
 
-#include <Basalt/Renderer/LocalShadows.h>
-#include <Basalt/Scene/ComponentRegistry.h>
-#include <Basalt/Scene/Entity.h>
-#include <Basalt/Scene/Scene.h>
-#include <Basalt/Scene/SceneSerializer.h>
+#include <Breccia/Renderer/LocalShadows.h>
+#include <Breccia/Scene/ComponentRegistry.h>
+#include <Breccia/Scene/Entity.h>
+#include <Breccia/Scene/Scene.h>
+#include <Breccia/Scene/SceneSerializer.h>
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -14,7 +14,7 @@
 #include <limits>
 #include <string_view>
 
-using namespace Basalt;
+using namespace Breccia;
 
 TEST_SUITE("Local shadows")
 {

@@ -3,9 +3,9 @@
 
 #include "GPUFixture.h"
 
-#include <Basalt/Renderer/GraphicsDevice.h>
-#include <Basalt/Renderer/ShaderUtils.h>
-#include <Basalt/Renderer/SsaoBlur.h>
+#include <Breccia/Renderer/GraphicsDevice.h>
+#include <Breccia/Renderer/ShaderUtils.h>
+#include <Breccia/Renderer/SsaoBlur.h>
 
 #include <glm/glm.hpp>
 
@@ -16,7 +16,7 @@
 #include <limits>
 #include <vector>
 
-using namespace Basalt;
+using namespace Breccia;
 
 namespace {
 

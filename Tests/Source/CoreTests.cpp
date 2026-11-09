@@ -1,21 +1,21 @@
 #include <doctest/doctest.h>
 
-#include <Basalt/Core/FileSystem.h>
-#include <Basalt/Core/FileWatcher.h>
-#include <Basalt/Core/GamepadCodes.h>
-#include <Basalt/Core/Input.h>
-#include <Basalt/Core/InputActions.h>
-#include <Basalt/Core/JsonUtils.h>
-#include <Basalt/Core/KeyCodes.h>
-#include <Basalt/Core/LayerStack.h>
-#include <Basalt/Core/Log.h>
-#include <Basalt/Core/MouseCodes.h>
-#include <Basalt/Core/Platform.h>
-#include <Basalt/Core/Process.h>
-#include <Basalt/Core/UUID.h>
-#include <Basalt/Events/ApplicationEvent.h>
-#include <Basalt/Events/KeyEvent.h>
-#include <Basalt/Events/MouseEvent.h>
+#include <Breccia/Core/FileSystem.h>
+#include <Breccia/Core/FileWatcher.h>
+#include <Breccia/Core/GamepadCodes.h>
+#include <Breccia/Core/Input.h>
+#include <Breccia/Core/InputActions.h>
+#include <Breccia/Core/JsonUtils.h>
+#include <Breccia/Core/KeyCodes.h>
+#include <Breccia/Core/LayerStack.h>
+#include <Breccia/Core/Log.h>
+#include <Breccia/Core/MouseCodes.h>
+#include <Breccia/Core/Platform.h>
+#include <Breccia/Core/Process.h>
+#include <Breccia/Core/UUID.h>
+#include <Breccia/Events/ApplicationEvent.h>
+#include <Breccia/Events/KeyEvent.h>
+#include <Breccia/Events/MouseEvent.h>
 
 #include "TestUtils.h"
 
@@ -41,7 +41,7 @@
 	#include <unistd.h>
 #endif
 
-using namespace Basalt;
+using namespace Breccia;
 
 TEST_SUITE("Core")
 {
@@ -148,12 +148,12 @@ TEST_SUITE("Core")
 	TEST_CASE("Engine log messages reach the global history")
 	{
 		const uint64_t before = Log::GetHistory().GetTotalCount();
-		BS_CORE_INFO("history probe {}", 123);
+		BR_CORE_INFO("history probe {}", 123);
 		uint64_t next = 0;
 		const auto messages = Log::GetHistory().GetMessagesSince(before, next);
 		REQUIRE_FALSE(messages.empty());
 		CHECK(messages.back().Text == "history probe 123");
-		CHECK(messages.back().LoggerName == "BASALT");
+		CHECK(messages.back().LoggerName == "BRECCIA");
 	}
 
 	TEST_CASE("KeyCode and MouseCode names round-trip")
@@ -477,7 +477,7 @@ TEST_SUITE("Core")
 
 	TEST_CASE("Input reads the previous frame's keys, buttons and gamepads")
 	{
-		BasaltTest::ScopedGameInput restore;
+		BrecciaTest::ScopedGameInput restore;
 		Input::SetKeyState(KeyCode::Q, true);
 		Input::SetMouseButtonState(MouseCode::Right, true);
 		Input::SetGamepadConnected(2, true);
@@ -508,7 +508,7 @@ TEST_SUITE("Core")
 
 	TEST_CASE("GameInput equals Input with full routing")
 	{
-		BasaltTest::ScopedGameInput restore;
+		BrecciaTest::ScopedGameInput restore;
 		Input::SetKeyState(KeyCode::W, true);
 		Input::SetMouseButtonState(MouseCode::Left, true);
 		Input::SetMousePosition({ 10.0f, 20.0f });
@@ -534,7 +534,7 @@ TEST_SUITE("Core")
 
 	TEST_CASE("Losing game focus releases the keyboard for the game; what is held when it comes back stays released")
 	{
-		BasaltTest::ScopedGameInput restore;
+		BrecciaTest::ScopedGameInput restore;
 		Input::SetKeyState(KeyCode::W, true);
 		CHECK(GameInput::IsKeyPressed(KeyCode::W));
 		Input::EndFrame();
@@ -573,7 +573,7 @@ TEST_SUITE("Core")
 
 	TEST_CASE("The game's pointer gates mouse buttons, movement and scroll but not the position")
 	{
-		BasaltTest::ScopedGameInput restore;
+		BrecciaTest::ScopedGameInput restore;
 		Input::SetMousePosition({ 0.0f, 0.0f });
 		Input::SetMouseButtonState(MouseCode::Left, true);
 		Input::EndFrame();
@@ -602,7 +602,7 @@ TEST_SUITE("Core")
 
 	TEST_CASE("Game focus gates gamepads like the keyboard, sticks until they return to rest")
 	{
-		BasaltTest::ScopedGameInput restore;
+		BrecciaTest::ScopedGameInput restore;
 		Input::SetGamepadConnected(0, true);
 		REQUIRE(Input::SetGamepadButtonState(0, GamepadButton::A, true));
 		REQUIRE(Input::SetGamepadAxis(0, GamepadAxis::LeftX, 1.0f));
@@ -644,7 +644,7 @@ TEST_SUITE("Core")
 
 	TEST_CASE("A reset clears what the game saw without reporting releases")
 	{
-		BasaltTest::ScopedGameInput restore;
+		BrecciaTest::ScopedGameInput restore;
 		Input::SetKeyState(KeyCode::D, true);
 		Input::EndFrame();
 		Input::SetGameFocus(false);
@@ -663,7 +663,7 @@ TEST_SUITE("Core")
 
 	TEST_CASE("Cursor modes have names and are stored, not applied, by Input")
 	{
-		BasaltTest::ScopedGameInput restore;
+		BrecciaTest::ScopedGameInput restore;
 		CHECK(CursorModeToString(CursorMode::Locked) == "Locked");
 		CHECK(CursorModeToString(static_cast<CursorMode>(7)) == "Unknown");
 		CHECK(CursorModeFromString("hidden") == CursorMode::Hidden);
@@ -707,7 +707,7 @@ TEST_SUITE("Core")
 		CHECK_FALSE(map->Find("jump"));
 
 		const nlohmann::json saved = map->ToJson();
-		CHECK(saved["Format"] == "BasaltInput");
+		CHECK(saved["Format"] == "BrecciaInput");
 		CHECK(saved["Version"] == 1);
 		CHECK(saved["Actions"][0]["Type"] == "Button");
 		CHECK(saved["Actions"][0]["Bindings"][0] == nlohmann::json{ { "Key", "Space" } });
@@ -738,7 +738,7 @@ TEST_SUITE("Core")
 		const std::vector<std::pair<nlohmann::json, const char*>> cases = {
 			{ nlohmann::json::array(), "must be an object" },
 			{ { { "Actions", {} }, { "Extra", 1 } }, "unknown key 'Extra'" },
-			{ { { "Format", "BasaltScene" } }, "Format must be \"BasaltInput\"" },
+			{ { { "Format", "BrecciaScene" } }, "Format must be \"BrecciaInput\"" },
 			{ { { "Version", 2 } }, "unsupported Version" },
 			{ { { "Actions", nlohmann::json::array({ "Jump" }) } }, "input action #1 must be an object" },
 			{ { { "Actions", "Jump" } }, "Actions must be an array" },
@@ -776,7 +776,7 @@ TEST_SUITE("Core")
 
 	TEST_CASE("Input actions read buttons, axes, dead zones and gamepad indices through GameInput")
 	{
-		BasaltTest::ScopedGameInput restore;
+		BrecciaTest::ScopedGameInput restore;
 		std::string error;
 		const auto map = InputActionMap::FromJson(
 			{ { "Actions",
@@ -906,7 +906,7 @@ TEST_SUITE("Core")
 
 	TEST_CASE("Injected gamepads end the game's blocks as soon as they are let go, like keys")
 	{
-		BasaltTest::ScopedGameInput restore;
+		BrecciaTest::ScopedGameInput restore;
 		Input::SetKeyState(KeyCode::Q, true);
 		Input::SetGamepadConnected(0, true);
 		REQUIRE(Input::SetGamepadButtonState(0, GamepadButton::A, true));
@@ -932,7 +932,7 @@ TEST_SUITE("Core")
 
 	TEST_CASE("Physical gamepads held through a focus change stay the game's only after they are let go")
 	{
-		BasaltTest::ScopedGameInput restore;
+		BrecciaTest::ScopedGameInput restore;
 		GamepadDeviceState held;
 		held.Name = "Pad";
 		held.Buttons[static_cast<size_t>(GamepadButton::B)] = true;
@@ -959,7 +959,7 @@ TEST_SUITE("Core")
 
 	TEST_CASE("A key the host withholds never reaches the game, until it is pressed again")
 	{
-		BasaltTest::ScopedGameInput restore;
+		BrecciaTest::ScopedGameInput restore;
 		Input::SetKeyState(KeyCode::Escape, true);
 		Input::WithholdFromGame(KeyCode::Escape);
 		CHECK(Input::IsKeyPressed(KeyCode::Escape));
@@ -980,7 +980,7 @@ TEST_SUITE("Core")
 
 	TEST_CASE("A scaled gamepad axis presses a button on whichever gamepad pushes it the right way")
 	{
-		BasaltTest::ScopedGameInput restore;
+		BrecciaTest::ScopedGameInput restore;
 		std::string error;
 		const auto map = InputActionMap::FromJson({ { "Actions", { { { "Name", "Up" }, { "Bindings", { { { "GamepadAxis", "LeftY" }, { "Scale", -1 } } } } }, { { "Name", "Steer" }, { "Type", "Axis" }, { "Bindings", { { { "GamepadAxis", "LeftX" }, { "DeadZone", 0 } } } } } } } }, error);
 		REQUIRE(map);
@@ -1085,15 +1085,15 @@ TEST_SUITE("Core")
 
 	TEST_CASE("FileSystem writes atomically and reads back")
 	{
-		const BasaltTest::TempDirectory scratch("FileSystem");
+		const BrecciaTest::TempDirectory scratch("FileSystem");
 		const auto& directory = scratch.GetPath();
 		const auto path = directory / "nested" / "file.txt";
 
 		CHECK_FALSE(FileSystem::ReadTextFile(path).has_value());
-		REQUIRE(FileSystem::WriteTextFile(path, "hello basalt"));
+		REQUIRE(FileSystem::WriteTextFile(path, "hello breccia"));
 		CHECK(FileSystem::Exists(path));
-		CHECK_FALSE(BasaltTest::HasTempFiles(path.parent_path()));
-		CHECK(FileSystem::ReadTextFile(path).value() == "hello basalt");
+		CHECK_FALSE(BrecciaTest::HasTempFiles(path.parent_path()));
+		CHECK(FileSystem::ReadTextFile(path).value() == "hello breccia");
 
 		REQUIRE(FileSystem::WriteTextFile(path, "replaced"));
 		CHECK(FileSystem::ReadTextFile(path).value() == "replaced");
@@ -1109,7 +1109,7 @@ TEST_SUITE("Core")
 
 	TEST_CASE("FileSystem copies over a target, retrying while Windows reports it locked")
 	{
-		BasaltTest::TempDirectory directory("FileSystemCopyReplacing");
+		BrecciaTest::TempDirectory directory("FileSystemCopyReplacing");
 		const auto source = directory.GetPath() / "new.bin";
 		const auto target = directory.GetPath() / "old.bin";
 		// The old target is longer, so a copy that overwrote in place instead of replacing would leave its tail.
@@ -1173,7 +1173,7 @@ TEST_SUITE("Core")
 	TEST_CASE("FileSystem reads only regular files")
 	{
 		// A directory opens as a stream on Linux with a meaningless size; reading one must fail, not allocate it.
-		BasaltTest::TempDirectory directory("FileSystemReadDirectory");
+		BrecciaTest::TempDirectory directory("FileSystemReadDirectory");
 		CHECK_FALSE(FileSystem::ReadTextFile(directory.GetPath()).has_value());
 		CHECK_FALSE(FileSystem::ReadBinaryFile(directory.GetPath()).has_value());
 		CHECK_FALSE(FileSystem::ReadTextFile(directory.GetPath() / "missing.txt").has_value());
@@ -1183,7 +1183,7 @@ TEST_SUITE("Core")
 
 	TEST_CASE("FileSystem write failure leaves the target untouched and no temp file")
 	{
-		const BasaltTest::TempDirectory scratch("FileSystemFailure");
+		const BrecciaTest::TempDirectory scratch("FileSystemFailure");
 		const auto& directory = scratch.GetPath();
 
 		// The target's "parent directory" is a regular file, so the temp file cannot be created.
@@ -1197,11 +1197,11 @@ TEST_SUITE("Core")
 		std::filesystem::create_directories(occupied / "inner");
 		CHECK_FALSE(FileSystem::WriteTextFile(occupied, "data"));
 		CHECK(std::filesystem::is_directory(occupied));
-		CHECK_FALSE(BasaltTest::HasTempFiles(directory));
+		CHECK_FALSE(BrecciaTest::HasTempFiles(directory));
 	}
 }
 
-#include <Basalt/Core/CommandLine.h>
+#include <Breccia/Core/CommandLine.h>
 
 TEST_SUITE("Core")
 {
@@ -1227,7 +1227,7 @@ TEST_SUITE("Core")
 		// RunProcess argument test passes non-ASCII arguments through it.
 		const std::vector<std::string> arguments = Platform::GetProcessArguments(0, nullptr);
 		REQUIRE_FALSE(arguments.empty());
-		CHECK(FileSystem::PathFromUtf8(arguments[0]).stem() == "BasaltTests");
+		CHECK(FileSystem::PathFromUtf8(arguments[0]).stem() == "BrecciaTests");
 #else
 		// Elsewhere argv is the process's bytes, UTF-8 already; a null entry becomes empty text.
 		const char* argv[] = { "app", "--project", "資産", nullptr };
@@ -1239,7 +1239,7 @@ TEST_SUITE("Core")
 	TEST_CASE("System error text comes through DescribeError")
 	{
 		// No test can tell the two apart off Windows, or on a runner in an English locale, where the ANSI text is ASCII.
-		const std::filesystem::path source = BASALT_SOURCE_DIR;
+		const std::filesystem::path source = BRECCIA_SOURCE_DIR;
 		// Split so that this test does not match itself.
 		constexpr std::string_view RawMessage = ".message"
 												"()";
@@ -1247,7 +1247,7 @@ TEST_SUITE("Core")
 													  "(";
 		std::string offenders;
 		size_t scanned = 0;
-		for (const char* tree : { "Basalt/Source", "Basalt-Editor/Source", "Basalt-Runtime/Source", "Basalt-CLI/Source", "Tests/Source" })
+		for (const char* tree : { "Breccia/Source", "Breccia-Editor/Source", "Breccia-Runtime/Source", "Breccia-CLI/Source", "Tests/Source" })
 			for (const auto& entry : std::filesystem::recursive_directory_iterator(source / tree))
 			{
 				const std::string extension = FileSystem::GetLowercaseExtension(entry.path());
@@ -1328,16 +1328,16 @@ TEST_SUITE("Core")
 		CHECK(ParseJson(nested(1000000)).is_discarded());
 	}
 
-	// The test binary doubles as the child (TestMain.cpp: --basalt-child), so no shell is needed on any platform.
+	// The test binary doubles as the child (TestMain.cpp: --breccia-child), so no shell is needed on any platform.
 	ProcessSpec ChildProcess(std::vector<std::string> actions)
 	{
 		ProcessSpec spec;
 #if defined(_WIN32)
-		spec.Executable = FileSystem::GetExecutableDirectory() / "BasaltTests.exe";
+		spec.Executable = FileSystem::GetExecutableDirectory() / "BrecciaTests.exe";
 #else
-		spec.Executable = FileSystem::GetExecutableDirectory() / "BasaltTests";
+		spec.Executable = FileSystem::GetExecutableDirectory() / "BrecciaTests";
 #endif
-		spec.Arguments = { "--basalt-child" };
+		spec.Arguments = { "--breccia-child" };
 		spec.Arguments.insert(spec.Arguments.end(), actions.begin(), actions.end());
 		spec.Timeout = std::chrono::milliseconds(30000);
 		return spec;
@@ -1387,7 +1387,7 @@ TEST_SUITE("Core")
 	TEST_CASE("RunProcess runs in the requested working directory")
 	{
 		// A CJK name, outside every single-byte code page, also checks that the child reports it as UTF-8.
-		BasaltTest::TempDirectory directory("ProcessWorkingDirectory-作業");
+		BrecciaTest::TempDirectory directory("ProcessWorkingDirectory-作業");
 		ProcessSpec spec = ChildProcess({ "cwd" });
 		spec.WorkingDirectory = directory.GetPath();
 		const ProcessResult result = RunProcess(spec);
@@ -1402,17 +1402,17 @@ TEST_SUITE("Core")
 
 	TEST_CASE("RunProcess passes the environment with overrides")
 	{
-		const BasaltTest::ScopedEnvVar kept("BASALT_PROCESS_TEST_KEPT", "kept");
-		const BasaltTest::ScopedEnvVar unicode("BASALT_PROCESS_TEST_UNICODE", "J\xC3\xBCrgen");
-		const BasaltTest::ScopedEnvVar replaced("BASALT_PROCESS_TEST_REPLACED", "old");
-		ProcessSpec spec = ChildProcess({ "env", "BASALT_PROCESS_TEST_KEPT", "env", "BASALT_PROCESS_TEST_REPLACED", "env", "BASALT_PROCESS_TEST_ADDED", "env", "BASALT_PROCESS_TEST_UNICODE" });
-		spec.Environment = { { "BASALT_PROCESS_TEST_REPLACED", "new value" }, { "BASALT_PROCESS_TEST_ADDED", "added \xC3\xA9" } };
+		const BrecciaTest::ScopedEnvVar kept("BRECCIA_PROCESS_TEST_KEPT", "kept");
+		const BrecciaTest::ScopedEnvVar unicode("BRECCIA_PROCESS_TEST_UNICODE", "J\xC3\xBCrgen");
+		const BrecciaTest::ScopedEnvVar replaced("BRECCIA_PROCESS_TEST_REPLACED", "old");
+		ProcessSpec spec = ChildProcess({ "env", "BRECCIA_PROCESS_TEST_KEPT", "env", "BRECCIA_PROCESS_TEST_REPLACED", "env", "BRECCIA_PROCESS_TEST_ADDED", "env", "BRECCIA_PROCESS_TEST_UNICODE" });
+		spec.Environment = { { "BRECCIA_PROCESS_TEST_REPLACED", "new value" }, { "BRECCIA_PROCESS_TEST_ADDED", "added \xC3\xA9" } };
 		const ProcessResult result = RunProcess(spec);
 		REQUIRE(result.Succeeded());
-		CHECK(result.Output.find("BASALT_PROCESS_TEST_KEPT=kept") != std::string::npos);
-		CHECK(result.Output.find("BASALT_PROCESS_TEST_REPLACED=new value") != std::string::npos);
-		CHECK(result.Output.find("BASALT_PROCESS_TEST_ADDED=added \xC3\xA9") != std::string::npos);
-		CHECK(result.Output.find("BASALT_PROCESS_TEST_UNICODE=J\xC3\xBCrgen") != std::string::npos);
+		CHECK(result.Output.find("BRECCIA_PROCESS_TEST_KEPT=kept") != std::string::npos);
+		CHECK(result.Output.find("BRECCIA_PROCESS_TEST_REPLACED=new value") != std::string::npos);
+		CHECK(result.Output.find("BRECCIA_PROCESS_TEST_ADDED=added \xC3\xA9") != std::string::npos);
+		CHECK(result.Output.find("BRECCIA_PROCESS_TEST_UNICODE=J\xC3\xBCrgen") != std::string::npos);
 		CHECK(result.Output.find("=old") == std::string::npos);
 	}
 
@@ -1518,7 +1518,7 @@ TEST_SUITE("Core")
 			CHECK(result.Error.find("invalid environment variable name") != std::string::npos);
 		}
 		// Which of two values for one name wins would differ between platforms (Windows ignores case).
-		spec.Environment = { { "BASALT_TEST_VALUE", "a" }, { "basalt_test_value", "b" } };
+		spec.Environment = { { "BRECCIA_TEST_VALUE", "a" }, { "breccia_test_value", "b" } };
 		ProcessResult result = RunProcess(spec);
 		CHECK(result.Outcome == ProcessOutcome::Failed);
 		CHECK(result.Error.find("set twice") != std::string::npos);
@@ -1531,7 +1531,7 @@ TEST_SUITE("Core")
 
 	TEST_CASE("RunProcess resolves a relative executable against the caller's directory, not the child's")
 	{
-		BasaltTest::TempDirectory directory("ProcessRelativeExecutable");
+		BrecciaTest::TempDirectory directory("ProcessRelativeExecutable");
 		ProcessSpec spec = ChildProcess({ "exit", "0" });
 		std::error_code error;
 		spec.Executable = std::filesystem::relative(spec.Executable, std::filesystem::current_path(), error);
@@ -1546,7 +1546,7 @@ TEST_SUITE("Core")
 	TEST_CASE("RunProcess distinguishes a program that cannot start from one that fails")
 	{
 		ProcessSpec spec;
-		spec.Executable = FileSystem::GetExecutableDirectory() / "NoSuchProgram-Basalt";
+		spec.Executable = FileSystem::GetExecutableDirectory() / "NoSuchProgram-Breccia";
 		const ProcessResult result = RunProcess(spec);
 		CHECK(result.Outcome == ProcessOutcome::Failed);
 		CHECK_FALSE(result.Succeeded());
@@ -1563,12 +1563,12 @@ TEST_SUITE("Core")
 		const uint64_t first = history.AddListener([&](const LogMessage& message) { seen.push_back(message.Text); });
 		const uint64_t second = history.AddListener([&](const LogMessage& message) { seen.push_back("2:" + message.Text); });
 		CHECK(first != second);
-		history.Push({ LogLevel::Info, "BASALT", "a" });
+		history.Push({ LogLevel::Info, "BRECCIA", "a" });
 		history.RemoveListener(first);
-		history.Push({ LogLevel::Error, "BASALT", "b" });
+		history.Push({ LogLevel::Error, "BRECCIA", "b" });
 		history.RemoveListener(second);
 		history.RemoveListener(second);
-		history.Push({ LogLevel::Warn, "BASALT", "c" });
+		history.Push({ LogLevel::Warn, "BRECCIA", "c" });
 		CHECK(seen == std::vector<std::string>{ "a", "2:a", "2:b" });
 		CHECK(history.GetTotalCount() == 3);
 	}
@@ -1580,9 +1580,9 @@ TEST_SUITE("Core")
 		// A listener that logs re-enters Push: the nested message is stored but not passed to listeners again.
 		const uint64_t echo = history.AddListener([&](const LogMessage& message) {
 			calls++;
-			history.Push({ LogLevel::Info, "BASALT", "echo of " + message.Text });
+			history.Push({ LogLevel::Info, "BRECCIA", "echo of " + message.Text });
 		});
-		history.Push({ LogLevel::Info, "BASALT", "first" });
+		history.Push({ LogLevel::Info, "BRECCIA", "first" });
 		CHECK(calls == 1);
 		uint64_t next = 0;
 		std::vector<std::string> texts;
@@ -1595,7 +1595,7 @@ TEST_SUITE("Core")
 		history.AddListener([](const LogMessage&) { throw std::runtime_error("listener failure"); });
 		int after = 0;
 		history.AddListener([&](const LogMessage&) { after++; });
-		history.Push({ LogLevel::Error, "BASALT", "kept" });
+		history.Push({ LogLevel::Error, "BRECCIA", "kept" });
 		CHECK(after == 1);
 		// The message, then the failure as an error of its own.
 		CHECK(history.GetErrorCount() == 2);
@@ -1613,9 +1613,9 @@ TEST_SUITE("Core")
 			if (message.Text != "listener test: outer")
 				return;
 			calls++;
-			BS_CORE_INFO("listener test: inner");
+			BR_CORE_INFO("listener test: inner");
 		});
-		BS_CORE_INFO("listener test: outer");
+		BR_CORE_INFO("listener test: outer");
 		history.RemoveListener(id);
 		CHECK(calls == 1);
 		const std::vector<LogMessage> all = history.GetAll();
@@ -1627,7 +1627,7 @@ TEST_SUITE("Core")
 
 	TEST_CASE("Concurrent atomic writes of one file all succeed and leave no temporary files")
 	{
-		BasaltTest::TempDirectory directory("ConcurrentWrites");
+		BrecciaTest::TempDirectory directory("ConcurrentWrites");
 		const std::filesystem::path path = directory.GetPath() / "shared.txt";
 		std::atomic<int> failures = 0;
 		std::vector<std::thread> writers;
@@ -1649,7 +1649,7 @@ TEST_SUITE("Core")
 		const std::string text = FileSystem::ReadTextFile(path).value_or("");
 		CHECK(text.starts_with("writer "));
 		CHECK(text.size() == 8);
-		CHECK_FALSE(BasaltTest::HasTempFiles(directory.GetPath()));
+		CHECK_FALSE(BrecciaTest::HasTempFiles(directory.GetPath()));
 	}
 
 	TEST_CASE("Log history listeners can be removed while other threads log")
@@ -1658,7 +1658,7 @@ TEST_SUITE("Core")
 		std::atomic<bool> running = true;
 		std::thread logger([&]() {
 			while (running)
-				history.Push({ LogLevel::Trace, "BASALT", "background" });
+				history.Push({ LogLevel::Trace, "BRECCIA", "background" });
 		});
 		int total = 0;
 		for (int i = 0; i < 200; i++)
@@ -1680,7 +1680,7 @@ TEST_SUITE("Core")
 	}
 }
 
-namespace Basalt {
+namespace Breccia {
 
 	// The scan steps FileWatcher keeps private, so tests can feed it scans without a worker thread.
 	struct FileWatcherTestAccess
@@ -1716,7 +1716,7 @@ TEST_SUITE("Core")
 
 	TEST_CASE("FileWatcher reports added, modified and removed files under its folder")
 	{
-		BasaltTest::TempDirectory root("FileWatcherRefresh");
+		BrecciaTest::TempDirectory root("FileWatcherRefresh");
 		WriteFile(root.GetPath() / "Assets/Scripts/Player.lua", "return {}");
 		WriteFile(root.GetPath() / "Assets/Textures/Wall.png", "png");
 		WriteFile(root.GetPath() / "Project.bproject", "{}");
@@ -1745,7 +1745,7 @@ TEST_SUITE("Core")
 		CHECK(watcher.Refresh() == std::vector<FileChange>{ { "Assets/Scripts/Player.lua", FileChangeType::Modified } });
 
 		// Another root starts afresh.
-		BasaltTest::TempDirectory other("FileWatcherOther");
+		BrecciaTest::TempDirectory other("FileWatcherOther");
 		WriteFile(other.GetPath() / "Assets/a.txt", "a");
 		watcher.Watch(other.GetPath());
 		CHECK(watcher.Refresh().empty());
@@ -1757,7 +1757,7 @@ TEST_SUITE("Core")
 
 	TEST_CASE("FileWatcher holds back a change until a scan finds the file unchanged")
 	{
-		BasaltTest::TempDirectory root("FileWatcherSettle");
+		BrecciaTest::TempDirectory root("FileWatcherSettle");
 		FileWatcher watcher;
 		watcher.Watch(root.GetPath());
 		const auto scanWith = [](uintmax_t size, int64_t time) {
@@ -1796,7 +1796,7 @@ TEST_SUITE("Core")
 
 	TEST_CASE("FileWatcher does not report the host's own writes")
 	{
-		BasaltTest::TempDirectory root("FileWatcherAcknowledge");
+		BrecciaTest::TempDirectory root("FileWatcherAcknowledge");
 		const std::filesystem::path file = root.GetPath() / "Assets/Scripts/Enemy.lua";
 		WriteFile(file, "return {}");
 		FileWatcher watcher;
@@ -1843,7 +1843,7 @@ TEST_SUITE("Core")
 #if !defined(_WIN32)
 	TEST_CASE("FileWatcher reports nothing while its folder cannot be read")
 	{
-		BasaltTest::TempDirectory root("FileWatcherUnreadable");
+		BrecciaTest::TempDirectory root("FileWatcherUnreadable");
 		WriteFile(root.GetPath() / "Assets/Scripts/Player.lua", "return {}");
 		WriteFile(root.GetPath() / "Assets/Textures/Wall.png", "png");
 		const std::filesystem::path locked = root.GetPath() / "Assets/Textures";
@@ -1885,7 +1885,7 @@ TEST_SUITE("Core")
 
 	TEST_CASE("FileWatcher polling follows the watched folder and stops cleanly")
 	{
-		BasaltTest::TempDirectory root("FileWatcherPolling");
+		BrecciaTest::TempDirectory root("FileWatcherPolling");
 		WriteFile(root.GetPath() / "Assets/a.txt", "a");
 		{
 			FileWatcher watcher;

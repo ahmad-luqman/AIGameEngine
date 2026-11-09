@@ -1,17 +1,17 @@
 #include <doctest/doctest.h>
 
-#include <Basalt/Asset/AssetManager.h>
-#include <Basalt/Asset/MeshSource.h>
-#include <Basalt/Renderer/DebugDraw.h>
-#include <Basalt/Renderer/RenderMath.h>
-#include <Basalt/Scene/SceneCamera.h>
+#include <Breccia/Asset/AssetManager.h>
+#include <Breccia/Asset/MeshSource.h>
+#include <Breccia/Renderer/DebugDraw.h>
+#include <Breccia/Renderer/RenderMath.h>
+#include <Breccia/Scene/SceneCamera.h>
 
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <cmath>
 #include <limits>
 
-using namespace Basalt;
+using namespace Breccia;
 
 TEST_SUITE("RenderMath")
 {

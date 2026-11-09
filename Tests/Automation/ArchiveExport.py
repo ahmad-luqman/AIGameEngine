@@ -10,7 +10,7 @@ so a module that fails to load from both exports alike does not pass unnoticed. 
 beside its compressed Replaced.ktx2: the archive must report it as omitted and the folder must copy it. A third export
 with keepOriginals must omit nothing, and that archive, once broken, must stop the game with exit code 1 and the reason.
 
-Usage: ArchiveExport.py <basalt CLI> <feature test project>
+Usage: ArchiveExport.py <breccia CLI> <feature test project>
 """
 import collections
 import json
@@ -32,9 +32,9 @@ def fail(message):
 
 def main():
     cli, source = Path(sys.argv[1]).resolve(), Path(sys.argv[2]).resolve()
-    with tempfile.TemporaryDirectory(prefix="BasaltArchive-") as temp:
+    with tempfile.TemporaryDirectory(prefix="BrecciaArchive-") as temp:
         root = Path(temp)
-        env = dict(os.environ, BASALT_USER_DATA_DIR=str(root / "UserData"))
+        env = dict(os.environ, BRECCIA_USER_DATA_DIR=str(root / "UserData"))
         if sys.platform == "darwin":
             # Export bundles the Vulkan loader and MoltenVK; headless runs never load them, so stand-ins do.
             sdk = root / "VulkanSDK" / "lib"

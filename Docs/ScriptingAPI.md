@@ -1,14 +1,14 @@
-# Basalt Lua Scripting API
+# Breccia Lua Scripting API
 
 Gameplay code is written in Lua 5.4. A script is attached to an entity with a `Script` component
 (`{"Script": "Assets/Scripts/Player.lua"}`). The feature test (`Tests/Data/FeatureTest/Assets/Scripts/FeatureTest.lua`)
 calls every function on this page (checking its effect wherever it can be observed headlessly) and is the
 best executable reference.
 
-**Editor support.** [`basalt.d.lua`](basalt.d.lua) declares the whole API (and every component's fields) for
+**Editor support.** [`breccia.d.lua`](breccia.d.lua) declares the whole API (and every component's fields) for
 [lua-language-server](https://luals.github.io/): completion, hover docs and type checks in VS Code, Neovim and other
 editors. The repository's `.luarc.json` loads it; in a game project add the file to `workspace.library` and annotate a
-script class with `---@class Player: BasaltScript` (new scripts from the editor's content browser start that way). The
+script class with `---@class Player: BrecciaScript` (new scripts from the editor's content browser start that way). The
 `LuaTypeDefinitions` unit test fails when a binding is added without a declaration, and `scripts/generate_docs.py`
 regenerates the component section.
 
@@ -122,7 +122,7 @@ the line it reached.
 - Set the limit with `project.set scriptInstructionLimit`, from the next play (reading a script's properties uses it at once). 0
   removes it and its overhead, which depends on the script: about 5% for one moving 2,000 entities through bindings, and up to
   2.7 times for tight arithmetic, so profile with it off.
-- `BasaltRuntime`, and so every exported game, never applies the limit, and can hang.
+- `BrecciaRuntime`, and so every exported game, never applies the limit, and can hang.
 
 Also not limited: time inside a C function (a slow `string.find` pattern), and how much one allocates; `__gc` finalizers; and, as
 Lua keeps hooks off after this error until a `pcall` restores them, an `xpcall` message handler the stop itself calls and the
@@ -231,7 +231,7 @@ reflection; refraction and volume absorption are not modeled. See [AssetPipeline
 asset has not loaded or when it cannot); `""` returns to the inline fields. Other paths are rejected. See
 [AssetPipeline.md](AssetPipeline.md#material-assets).
 
-Component names and fields are listed by `basalt component.types` (and in Docs/Components.md).
+Component names and fields are listed by `breccia component.types` (and in Docs/Components.md).
 Vectors in component tables are arrays (`{1, 2, 3}`); rotations are Euler degrees.
 
 ## Scene
@@ -386,7 +386,7 @@ end
 - The file is `SaveData.json` in a per-game directory named after the project (characters that are not
   safe in a file name become `_`, and then a short hash of the name is appended): `%APPDATA%\<Project>`
   (Windows), `~/Library/Application Support/<Project>` (macOS), `$XDG_DATA_HOME/<Project>` or
-  `~/.local/share/<Project>` (Linux). The environment variable `BASALT_USER_DATA_DIR` replaces the
+  `~/.local/share/<Project>` (Linux). The environment variable `BRECCIA_USER_DATA_DIR` replaces the
   platform directory (tests and tools use it; set to a relative path, `Storage` raises an error rather than
   falling back). Scripts never choose a path, so the file-system sandbox stays intact. The editor's play
   mode and the exported game share the file.
@@ -442,7 +442,7 @@ in Project Settings > Input Actions, or with `project.set inputActions`; it is e
 
 ```json
 {
-	"Format": "BasaltInput",
+	"Format": "BrecciaInput",
 	"Version": 1,
 	"Actions": [
 		{ "Name": "Jump", "Type": "Button", "Bindings": [{ "Key": "Space" }, { "GamepadButton": "A" }] },

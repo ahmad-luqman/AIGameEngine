@@ -1,6 +1,6 @@
 #include <doctest/doctest.h>
 
-#include <Basalt/Core/CrashReporter.h>
+#include <Breccia/Core/CrashReporter.h>
 
 #include <algorithm>
 #include <csignal>
@@ -9,7 +9,7 @@
 #include <thread>
 #include <vector>
 
-using namespace Basalt;
+using namespace Breccia;
 
 // The handlers themselves are exercised by crashing child processes (Tests/Automation/CrashReport.py, ctest CrashReport);
 // these cases check the report's parts, which the handlers format without allocating.
@@ -93,7 +93,7 @@ TEST_SUITE("CrashReporter")
 		CrashReporter::SetContext("Project: Header Test 2.0.1");
 		CrashReporter::FormatHeader(*text, "SIGSEGV (invalid memory access)", 0x10, 1700000000, 4321);
 		const std::string header(text->View());
-		CHECK(header.starts_with("Basalt crash report\nApplication: "));
+		CHECK(header.starts_with("Breccia crash report\nApplication: "));
 		CHECK(header.find("\nProject: Header Test 2.0.1\n") != std::string::npos);
 #if defined(_WIN32)
 		CHECK(header.find("\nPlatform: Windows\n") != std::string::npos);
@@ -143,7 +143,7 @@ TEST_SUITE("CrashReporter")
 		CHECK(CrashReporter::SanitizeApplicationName("a/b:c\\d<e>f\"g|h?i*j") == "abcdefghij");
 		CHECK(CrashReporter::SanitizeApplicationName("tab\there") == "tabhere");
 		for (const char* name : { "", ".", "..", "/", " . ", "???" })
-			CHECK_MESSAGE(CrashReporter::SanitizeApplicationName(name) == "Basalt", name);
+			CHECK_MESSAGE(CrashReporter::SanitizeApplicationName(name) == "Breccia", name);
 		CHECK(CrashReporter::SanitizeApplicationName("Game. ") == "Game");
 		// Cut at 127 bytes, never inside a UTF-8 character: 63 two-byte characters fit, the 64th would end at byte 128.
 		std::string wide;
@@ -177,12 +177,12 @@ TEST_SUITE("CrashReporter")
 		CHECK(lines.ends_with("[info] APP: line " + std::to_string(CrashReporter::MaxLogLines + 4) + "\n"));
 		CHECK(std::count(lines.begin(), lines.end(), '\n') == static_cast<std::ptrdiff_t>(CrashReporter::MaxLogLines));
 
-		CrashReporter::RecordLogLine("error", "BASALT", "two\nlines\r" + std::string(500, 'z'));
+		CrashReporter::RecordLogLine("error", "BRECCIA", "two\nlines\r" + std::string(500, 'z'));
 		text->Clear();
 		CrashReporter::FormatLogLines(*text);
 		lines = std::string(text->View());
 		const std::string last = lines.substr(lines.rfind('\n', lines.size() - 2) + 1);
-		CHECK(last.starts_with("[error] BASALT: two lines zzz"));
+		CHECK(last.starts_with("[error] BRECCIA: two lines zzz"));
 		CHECK(last.size() == CrashReporter::MaxLogLineLength + 1);
 
 		// A line cut inside a character loses the whole character: "[info] A: " is 10 bytes.

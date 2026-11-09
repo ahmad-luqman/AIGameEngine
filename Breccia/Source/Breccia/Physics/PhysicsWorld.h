@@ -1,0 +1,343 @@
+#pragma once
+
+#include "Breccia/Core/Base.h"
+#include "Breccia/Core/Timestep.h"
+#include "Breccia/Core/UUID.h"
+#include "Breccia/Physics/PhysicsLayers.h"
+
+#include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
+
+#include <functional>
+#include <optional>
+#include <string>
+#include <vector>
+#include <utility>
+
+namespace Breccia {
+
+	class Entity;
+	class Scene;
+	class MeshSource;
+	class StaticPhysicsShapes;
+
+	// World-space capsule hemispheres for the live ragdoll collider overlay. Equal endpoints form a sphere.
+	struct RagdollCapsule
+	{
+		glm::vec3 Start = glm::vec3(0);
+		glm::vec3 End = glm::vec3(0);
+		float Radius = 0;
+	};
+
+	// An owned, read-only snapshot of physical joints in the entity's model space, the rig's root first.
+	struct RagdollPose
+	{
+		Ref<MeshSource> Source;
+		std::vector<std::pair<uint32_t, glm::mat4>> Joints;
+		float Weight = 0;
+		bool Active = false;
+		bool Sleeping = false;
+		// Some joint's motor is driving toward the animated pose (read from the physics joints themselves).
+		bool Powered = false;
+	};
+
+	struct RaycastHit
+	{
+		UUID EntityID = 0;
+		glm::vec3 Point = { 0.0f, 0.0f, 0.0f };
+		glm::vec3 Normal = { 0.0f, 0.0f, 0.0f };
+		float Distance = 0.0f;
+	};
+
+	// Which bodies a query sees. LayerMask has one bit per physics layer (see PhysicsLayers::MaskFromNames);
+	// a mask of 0 matches nothing.
+	struct PhysicsQueryFilter
+	{
+		uint32_t LayerMask = 0xFFFFFFFF;
+		// Skipped entirely, e.g. the caster itself; 0 (never a valid entity UUID) skips nothing.
+		UUID IgnoreEntity = 0;
+		bool IncludeTriggers = false;
+	};
+
+	// Where a swept sphere first touches a body: how far along its move (0..1), and the surface's normal there (away from
+	// the body).
+	struct PhysicsSweepHit
+	{
+		float Fraction = 0;
+		glm::vec3 Normal = glm::vec3(0);
+	};
+
+	// Bodies near a region, gathered once (PhysicsWorld::CollectShapes, or StaticPhysicsShapes without a world) for many
+	// sphere queries, such as spring bone points against walls and floors: each body's shape and transform as they were when
+	// gathered, so queries never lock bodies. It must not outlive the last PhysicsWorld or StaticPhysicsShapes: it is meant
+	// for one frame's queries.
+	class PhysicsShapeSnapshot
+	{
+	public:
+		// Bodies kept at most; CollectShapes keeps the ones nearest the region's center.
+		static constexpr uint32_t MaxShapes = 32;
+		// Spheres smaller than this (meters) query as this size: physics shapes need a radius.
+		static constexpr float MinRadius = 0.001f;
+
+		PhysicsShapeSnapshot();
+		~PhysicsShapeSnapshot();
+		PhysicsShapeSnapshot(PhysicsShapeSnapshot&&) noexcept;
+		PhysicsShapeSnapshot& operator=(PhysicsShapeSnapshot&&) noexcept;
+		PhysicsShapeSnapshot(const PhysicsShapeSnapshot&) = delete;
+		PhysicsShapeSnapshot& operator=(const PhysicsShapeSnapshot&) = delete;
+
+		bool Empty() const;
+		// Whether more than MaxShapes bodies were near (the farthest were left out).
+		bool Truncated() const;
+		// The radius PushOut queries with: CollectShapes' radius, at least MinRadius (also when nothing was gathered); 0 for a
+		// default snapshot or one from invalid input.
+		float GetRadius() const;
+		// The sphere (GetRadius) at `point` pushed out of the gathered shape it penetrates most deeply, along the shortest way
+		// out (PushOutDirection); nullopt when it touches none. Mesh triangles push from their front faces only.
+		std::optional<glm::vec3> PushOut(const glm::vec3& point) const;
+		// The first gathered shape the sphere (GetRadius) meets moving from `from` to `to`, or nullopt. One that starts inside
+		// a shape meets it only if it moves deeper (Fraction 0); moving out, it is free. Mesh triangles stop it from their
+		// front faces only.
+		std::optional<PhysicsSweepHit> Sweep(const glm::vec3& from, const glm::vec3& to) const;
+
+	private:
+		friend class PhysicsWorld;
+		friend class StaticPhysicsShapes;
+		struct Impl;
+		struct Candidate;
+		// Keeps the MaxShapes nearest candidates (ties by entity, then body), so what is kept never depends on their order.
+		static PhysicsShapeSnapshot FromCandidates(std::vector<Candidate> candidates, float radius);
+		Scope<Impl> m_Impl;
+	};
+
+	// Which way a sphere centred at `point` leaves a body it penetrates: against the penetration axis (which moves the body
+	// out), else away from the body's centre of mass, else up, so a penetration always moves the sphere. A unit vector.
+	glm::vec3 PushOutDirection(const glm::vec3& penetrationAxis, const glm::vec3& point, const glm::vec3& bodyCenter);
+
+	enum class ContactEventType
+	{
+		CollisionBegin = 0,
+		CollisionEnd,
+		TriggerEnter,
+		TriggerExit
+	};
+
+	// Where two entities started or stopped touching. Begin and enter events report where they first touched
+	// (midway between the surfaces); end and exit events the closest points of the two bodies right after they
+	// parted (midway between them; the deepest overlap if their contact ended while they still overlap, e.g. a
+	// new joint now ignores the pair), and none when either body is gone (destroyed or being rebuilt) or they
+	// are already far apart. A character is measured by its inner body (90% of its colliders). Relative to the
+	// event's first entity: Normal points from the second entity toward the first, i.e. the direction that
+	// pushes the first entity out (or that it left in).
+	struct ContactInfo
+	{
+		glm::vec3 Point = { 0.0f, 0.0f, 0.0f };
+		glm::vec3 Normal = { 0.0f, 0.0f, 0.0f };
+		// CollisionBegin only: the estimated impulse (N*s) along the normal that resolves the impact, bounce
+		// included; 0 when the bodies touched without closing in (e.g. resting contact), and for the other
+		// events (triggers do not push, and parting takes none). When several parts of the two bodies start
+		// touching in the same step, the strongest is reported (for triggers, the first in a fixed order).
+		float Impulse = 0.0f;
+
+		// The same contact seen from the second entity.
+		ContactInfo Flipped() const { return { Point, -Normal, Impulse }; }
+	};
+
+	// What one world can hold, fixed when it starts. The defaults hold about as many touching boxes as MaxBodies allows (measured
+	// in Release at 65,000 piled and 64,000 in a lattice). They reserve about 510 MiB per world, the temp block and Jolt's
+	// contact pools, of which a world starts by touching 12 MiB, the hash buckets: Jolt sizes its tables to the scene on each
+	// step, so step cost follows the scene. Windows' debug CRT fills the reserve instead. Past a limit contacts are dropped,
+	// which PhysicsWorld logs. Values outside what Jolt accepts are clamped.
+	struct PhysicsCapacity
+	{
+		uint32_t MaxBodies = 65536;
+		// These two share one pool in Jolt, so running out of one can depend on the other.
+		uint32_t MaxBodyPairs = 1u << 20;
+		uint32_t MaxContactConstraints = 1u << 19;
+		// The block a step's working memory comes from. 0 sizes it to MaxContactConstraints, which Jolt reserves in full on
+		// every step; working memory past the block comes from malloc, so a block too small is only slower.
+		uint32_t TempMemoryBytes = 0;
+	};
+
+	// Jolt-backed physics simulation for one running scene.
+	//
+	// Bodies are created for every entity with a RigidBodyComponent and at least one collider (box, sphere,
+	// capsule or mesh; several combine into one compound shape). RigidBody and collider components added or removed at
+	// runtime rebuild the body before the next step; changes to them apply in place unless only a rebuild can (see
+	// UpdateInPlace), as CharacterController changes do; a world-scale change resizes the body's or character's shape in
+	// place (see ApplyScaleChanges).
+	// JointComponents become Jolt constraints once both bodies exist (a joint whose body is missing is
+	// retried when that body is created). A joint moves its BodyEntity's body, so several joint entities can
+	// act on one body; joints are tracked by the entity holding the component. A joint is rebuilt from the
+	// current poses when either body is rebuilt or one of its structural fields changes (see JointComponent);
+	// other changes update it in place. Joint warnings (including fields the joint ignores, see
+	// JointFieldApplies) are logged once per distinct setting, so scripts may set the component every frame.
+	// Contacts combine the two bodies' Friction and Restitution (or the touching collider's own, when its
+	// OverrideMaterial is set) with their FrictionCombine/RestitutionCombine modes (see CombineFriction in
+	// PhysicsMaterial.h).
+	// Collision filtering uses named layers (RigidBodyComponent::Layer) and the collision matrix of the
+	// scene's override or else the active project, copied when the world is built: matrix edits apply on the
+	// next play. An unknown layer name falls back to Default with a warning.
+	// Dynamic bodies write their pose back to the entity; moving a dynamic or static body's transform from
+	// script teleports it; kinematic bodies follow their transform smoothly.
+	// Entities with a CharacterControllerComponent and a collider get a Jolt CharacterVirtual (plus a kinematic
+	// inner body that other bodies, queries and contact events see) instead of a rigid body. Characters move
+	// before each step, in registry order, and write their position back; their rotation follows the entity.
+	// They collide with each other's shapes (filtered by the collision matrix), so a moving character pushes
+	// another one with its velocity.
+	class PhysicsWorld
+	{
+	public:
+		explicit PhysicsWorld(Scene* scene, PhysicsCapacity capacity = GetDefaultCapacity());
+		~PhysicsWorld();
+
+		PhysicsWorld(const PhysicsWorld&) = delete;
+		PhysicsWorld& operator=(const PhysicsWorld&) = delete;
+
+		// What scenes start their worlds with: PhysicsCapacity{} unless this process set less. A host that starts thousands, as
+		// the unit tests do, can ask for less: in Debug and under sanitizers a world's start costs in proportion to what it reserves.
+		static const PhysicsCapacity& GetDefaultCapacity();
+		static void SetDefaultCapacity(const PhysicsCapacity& capacity);
+
+		void Start();
+		// Runs as many fixed steps as the accumulated time allows, then dispatches contact events.
+		void Step(Timestep ts);
+		// Applies every pending physics change now (what each Step does first) and optimizes the broad phase like
+		// Start: called by Scene::ApplyPendingLoad so the bodies, characters and joints of the entities a scene load
+		// just added exist before their OnCreate.
+		void OnSceneLoaded();
+		void OnEntityDestroyed(Entity entity);
+
+		bool HasBody(Entity entity) const;
+		// Rebuilds the body from the entity's current components.
+		void RecreateBody(Entity entity);
+
+		void AddForce(Entity entity, const glm::vec3& force);
+		void AddImpulse(Entity entity, const glm::vec3& impulse);
+		void AddTorque(Entity entity, const glm::vec3& torque);
+		void SetLinearVelocity(Entity entity, const glm::vec3& velocity);
+		// For a character, how fast it actually moved in the last step (after collisions, steps and slopes).
+		glm::vec3 GetLinearVelocity(Entity entity) const;
+		void SetAngularVelocity(Entity entity, const glm::vec3& velocity);
+		glm::vec3 GetAngularVelocity(Entity entity) const;
+		// Whether the entity's dynamic or kinematic body is asleep: no longer simulated until something wakes it (see
+		// RigidBody.AllowSleeping). False for static bodies and entities without a body (Lua's e:IsSleeping() returns nil
+		// for those).
+		bool IsBodySleeping(Entity entity) const;
+
+		// Whether the JointComponent held by this entity is currently a live constraint (false before both
+		// bodies exist, when the joint is invalid, and after it broke).
+		bool HasJoint(Entity entity) const;
+		// Hinge angle (degrees, wrapping at +-180) or slider offset (meters) of the joint held by this entity:
+		// its body relative to the connected one, measured from the joint's rest pose and signed around/along
+		// the world-space Axis; nullopt for other joint types and entities without a live joint.
+		std::optional<float> GetJointPosition(Entity entity) const;
+		// Rotation of a cone or six-DOF joint's body relative to the connected one, measured from the joint's
+		// rest pose in the joint frame (X = Axis; for six-DOF Y = SecondaryAxis, for a cone Y and Z are an
+		// arbitrary perpendicular pair), as Euler angles in degrees like Transform Rotation. A six-DOF
+		// AngularMotorTarget in this form drives the joint back to that pose. nullopt for other joint types
+		// and entities without a live joint.
+		std::optional<glm::vec3> GetJointRotation(Entity entity) const;
+
+		// Character controllers. MoveCharacter sets the velocity the character walks with until the next call.
+		// With gravity (scene gravity times GravityFactor), the part of it along the up axis (against gravity)
+		// only counts while the character stands on walkable ground, where it jumps (again on every landing
+		// while it is held), and once within CharacterController.JumpGrace seconds (counted in fixed steps) of
+		// leaving it without jumping (coyote time); otherwise in the air gravity drives the vertical speed and the
+		// rest steers. The character
+		// also moves with the ground it stands on. Without gravity the velocity applies in full. Calls on
+		// entities without a character do nothing; non-finite velocities are ignored.
+		bool HasCharacter(Entity entity) const;
+		void MoveCharacter(Entity entity, const glm::vec3& velocity);
+		// Queues animation displacement until a fixed step. Step consumes the one-frame override;
+		// pending displacement survives frames without fixed steps. Non-finite requests are logged/ignored.
+		// `share` (0..1, clamped; a non-finite one is logged and counts as 1) is how much of the character's horizontal
+		// movement the displacement owns: below 1, during a fade between root-motion and gameplay-driven states,
+		// MoveCharacter's horizontal velocity is added scaled by 1 - share. Frames queued before one step average their
+		// shares weighted by `seconds`, the time each displacement took (0 or non-finite: one fixed step); a frame
+		// without displacement counts too.
+		// A frame that queues nothing while earlier displacement waits for a step (a fade that ended, a clip that
+		// stopped) counts with share 0: gameplay movement owns that part of the step.
+		void QueueRootMotion(Entity entity, const glm::vec3& displacement, float share = 1.0f, float seconds = 0.0f);
+		// Standing on ground no steeper than SlopeLimit.
+		bool IsCharacterGrounded(Entity entity) const;
+		// Normal of the ground the character touches (walkable or too steep), nullopt in the air or without a
+		// character.
+		std::optional<glm::vec3> GetCharacterGroundNormal(Entity entity) const;
+		uint32_t GetCharacterCount() const;
+
+		// Enables skeleton physics, inheriting body linear/angular and tangential motion (controller: linear), and
+		// distributing a total world impulse over the parts it can move (not a KinematicRoot). Returns false with a diagnostic for invalid rigs/settings,
+		// overflowing impulses or cancellation by contact callbacks. Repeated activation adds the impulse.
+		bool ActivateRagdoll(Entity entity, const glm::vec3& impulse = glm::vec3(0));
+		// Freezes the physical pose, removes its bodies, optionally starts a get-up clip, and blends over seconds.
+		// Aligns the incoming animation root horizontally with the fall; callers place height for a different ground level. A
+		// KinematicRoot entity is left where it is.
+		bool RecoverRagdoll(Entity entity, const std::string& clip, float seconds);
+		bool IsRagdollActive(Entity entity) const;
+		// Fades the motor strength (0..1, scaling MotorTorque) linearly over seconds (0: at once); a changed MotorStrength
+		// applies at once and ends a fade. False with a diagnostic for a missing Ragdoll component or invalid values.
+		bool SetRagdollMotorStrength(Entity entity, float strength, float seconds);
+		// The current motor strength; nullopt without a Ragdoll component (or for an entity of another scene).
+		std::optional<float> GetRagdollMotorStrength(Entity entity) const;
+		uint32_t GetRagdollBodyCount(Entity entity) const;
+		// Construction attempts, including rejections; useful for diagnosing automatic activation retries.
+		uint64_t GetRagdollBuildCount() const;
+		std::vector<RagdollCapsule> GetRagdollCapsules(Entity entity) const;
+		// True during simulation or recovery.
+		bool HasRagdollPose(Entity entity) const;
+		// True while the ragdoll carries the whole rig during simulation or recovery, so animation leaves root motion, IK
+		// and springs to it. False for a KinematicRoot rig, whose root follows the animation.
+		bool RagdollOwnsRoot(Entity entity) const;
+		// Whether balance held the rig up in the last physics step: false when it is off, without gravity, when nothing
+		// supports the rig or when it tilted past BalanceMaxTilt.
+		bool IsRagdollBalanced(Entity entity) const;
+		// Model-space joint transforms and physical weight, with their owning source for identity checks after reload.
+		std::optional<RagdollPose> GetRagdollPose(Entity entity) const;
+		bool GetRagdollPose(Entity entity, const MeshSource& source, std::vector<std::pair<uint32_t, glm::mat4>>& joints, float& weight) const;
+
+		// Scene queries. Casts sweep along `direction` (any length) for up to maxDistance and report the
+		// closest hit, or with the *All variants every entity hit, once each at its closest point, sorted by
+		// distance (ties by UUID). A cast that starts inside a body hits it at distance 0, whichever way it
+		// moves. Overlaps return each entity touching the shape once, sorted by UUID. Invalid input (a
+		// non-finite or zero-length direction, a non-finite position, a non-positive distance, radius or half
+		// extent, a zero rotation) returns nothing. Rotations are world-space; box sizes are half extents.
+		std::optional<RaycastHit> Raycast(const glm::vec3& origin, const glm::vec3& direction, float maxDistance, const PhysicsQueryFilter& filter = {}) const;
+		std::vector<RaycastHit> RaycastAll(const glm::vec3& origin, const glm::vec3& direction, float maxDistance, const PhysicsQueryFilter& filter = {}) const;
+		std::optional<RaycastHit> SphereCast(const glm::vec3& origin, float radius, const glm::vec3& direction, float maxDistance, const PhysicsQueryFilter& filter = {}) const;
+		std::vector<RaycastHit> SphereCastAll(const glm::vec3& origin, float radius, const glm::vec3& direction, float maxDistance, const PhysicsQueryFilter& filter = {}) const;
+		std::optional<RaycastHit> BoxCast(const glm::vec3& origin, const glm::vec3& halfExtents, const glm::quat& rotation, const glm::vec3& direction, float maxDistance, const PhysicsQueryFilter& filter = {}) const;
+		std::vector<RaycastHit> BoxCastAll(const glm::vec3& origin, const glm::vec3& halfExtents, const glm::quat& rotation, const glm::vec3& direction, float maxDistance, const PhysicsQueryFilter& filter = {}) const;
+		std::vector<UUID> OverlapSphere(const glm::vec3& center, float radius, const PhysicsQueryFilter& filter = {}) const;
+		std::vector<UUID> OverlapBox(const glm::vec3& center, const glm::vec3& halfExtents, const glm::quat& rotation, const PhysicsQueryFilter& filter = {}) const;
+		// The bodies whose bounds touch the box [min, max], for PushOut and Sweep queries of spheres of `radius` (at least
+		// PhysicsShapeSnapshot::MinRadius), seen through `filter` and, when given, `accept` (by entity UUID; called with no
+		// body locked, so it may query this world). Non-finite or inverted bounds, or a radius that is not finite and
+		// nonnegative, gather nothing, as other queries return nothing for invalid input.
+		PhysicsShapeSnapshot CollectShapes(const glm::vec3& min, const glm::vec3& max, float radius, const PhysicsQueryFilter& filter = {}, const std::function<bool(UUID)>& accept = {}) const;
+
+		// The layers this world filters with (resolved when it was built).
+		const PhysicsLayers& GetLayers() const;
+
+		glm::vec3 GetGravity() const;
+		void SetGravity(const glm::vec3& gravity);
+
+		uint32_t GetBodyCount() const;
+		uint64_t GetStepCount() const { return m_StepCount; }
+		// How many mesh collider shapes have been cooked by every world so far. Cooked shapes are cached per
+		// mesh asset, mesh index and convexity across worlds, so this only grows for new or reloaded meshes.
+		static uint64_t GetMeshShapeCookCount();
+		// Drops every cached mesh collider shape (e.g. after AssetManager::Clear on a project switch). Shapes
+		// still used by a body stay alive through that body.
+		static void ClearMeshShapeCache();
+
+	private:
+		friend class AnimationSystem;
+		void RejectRagdollPose(Entity entity);
+		struct Impl;
+		Scope<Impl> m_Impl;
+		float m_Accumulator = 0.0f;
+		uint64_t m_StepCount = 0;
+	};
+
+}

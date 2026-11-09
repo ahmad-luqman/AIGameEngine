@@ -13,7 +13,7 @@ def require(condition, message):
 
 cli = pathlib.Path(sys.argv[1]).resolve()
 source = pathlib.Path(sys.argv[2]).resolve()
-with tempfile.TemporaryDirectory(prefix="BasaltAssetPipeline-") as temp:
+with tempfile.TemporaryDirectory(prefix="BrecciaAssetPipeline-") as temp:
     project = pathlib.Path(temp) / "Project"
     # Saved/ holds the FeatureTest batch's replay, which that test may be writing right now (ctest -j).
     shutil.copytree(source, project, ignore=shutil.ignore_patterns("Saved"))

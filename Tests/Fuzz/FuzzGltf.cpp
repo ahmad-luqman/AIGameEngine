@@ -2,11 +2,11 @@
 // model), so each input is written to a scratch file inside a scratch project.
 #include "FuzzCommon.h"
 
-#include <Basalt/Animation/AnimationClipSet.h>
-#include <Basalt/Animation/AnimationPose.h>
-#include <Basalt/Asset/MeshImporter.h>
-#include <Basalt/Core/FileSystem.h>
-#include <Basalt/Project/Project.h>
+#include <Breccia/Animation/AnimationClipSet.h>
+#include <Breccia/Animation/AnimationPose.h>
+#include <Breccia/Asset/MeshImporter.h>
+#include <Breccia/Core/FileSystem.h>
+#include <Breccia/Project/Project.h>
 
 #include <filesystem>
 #include <string>
@@ -14,15 +14,15 @@
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 {
-	BasaltFuzz::Init();
+	BrecciaFuzz::Init();
 	// Per-process directory: libFuzzer may run several workers in parallel (-jobs/-workers).
-	static const std::filesystem::path directory = std::filesystem::temp_directory_path() / ("BasaltFuzzGltf-" + std::to_string(getpid()));
+	static const std::filesystem::path directory = std::filesystem::temp_directory_path() / ("BrecciaFuzzGltf-" + std::to_string(getpid()));
 	static const bool projectReady = [] {
 		std::string error;
-		Basalt::Ref<Basalt::Project> project = Basalt::Project::Create(directory, "FuzzGltf", error);
+		Breccia::Ref<Breccia::Project> project = Breccia::Project::Create(directory, "FuzzGltf", error);
 		if (!project)
 			return false;
-		Basalt::Project::SetActive(project);
+		Breccia::Project::SetActive(project);
 		return true;
 	}();
 	if (!projectReady)
@@ -33,32 +33,32 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 		return 0;
 	const bool binary = (data[0] & 1) != 0;
 	const std::filesystem::path path = directory / (binary ? "Fuzz.glb" : "Fuzz.gltf");
-	Basalt::FileSystem::WriteBinaryFile(path, data + 1, size - 1);
+	Breccia::FileSystem::WriteBinaryFile(path, data + 1, size - 1);
 	std::string error;
-	const auto source = Basalt::MeshImporter::LoadGltf(path, binary ? "Fuzz.glb" : "Fuzz.gltf", error);
+	const auto source = Breccia::MeshImporter::LoadGltf(path, binary ? "Fuzz.glb" : "Fuzz.gltf", error);
 	// Library glTFs are untrusted too: retarget the model's clips onto itself.
 	if (source && !source->AnimationUnsupported)
 	{
 		// Onto a copy without clips, so the library's clips are not hidden by the model's and really bake.
-		auto target = Basalt::CreateRef<Basalt::MeshSource>(*source);
+		auto target = Breccia::CreateRef<Breccia::MeshSource>(*source);
 		target->Animations.clear();
-		Basalt::AnimationClipSet::Build(target, { Basalt::AnimationClipSet::Library{ .Entry = { .Mesh = "Fuzz.gltf" }, .Source = source } });
+		Breccia::AnimationClipSet::Build(target, { Breccia::AnimationClipSet::Library{ .Entry = { .Mesh = "Fuzz.gltf" }, .Source = source } });
 	}
 	if (source)
 		for (const auto& clip : source->Animations)
 		{
 			std::vector<glm::mat4> globals;
-			if (!Basalt::EvaluateAnimation(*source, &clip, clip.Duration * .37f, globals))
+			if (!Breccia::EvaluateAnimation(*source, &clip, clip.Duration * .37f, globals))
 				continue;
 			std::vector<std::vector<glm::mat4>> palettes(source->Skins.size());
 			for (size_t i = 0; i < source->Skins.size(); i++)
-				palettes[i] = Basalt::BuildSkinPalette(source->Skins[i], globals);
+				palettes[i] = Breccia::BuildSkinPalette(source->Skins[i], globals);
 			for (const auto& node : source->Nodes)
 				if (node.Active && node.MeshIndex >= 0 && node.SkinIndex >= 0 && !palettes[node.SkinIndex].empty())
 					for (uint32_t submesh : source->Meshes[node.MeshIndex].Submeshes)
 					{
-						Basalt::SkinBounds(*source, source->Submeshes[submesh], palettes[node.SkinIndex]);
-						Basalt::CachedSkinBounds(*source, source->Submeshes[submesh], palettes[node.SkinIndex]);
+						Breccia::SkinBounds(*source, source->Submeshes[submesh], palettes[node.SkinIndex]);
+						Breccia::CachedSkinBounds(*source, source->Submeshes[submesh], palettes[node.SkinIndex]);
 					}
 		}
 	return 0;

@@ -1,18 +1,18 @@
 #include <doctest/doctest.h>
 
-#include <Basalt/Audio/AudioEngine.h>
-#include <Basalt/Audio/AudioRules.h>
-#include <Basalt/Audio/AudioSystem.h>
-#include <Basalt/Audio/LowPassNode.h>
-#include <Basalt/Audio/SourceEffectsNode.h>
-#include <Basalt/Scripting/ScriptEngine.h>
-#include <Basalt/Core/FileSystem.h>
-#include <Basalt/Core/Log.h>
-#include <Basalt/Core/PackArchive.h>
-#include <Basalt/Physics/PhysicsWorld.h>
-#include <Basalt/Scene/ComponentRegistry.h>
-#include <Basalt/Scene/Entity.h>
-#include <Basalt/Scene/Scene.h>
+#include <Breccia/Audio/AudioEngine.h>
+#include <Breccia/Audio/AudioRules.h>
+#include <Breccia/Audio/AudioSystem.h>
+#include <Breccia/Audio/LowPassNode.h>
+#include <Breccia/Audio/SourceEffectsNode.h>
+#include <Breccia/Scripting/ScriptEngine.h>
+#include <Breccia/Core/FileSystem.h>
+#include <Breccia/Core/Log.h>
+#include <Breccia/Core/PackArchive.h>
+#include <Breccia/Physics/PhysicsWorld.h>
+#include <Breccia/Scene/ComponentRegistry.h>
+#include <Breccia/Scene/Entity.h>
+#include <Breccia/Scene/Scene.h>
 
 #include "TestUtils.h"
 
@@ -27,15 +27,15 @@
 #include <span>
 #include <vector>
 
-using namespace Basalt;
+using namespace Breccia;
 
 // Loudness checks compare RMS levels of the device-less mix. Exact zeros rely on miniaudio applying volume changes
 // at once (it has no volume smoothing unless asked for one).
 
 namespace {
 
-	using BasaltTest::HeadlessAudio;
-	using BasaltTest::MakeWav;
+	using BrecciaTest::HeadlessAudio;
+	using BrecciaTest::MakeWav;
 
 	// The device-less engine's default format: 48 kHz, interleaved stereo (two samples per frame).
 	constexpr size_t FramesPerSecond = 48000;
@@ -226,7 +226,7 @@ TEST_SUITE("Audio")
 {
 	TEST_CASE("Audio sources play, finish and are positioned without an output device")
 	{
-		BasaltTest::TempProject project("Audio");
+		BrecciaTest::TempProject project("Audio");
 		project.WriteFile("Assets/Audio/Beep.wav", MakeWav(0.25f));
 		HeadlessAudio engine;
 		CHECK_FALSE(AudioEngine::HasDevice());
@@ -253,9 +253,9 @@ TEST_SUITE("Audio")
 		CHECK(audio.Play(looping));
 		const uint64_t since = Log::GetHistory().GetTotalCount();
 		CHECK_FALSE(audio.Play(broken));
-		CHECK(BasaltTest::CountLogMessages(since, "cannot load clip 'Assets/Audio/Missing.wav'") == 1);
+		CHECK(BrecciaTest::CountLogMessages(since, "cannot load clip 'Assets/Audio/Missing.wav'") == 1);
 		// miniaudio's own diagnostics reach the engine log, without their trailing newline.
-		CHECK(BasaltTest::CountLogMessages(since, "miniaudio: Failed to load file") == 1);
+		CHECK(BrecciaTest::CountLogMessages(since, "miniaudio: Failed to load file") == 1);
 		uint64_t next = 0;
 		for (const LogMessage& message : Log::GetHistory().GetMessagesSince(since, next))
 			CHECK(message.Text.back() != '\n');
@@ -280,10 +280,10 @@ TEST_SUITE("Audio")
 
 	TEST_CASE("A scene load starts the new scene's PlayOnStart sources")
 	{
-		BasaltTest::TempProject project("AudioSceneLoad");
+		BrecciaTest::TempProject project("AudioSceneLoad");
 		project.WriteFile("Assets/Audio/Beep.wav", MakeWav(0.25f));
 		project.WriteFile("Assets/Scenes/Next.bscene", R"({
-			"Format": "BasaltScene", "Version": 1,
+			"Format": "BrecciaScene", "Version": 1,
 			"Entities": [
 				{ "ID": 10, "Name": "Music", "Parent": 0, "Components": { "AudioSource": { "Clip": "Assets/Audio/Beep.wav", "PlayOnStart": true } } },
 				{ "ID": 11, "Name": "Silent", "Parent": 0, "Components": { "AudioSource": { "Clip": "Assets/Audio/Beep.wav", "PlayOnStart": false } } }
@@ -308,7 +308,7 @@ TEST_SUITE("Audio")
 	// names load there only through the wide entry point.
 	TEST_CASE("Clips named in CJK characters play, decoded and streamed")
 	{
-		BasaltTest::TempProject project("Audio-資産");
+		BrecciaTest::TempProject project("Audio-資産");
 		project.WriteFile("Assets/Audio/音.wav", MakeWav(0.25f));
 		HeadlessAudio engine;
 
@@ -326,7 +326,7 @@ TEST_SUITE("Audio")
 		const uint64_t since = Log::GetHistory().GetTotalCount();
 		CHECK(audio.Play(decoded));
 		CHECK(audio.Play(streamed));
-		CHECK(BasaltTest::CountLogMessages(since, "cannot load clip") == 0);
+		CHECK(BrecciaTest::CountLogMessages(since, "cannot load clip") == 0);
 		CHECK(Rms(Mix(0.05f)) > 0.01f);
 		scene.OnRuntimeStop();
 	}
@@ -334,7 +334,7 @@ TEST_SUITE("Audio")
 	TEST_CASE("CanDecode answers from a file's bytes, as the decoders that play it do")
 	{
 		const auto read = [](const char* name) {
-			const auto bytes = FileSystem::ReadBinaryFile(std::filesystem::path(BASALT_TEST_DATA_DIR) / "Audio" / name);
+			const auto bytes = FileSystem::ReadBinaryFile(std::filesystem::path(BRECCIA_TEST_DATA_DIR) / "Audio" / name);
 			REQUIRE(bytes);
 			return *bytes;
 		};
@@ -511,7 +511,7 @@ TEST_SUITE("Audio")
 		CHECK(IsValidAudioVolume(4.0f));
 
 		// C++ code can bypass the registry; the system refuses to play such a source rather than mix an invalid gain.
-		BasaltTest::TempProject project("AudioValidation");
+		BrecciaTest::TempProject project("AudioValidation");
 		project.WriteFile("Assets/Audio/Beep.wav", MakeWav(0.25f));
 		HeadlessAudio engine;
 		AudioScene audioScene;
@@ -522,23 +522,23 @@ TEST_SUITE("Audio")
 		CHECK_FALSE(audio.IsPlaying(bad));
 		const uint64_t since = Log::GetHistory().GetTotalCount();
 		CHECK_FALSE(audio.Play(bad));
-		CHECK(BasaltTest::CountLogMessages(since, "cannot play the AudioSource of 'Bad': Volume must be a finite number >= 0 (got -1)") == 1);
+		CHECK(BrecciaTest::CountLogMessages(since, "cannot play the AudioSource of 'Bad': Volume must be a finite number >= 0 (got -1)") == 1);
 		CHECK_FALSE(audio.PlayOneShot("Assets/Audio/Beep.wav", nullptr, nan));
 		CHECK_FALSE(audio.PlayOneShot("Assets/Audio/Beep.wav", nullptr, -1.0f));
-		CHECK(BasaltTest::CountLogMessages(since, "cannot play 'Assets/Audio/Beep.wav' at volume") == 2);
+		CHECK(BrecciaTest::CountLogMessages(since, "cannot play 'Assets/Audio/Beep.wav' at volume") == 2);
 		CHECK(audio.GetActiveSoundCount() == 0);
 		CHECK_FALSE(audio.SetBusVolume(AudioBus::Music, nan));
 		CHECK_FALSE(audio.SetBusVolume(AudioBus::Music, -0.5f));
-		CHECK(BasaltTest::CountLogMessages(since, "the Music bus volume must be a finite number >= 0") == 2);
+		CHECK(BrecciaTest::CountLogMessages(since, "the Music bus volume must be a finite number >= 0") == 2);
 		CHECK(audio.GetBusVolume(AudioBus::Music) == 1.0f);
 		// A source without a clip says so.
 		CHECK_FALSE(audio.Play(audioScene.Add("NoClip", Source(""))));
-		CHECK(BasaltTest::CountLogMessages(since, "cannot play a sound without a clip") == 1);
+		CHECK(BrecciaTest::CountLogMessages(since, "cannot play a sound without a clip") == 1);
 	}
 
 	TEST_CASE("Mixer buses scale the sounds routed to them, and Master scales every bus")
 	{
-		BasaltTest::TempProject project("AudioBuses");
+		BrecciaTest::TempProject project("AudioBuses");
 		project.WriteFile("Assets/Audio/Tone.wav", MakeWav(1.0f));
 		HeadlessAudio engine;
 		AudioScene scene;
@@ -588,7 +588,7 @@ TEST_SUITE("Audio")
 
 	TEST_CASE("A source routed straight to Master ignores the category buses")
 	{
-		BasaltTest::TempProject project("AudioMasterBus");
+		BrecciaTest::TempProject project("AudioMasterBus");
 		project.WriteFile("Assets/Audio/Tone.wav", MakeWav(1.0f));
 		HeadlessAudio engine;
 		AudioScene scene;
@@ -606,7 +606,7 @@ TEST_SUITE("Audio")
 
 	TEST_CASE("A bus value outside the enum (C++ only) is refused and changes nothing")
 	{
-		BasaltTest::TempProject project("AudioBadBus");
+		BrecciaTest::TempProject project("AudioBadBus");
 		project.WriteFile("Assets/Audio/Tone.wav", MakeWav(1.0f));
 		HeadlessAudio engine;
 		AudioScene scene;
@@ -616,7 +616,7 @@ TEST_SUITE("Audio")
 		CHECK_FALSE(audio.SetBusVolume(badBus, 0.5f));
 		CHECK(audio.GetBusVolume(badBus) == 0.0f);
 		CHECK_FALSE(audio.PlayOneShot("Assets/Audio/Tone.wav", nullptr, 1.0f, badBus));
-		CHECK(BasaltTest::CountLogMessages(since, "bus value 7 is out of range") == 3);
+		CHECK(BrecciaTest::CountLogMessages(since, "bus value 7 is out of range") == 3);
 		for (size_t i = 0; i < AudioBusCount; i++)
 			CHECK(audio.GetBusVolume(static_cast<AudioBus>(i)) == 1.0f);
 		CHECK(audio.GetActiveSoundCount() == 0);
@@ -624,15 +624,15 @@ TEST_SUITE("Audio")
 
 	TEST_CASE("Bus volumes last for the play session: Scene.Load keeps them, a new session resets them")
 	{
-		BasaltTest::TempProject project("AudioBusSession");
+		BrecciaTest::TempProject project("AudioBusSession");
 		project.WriteFile("Assets/Audio/Tone.wav", MakeWav(1.0f));
 		project.WriteFile("Assets/Scenes/Next.bscene", R"({
-			"Format": "BasaltScene", "Version": 1,
+			"Format": "BrecciaScene", "Version": 1,
 			"Entities": [
 				{ "ID": 10, "Name": "Music", "Parent": 0, "Components": { "AudioSource": { "Clip": "Assets/Audio/Tone.wav", "PlayOnStart": true, "Loop": true, "Spatial": false, "Bus": "Music", "Stream": true } } }
 			]
 		})");
-		project.WriteFile("Assets/Scenes/Quiet.bscene", R"({ "Format": "BasaltScene", "Version": 1, "Entities": [ { "ID": 20, "Name": "Nobody", "Parent": 0, "Components": {} } ] })");
+		project.WriteFile("Assets/Scenes/Quiet.bscene", R"({ "Format": "BrecciaScene", "Version": 1, "Entities": [ { "ID": 20, "Name": "Nobody", "Parent": 0, "Components": {} } ] })");
 		HeadlessAudio engine;
 		Scene scene;
 		scene.OnRuntimeStart();
@@ -668,7 +668,7 @@ TEST_SUITE("Audio")
 
 	TEST_CASE("PlayOnStart sources only sound once the scripts' OnCreate could set bus volumes")
 	{
-		BasaltTest::TempProject project("AudioDeferredStart");
+		BrecciaTest::TempProject project("AudioDeferredStart");
 		project.WriteFile("Assets/Audio/Tone.wav", MakeWav(1.0f));
 		HeadlessAudio engine;
 		// The system on its own, outside a running scene, to look between Start and BeginPlayback.
@@ -735,7 +735,7 @@ TEST_SUITE("Audio")
 		{
 			SUBCASE(format)
 			{
-				BasaltTest::TempProject project("AudioArchive");
+				BrecciaTest::TempProject project("AudioArchive");
 				const std::string key = "Assets/Audio/" + name;
 				const std::filesystem::path disk = project.GetDirectory() / "Assets" / "Audio" / name;
 				if (name.ends_with(".wav"))
@@ -744,7 +744,7 @@ TEST_SUITE("Audio")
 				{
 					std::error_code copyError;
 					std::filesystem::create_directories(disk.parent_path(), copyError);
-					std::filesystem::copy_file(std::filesystem::path(BASALT_TEST_DATA_DIR) / "Audio" / name, disk, copyError);
+					std::filesystem::copy_file(std::filesystem::path(BRECCIA_TEST_DATA_DIR) / "Audio" / name, disk, copyError);
 					REQUIRE_FALSE(copyError);
 				}
 				project.WriteFile("Assets/Audio/Earlier.bin", std::string(5000, 'x'));
@@ -770,7 +770,7 @@ TEST_SUITE("Audio")
 				std::filesystem::remove(disk, removeError);
 				Ref<PackArchive> archive = PackArchive::Open(archivePath, error);
 				REQUIRE_MESSAGE(archive, error);
-				BasaltTest::ScopedMount mount(project.GetDirectory(), archive);
+				BrecciaTest::ScopedMount mount(project.GetDirectory(), archive);
 
 				CHECK(CountMismatches(fileLooped, PlayAlone(source, seconds + 2.0f, true)) == 0);
 				source.Loop = false;
@@ -796,7 +796,7 @@ TEST_SUITE("Audio")
 #if !defined(_WIN32)
 	TEST_CASE("A clip whose archive is cut short ends early with an error instead of hanging")
 	{
-		BasaltTest::TempProject project("AudioArchiveCut");
+		BrecciaTest::TempProject project("AudioArchiveCut");
 		const float seconds = 12.0f;
 		project.WriteFile("Assets/Audio/Song.wav", MakeWav(seconds, 48000));
 		const std::filesystem::path archivePath = project.GetDirectory() / "Audio.bpak";
@@ -807,7 +807,7 @@ TEST_SUITE("Audio")
 		std::filesystem::remove(project.GetDirectory() / "Assets" / "Audio" / "Song.wav");
 		const Ref<PackArchive> archive = PackArchive::Open(archivePath, error);
 		REQUIRE_MESSAGE(archive, error);
-		BasaltTest::ScopedMount mount(project.GetDirectory(), archive);
+		BrecciaTest::ScopedMount mount(project.GetDirectory(), archive);
 		HeadlessAudio engine;
 
 		AudioSourceComponent source = Source("Assets/Audio/Song.wav", AudioBus::Music);
@@ -833,7 +833,7 @@ TEST_SUITE("Audio")
 
 	TEST_CASE("A streamed clip plays exactly the samples of the decoded clip, across its pages")
 	{
-		BasaltTest::TempProject project("AudioStream");
+		BrecciaTest::TempProject project("AudioStream");
 		// 2.5 s at the engine's rate: three one-second pages, so the two-page stream buffer must refill a page
 		// mid-clip; no resampling.
 		project.WriteFile("Assets/Audio/Song.wav", MakeWav(2.5f, 48000));
@@ -852,7 +852,7 @@ TEST_SUITE("Audio")
 
 	TEST_CASE("Looping and resampled streams match their decoded clips")
 	{
-		BasaltTest::TempProject project("AudioStreamLoop");
+		BrecciaTest::TempProject project("AudioStreamLoop");
 		project.WriteFile("Assets/Audio/Ambience.wav", MakeWav(1.2f, 48000));
 		project.WriteFile("Assets/Audio/Ambience22k.wav", MakeWav(1.2f, 22050));
 		HeadlessAudio engine;
@@ -871,7 +871,7 @@ TEST_SUITE("Audio")
 
 	TEST_CASE("Streams can be pitched, spatial, stopped mid-play, replayed and destroyed")
 	{
-		BasaltTest::TempProject project("AudioStreamLifecycle");
+		BrecciaTest::TempProject project("AudioStreamLifecycle");
 		project.WriteFile("Assets/Audio/Song.wav", MakeWav(2.5f, 48000));
 		HeadlessAudio engine;
 		AudioScene scene;
@@ -921,7 +921,7 @@ TEST_SUITE("Audio")
 
 	TEST_CASE("A streamed clip that cannot be read is reported, not played")
 	{
-		BasaltTest::TempProject project("AudioStreamBroken");
+		BrecciaTest::TempProject project("AudioStreamBroken");
 		project.WriteFile("Assets/Audio/Garbage.wav", "not a wav file at all");
 		// The header promises 2.5 s; the data holds 0.5 s.
 		std::string truncated = MakeWav(2.5f, 48000);
@@ -941,9 +941,9 @@ TEST_SUITE("Audio")
 		const uint64_t since = Log::GetHistory().GetTotalCount();
 		CHECK_FALSE(audio.Play(missingEntity));
 		CHECK_FALSE(audio.Play(garbageEntity));
-		CHECK(BasaltTest::CountLogMessages(since, "cannot load clip 'Assets/Audio/Missing.wav'") == 1);
-		CHECK(BasaltTest::CountLogMessages(since, "cannot load clip 'Assets/Audio/Garbage.wav'") == 1);
-		CHECK(BasaltTest::CountLogMessages(since, "streamed") == 2);
+		CHECK(BrecciaTest::CountLogMessages(since, "cannot load clip 'Assets/Audio/Missing.wav'") == 1);
+		CHECK(BrecciaTest::CountLogMessages(since, "cannot load clip 'Assets/Audio/Garbage.wav'") == 1);
+		CHECK(BrecciaTest::CountLogMessages(since, "streamed") == 2);
 		CHECK(audio.GetActiveSoundCount() == 0);
 		CHECK(Rms(Mix(0.1f)) == 0.0f);
 
@@ -961,7 +961,7 @@ TEST_SUITE("Audio")
 
 	TEST_CASE("Spatial sources fade with distance from the listener; non-spatial sources do not")
 	{
-		BasaltTest::TempProject project("AudioSpatial");
+		BrecciaTest::TempProject project("AudioSpatial");
 		project.WriteFile("Assets/Audio/Tone.wav", MakeWav(1.0f));
 		HeadlessAudio engine;
 		AudioSourceComponent spatial = Source("Assets/Audio/Tone.wav");
@@ -989,7 +989,7 @@ TEST_SUITE("Audio")
 
 	TEST_CASE("Spatial sources follow their entity and pan by direction")
 	{
-		BasaltTest::TempProject project("AudioSpatialMotion");
+		BrecciaTest::TempProject project("AudioSpatialMotion");
 		project.WriteFile("Assets/Audio/Tone.wav", MakeWav(2.0f));
 		HeadlessAudio engine;
 		AudioScene scene;
@@ -1017,7 +1017,7 @@ TEST_SUITE("Audio")
 
 	TEST_CASE("A spatial one-shot fades with distance")
 	{
-		BasaltTest::TempProject project("AudioSpatialOneShot");
+		BrecciaTest::TempProject project("AudioSpatialOneShot");
 		project.WriteFile("Assets/Audio/Tone.wav", MakeWav(1.0f));
 		HeadlessAudio engine;
 		auto measure = [](const glm::vec3& position) {
@@ -1031,7 +1031,7 @@ TEST_SUITE("Audio")
 
 	TEST_CASE("Pitch scales a clip's playback speed")
 	{
-		BasaltTest::TempProject project("AudioPitch");
+		BrecciaTest::TempProject project("AudioPitch");
 		project.WriteFile("Assets/Audio/Beep.wav", MakeWav(0.5f));
 		HeadlessAudio engine;
 		AudioScene scene;
@@ -1061,7 +1061,7 @@ TEST_SUITE("Audio")
 
 	TEST_CASE("Source lifecycle: replay restarts, stop and invalid sources are harmless, stopping play releases everything")
 	{
-		BasaltTest::TempProject project("AudioLifecycle");
+		BrecciaTest::TempProject project("AudioLifecycle");
 		project.WriteFile("Assets/Audio/Beep.wav", MakeWav(0.25f));
 		HeadlessAudio engine;
 		AudioScene scene;
@@ -1103,7 +1103,7 @@ TEST_SUITE("Audio")
 
 	TEST_CASE("Without an audio engine nothing plays, but bus volumes are still kept")
 	{
-		BasaltTest::TempProject project("AudioNoEngine");
+		BrecciaTest::TempProject project("AudioNoEngine");
 		project.WriteFile("Assets/Audio/Beep.wav", MakeWav(0.25f));
 		REQUIRE_FALSE(AudioEngine::IsInitialized());
 		std::vector<float> frames;
@@ -1142,7 +1142,7 @@ TEST_SUITE("Audio")
 
 	TEST_CASE("Doppler: approaching sources sound higher, receding ones lower, by the physical ratio")
 	{
-		BasaltTest::TempProject project("AudioDoppler");
+		BrecciaTest::TempProject project("AudioDoppler");
 		project.WriteFile("Assets/Audio/Tone.wav", MakeWav(2.0f));
 		HeadlessAudio engine;
 		constexpr float Speed = 30.0f;
@@ -1182,7 +1182,7 @@ TEST_SUITE("Audio")
 
 	TEST_CASE("Doppler: velocities come from physics bodies, a teleport is capped and one-shots never shift")
 	{
-		BasaltTest::TempProject project("AudioDopplerBodies");
+		BrecciaTest::TempProject project("AudioDopplerBodies");
 		project.WriteFile("Assets/Audio/Tone.wav", MakeWav(2.0f));
 		HeadlessAudio engine;
 
@@ -1256,7 +1256,7 @@ TEST_SUITE("Audio")
 
 	TEST_CASE("LowPass muffles a source while it plays, and turning it off restores the exact sound")
 	{
-		BasaltTest::TempProject project("AudioLowPass");
+		BrecciaTest::TempProject project("AudioLowPass");
 		project.WriteFile("Assets/Audio/High.wav", MakeWav(2.0f, 44100, 4000.0));
 		project.WriteFile("Assets/Audio/Low.wav", MakeWav(2.0f, 22050, 220.0));
 		HeadlessAudio engine;
@@ -1311,7 +1311,7 @@ TEST_SUITE("Audio")
 
 	TEST_CASE("Live effect values that C++ code made invalid turn the effect off, reported once until valid again")
 	{
-		BasaltTest::TempProject project("AudioInvalidEffects");
+		BrecciaTest::TempProject project("AudioInvalidEffects");
 		project.WriteFile("Assets/Audio/High.wav", MakeWav(2.0f, 44100, 4000.0));
 		HeadlessAudio engine;
 		AudioScene scene;
@@ -1329,7 +1329,7 @@ TEST_SUITE("Audio")
 		CHECK(Rms(Mix(0.1f)) == doctest::Approx(plainRms).epsilon(0.01));
 		CHECK_FALSE(audio.HasReverb(AudioBus::SFX));
 		// Six updates, one report (the first problem: Doppler).
-		CHECK(BasaltTest::CountLogMessages(since, "an effect of the AudioSource of 'High' is off: Doppler must be a number from 0 to 2 (got -1)") == 1);
+		CHECK(BrecciaTest::CountLogMessages(since, "an effect of the AudioSource of 'High' is off: Doppler must be a number from 0 to 2 (got -1)") == 1);
 		CHECK(Log::GetHistory().GetTotalCount() == since + 1);
 		// Valid again, then invalid again: reported again.
 		effects.LowPass = 0.0f;
@@ -1338,13 +1338,13 @@ TEST_SUITE("Audio")
 		scene.Run(StepSeconds);
 		effects.ReverbSend = std::numeric_limits<float>::quiet_NaN();
 		scene.Run(0.1f);
-		CHECK(BasaltTest::CountLogMessages(since, "is off: ReverbSend must be a number from 0 to 1") == 1);
+		CHECK(BrecciaTest::CountLogMessages(since, "is off: ReverbSend must be a number from 0 to 1") == 1);
 		CHECK(Log::GetHistory().GetTotalCount() == since + 2);
 	}
 
 	TEST_CASE("ReverbSend feeds the bus's reverb, whose tail outlasts the sound and follows the bus volume")
 	{
-		BasaltTest::TempProject project("AudioReverb");
+		BrecciaTest::TempProject project("AudioReverb");
 		project.WriteFile("Assets/Audio/Beep.wav", MakeWav(0.1f));
 		HeadlessAudio engine;
 		// The tail's loudness from 0.15 s after a 0.1 s beep, with the send and room given.
@@ -1382,7 +1382,7 @@ TEST_SUITE("Audio")
 
 	TEST_CASE("Reverb settings are validated, and start over each session")
 	{
-		BasaltTest::TempProject project("AudioReverbSettings");
+		BrecciaTest::TempProject project("AudioReverbSettings");
 		project.WriteFile("Assets/Audio/Beep.wav", MakeWav(2.0f));
 		HeadlessAudio engine;
 		{
@@ -1401,8 +1401,8 @@ TEST_SUITE("Audio")
 			invalid = {};
 			invalid.Width = std::numeric_limits<float>::quiet_NaN();
 			CHECK_FALSE(audio.SetReverb(invalid));
-			CHECK(BasaltTest::CountLogMessages(since, "cannot set the reverb: Damping must be a number from 0 to 1 (got 1.5)") == 1);
-			CHECK(BasaltTest::CountLogMessages(since, "cannot set the reverb: Width must be a number from 0 to 1") == 1);
+			CHECK(BrecciaTest::CountLogMessages(since, "cannot set the reverb: Damping must be a number from 0 to 1 (got 1.5)") == 1);
+			CHECK(BrecciaTest::CountLogMessages(since, "cannot set the reverb: Width must be a number from 0 to 1") == 1);
 			CHECK(audio.GetReverb().Damping == 0.25f);
 
 			AudioReverbSettings dry;
@@ -1430,7 +1430,7 @@ TEST_SUITE("Audio")
 
 	TEST_CASE("Doppler: a listener on a character uses the character's velocity, and a new listener starts at rest")
 	{
-		BasaltTest::TempProject project("AudioDopplerListener");
+		BrecciaTest::TempProject project("AudioDopplerListener");
 		project.WriteFile("Assets/Audio/Tone.wav", MakeWav(2.0f));
 		HeadlessAudio engine;
 
@@ -1479,7 +1479,7 @@ TEST_SUITE("Audio")
 
 	TEST_CASE("Doppler: placing entities in OnCreate is no movement, and a script-moved static body is measured")
 	{
-		BasaltTest::TempProject project("AudioDopplerPlacement");
+		BrecciaTest::TempProject project("AudioDopplerPlacement");
 		project.WriteFile("Assets/Audio/Tone.wav", MakeWav(2.0f));
 		HeadlessAudio engine;
 
@@ -1551,7 +1551,7 @@ TEST_SUITE("Audio")
 
 	TEST_CASE("Doppler: the strongest factor at the speed cap stays audible both ways")
 	{
-		BasaltTest::TempProject project("AudioDopplerExtremes");
+		BrecciaTest::TempProject project("AudioDopplerExtremes");
 		project.WriteFile("Assets/Audio/Tone.wav", MakeWav(2.0f));
 		HeadlessAudio engine;
 		// Source and listener both jump 50 m in one frame (capped to 100 m/s each), toward or away from each other.
@@ -1574,7 +1574,7 @@ TEST_SUITE("Audio")
 
 	TEST_CASE("A source whose world position is not finite keeps its last position, reported once")
 	{
-		BasaltTest::TempProject project("AudioNonFinite");
+		BrecciaTest::TempProject project("AudioNonFinite");
 		project.WriteFile("Assets/Audio/Tone.wav", MakeWav(2.0f));
 		HeadlessAudio engine;
 		AudioScene scene;
@@ -1586,7 +1586,7 @@ TEST_SUITE("Audio")
 		const uint64_t since = Log::GetHistory().GetTotalCount();
 		speaker.GetComponent<TransformComponent>().Translation.x = std::numeric_limits<float>::quiet_NaN();
 		scene.Run(0.1f);
-		CHECK(BasaltTest::CountLogMessages(since, "'Speaker' has a world position that is not finite") == 1);
+		CHECK(BrecciaTest::CountLogMessages(since, "'Speaker' has a world position that is not finite") == 1);
 		// Nothing poisoned the mix or the reverb's feedback.
 		speaker.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 0.0f, -2.0f);
 		scene.Run(StepSeconds);
@@ -1598,7 +1598,7 @@ TEST_SUITE("Audio")
 
 	TEST_CASE("LowPass glides to a new cutoff, restarts cleanly after a bypass, and combines with a reverb send")
 	{
-		BasaltTest::TempProject project("AudioLowPassChain");
+		BrecciaTest::TempProject project("AudioLowPassChain");
 		project.WriteFile("Assets/Audio/High.wav", MakeWav(2.0f, 44100, 4000.0));
 		HeadlessAudio engine;
 		AudioScene scene;
@@ -1665,9 +1665,9 @@ TEST_SUITE("Audio")
 
 	TEST_CASE("A reverb created after SetReverb uses its settings, and the settings survive Scene.Load")
 	{
-		BasaltTest::TempProject project("AudioReverbLater");
+		BrecciaTest::TempProject project("AudioReverbLater");
 		project.WriteFile("Assets/Audio/Beep.wav", MakeWav(0.1f));
-		project.WriteFile("Assets/Scenes/Next.bscene", R"({ "Format": "BasaltScene", "Version": 1, "Entities": [ { "ID": 20, "Name": "Nobody", "Parent": 0, "Components": {} } ] })");
+		project.WriteFile("Assets/Scenes/Next.bscene", R"({ "Format": "BrecciaScene", "Version": 1, "Entities": [ { "ID": 20, "Name": "Nobody", "Parent": 0, "Components": {} } ] })");
 		HeadlessAudio engine;
 		// The tail of a beep whose source starts sending while it already plays, into a reverb created only now, after the settings were set.
 		auto tail = [](const AudioReverbSettings& room) {
@@ -1701,7 +1701,7 @@ TEST_SUITE("Audio")
 
 	TEST_CASE("A source whose AudioSource is removed while it plays keeps playing until it is stopped")
 	{
-		BasaltTest::TempProject project("AudioRemovedSource");
+		BrecciaTest::TempProject project("AudioRemovedSource");
 		project.WriteFile("Assets/Audio/Tone.wav", MakeWav(2.0f));
 		HeadlessAudio engine;
 		AudioScene scene;
@@ -1725,7 +1725,7 @@ TEST_SUITE("Audio")
 
 	TEST_CASE("Where the reverb cannot run (surround, low rates) sends are dropped, logged once per bus, and sounds play dry")
 	{
-		BasaltTest::TempProject project("AudioReverbUnavailable");
+		BrecciaTest::TempProject project("AudioReverbUnavailable");
 		project.WriteFile("Assets/Audio/Tone.wav", MakeWav(2.0f));
 		auto run = [](const AudioDevicelessFormat& format, const std::string& expectedLog) {
 			HeadlessAudio engine(format);
@@ -1746,8 +1746,8 @@ TEST_SUITE("Audio")
 			scene.Run(0.1f);
 			CHECK_FALSE(audio.HasReverb(AudioBus::SFX));
 			CHECK_FALSE(audio.HasReverb(AudioBus::Music));
-			CHECK(BasaltTest::CountLogMessages(since, expectedLog) == 1);
-			CHECK(BasaltTest::CountLogMessages(since, "reverb for") == 2);
+			CHECK(BrecciaTest::CountLogMessages(since, expectedLog) == 1);
+			CHECK(BrecciaTest::CountLogMessages(since, "reverb for") == 2);
 			const std::vector<float> mix = Mix(0.1f);
 			CHECK(AllFinite(mix));
 			CHECK(Rms(mix) > 0.01f);
@@ -1762,12 +1762,12 @@ TEST_SUITE("Audio")
 		CHECK_FALSE(AudioEngine::Init(true, { 0, 48000 }));
 		CHECK_FALSE(AudioEngine::Init(true, { 2, 4000 }));
 		CHECK_FALSE(AudioEngine::IsInitialized());
-		CHECK(BasaltTest::CountLogMessages(since, "unsupported device-less format") == 2);
+		CHECK(BrecciaTest::CountLogMessages(since, "unsupported device-less format") == 2);
 	}
 
 	TEST_CASE("A LowPass cutoff above the output's Nyquist frequency is kept under it")
 	{
-		BasaltTest::TempProject project("AudioLowPassNyquist");
+		BrecciaTest::TempProject project("AudioLowPassNyquist");
 		project.WriteFile("Assets/Audio/Tone.wav", MakeWav(2.0f));
 		// At 22.05 kHz a 15 kHz cutoff lies past Nyquist (11.025 kHz); the filter runs at 0.45 times the rate instead,
 		// which a 440 Hz tone passes untouched.
@@ -1788,7 +1788,7 @@ TEST_SUITE("Audio")
 
 	TEST_CASE("A listener whose transform is not finite keeps its last placement, reported once until it is finite")
 	{
-		BasaltTest::TempProject project("AudioListenerNonFinite");
+		BrecciaTest::TempProject project("AudioListenerNonFinite");
 		project.WriteFile("Assets/Audio/Tone.wav", MakeWav(2.0f));
 		HeadlessAudio engine;
 		AudioScene scene;
@@ -1802,7 +1802,7 @@ TEST_SUITE("Audio")
 		// A zero scale: the position is finite, its directions are not.
 		transform.Scale = glm::vec3(0.0f);
 		scene.Run(0.1f);
-		CHECK(BasaltTest::CountLogMessages(since, "the listener 'Listener' has a transform that is not finite") == 1);
+		CHECK(BrecciaTest::CountLogMessages(since, "the listener 'Listener' has a transform that is not finite") == 1);
 		// Back, somewhere else: no teleport reads as movement, and nothing poisoned the mix or the reverb.
 		transform.Scale = glm::vec3(1.0f);
 		transform.Translation = glm::vec3(0.0f, 0.0f, 30.0f);
@@ -1814,12 +1814,12 @@ TEST_SUITE("Audio")
 		// Broken again: reported again.
 		transform.Translation.y = std::numeric_limits<float>::infinity();
 		scene.Run(StepSeconds);
-		CHECK(BasaltTest::CountLogMessages(since, "the listener 'Listener' has a transform that is not finite") == 2);
+		CHECK(BrecciaTest::CountLogMessages(since, "the listener 'Listener' has a transform that is not finite") == 2);
 	}
 
 	TEST_CASE("Positions that are not finite never reach a sound: Play and PlayOneShot refuse them, and a recovery is no teleport")
 	{
-		BasaltTest::TempProject project("AudioNonFinitePlay");
+		BrecciaTest::TempProject project("AudioNonFinitePlay");
 		project.WriteFile("Assets/Audio/Tone.wav", MakeWav(2.0f));
 		HeadlessAudio engine;
 		AudioScene scene;
@@ -1831,10 +1831,10 @@ TEST_SUITE("Audio")
 		const uint64_t since = Log::GetHistory().GetTotalCount();
 		speaker.GetComponent<TransformComponent>().Translation.x = std::numeric_limits<float>::quiet_NaN();
 		CHECK_FALSE(audio.Play(speaker));
-		CHECK(BasaltTest::CountLogMessages(since, "cannot play the AudioSource of 'Speaker': its world position is not finite") == 1);
+		CHECK(BrecciaTest::CountLogMessages(since, "cannot play the AudioSource of 'Speaker': its world position is not finite") == 1);
 		const glm::vec3 nowhere(std::numeric_limits<float>::infinity(), 0.0f, 0.0f);
 		CHECK_FALSE(audio.PlayOneShot("Assets/Audio/Tone.wav", &nowhere));
-		CHECK(BasaltTest::CountLogMessages(since, "cannot play 'Assets/Audio/Tone.wav' at a position that is not finite") == 1);
+		CHECK(BrecciaTest::CountLogMessages(since, "cannot play 'Assets/Audio/Tone.wav' at a position that is not finite") == 1);
 		CHECK(audio.GetActiveSoundCount() == 0);
 
 		// A playing source that goes non-finite and comes back 40 m away does not read as moving 40 m in a frame.
@@ -1851,7 +1851,7 @@ TEST_SUITE("Audio")
 
 	TEST_CASE("Each new invalid effect value is reported, and a NaN send never reaches the reverb")
 	{
-		BasaltTest::TempProject project("AudioInvalidEffectsEach");
+		BrecciaTest::TempProject project("AudioInvalidEffectsEach");
 		project.WriteFile("Assets/Audio/Tone.wav", MakeWav(2.0f));
 		HeadlessAudio engine;
 		AudioScene scene;
@@ -1862,15 +1862,15 @@ TEST_SUITE("Audio")
 		effects.Doppler = -1.0f;
 		effects.LowPass = 5.0f;
 		scene.Run(0.1f);
-		CHECK(BasaltTest::CountLogMessages(since, "is off: Doppler must be") == 1);
+		CHECK(BrecciaTest::CountLogMessages(since, "is off: Doppler must be") == 1);
 		// Doppler fixed, LowPass still out of range: that one is reported now.
 		effects.Doppler = 0.0f;
 		scene.Run(0.1f);
-		CHECK(BasaltTest::CountLogMessages(since, "is off: LowPass must be") == 1);
+		CHECK(BrecciaTest::CountLogMessages(since, "is off: LowPass must be") == 1);
 		effects.LowPass = 0.0f;
 		effects.ReverbSend = std::numeric_limits<float>::quiet_NaN();
 		scene.Run(0.1f);
-		CHECK(BasaltTest::CountLogMessages(since, "is off: ReverbSend must be") == 1);
+		CHECK(BrecciaTest::CountLogMessages(since, "is off: ReverbSend must be") == 1);
 		CHECK_FALSE(audio.HasReverb(AudioBus::SFX));
 		CHECK(AllFinite(Mix(0.2f)));
 		CHECK(Log::GetHistory().GetTotalCount() == since + 3);
@@ -1878,7 +1878,7 @@ TEST_SUITE("Audio")
 
 	TEST_CASE("Doppler: a static body stops the search for a moving ancestor; no listener resets the listener's history")
 	{
-		BasaltTest::TempProject project("AudioDopplerAncestors");
+		BrecciaTest::TempProject project("AudioDopplerAncestors");
 		project.WriteFile("Assets/Audio/Tone.wav", MakeWav(2.0f));
 		HeadlessAudio engine;
 
@@ -1933,7 +1933,7 @@ TEST_SUITE("Audio")
 		CHECK_FALSE(AudioEngine::Init(true, { 2, MaxDevicelessSampleRate + 1 }));
 		CHECK_FALSE(AudioEngine::IsInitialized());
 
-		BasaltTest::TempProject project("AudioMono");
+		BrecciaTest::TempProject project("AudioMono");
 		project.WriteFile("Assets/Audio/Tone.wav", MakeWav(2.0f));
 		HeadlessAudio engine({ MinDevicelessChannels, MinDevicelessSampleRate });
 		REQUIRE(AudioEngine::GetEngine());
@@ -1943,7 +1943,7 @@ TEST_SUITE("Audio")
 		CHECK(AudioEngine::Init(true, { MinDevicelessChannels, MinDevicelessSampleRate }));
 		const uint64_t since = Log::GetHistory().GetTotalCount();
 		CHECK_FALSE(AudioEngine::Init(true));
-		CHECK(BasaltTest::CountLogMessages(since, "already running without a device at 1 channels and 8000 Hz") == 1);
+		CHECK(BrecciaTest::CountLogMessages(since, "already running without a device at 1 channels and 8000 Hz") == 1);
 
 		// Every effect stage runs in mono (the reverb is refused below 22.05 kHz, logged; the rest plays).
 		AudioScene scene;
@@ -2018,7 +2018,7 @@ TEST_SUITE("Audio")
 
 	TEST_CASE("Doppler: a listener that stops being valid stops moving, so sources are no longer shifted")
 	{
-		BasaltTest::TempProject project("AudioListenerFreeze");
+		BrecciaTest::TempProject project("AudioListenerFreeze");
 		project.WriteFile("Assets/Audio/Tone.wav", MakeWav(2.0f));
 		HeadlessAudio engine;
 		// The listener walks toward the source at 30 m/s, then its transform breaks (or it goes away).
@@ -2048,7 +2048,7 @@ TEST_SUITE("Audio")
 
 	TEST_CASE("Finite positions too far out for miniaudio are refused like non-finite ones")
 	{
-		BasaltTest::TempProject project("AudioExtremePositions");
+		BrecciaTest::TempProject project("AudioExtremePositions");
 		project.WriteFile("Assets/Audio/Tone.wav", MakeWav(2.0f));
 		HeadlessAudio engine;
 		AudioScene scene(glm::vec3(-3.0e38f, 0.0f, 0.0f));
@@ -2059,12 +2059,12 @@ TEST_SUITE("Audio")
 		Entity near = scene.Add("Near", source, glm::vec3(0.0f, 0.0f, -2.0f));
 		AudioSystem& audio = scene.Start();
 		CHECK_FALSE(audio.IsPlaying(far));
-		CHECK(BasaltTest::CountLogMessages(since, "cannot play the AudioSource of 'Far': its world position is not finite or is beyond") == 1);
+		CHECK(BrecciaTest::CountLogMessages(since, "cannot play the AudioSource of 'Far': its world position is not finite or is beyond") == 1);
 		const glm::vec3 beyond(0.0f, 2.0f * AudioSystem::MaxAudioCoordinate, 0.0f);
 		CHECK_FALSE(audio.PlayOneShot("Assets/Audio/Tone.wav", &beyond));
 		// The listener out there keeps miniaudio's last placement; the near source plays, and nothing turns to NaN.
 		scene.Run(0.1f);
-		CHECK(BasaltTest::CountLogMessages(since, "the listener 'Listener' has a transform that is not finite (or is beyond") == 1);
+		CHECK(BrecciaTest::CountLogMessages(since, "the listener 'Listener' has a transform that is not finite (or is beyond") == 1);
 		const std::vector<float> mix = Mix(0.2f);
 		CHECK(AllFinite(mix));
 		CHECK(Rms(mix) > 0.01f);
@@ -2081,7 +2081,7 @@ TEST_SUITE("Audio")
 {
 	TEST_CASE("Audio polish one-shots filter, distort and retain echo tails")
 	{
-		BasaltTest::TempProject project("AudioPolish");
+		BrecciaTest::TempProject project("AudioPolish");
 		project.WriteFile("Assets/Audio/Tone.wav", MakeWav(1.0f, 48000, 100));
 		project.WriteFile("Assets/Audio/Short.wav", MakeWav(0.04f, 48000, 100));
 		HeadlessAudio engine;
@@ -2211,12 +2211,12 @@ TEST_SUITE("Audio")
 		chamber.Radius = -1;
 		audio->Update(0.1f);
 		audio->Update(0.1f);
-		CHECK(BasaltTest::CountLogMessages(since, "AudioReverbZone of 'Chamber' is ignored") == 1);
+		CHECK(BrecciaTest::CountLogMessages(since, "AudioReverbZone of 'Chamber' is ignored") == 1);
 		chamber.Radius = 5;
 		audio->Update(0.1f);
 		chamber.Radius = -1;
 		audio->Update(0.1f);
-		CHECK(BasaltTest::CountLogMessages(since, "AudioReverbZone of 'Chamber' is ignored") == 2);
+		CHECK(BrecciaTest::CountLogMessages(since, "AudioReverbZone of 'Chamber' is ignored") == 2);
 		hall.Enabled = false;
 		audio->Update(0.1f);
 		CHECK(audio->GetReverb().RoomSize == doctest::Approx(0.5));
@@ -2225,7 +2225,7 @@ TEST_SUITE("Audio")
 
 	TEST_CASE("Live source polish effects rewire with low-pass and sends and return to dry")
 	{
-		BasaltTest::TempProject project("LivePolish");
+		BrecciaTest::TempProject project("LivePolish");
 		project.WriteFile("Assets/Audio/Tone.wav", MakeWav(1, 48000, 100));
 		HeadlessAudio engine;
 		Scene scene;
@@ -2320,7 +2320,7 @@ TEST_SUITE("Audio")
 {
 	TEST_CASE("Finished source effects suspend after their tail and Play creates an active chain")
 	{
-		BasaltTest::TempProject project("FinishedEffects");
+		BrecciaTest::TempProject project("FinishedEffects");
 		project.WriteFile("Assets/Audio/Short.wav", MakeWav(0.04f, 48000));
 		HeadlessAudio engine;
 		Scene scene;

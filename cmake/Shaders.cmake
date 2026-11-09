@@ -1,16 +1,16 @@
 # GLSL -> SPIR-V compilation at build time with glslc (ships with the Vulkan SDK / shaderc).
 # Compiled SPIR-V is embedded into the engine binary, so shipped games never look for shader files.
 
-find_program(BASALT_GLSLC glslc HINTS "$ENV{VULKAN_SDK}/bin" "$ENV{VULKAN_SDK}/Bin" REQUIRED)
+find_program(BRECCIA_GLSLC glslc HINTS "$ENV{VULKAN_SDK}/bin" "$ENV{VULKAN_SDK}/Bin" REQUIRED)
 
-# basalt_embed_shaders(<target> INCLUDE_DIR <dir> [EXTRA_INCLUDE_DIRS <dirs...>]
+# breccia_embed_shaders(<target> INCLUDE_DIR <dir> [EXTRA_INCLUDE_DIRS <dirs...>]
 #                      SOURCES <files...>)
 #
 # Compiles every .vert/.frag/.comp source to SPIR-V and adds a generated EmbeddedShaders.cpp to <target>
 # that registers them by file name (e.g. "ImGui.vert"). Shared headers (*.glsl in INCLUDE_DIR) are
 # dependencies of every shader, as are *.h files in EXTRA_INCLUDE_DIRS. Editing any shared
 # header recompiles every shader. External sources stay unmodified in the dependency tree.
-function(basalt_embed_shaders target)
+function(breccia_embed_shaders target)
 	cmake_parse_arguments(ARG "" "INCLUDE_DIR" "SOURCES;EXTRA_INCLUDE_DIRS" ${ARGN})
 
 	set(outputDir "${CMAKE_CURRENT_BINARY_DIR}/EmbeddedShaders")
@@ -38,8 +38,8 @@ function(basalt_embed_shaders target)
 
 		add_custom_command(
 			OUTPUT "${output}"
-			COMMAND "${BASALT_GLSLC}" --target-env=vulkan1.2 -O -Werror -mfmt=c
-				-DMAX_CASCADES=${BASALT_SHADOW_CASCADES} -DMAX_LIGHTS=${BASALT_MAX_LIGHTS}
+			COMMAND "${BRECCIA_GLSLC}" --target-env=vulkan1.2 -O -Werror -mfmt=c
+				-DMAX_CASCADES=${BRECCIA_SHADOW_CASCADES} -DMAX_LIGHTS=${BRECCIA_MAX_LIGHTS}
 				-I "${ARG_INCLUDE_DIR}" ${extraIncludes} "${source}" -o "${output}"
 			DEPENDS "${source}" ${includeDeps}
 			COMMENT "Compiling shader ${fileName}"
@@ -50,8 +50,8 @@ function(basalt_embed_shaders target)
 		string(APPEND generatedTable "\t\t\t{ \"${fileName}\", s_${identifier}, sizeof(s_${identifier}) },\n")
 	endforeach()
 
-	set(BASALT_SHADER_DEFINITIONS "${generatedIncludes}")
-	set(BASALT_SHADER_TABLE "${generatedTable}")
+	set(BRECCIA_SHADER_DEFINITIONS "${generatedIncludes}")
+	set(BRECCIA_SHADER_TABLE "${generatedTable}")
 	set(generatedSource "${outputDir}/EmbeddedShaders.cpp")
 	configure_file("${PROJECT_SOURCE_DIR}/cmake/EmbeddedShaders.cpp.in" "${generatedSource}" @ONLY)
 

@@ -1,42 +1,42 @@
 #include "../Benchmarks/BenchmarkScene.h"
 
-#include "Basalt/Animation/AnimationSystem.h"
-#include "Basalt/Physics/PhysicsWorld.h"
+#include "Breccia/Animation/AnimationSystem.h"
+#include "Breccia/Physics/PhysicsWorld.h"
 
 #include <doctest/doctest.h>
 
 #include <limits>
 
-using namespace Basalt;
+using namespace Breccia;
 
 TEST_CASE("The diagnostics benchmark keeps its fixed workload throughout warmup and measurement")
 {
 	Scene scene;
-	BasaltBenchmark::BuildScene(scene);
-	CHECK(scene.GetEntityCount() == BasaltBenchmark::Entities);
+	BrecciaBenchmark::BuildScene(scene);
+	CHECK(scene.GetEntityCount() == BrecciaBenchmark::Entities);
 	scene.OnRuntimeStart();
 	REQUIRE(scene.GetPhysicsWorld());
-	CHECK(scene.GetPhysicsWorld()->GetBodyCount() == BasaltBenchmark::Bodies);
-	CHECK(BasaltBenchmark::CountWorkload(scene).IsComplete());
-	for (uint32_t frame = 0; frame < BasaltBenchmark::WarmupFrames + BasaltBenchmark::SampleFrames; ++frame)
-		scene.OnUpdate(BasaltBenchmark::FixedStep);
-	CHECK(scene.GetEntityCount() == BasaltBenchmark::Entities);
-	CHECK(scene.GetPhysicsWorld()->GetBodyCount() == BasaltBenchmark::Bodies);
-	CHECK(BasaltBenchmark::CountWorkload(scene).IsComplete());
-	CHECK(BasaltBenchmark::CountPlayingAnimators(scene) == BasaltBenchmark::Animators);
+	CHECK(scene.GetPhysicsWorld()->GetBodyCount() == BrecciaBenchmark::Bodies);
+	CHECK(BrecciaBenchmark::CountWorkload(scene).IsComplete());
+	for (uint32_t frame = 0; frame < BrecciaBenchmark::WarmupFrames + BrecciaBenchmark::SampleFrames; ++frame)
+		scene.OnUpdate(BrecciaBenchmark::FixedStep);
+	CHECK(scene.GetEntityCount() == BrecciaBenchmark::Entities);
+	CHECK(scene.GetPhysicsWorld()->GetBodyCount() == BrecciaBenchmark::Bodies);
+	CHECK(BrecciaBenchmark::CountWorkload(scene).IsComplete());
+	CHECK(BrecciaBenchmark::CountPlayingAnimators(scene) == BrecciaBenchmark::Animators);
 
 	// Retaining entities while dropping a component must fail the same guard the timing executable uses.
-	auto light = scene.GetEntityByUUID(UUID(BasaltBenchmark::FirstLightId));
+	auto light = scene.GetEntityByUUID(UUID(BrecciaBenchmark::FirstLightId));
 	REQUIRE(light.HasComponent<PointLightComponent>());
 	light.RemoveComponent<PointLightComponent>();
-	CHECK_FALSE(BasaltBenchmark::CountWorkload(scene).IsComplete());
-	CHECK(BasaltBenchmark::CountWorkload(scene).Lights == BasaltBenchmark::Lights - 1);
+	CHECK_FALSE(BrecciaBenchmark::CountWorkload(scene).IsComplete());
+	CHECK(BrecciaBenchmark::CountWorkload(scene).Lights == BrecciaBenchmark::Lights - 1);
 	scene.OnRuntimeStop();
 }
 
 TEST_CASE("The benchmark rejects a reduced rendered workload even when mannequins mask missing cubes")
 {
-	using namespace BasaltBenchmark;
+	using namespace BrecciaBenchmark;
 	SceneRendererStatistics full;
 	full.DrawCalls = 2;
 	full.Instances = Meshes + Animators;
@@ -70,21 +70,21 @@ TEST_CASE("The benchmark rejects stale, pending, disabled and invalid GPU measur
 	GpuStatistics statistics{ .DisabledReason = std::nullopt };
 	statistics.Timings.SampleCount = 30;
 	statistics.Timings.FrameMilliseconds = 2.0f;
-	CHECK(BasaltBenchmark::HasValidGpuTiming(statistics));
+	CHECK(BrecciaBenchmark::HasValidGpuTiming(statistics));
 	statistics.ConsecutiveDrops = 1;
-	CHECK_FALSE(BasaltBenchmark::HasValidGpuTiming(statistics));
+	CHECK_FALSE(BrecciaBenchmark::HasValidGpuTiming(statistics));
 	statistics.ConsecutiveDrops = GpuProfiler::DropWarningThreshold;
-	CHECK_FALSE(BasaltBenchmark::HasValidGpuTiming(statistics));
+	CHECK_FALSE(BrecciaBenchmark::HasValidGpuTiming(statistics));
 	statistics.ConsecutiveDrops = 0;
 	for (float invalid : { 0.0f, -1.0f, std::numeric_limits<float>::infinity(), std::numeric_limits<float>::quiet_NaN() })
 	{
 		statistics.Timings.FrameMilliseconds = invalid;
-		CHECK_FALSE(BasaltBenchmark::HasValidGpuTiming(statistics));
+		CHECK_FALSE(BrecciaBenchmark::HasValidGpuTiming(statistics));
 	}
 	statistics.Timings.FrameMilliseconds = 2.0f;
 	statistics.Timings.SampleCount = 0;
-	CHECK_FALSE(BasaltBenchmark::HasValidGpuTiming(statistics));
+	CHECK_FALSE(BrecciaBenchmark::HasValidGpuTiming(statistics));
 	statistics.Timings.SampleCount = 30;
 	statistics.DisabledReason = "query creation failed";
-	CHECK_FALSE(BasaltBenchmark::HasValidGpuTiming(statistics));
+	CHECK_FALSE(BrecciaBenchmark::HasValidGpuTiming(statistics));
 }

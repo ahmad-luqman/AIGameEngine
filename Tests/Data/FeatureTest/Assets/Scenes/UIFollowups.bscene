@@ -1,5 +1,5 @@
 {
-	"Format": "BasaltScene",
+	"Format": "BrecciaScene",
 	"Version": 1,
 	"Name": "UIFollowups",
 	"Entities": [
@@ -11,7 +11,7 @@
 		{"ID": 6, "Name": "ClipCaption", "Components": {"UIRect": {"AnchorMin": [0, 0], "AnchorMax": [0, 0], "Pivot": [0, 0], "Position": [100, 570], "Size": [500, 60]}, "UIText": {"Text": "Nested clips: green / red / blue", "FontSize": 28, "Shadow": false}}},
 		{"ID": 7, "Name": "Sprite", "Components": {"UIRect": {"AnchorMin": [0, 0], "AnchorMax": [0, 0], "Pivot": [0, 0], "Position": [650, 300], "Size": [240, 240], "Rotation": 12, "Scale": [0.9, 1.1]}, "UIImage": {"Texture": "Assets/Textures/Checker.png", "UVMin": [0, 0], "UVMax": [0.5, 0.5], "SpriteColumns": 2, "SpriteRows": 2, "SpriteFrame": 0}}},
 		{"ID": 8, "Name": "SpriteCaption", "Components": {"UIRect": {"AnchorMin": [0, 0], "AnchorMax": [0, 0], "Pivot": [0, 0], "Position": [620, 600], "Size": [350, 60]}, "UIText": {"Text": "Cropped sprite cell", "FontSize": 28, "Shadow": false}}},
-		{"ID": 9, "Name": "NameInput", "Components": {"UIRect": {"AnchorMin": [0, 0], "AnchorMax": [0, 0], "Pivot": [0, 0], "Position": [1100, 280], "Size": [550, 70]}, "UITextInput": {"Text": "Basalt player", "Placeholder": "Enter name"}, "UIFocusRing": {"Color": [1, 0.8, 0.1, 1], "Thickness": 4}}},
+		{"ID": 9, "Name": "NameInput", "Components": {"UIRect": {"AnchorMin": [0, 0], "AnchorMax": [0, 0], "Pivot": [0, 0], "Position": [1100, 280], "Size": [550, 70]}, "UITextInput": {"Text": "Breccia player", "Placeholder": "Enter name"}, "UIFocusRing": {"Color": [1, 0.8, 0.1, 1], "Thickness": 4}}},
 		{"ID": 10, "Name": "QualityDropdown", "Components": {"UIRect": {"AnchorMin": [0, 0], "AnchorMax": [0, 0], "Pivot": [0, 0], "Position": [1100, 390], "Size": [550, 70]}, "UIDropdown": {"Options": "Low\nMedium\nHigh", "Selected": 2}}},
 		{"ID": 11, "Name": "VerticalSlider", "Components": {"UIRect": {"AnchorMin": [0, 0], "AnchorMax": [0, 0], "Pivot": [0, 0], "Position": [1730, 280], "Size": [70, 320]}, "UISlider": {"Vertical": true, "Value": 0.65, "OnValueChanged": ""}}},
 		{"ID": 12, "Name": "ScrollViewport", "Components": {"UIRect": {"AnchorMin": [0, 0], "AnchorMax": [0, 0], "Pivot": [0, 0], "Position": [1100, 510], "Size": [550, 240]}, "UIScrollView": {"ContentSize": [550, 600], "Offset": [0, 90]}, "UIImage": {"Color": [0.2, 0.2, 0.2, 1]}}},
