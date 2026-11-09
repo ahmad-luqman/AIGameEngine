@@ -16,6 +16,20 @@ project(Breccia
 	DESCRIPTION "Breccia - a simple, production-grade 3D game engine"
 	LANGUAGES C CXX)
 
+# The engine was called Basalt until PR #76. A tree configured before then keeps its options under the old prefix,
+# which nothing reads: an ASan tree would quietly build without sanitizers, so such a configure stops here.
+get_cmake_property(cacheVariables CACHE_VARIABLES)
+list(FILTER cacheVariables INCLUDE REGEX "^BASALT_")
+if(cacheVariables)
+	list(JOIN cacheVariables ", " renamedOptions)
+	message(FATAL_ERROR "This build tree predates the rename from Basalt to Breccia and still sets ${renamedOptions}. "
+		"Delete the tree, or configure it again with -U 'BASALT_*' and the same options under their BRECCIA_ names.")
+endif()
+if(NOT "$ENV{BASALT_DEPS_SOURCE_DIR}" STREQUAL "")
+	message(WARNING "BASALT_DEPS_SOURCE_DIR is no longer read since the rename from Basalt to Breccia: "
+		"set BRECCIA_DEPS_SOURCE_DIR instead.")
+endif()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)

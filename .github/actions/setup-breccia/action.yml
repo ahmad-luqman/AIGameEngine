@@ -1,8 +1,8 @@
 name: Set up Breccia's build tools
 description: >-
-  Installs what building Breccia needs on the runner's OS (Linux packages, Homebrew packages, or the Vulkan SDK, MSVC and
-  Ninja on Windows), restores the dependency sources into _deps (fetching and saving them on a cache miss) and points
-  BRECCIA_DEPS_SOURCE_DIR at them.
+  Installs what building Breccia needs on the runner's OS (Linux packages, Homebrew packages, or the Vulkan SDK, MSVC
+  and Ninja on Windows), restores the dependency sources into _deps (fetching and saving them on a cache miss) and
+  points BRECCIA_DEPS_SOURCE_DIR at them.
 
 # Used by every job that builds Breccia, in ci.yml, fuzz-nightly.yml and release.yml, after checking out the repository
 # (the steps run its scripts). release.yml also runs on pull requests that change this file; fuzz-nightly.yml has no pull

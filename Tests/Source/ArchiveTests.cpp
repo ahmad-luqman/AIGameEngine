@@ -25,6 +25,7 @@
 #include <cstring>
 #include <random>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -54,8 +55,9 @@ namespace {
 	std::vector<uint8_t> Repetitive(size_t size)
 	{
 		std::vector<uint8_t> data(size);
+		constexpr std::string_view Pattern = "pack archive text ";
 		for (size_t i = 0; i < size; i++)
-			data[i] = static_cast<uint8_t>("Breccia archive "[i % 15]);
+			data[i] = static_cast<uint8_t>(Pattern[i % Pattern.size()]);
 		return data;
 	}
 
@@ -1347,10 +1349,12 @@ TEST_SUITE("Archive")
 		CHECK(HashBytes64(nullptr, 0) == HashBytes64("", 0));
 		const std::vector<uint8_t> data = Noise(37);
 		const uint64_t hash = HashBytes64(data.data(), data.size());
-		// Pinned: archives written on one platform are read on every other (one value takes the word loop, one does not).
-		CHECK(HashBytes64("Breccia", 7) == 4190716647869965296ull);
-		CHECK(HashBytes64("Breccia archive hash", 20) == 16286125179012839668ull);
-		CHECK(HashBytes64("Breccia", 7) != HashBytes64("breccia", 7));
+		// Pinned: archives written on one platform are read on every other. The inputs cover no words, words and a tail,
+		// and words alone; they avoid the engine's name, so a rename never touches a format pin.
+		CHECK(HashBytes64("bpak", 4) == 8908455541177533817ull);
+		CHECK(HashBytes64("pack archive hash", 17) == 11655933400515416070ull);
+		CHECK(HashBytes64("pack archive has", 16) == 12721861551262622531ull);
+		CHECK(HashBytes64("bpak", 4) != HashBytes64("BPAK", 4));
 		for (size_t i = 0; i < data.size(); i++)
 		{
 			auto changed = data;

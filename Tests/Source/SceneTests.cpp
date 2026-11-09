@@ -1895,3 +1895,17 @@ TEST_CASE("UI navigation and widget callback references remap in duplicated tree
 	verify(instance);
 	CHECK(first.GetComponent<UITextInputComponent>().Target == second.GetUUID());
 }
+
+TEST_CASE("Scene files are read without a Format marker and rejected with another one")
+{
+	// "BasaltScene" is what scenes said before the engine was renamed Breccia: such files are rejected, not read.
+	Scene scene;
+	std::string error;
+	nlohmann::json data = SceneSerializer::SerializeScene(scene);
+	CHECK(data["Format"] == SceneSerializer::SceneFormatName);
+	data["Format"] = "BasaltScene";
+	CHECK_FALSE(SceneSerializer::DeserializeScene(scene, data, error));
+	CHECK(error == "'Format' is 'BasaltScene', expected 'BrecciaScene'");
+	data.erase("Format");
+	CHECK_MESSAGE(SceneSerializer::DeserializeScene(scene, data, error), error);
+}

@@ -124,7 +124,8 @@ TEST_SUITE("Project")
 		const std::pair<const char*, const char*> invalid[] = {
 			{ "{", "not valid JSON" },
 			{ "[]", "JSON object" },
-			{ R"({"Format": "BrecciaScene", "Version": 1, "Values": {}})", "'Format'" },
+			{ R"({"Format": "BasaltSaveData", "Version": 1, "Values": {}})", R"('Format' must be "BrecciaSaveData", not "BasaltSaveData")" },
+			{ R"({"Version": 1, "Values": {}})", "and is missing" },
 			{ R"({"Format": "BrecciaSaveData", "Version": 0, "Values": {}})", "'Version'" },
 			{ R"({"Format": "BrecciaSaveData", "Version": 99, "Values": {}})", "newer than supported" },
 			{ R"({"Format": "BrecciaSaveData", "Version": 1, "Values": []})", "'Values'" },
@@ -375,6 +376,10 @@ TEST_SUITE("Project")
 			CHECK_FALSE(Project::Load(temp.GetDirectory(), error));
 			CHECK(error.find("must be an integer in [64, 16384]") != std::string::npos);
 		}
+		// Another Format marker (projects said "BasaltProject" before the engine was renamed Breccia) is rejected.
+		temp.WriteFile(Project::FileName, R"({"Format": "BasaltProject", "Name": "Old"})");
+		CHECK_FALSE(Project::Load(temp.GetDirectory(), error));
+		CHECK(error.find(R"(has 'Format' "BasaltProject", expected "BrecciaProject")") != std::string::npos);
 	}
 
 	TEST_CASE("Scenes store the fixed timestep only as an override, and null removes it")
@@ -694,6 +699,8 @@ TEST_SUITE("Project")
 		auto report = ValidateProject(*project);
 		CHECK(report.IsValid());
 		CHECK(Contains(Messages(report, ValidationSeverity::Warning), "does not declare \"Format\""));
+		temp.WriteFile(Project::FileName, R"({"Format": "BasaltProject", "Name": "Old"})");
+		CHECK(Contains(Messages(ValidateProject(*project), ValidationSeverity::Error), R"('Format' is "BasaltProject", expected "BrecciaProject")"));
 		temp.WriteFile(Project::FileName, "[1, 2]");
 		CHECK(Contains(Messages(ValidateProject(*project), ValidationSeverity::Error), "the project file is not a JSON object"));
 		project->GetConfig().StartScene = "Assets/Scenes/Main.lua";

@@ -27,10 +27,10 @@ protection, so renaming or removing jobs blocks nothing; check `gh api repos/ahm
   and the nightly fuzz build restores, never saves, CI's fuzz cache. ccache drops files unused for a week. The clang-tidy
   jobs compile only shaders, and `release.yml`'s Dist builds run without a compiler cache.
 - **Dependency sources.** One entry per OS, shared by every job and workflow, holds the pinned third-party sources
-  (`scripts/ci-fetch-deps.sh`, used through `BRECCIA_DEPS_SOURCE_DIR` by `cmake/DependencySources.cmake`). Its key hashes
-  `cmake/Dependencies.cmake` and `scripts/ci-fetch-deps.sh`, so a change to either makes every job of the first run of a
-  pull request fetch the sources again (about 1.5-2 minutes each). That run saves an entry that only the pull request's
-  later runs can read (manual runs on its branch save their own); other refs miss until `main` saves one.
+  (`scripts/ci-fetch-deps.sh`, used through `BRECCIA_DEPS_SOURCE_DIR` by `cmake/DependencySources.cmake`). Its key
+  hashes `cmake/Dependencies.cmake` and `scripts/ci-fetch-deps.sh`, so a change to either makes every job of the first
+  run of a pull request fetch the sources again (about 1.5-2 minutes each). That run saves an entry that only the pull
+  request's later runs can read (manual runs on its branch save their own); other refs miss until `main` saves one.
 - `scripts/ci-check-caches.sh` fails a job whose build downloaded a dependency or does not compile through its compiler
   cache, which would otherwise only show as a slower run.
 - The repository's Actions caches share 10 GB; GitHub evicts the least recently used entries beyond that.

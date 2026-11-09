@@ -818,8 +818,8 @@ TEST_SUITE("PrefabEditing")
 		f.RunError("prefab.instantiate", { { "path", badPath } });
 		writeBadPrefab(json::array({ root }), 99);
 		CHECK(Contains(f.RunError("prefab.instantiate", { { "path", badPath } }), "newer than the supported version"));
-		f.Directory.WriteFile(badPath, json{ { "Format", "BrecciaScene" }, { "Entities", json::array({ root }) } }.dump());
-		CHECK(Contains(f.RunError("prefab.instantiate", { { "path", badPath } }), "expected \"BrecciaPrefab\""));
+		f.Directory.WriteFile(badPath, json{ { "Format", "BasaltPrefab" }, { "Entities", json::array({ root }) } }.dump());
+		CHECK(Contains(f.RunError("prefab.instantiate", { { "path", badPath } }), "has 'Format' \"BasaltPrefab\", expected \"BrecciaPrefab\""));
 		// These pass the structure checks and fail while creating entities: nothing created is left behind.
 		writeBadPrefab(json::array({ root, child, json{ { "ID", 13 }, { "Name", "Lost" }, { "Parent", 999 } } }));
 		CHECK(Contains(f.RunError("prefab.instantiate", { { "path", badPath } }), "unknown parent"));

@@ -1,6 +1,7 @@
 # Breccia Engine — Maturity Assessment and Gap Analysis
 
-Assessed on 2026-11-07 at `main` @ `4f823ab` (0.1.0, untagged). This replaces the 2026-10-21 report, which was a survey
+Assessed on 2026-11-07 at `main` @ `4f823ab` (0.1.0, untagged), when the engine was still named Basalt (the names
+here were updated by the rename to Breccia in #76). This replaces the 2026-10-21 report, which was a survey
 of `abffa75` with a delta on top. Scores read `new (old)`.
 
 ## 1. Verdict
@@ -40,8 +41,8 @@ Unlike the last report, this one ran the engine.
   GitHub API that day. Claims that could not be confirmed are in section 13, not stated as facts.
 - **Scores are judgment calls applied to the anchors in section 9,** not benchmarks. Treat Breccia, Godot, Unity and
   Unreal as ±1 per cell; Bevy ±1 to 2 and Flax, O3DE and Fyrox ±2, because those were assessed from docs alone. No
-  competitor was built or run, so hands-on findings exist only for Breccia. That asymmetry is real: Breccia's defects were
-  looked for, and competitors' were not. Their scale limits are not compared here.
+  competitor was built or run, so hands-on findings exist only for Breccia. That asymmetry is real: Breccia's defects
+  were looked for, and competitors' were not. Their scale limits are not compared here.
 
 ## 3. Snapshot
 
@@ -189,9 +190,9 @@ above that core: Bevy, which has no editor, is ahead of it on rendering.
 | Navigation | **None** | Yes | Crates | Yes | Recast, Mass, StateTree | Yes |
 | Networking | **None** | High-level multiplayer | Crates (lightyear, replicon) | Netcode for GameObjects and Entities | Replication, Iris | Replication, RPC |
 
-Breccia's runtime character stack remains its most impressive area: powered ragdolls with active balance and foot locking
-stand up well against Godot. It lost the outright lead because Godot's IK solvers are broader and its animation editor
-exists; Breccia's depth is also untested by any real character content.
+Breccia's runtime character stack remains its most impressive area: powered ragdolls with active balance and foot
+locking stand up well against Godot. It lost the outright lead because Godot's IK solvers are broader and its animation
+editor exists; Breccia's depth is also untested by any real character content.
 
 ### Platforms
 

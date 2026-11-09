@@ -34,8 +34,8 @@ function(breccia_use_dependency_sources pinsFile)
 		# A missing directory means nothing was fetched there yet (CI jobs fetch on a cache miss, through
 		# .github/actions/setup-breccia); a directory with another stamp, or none, holds sources for other pins.
 		if(EXISTS "${sourceDir}")
-			message(WARNING "Breccia: ignoring BRECCIA_DEPS_SOURCE_DIR (${sourceDir}): its sources were not fetched for "
-				"these pins (scripts/ci-fetch-deps.sh)")
+			message(WARNING "Breccia: ignoring BRECCIA_DEPS_SOURCE_DIR (${sourceDir}): its sources were not fetched "
+				"for these pins (scripts/ci-fetch-deps.sh)")
 		endif()
 		return()
 	endif()

@@ -142,8 +142,10 @@ namespace Breccia {
 					return;
 				}
 				const auto format = data.find("Format");
-				if (format == data.end() || *format != "BrecciaProject")
-					m_Report.Add(ValidationSeverity::Warning, Project::FileName, "the file does not declare \"Format\": \"BrecciaProject\"");
+				if (format == data.end())
+					m_Report.Add(ValidationSeverity::Warning, Project::FileName, std::string("the file does not declare \"Format\": \"") + Project::FormatName + "\"");
+				else if (*format != Project::FormatName)
+					m_Report.Add(ValidationSeverity::Error, Project::FileName, "'Format' is " + format->dump() + ", expected \"" + Project::FormatName + "\"");
 			}
 
 			// A broken input actions file stops the project from loading anywhere (Project::Load), so this reports one

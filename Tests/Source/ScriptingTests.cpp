@@ -2973,18 +2973,18 @@ TEST_SUITE("Scripting")
 		Input::SetKeyState(KeyCode::W, true);
 		CHECK(Eval(scene, "return Input.IsActionDown('Jump')") == "true");
 		CHECK(Project::GetActive()->GetConfig().InputActions == *actions);
-		BrecciaTest::CheckLuaErrors(*scene.GetScriptEngine(),
-									std::array<std::pair<const char*, const char*>, 9>{ {
-										{ "Input.SetBindings('Jump', { Key = 'Space' })", "Input.SetBindings('Jump'): expected a list of bindings, such as { { Key = 'Space' } }" },
-										{ "Input.SetBindings('Jump', { { Key = 'Space', Scale = 0/0 } })", "Input.SetBindings('Jump'): binding Scale must be a number" },
-										{ "Input.SetBindings('Jump', { function() end })", "Input.SetBindings('Jump'): cannot convert a Lua function to data" },
-										{ "Input.GetAction('Dash')", "unknown input action 'Dash' (defined: Jump, MoveX)" },
-										{ "Input.IsActionPressed('jump')", "unknown input action 'jump'" },
-										{ "Input.SetBindings('Jump', { { Key = 'Nope' } })", "Input.SetBindings('Jump'): binding: unknown Key 'Nope'" },
-										{ "Input.SetBindings('Jump', { { Key = 'A', Scale = 3 } })", "Scale must be a number in [-1, 1]" },
-										{ "Input.SetBindings('Dash', {})", "unknown input action 'Dash'" },
-										{ "Input.ResetBindings('Dash')", "unknown input action 'Dash'" },
-									} });
+		const std::array<std::pair<const char*, const char*>, 9> bindingErrors{ {
+			{ "Input.SetBindings('Jump', { Key = 'Space' })", "Input.SetBindings('Jump'): expected a list of bindings, such as { { Key = 'Space' } }" },
+			{ "Input.SetBindings('Jump', { { Key = 'Space', Scale = 0/0 } })", "Input.SetBindings('Jump'): binding Scale must be a number" },
+			{ "Input.SetBindings('Jump', { function() end })", "Input.SetBindings('Jump'): cannot convert a Lua function to data" },
+			{ "Input.GetAction('Dash')", "unknown input action 'Dash' (defined: Jump, MoveX)" },
+			{ "Input.IsActionPressed('jump')", "unknown input action 'jump'" },
+			{ "Input.SetBindings('Jump', { { Key = 'Nope' } })", "Input.SetBindings('Jump'): binding: unknown Key 'Nope'" },
+			{ "Input.SetBindings('Jump', { { Key = 'A', Scale = 3 } })", "Scale must be a number in [-1, 1]" },
+			{ "Input.SetBindings('Dash', {})", "unknown input action 'Dash'" },
+			{ "Input.ResetBindings('Dash')", "unknown input action 'Dash'" },
+		} };
+		BrecciaTest::CheckLuaErrors(*scene.GetScriptEngine(), bindingErrors);
 		// An empty table removes every binding; Scene.Load keeps the session's bindings.
 		CHECK(Eval(scene, "Input.SetBindings('MoveX', {}) return #Input.GetBindings('MoveX')") == "0");
 		CHECK(Eval(scene, "Scene.Load('Assets/Scenes/Next.bscene') return true") == "true");

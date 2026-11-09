@@ -41,6 +41,9 @@ namespace Breccia {
 	{
 	public:
 		static constexpr int FormatVersion = 4;
+		// The "Format" markers of scene and prefab files: readers reject any other.
+		static constexpr const char* SceneFormatName = "BrecciaScene";
+		static constexpr const char* PrefabFormatName = "BrecciaPrefab";
 		// Encodes declared asset fields for disk persistence, creating sidecars when needed. Missing and
 		// non-project references stay strings. onlyPath limits migration to that asset and its embedded images.
 		// Uses the project's current index; batch writers refresh before calling. No-op without a project.

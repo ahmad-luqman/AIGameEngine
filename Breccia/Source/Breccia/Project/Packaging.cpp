@@ -304,43 +304,76 @@ namespace Breccia {
 
 	IconImage MakeDefaultIcon(uint32_t size)
 	{
-		// The top of a breccia column: a dark hexagon with a lighter inner face, 4x4 supersampled for smooth edges.
+		// A piece of breccia: light angular fragments set in a dark stone, 4x4 supersampled for smooth edges.
 		BR_CORE_ASSERT(size > 0, "icon size must be positive");
+		struct Polygon
+		{
+			std::array<std::array<float, 2>, 8> Points{};
+			size_t Count = 0;
+			std::array<float, 3> Color{};
+		};
+		// Convex polygons in icon units centered on the origin (y down); the fragments lie inside the stone.
+		static constexpr Polygon Stone = { { { { -0.30f, -0.44f }, { 0.18f, -0.46f }, { 0.44f, -0.16f }, { 0.42f, 0.24f }, { 0.14f, 0.46f }, { -0.26f, 0.42f }, { -0.46f, 0.08f }, { -0.44f, -0.24f } } }, 8, { 52.0f, 56.0f, 66.0f } };
+		static constexpr std::array<Polygon, 5> Fragments = { {
+			{ { { { -0.31f, -0.30f }, { -0.03f, -0.37f }, { -0.13f, -0.07f } } }, 3, { 150.0f, 156.0f, 168.0f } },
+			{ { { { 0.05f, -0.33f }, { 0.31f, -0.21f }, { 0.25f, 0.01f }, { 0.03f, -0.08f } } }, 4, { 116.0f, 122.0f, 136.0f } },
+			{ { { { -0.37f, 0.00f }, { -0.09f, 0.07f }, { -0.21f, 0.31f } } }, 3, { 172.0f, 166.0f, 156.0f } },
+			{ { { { -0.01f, 0.08f }, { 0.31f, 0.11f }, { 0.20f, 0.35f }, { -0.05f, 0.31f } } }, 4, { 134.0f, 140.0f, 152.0f } },
+			{ { { { 0.33f, -0.05f }, { 0.39f, 0.09f }, { 0.30f, 0.07f } } }, 3, { 160.0f, 154.0f, 146.0f } },
+		} };
+		const auto inside = [](const Polygon& polygon, float x, float y) {
+			// Inside a convex polygon: on the same side of every edge, whichever way it winds.
+			float side = 0.0f;
+			for (size_t i = 0; i < polygon.Count; ++i)
+			{
+				const auto& a = polygon.Points[i];
+				const auto& b = polygon.Points[(i + 1) % polygon.Count];
+				const float cross = (b[0] - a[0]) * (y - a[1]) - (b[1] - a[1]) * (x - a[0]);
+				if (cross * side < 0.0f)
+					return false;
+				if (cross != 0.0f)
+					side = cross;
+			}
+			return true;
+		};
+
 		IconImage icon;
 		icon.Width = size;
 		icon.Height = size;
 		icon.Pixels.resize(static_cast<size_t>(size) * size * 4);
-		const auto insideHexagon = [](float x, float y, float radius) {
-			// A pointy-top regular hexagon centered on the origin.
-			const float ax = std::abs(x);
-			const float ay = std::abs(y);
-			return ax <= radius * 0.8660254f && ay <= radius && ax * 0.5f + ay * 0.8660254f <= radius * 0.8660254f;
-		};
 		constexpr int Samples = 4;
 		for (uint32_t py = 0; py < size; ++py)
 		{
 			for (uint32_t px = 0; px < size; ++px)
 			{
-				float coverage = 0.0f;
-				float inner = 0.0f;
+				std::array<float, 3> color{};
+				int covered = 0;
 				for (int sy = 0; sy < Samples; ++sy)
 				{
 					for (int sx = 0; sx < Samples; ++sx)
 					{
 						const float x = (static_cast<float>(px) + (static_cast<float>(sx) + 0.5f) / Samples) / static_cast<float>(size) - 0.5f;
 						const float y = (static_cast<float>(py) + (static_cast<float>(sy) + 0.5f) / Samples) / static_cast<float>(size) - 0.5f;
-						coverage += insideHexagon(x, y, 0.46f) ? 1.0f : 0.0f;
-						inner += insideHexagon(x, y, 0.30f) ? 1.0f : 0.0f;
+						if (!inside(Stone, x, y))
+							continue;
+						const std::array<float, 3>* sample = &Stone.Color;
+						for (const Polygon& fragment : Fragments)
+						{
+							if (inside(fragment, x, y))
+							{
+								sample = &fragment.Color;
+								break;
+							}
+						}
+						for (size_t c = 0; c < 3; ++c)
+							color[c] += (*sample)[c];
+						++covered;
 					}
 				}
-				coverage /= Samples * Samples;
-				inner /= Samples * Samples;
 				uint8_t* pixel = &icon.Pixels[(static_cast<size_t>(py) * size + px) * 4];
-				const float shade = coverage > 0.0f ? inner / coverage : 0.0f;
-				pixel[0] = static_cast<uint8_t>(std::lround(58.0f + 52.0f * shade));
-				pixel[1] = static_cast<uint8_t>(std::lround(64.0f + 56.0f * shade));
-				pixel[2] = static_cast<uint8_t>(std::lround(76.0f + 60.0f * shade));
-				pixel[3] = static_cast<uint8_t>(std::lround(255.0f * coverage));
+				for (size_t c = 0; c < 3; ++c)
+					pixel[c] = covered > 0 ? static_cast<uint8_t>(std::lround(color[c] / static_cast<float>(covered))) : 0;
+				pixel[3] = static_cast<uint8_t>(std::lround(255.0f * static_cast<float>(covered) / (Samples * Samples)));
 			}
 		}
 		return icon;

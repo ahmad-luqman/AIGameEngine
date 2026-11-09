@@ -206,21 +206,21 @@ namespace {
 		std::exit(2);
 	}
 
-	// `BrecciaTests --breccia-child <actions...>` acts as a child process for the RunProcess tests, so they need no shell
-	// or other platform tool. With BRECCIA_TEST_CHILD_ACTIONS set (space-separated actions), it does the same whatever
-	// its arguments, standing in for an exported game (smoke tests). Actions run in order: print <text> (stdout), error
-	// <text> (stderr), env <name>, cwd, sleep <ms>, spam <bytes>, utf8 <count> (prints "é" count times), invalid (prints
-	// bytes that are not UTF-8), fd <descriptor> (POSIX: whether it is open), crash (a real access violation on Windows,
-	// SIGABRT elsewhere), trap (BR_DEBUGBREAK), args (prints every remaining argument on its own line), exit <code>,
-	// crash-report <kind> (installs the crash reporter as "CrashChild", then calls Install again from two threads at
-	// once, logs "crash-test sentinel 42", then crashes: kind is segv, abort, terminate, throw-int, purecall,
-	// invalid-parameter (Windows), trap, stackoverflow, nested-stackoverflow, thread-segv, thread-stackoverflow,
-	// job-stackoverflow or two-thread-segv; exits 77 when crash reports are unavailable, as under AddressSanitizer;
-	// Tests/Automation/CrashReport.py checks the report), crash-dialog <zenity|kdialog|xmessage|osascript> <program>
-	// <opener> <crash|error|long|disabled|off> (installs with those tools and dialogs on, then crashes with a report or
-	// shows an error, a long one with long; disabled shows an error with dialogs off, then one with them on; off only
-	// the first, the one mode for Windows, whose dialogs need no tools), crash-script <title> <message> <report path>
-	// (prints the macOS dialog's AppleScript).
+	// `BrecciaTests --breccia-child <actions...>` acts as a child process for the RunProcess tests, so they need no
+	// shell or other platform tool. With BRECCIA_TEST_CHILD_ACTIONS set (space-separated actions), it does the same
+	// whatever its arguments, standing in for an exported game (smoke tests). Actions run in order: print <text>
+	// (stdout), error <text> (stderr), env <name>, cwd, sleep <ms>, spam <bytes>, utf8 <count> (prints "é" count
+	// times), invalid (prints bytes that are not UTF-8), fd <descriptor> (POSIX: whether it is open), crash (a real
+	// access violation on Windows, SIGABRT elsewhere), trap (BR_DEBUGBREAK), args (prints every remaining argument on
+	// its own line), exit <code>, crash-report <kind> (installs the crash reporter as "CrashChild", then calls Install
+	// again from two threads at once, logs "crash-test sentinel 42", then crashes: kind is segv, abort, terminate,
+	// throw-int, purecall, invalid-parameter (Windows), trap, stackoverflow, nested-stackoverflow, thread-segv,
+	// thread-stackoverflow, job-stackoverflow or two-thread-segv; exits 77 when crash reports are unavailable, as under
+	// AddressSanitizer; Tests/Automation/CrashReport.py checks the report), crash-dialog
+	// <zenity|kdialog|xmessage|osascript> <program> <opener> <crash|error|long|disabled|off> (installs with those tools
+	// and dialogs on, then crashes with a report or shows an error, a long one with long; disabled shows an error with
+	// dialogs off, then one with them on; off only the first, the one mode for Windows, whose dialogs need no tools),
+	// crash-script <title> <message> <report path> (prints the macOS dialog's AppleScript).
 	int RunChild(const std::vector<std::string>& actions)
 	{
 		for (size_t i = 0; i < actions.size(); i++)
