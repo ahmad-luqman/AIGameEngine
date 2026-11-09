@@ -3,6 +3,7 @@
 #include "Breccia/Core/Assert.h"
 #include "Breccia/Core/Log.h"
 #include "Breccia/Network/ReplicationSchema.h"
+#include "Breccia/Scene/ComponentRegistry.h"
 
 #include <algorithm>
 
@@ -25,7 +26,7 @@ namespace Breccia {
 		bool IsCore(uint32_t component)
 		{
 			const ReplicationSchema::Component* info = ReplicationSchema::Get().FindComponent(component);
-			return info && info->IsCore;
+			return info && info->Info->IsCore;
 		}
 
 	}

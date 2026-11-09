@@ -12,16 +12,17 @@ namespace Breccia {
 	// The wire identities of what replication sends, built once from ComponentRegistry: a component is its index in the
 	// registry, a replicated field its index in that component's ComponentInfo::ReplicatedFields. The connection handshake
 	// compares the hashes of two builds, which cover the components in order, every field's name and JSON type (list
-	// elements' too), every enum's options and the replicated fields: what spawns and updates depend on. Value ranges a
+	// elements' too), every enum's options, which components are core and the replicated fields: what spawns and updates
+	// depend on. Value ranges a
 	// component's Validate checks are not covered.
 	class ReplicationSchema
 	{
 	public:
 		struct Component
 		{
+			// Its ComponentInfo::IsCore says whether it exists on every entity (Transform, Tag), so that its presence is
+			// never sent.
 			const ComponentInfo* Info = nullptr;
-			// Core components (Transform, Tag) exist on every entity, so their presence is never sent.
-			bool IsCore = false;
 		};
 
 		static const ReplicationSchema& Get();
