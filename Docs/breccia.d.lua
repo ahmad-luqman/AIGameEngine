@@ -1474,6 +1474,7 @@ function BrecciaScript:StopAllCoroutines() end
 ---| "UINavigation"
 ---| "UIFocusRing"
 ---| "Prefab"
+---| "Networked"
 
 ---Tag data as Entity:GetComponent returns it and SetComponent/AddComponent accept it.
 ---@class TagComponent
@@ -1959,6 +1960,12 @@ function BrecciaScript:StopAllCoroutines() end
 ---@field Members table
 ---@field Baseline table
 
+---Networked data as Entity:GetComponent returns it and SetComponent/AddComponent accept it.
+---@class NetworkedComponent
+---@field Owner integer
+---@field Authority "Server"|"Owner"
+---@field Priority number
+
 ---An element of a component list field.
 ---@class AnimationEvent
 ---@field Clip string
@@ -2149,5 +2156,6 @@ function BrecciaScript:StopAllCoroutines() end
 ---@overload fun(self: Entity, name: "UINavigation"): UINavigationComponent?
 ---@overload fun(self: Entity, name: "UIFocusRing"): UIFocusRingComponent?
 ---@overload fun(self: Entity, name: "Prefab"): PrefabComponent?
+---@overload fun(self: Entity, name: "Networked"): NetworkedComponent?
 function Entity:GetComponent(name) end
 -- END GENERATED: components

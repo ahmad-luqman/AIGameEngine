@@ -34,6 +34,7 @@ namespace Breccia {
 	class PropertyAnimationSystem;
 	class UIInteraction;
 	class SceneEventListener;
+	class NetworkSystem;
 
 	// Intermediate images the renderer can display instead of the final image (diagnostics).
 	enum class RendererDebugView
@@ -210,6 +211,17 @@ namespace Breccia {
 		// Updates the source location after moving the scene file.
 		void SetPath(const std::string& path) { m_Path = path; }
 
+		// --- Network session ---------------------------------------------------------------------
+		// Attaches a network session (Network/NetworkSystem) until StopNetwork or the end of Play: during Play it receives
+		// before the scripts of every update and sends after the last system. Attach it before OnRuntimeStart: a client's
+		// runtime entity UUIDs then come from a stream of their own (the session seed mixed with a constant), so what a
+		// client spawns locally never takes an ID the host's stream gives its networked entities. Scene loads are refused
+		// while one is attached. Replacing a session ends the old one.
+		void StartNetwork(Scope<NetworkSystem> network);
+		// Ends the session (peers are told: ServerShutdown from a host, ClientQuit from a client).
+		void StopNetwork();
+		NetworkSystem* GetNetworkSystem() const { return m_NetworkSystem.get(); }
+
 		// Set by gameplay code (Lua Game.Quit) to ask the host application to stop the game.
 		void RequestQuit() { m_QuitRequested = true; }
 		bool IsQuitRequested() const { return m_QuitRequested; }
@@ -372,6 +384,9 @@ namespace Breccia {
 		Scope<AnimationSystem> m_AnimationSystem;
 		Scope<PropertyAnimationSystem> m_PropertyAnimationSystem;
 		Scope<UIInteraction> m_UIInteraction;
+		Scope<NetworkSystem> m_NetworkSystem;
+		// The seed of the runtime UUID stream: a client's differs from the host's (StartNetwork).
+		uint32_t IdentitySeed() const;
 
 		friend class Entity;
 		friend class SceneSerializer;

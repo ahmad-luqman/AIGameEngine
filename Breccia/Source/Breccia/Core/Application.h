@@ -52,6 +52,9 @@ namespace Breccia {
 		float FixedTimestep = 0.0f;
 		// When > 0 the application closes itself after this many frames.
 		uint64_t MaxFrames = 0;
+		// When > 0 a frame that finishes sooner sleeps for the rest of this many seconds, so a loop with nothing to wait
+		// for (a headless network host) does not spin a core.
+		float MinFrameSeconds = 0.0f;
 	};
 
 	// Owns the window, graphics device and layer stack, and runs the main loop. One instance per process.

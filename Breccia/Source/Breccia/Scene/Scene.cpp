@@ -8,6 +8,7 @@
 #include "Breccia/Core/Input.h"
 #include "Breccia/Core/Log.h"
 #include "Breccia/Core/Profiler.h"
+#include "Breccia/Network/NetworkSystem.h"
 #include "Breccia/Particles/ParticleSystem.h"
 #include "Breccia/Physics/PhysicsWorld.h"
 #include "Breccia/Project/Project.h"
@@ -161,11 +162,32 @@ namespace Breccia {
 	{
 		m_RandomSeed = Project::GetActiveRandomSeed();
 		m_SessionFixedTimestep = Project::GetActiveFixedTimestep();
-		m_SessionIdentity.emplace(m_RandomSeed);
+		m_SessionIdentity.emplace(IdentitySeed());
 		// Authored entities never pass through the stream; reserve their IDs so a destroyed one is
 		// never reissued to a later spawn by this generator.
 		for (const auto& [uuid, handle] : m_EntityMap)
 			m_SessionIdentity->Reserve(uuid);
+	}
+
+	uint32_t Scene::IdentitySeed() const
+	{
+		// Any fixed constant keeps a client's stream reproducible and away from the host's.
+		constexpr uint32_t ClientIdentitySalt = 0x9E3779B9u;
+		const bool client = m_NetworkSystem && m_NetworkSystem->GetRole() == NetworkRole::Client;
+		return client ? m_RandomSeed ^ ClientIdentitySalt : m_RandomSeed;
+	}
+
+	void Scene::StartNetwork(Scope<NetworkSystem> network)
+	{
+		m_NetworkSystem = std::move(network);
+		// Attached mid-session: IDs already given out stay, later ones come from the client's stream.
+		if (m_SessionIdentity)
+			m_SessionIdentity->Stream.Seed(IdentitySeed());
+	}
+
+	void Scene::StopNetwork()
+	{
+		m_NetworkSystem.reset();
 	}
 
 	UUID Scene::SessionIdentity::Next(const Scene& scene)
@@ -690,6 +712,8 @@ namespace Breccia {
 			return;
 
 		GameUI::BeginFrame();
+		// Peers learn first, before scripts and systems wind down.
+		m_NetworkSystem.reset();
 		// OnDestroy callbacks may destroy entities; apply those once every system is shut down.
 		m_DeferDestruction++;
 		if (m_ScriptEngine)
@@ -768,6 +792,11 @@ namespace Breccia {
 		DebugDraw::Clear();
 		GameUI::BeginFrame();
 
+		// Before the deferral below: a client replaces its networked entities with the host's when it is accepted, and a
+		// spawn in the same batch must not find the old entity still waiting to be destroyed.
+		if (m_NetworkSystem && m_State == SceneState::Play)
+			m_NetworkSystem->Receive(ts.GetSeconds());
+
 		m_DeferDestruction++;
 		if (m_State == SceneState::Play)
 		{
@@ -794,6 +823,9 @@ namespace Breccia {
 		m_DeferDestruction--;
 
 		FlushPendingDestruction();
+		// After every system and destruction, so the snapshot is this frame's final state.
+		if (m_NetworkSystem && m_State == SceneState::Play)
+			m_NetworkSystem->Send(ts.GetSeconds());
 		m_Time += ts.GetSeconds();
 		m_FrameCount++;
 
@@ -821,6 +853,12 @@ namespace Breccia {
 		if (m_State != SceneState::Play)
 		{
 			outError = "scenes can only be loaded while playing";
+			return false;
+		}
+		if (m_NetworkSystem)
+		{
+			// Clients would keep the old level: switching every peer's scene together is not supported yet.
+			outError = "scenes cannot be loaded during a network session";
 			return false;
 		}
 

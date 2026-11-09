@@ -348,7 +348,7 @@ namespace Breccia {
 		if (!entity || !entity.HasComponent<RigidBodyComponent>() || entity.HasComponent<CharacterControllerComponent>() || RagdollReplacesBody(entity.GetUUID()))
 			return;
 
-		const auto& rigidBody = entity.GetComponent<RigidBodyComponent>();
+		const RigidBodyComponent rigidBody = EffectiveRigidBody(entity, entity.GetComponent<RigidBodyComponent>());
 		glm::vec3 position;
 		glm::quat rotation;
 		glm::vec3 scale;
@@ -583,8 +583,12 @@ namespace Breccia {
 
 	bool PhysicsWorld::Impl::UpdateBody(Entity entity, BodyRecord& record, const ColliderSettings& colliders)
 	{
-		const auto* rigidBody = entity.TryGetComponent<RigidBodyComponent>();
-		if (!rigidBody || entity.HasComponent<CharacterControllerComponent>() || BodyNeedsRebuild(record.Settings, *rigidBody) || !colliders.SameChildren(record.Colliders))
+		const auto* component = entity.TryGetComponent<RigidBodyComponent>();
+		if (!component)
+			return false;
+		const RigidBodyComponent effective = EffectiveRigidBody(entity, *component);
+		const RigidBodyComponent* rigidBody = &effective;
+		if (entity.HasComponent<CharacterControllerComponent>() || BodyNeedsRebuild(record.Settings, *rigidBody) || !colliders.SameChildren(record.Colliders))
 			return false;
 		const bool reshaped = colliders != record.Colliders;
 		// Rewriting the same values must not wake the body or its neighbours.
@@ -644,6 +648,30 @@ namespace Breccia {
 		return true;
 	}
 
+	RigidBodyComponent PhysicsWorld::Impl::EffectiveRigidBody(Entity entity, const RigidBodyComponent& component) const
+	{
+		RigidBodyComponent effective = component;
+		if (effective.Type == RigidBodyType::Dynamic && ExternallyDriven.contains(entity.GetUUID()))
+			effective.Type = RigidBodyType::Kinematic;
+		return effective;
+	}
+
+	void PhysicsWorld::SetDrivenExternally(Entity entity, bool driven)
+	{
+		if (!m_Impl->Owns(entity))
+			return;
+		const UUID uuid = entity.GetUUID();
+		const bool changed = driven ? m_Impl->ExternallyDriven.insert(uuid).second : m_Impl->ExternallyDriven.erase(uuid) > 0;
+		// The next update compares the body with what it should be built from now, and rebuilds it with the new type.
+		if (changed && entity.HasComponent<RigidBodyComponent>())
+			m_Impl->DirtyEntities.Insert(uuid);
+	}
+
+	bool PhysicsWorld::IsDrivenExternally(Entity entity) const
+	{
+		return m_Impl->Owns(entity) && m_Impl->ExternallyDriven.contains(entity.GetUUID());
+	}
+
 	void PhysicsWorld::OnEntityDestroyed(Entity entity)
 	{
 		if (!m_Impl->Owns(entity))
@@ -661,6 +689,7 @@ namespace Breccia {
 		m_Impl->BodyWarnings.Forget(entity.GetUUID());
 		m_Impl->ResizeWarnings.Forget(entity.GetUUID());
 		m_Impl->Unbuilt.erase(entity.GetUUID());
+		m_Impl->ExternallyDriven.erase(entity.GetUUID());
 		if (blocked)
 			m_Impl->UnavailableRagdolls.erase(entity.GetUUID());
 	}

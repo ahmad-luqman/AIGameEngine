@@ -1442,6 +1442,34 @@ namespace Breccia {
 		nlohmann::json Baseline = nlohmann::json::object();
 	};
 
+	// Who decides a networked entity's replicated fields.
+	enum class NetworkAuthority : uint8_t
+	{
+		// The host simulates it and every client receives its state.
+		Server = 0,
+		// The peer named by Owner sends its state, which the host checks, applies and passes on to the other clients. While
+		// that peer is not connected (or Owner is 0) the host decides, as for Server.
+		Owner
+	};
+
+	// Marks an entity (with its descendants) as part of a network session's shared state (Network/NetworkSystem). The host
+	// spawns it on every client with the same UUID, sends the fields components declare in ComponentInfo::ReplicatedFields
+	// when they change, and despawns it when it is destroyed or loses this component. A descendant with a Networked
+	// component of its own is replicated separately. Owner is a peer ID, which a session assigns (the host is 0; clients
+	// are 1, 2, ... in the order they join, never reused), so a saved value means nothing until gameplay sets it.
+	struct NetworkedComponent
+	{
+		static constexpr float MaxPriority = 100.0f;
+
+		uint32_t Owner = 0;
+		NetworkAuthority Authority = NetworkAuthority::Server;
+		// How quickly the entity's changes go out when a connection's bandwidth is short, relative to the others (an entity
+		// waiting to be sent gains this much each tick; the highest totals go first). In (0, MaxPriority].
+		float Priority = 1.0f;
+
+		bool operator==(const NetworkedComponent&) const = default;
+	};
+
 	template<typename... Component>
 	struct ComponentGroup
 	{
@@ -1490,6 +1518,7 @@ namespace Breccia {
 		UIPanelComponent,
 		UINavigationComponent,
 		UIFocusRingComponent,
-		PrefabComponent>;
+		PrefabComponent,
+		NetworkedComponent>;
 
 }

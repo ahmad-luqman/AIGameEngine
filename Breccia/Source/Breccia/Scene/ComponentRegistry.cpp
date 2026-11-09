@@ -508,6 +508,7 @@ namespace Breccia {
 		constexpr const char* s_BlendSpaceTypeNames[] = { "1D", "2D" };
 		constexpr const char* s_LayerBlendNames[] = { "Override", "Additive" };
 		constexpr const char* s_IKChainTypeNames[] = { "TwoBone", "LookAt", "Fabrik" };
+		constexpr const char* s_NetworkAuthorityNames[] = { "Server", "Owner" };
 		// Names are indexed by enum value; a new enum value needs a name here.
 		static_assert(std::size(s_RigidBodyTypeNames) == static_cast<size_t>(RigidBodyType::Kinematic) + 1);
 		static_assert(std::size(s_ProjectionTypeNames) == static_cast<size_t>(SceneCamera::ProjectionType::Orthographic) + 1);
@@ -522,6 +523,7 @@ namespace Breccia {
 		static_assert(std::size(s_BlendSpaceTypeNames) == AnimationBlendSpaceTypeCount);
 		static_assert(std::size(s_LayerBlendNames) == AnimationLayerBlendCount);
 		static_assert(std::size(s_IKChainTypeNames) == IKChainTypeCount);
+		static_assert(std::size(s_NetworkAuthorityNames) == static_cast<size_t>(NetworkAuthority::Owner) + 1);
 
 		// The name of an enum value. C++ code can store a value outside the enum (the registry never does);
 		// writing it as the first name keeps saving from reading past the table.
@@ -1234,6 +1236,13 @@ namespace Breccia {
 			r.Field("Thickness", c.Thickness);
 		}
 
+		void Fields(FieldReader& r, NetworkedComponent& c)
+		{
+			r.Field("Owner", c.Owner);
+			r.EnumField("Authority", c.Authority, s_NetworkAuthorityNames);
+			r.Field("Priority", c.Priority);
+		}
+
 		void Fields(FieldReader& r, PrefabComponent& c)
 		{
 			const std::string previous = c.Prefab;
@@ -1822,6 +1831,11 @@ namespace Breccia {
 			return { { "Color", ToJson(c.Color) }, { "Thickness", c.Thickness } };
 		}
 
+		json Write(const NetworkedComponent& c)
+		{
+			return { { "Owner", c.Owner }, { "Authority", EnumName(s_NetworkAuthorityNames, c.Authority) }, { "Priority", c.Priority } };
+		}
+
 		json Write(const PrefabComponent& c)
 		{
 			return { { "Prefab", c.Prefab }, { "Members", c.Members }, { "Baseline", c.Baseline } };
@@ -2242,6 +2256,14 @@ namespace Breccia {
 			return ValidateUIFocusRing(c);
 		}
 
+		std::string Validate(const NetworkedComponent& c)
+		{
+			// The comparison is false for NaN, which it rejects too.
+			if (!(c.Priority > 0.0f && c.Priority <= NetworkedComponent::MaxPriority))
+				return fmt::format("Priority must be in (0, {}], got {}", NetworkedComponent::MaxPriority, c.Priority);
+			return {};
+		}
+
 		std::string Validate(const RagdollComponent& c)
 		{
 			return ValidateRagdoll(c);
@@ -2476,6 +2498,28 @@ namespace Breccia {
 					}
 				}
 			};
+			infos.push_back(MakeInfo<NetworkedComponent>("Networked"));
+
+			// What a network session sends when it changes (ComponentInfo::ReplicatedFields). Everything else reaches a
+			// client only inside the entity's spawn. Asset fields are left out: a client would load whatever path a host
+			// names, and spawns check theirs (Network/NetworkSystem).
+			const auto replicate = [&infos](const char* component, std::vector<std::string> fields) {
+				auto info = std::find_if(infos.begin(), infos.end(), [&](const ComponentInfo& candidate) { return candidate.Name == component; });
+				BR_CORE_ASSERT(info != infos.end(), "replicated fields name an unknown component");
+				for ([[maybe_unused]] const std::string& field : fields)
+				{
+					BR_CORE_ASSERT(std::find(info->Fields.begin(), info->Fields.end(), field) != info->Fields.end(), "a replicated field must be one of the component's top-level fields");
+					BR_CORE_ASSERT(std::find(info->AssetFields.begin(), info->AssetFields.end(), field) == info->AssetFields.end(), "asset fields are not replicated");
+				}
+				info->ReplicatedFields = std::move(fields);
+			};
+			replicate("Transform", { "Translation", "Rotation", "Scale" });
+			replicate("Networked", { "Owner", "Authority" });
+			replicate("Animator", { "Clip", "Speed" });
+			replicate("Material", { "AlbedoColor", "EmissiveColor", "EmissiveIntensity" });
+			replicate("DirectionalLight", { "Color", "Intensity" });
+			replicate("PointLight", { "Color", "Intensity" });
+			replicate("SpotLight", { "Color", "Intensity" });
 			return infos;
 		}
 

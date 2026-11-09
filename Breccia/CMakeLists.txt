@@ -60,7 +60,8 @@ target_link_libraries(Breccia
 		BrecciaStb
 		meshoptimizer
 		BrecciaTextureCodecs
-		libzstd_static)
+		libzstd_static
+		BrecciaEnet)
 
 if(WIN32)
 	# dbghelp: crash report stack traces and minidumps (Core/CrashReporter). shell32: CommandLineToArgvW (Core/Platform).

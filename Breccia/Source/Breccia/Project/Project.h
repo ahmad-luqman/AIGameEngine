@@ -5,6 +5,7 @@
 #include "Breccia/Core/FileSystem.h"
 #include "Breccia/Core/InputActions.h"
 #include "Breccia/Math/Random.h"
+#include "Breccia/Network/NetworkSettings.h"
 #include "Breccia/Physics/FixedTimestep.h"
 #include "Breccia/Physics/PhysicsLayers.h"
 #include "Breccia/Renderer/GraphicsSettings.h"
@@ -66,6 +67,8 @@ namespace Breccia {
 		// How many VM instructions one call into Lua may run before it fails with an error, and how many more bytes it may keep
 		// on the Lua heap, in the editor and the CLI (see ScriptCallBudget); 0: no limit. Applies from the next Play, and at once to reading a script's Properties.
 		uint32_t ScriptInstructionLimit = DefaultScriptInstructionLimit;
+		// Network sessions of the game (port, client limit, tick rate, bandwidth budget, timeout).
+		NetworkSettings Network;
 	};
 
 	// The form of ProjectConfig::Version, for messages.

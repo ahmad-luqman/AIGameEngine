@@ -649,6 +649,49 @@ namespace Breccia {
 		return created.front();
 	}
 
+	Entity SceneSerializer::CreateEntityTreeWithIds(Scene& scene, const json& entities, Entity parent, std::string& outError)
+	{
+		if (!entities.is_array() || entities.empty())
+		{
+			outError = "an entity tree needs at least one record";
+			return {};
+		}
+		// CreateEntities would give an entity whose ID is taken a fresh one; a tree that must keep its IDs fails instead.
+		for (size_t i = 0; i < entities.size(); i++)
+		{
+			const json& record = entities[i];
+			const auto id = record.is_object() ? record.find("ID") : json::const_iterator{};
+			if (!record.is_object() || id == record.end() || !id->is_number_unsigned() || id->get<uint64_t>() == 0)
+			{
+				outError = "entity #" + std::to_string(i) + " needs a nonzero ID";
+				return {};
+			}
+			if (scene.GetEntityByUUID(UUID(id->get<uint64_t>())))
+			{
+				outError = "entity #" + std::to_string(i) + " has ID " + std::to_string(id->get<uint64_t>()) + ", which another entity already has";
+				return {};
+			}
+			const auto parentId = record.find("Parent");
+			const bool isRoot = parentId == record.end() || (parentId->is_number_unsigned() && parentId->get<uint64_t>() == 0) || (parentId->is_number_integer() && parentId->get<int64_t>() == 0);
+			if ((i == 0) != isRoot)
+			{
+				outError = i == 0 ? "the first record must be the tree's root (Parent 0)" : "entity #" + std::to_string(i) + " must have a parent in the tree";
+				return {};
+			}
+		}
+		std::vector<Entity> created;
+		if (!CreateEntities(scene, entities, false, parent, created, outError))
+		{
+			for (Entity entity : std::views::reverse(created))
+			{
+				if (entity.IsValid())
+					scene.DestroyEntity(entity);
+			}
+			return {};
+		}
+		return created.front();
+	}
+
 	json SceneSerializer::SceneDocument(json entities)
 	{
 		return { { "Format", SceneFormatName }, { "Version", FormatVersion }, { "Entities", std::move(entities) } };

@@ -3026,6 +3026,7 @@ Changes project settings and saves the project file.
 | `inputActions` | object {Actions: [{Name, Type: "Button" | "Axis", Bindings: [{Key | MouseButton | GamepadButton | GamepadAxis: name, Scale?, DeadZone?, Gamepad?}]}]}, replaces every input action and saves Input.binput (written only when the actions change); applies from the next play |
 | `minRenderScale` | number in [0.25, 2], lowest scale dynamic resolution uses; it must be below renderScale, or dynamic resolution is inactive (a warning) |
 | `name` | string of at most 256 bytes |
+| `network` | object {Port: 1-65535, MaxClients: 1-1024, TickRate: 1-240 snapshots per second, MaxBytesPerSecond: 1024-104857600 per connection and direction, TimeoutSeconds: 1-600}, replaces the network session settings (keys left out take their defaults); applies to the next session |
 | `physicsLayers` | object {Names: ["Default", ...], IgnoredPairs: [[a, b], ...]}, replaces all layers; applies from the next play |
 | `randomSeed` | integer in [0, 4294967295], seeds Lua's random numbers, particle emitters and runtime entity UUIDs; applies from the next play |
 | `renderScale` | number in [0.25, 2], fraction of the window resolution the scene renders at (the highest scale with dynamic resolution) |
@@ -3193,6 +3194,10 @@ Changes project settings and saves the project file.
         }
       ],
       "description": "string of at most 256 bytes"
+    },
+    "network": {
+      "description": "object {Port: 1-65535, MaxClients: 1-1024, TickRate: 1-240 snapshots per second, MaxBytesPerSecond: 1024-104857600 per connection and direction, TimeoutSeconds: 1-600}, replaces the network session settings (keys left out take their defaults); applies to the next session",
+      "type": "object"
     },
     "physicsLayers": {
       "description": "object {Names: [\"Default\", ...], IgnoredPairs: [[a, b], ...]}, replaces all layers; applies from the next play",
