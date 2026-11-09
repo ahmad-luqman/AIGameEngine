@@ -72,14 +72,26 @@ jobs:
 
       # Pinned and checksummed. The type2 runtime is passed explicitly; appimagetool would otherwise download the
       # latest one while it builds each AppImage.
+      # Through the API with the job's token (gh release download): anonymous release downloads are the first GitHub
+      # throttles, and answered 504 for whole runs.
       - name: Install appimagetool (Linux)
         if: runner.os == 'Linux'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           tools="$RUNNER_TEMP/appimage"
           mkdir -p "$tools"
-          # Any failure is retried, for about two minutes (GitHub's release downloads answer 504 for a while at times).
-          curl -fsSL --retry 10 --retry-all-errors --retry-delay 10 -o "$tools/appimagetool" https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
-          curl -fsSL --retry 10 --retry-all-errors --retry-delay 10 -o "$tools/runtime" https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64
+          download() {
+            for attempt in 1 2 3 4 5; do
+              gh release download "$2" --repo "$1" --pattern "$3" --output "$4" --clobber && return 0
+              echo "downloading $3 from $1 failed (attempt $attempt), trying again in 10 s"
+              sleep 10
+            done
+            echo "::error::cannot download $3 from $1 $2"
+            return 1
+          }
+          download AppImage/appimagetool 1.9.1 appimagetool-x86_64.AppImage "$tools/appimagetool"
+          download AppImage/type2-runtime 20251108 runtime-x86_64 "$tools/runtime"
           echo "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  $tools/appimagetool" | sha256sum -c -
           echo "2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d  $tools/runtime" | sha256sum -c -
           chmod +x "$tools/appimagetool"
