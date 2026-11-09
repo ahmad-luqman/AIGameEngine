@@ -834,7 +834,9 @@ TEST_SUITE("Automation")
 		temp.WriteFile("Replays/NoEvents.breplay", R"({ "Format": "BrecciaReplay" })");
 		const std::string noEvents = RunError(registry, session, "replay.run", { { "path", "Replays/NoEvents.breplay" } });
 		CHECK(noEvents.find("not a Breccia replay file") != std::string::npos);
-		CHECK(noEvents.find("'Format' is") == std::string::npos); // the marker is right; only the events are missing
+		CHECK(noEvents.find("(no Events)") != std::string::npos); // the marker is right; only the events are missing
+		temp.WriteFile("Replays/NumberFormat.breplay", R"({ "Format": 5, "Events": [] })");
+		CHECK(RunError(registry, session, "replay.run", { { "path", "Replays/NumberFormat.breplay" } }).find("('Format' is 5)") != std::string::npos);
 		CHECK(RunError(registry, session, "replay.record_stop", { { "path", "Replays/X.breplay" } }).find("not recording") != std::string::npos);
 		Run(registry, session, "play.stop");
 		Input::Reset();

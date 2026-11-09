@@ -17,13 +17,20 @@ project(Breccia
 	LANGUAGES C CXX)
 
 # The engine was called Basalt until PR #76. A tree configured before then keeps its options under the old prefix,
-# which nothing reads: an ASan tree would quietly build without sanitizers, so such a configure stops here.
+# which nothing reads: an ASan tree would quietly build without sanitizers, so such a configure stops here. The
+# internal list of dependency source paths moves to its new name first (a failed configure still writes the cache), so
+# breccia_use_dependency_sources clears the FetchContent entries it lists rather than taking them for hand-set ones.
+if(DEFINED CACHE{BASALT_DEPS_SOURCE_PATHS})
+	set(BRECCIA_DEPS_SOURCE_PATHS "$CACHE{BASALT_DEPS_SOURCE_PATHS}"
+		CACHE INTERNAL "NAME=path of each source taken from BRECCIA_DEPS_SOURCE_DIR")
+	unset(BASALT_DEPS_SOURCE_PATHS CACHE)
+endif()
 get_cmake_property(cacheVariables CACHE_VARIABLES)
 list(FILTER cacheVariables INCLUDE REGEX "^BASALT_")
 if(cacheVariables)
 	list(JOIN cacheVariables ", " renamedOptions)
 	message(FATAL_ERROR "This build tree predates the rename from Basalt to Breccia and still sets ${renamedOptions}. "
-		"Delete the tree, or configure it again with -U 'BASALT_*' and the same options under their BRECCIA_ names.")
+		"Delete the tree, or configure it again with -U \"BASALT_*\" and the same options under their BRECCIA_ names.")
 endif()
 if(NOT "$ENV{BASALT_DEPS_SOURCE_DIR}" STREQUAL "")
 	message(WARNING "BASALT_DEPS_SOURCE_DIR is no longer read since the rename from Basalt to Breccia: "

@@ -1349,8 +1349,8 @@ TEST_SUITE("Archive")
 		CHECK(HashBytes64(nullptr, 0) == HashBytes64("", 0));
 		const std::vector<uint8_t> data = Noise(37);
 		const uint64_t hash = HashBytes64(data.data(), data.size());
-		// Pinned: archives written on one platform are read on every other. The inputs cover no words, words and a tail,
-		// and words alone; they avoid the engine's name, so a rename never touches a format pin.
+		// Pinned: archives written on one platform are read on every other. The inputs cover no words, words and a
+		// tail, and words alone; they avoid the engine's name, so a rename never touches a format pin.
 		CHECK(HashBytes64("bpak", 4) == 8908455541177533817ull);
 		CHECK(HashBytes64("pack archive hash", 17) == 11655933400515416070ull);
 		CHECK(HashBytes64("pack archive has", 16) == 12721861551262622531ull);

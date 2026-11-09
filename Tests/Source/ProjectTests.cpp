@@ -125,7 +125,7 @@ TEST_SUITE("Project")
 			{ "{", "not valid JSON" },
 			{ "[]", "JSON object" },
 			{ R"({"Format": "BasaltSaveData", "Version": 1, "Values": {}})", R"('Format' must be "BrecciaSaveData", not "BasaltSaveData")" },
-			{ R"({"Version": 1, "Values": {}})", "and is missing" },
+			{ R"({"Version": 1, "Values": {}})", R"('Format' is missing; it must be "BrecciaSaveData")" },
 			{ R"({"Format": "BrecciaSaveData", "Version": 0, "Values": {}})", "'Version'" },
 			{ R"({"Format": "BrecciaSaveData", "Version": 99, "Values": {}})", "newer than supported" },
 			{ R"({"Format": "BrecciaSaveData", "Version": 1, "Values": []})", "'Values'" },
@@ -380,6 +380,9 @@ TEST_SUITE("Project")
 		temp.WriteFile(Project::FileName, R"({"Format": "BasaltProject", "Name": "Old"})");
 		CHECK_FALSE(Project::Load(temp.GetDirectory(), error));
 		CHECK(error.find(R"(has 'Format' "BasaltProject", expected "BrecciaProject")") != std::string::npos);
+		temp.WriteFile(Project::FileName, R"({"Format": 7})");
+		CHECK_FALSE(Project::Load(temp.GetDirectory(), error));
+		CHECK(error.find(R"(has 'Format' 7, expected "BrecciaProject")") != std::string::npos);
 	}
 
 	TEST_CASE("Scenes store the fixed timestep only as an override, and null removes it")

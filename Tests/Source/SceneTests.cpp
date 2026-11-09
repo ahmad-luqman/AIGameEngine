@@ -1902,10 +1902,10 @@ TEST_CASE("Scene files are read without a Format marker and rejected with anothe
 	Scene scene;
 	std::string error;
 	nlohmann::json data = SceneSerializer::SerializeScene(scene);
-	CHECK(data["Format"] == SceneSerializer::SceneFormatName);
+	CHECK(data["Format"] == "BrecciaScene"); // the marker on disk, not the constant compared with itself
 	data["Format"] = "BasaltScene";
 	CHECK_FALSE(SceneSerializer::DeserializeScene(scene, data, error));
-	CHECK(error == "'Format' is 'BasaltScene', expected 'BrecciaScene'");
+	CHECK(error == R"('Format' is "BasaltScene", expected "BrecciaScene")");
 	data.erase("Format");
 	CHECK_MESSAGE(SceneSerializer::DeserializeScene(scene, data, error), error);
 }

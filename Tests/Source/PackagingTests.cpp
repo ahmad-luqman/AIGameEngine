@@ -567,6 +567,11 @@ TEST_SUITE("Packaging")
 		CHECK(fallback.Width == 64);
 		CHECK(fallback.Pixels[3] == 0);                        // a transparent corner
 		CHECK(fallback.Pixels[(32 * 64 + 32) * 4 + 3] == 255); // an opaque center
+		// A light fragment in the dark stone (the center pixel is stone).
+		constexpr size_t FragmentPixel = (size_t{ 40 } * 64 + 18) * 4;
+		constexpr size_t CenterPixel = (size_t{ 32 } * 64 + 32) * 4;
+		CHECK(fallback.Pixels[FragmentPixel + 3] == 255);
+		CHECK(fallback.Pixels[FragmentPixel] > fallback.Pixels[CenterPixel]);
 
 		// Invalid images (a failed resize) encode to nothing rather than to a broken file.
 		CHECK(EncodeIconPng(IconImage{}).empty());
