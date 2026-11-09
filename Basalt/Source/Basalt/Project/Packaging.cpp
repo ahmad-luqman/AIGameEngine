@@ -393,6 +393,8 @@ namespace Basalt {
 		add("CFBundleShortVersionString", shortVersion);
 		add("CFBundleVersion", shortVersion);
 		add("LSApplicationCategoryType", "public.app-category.games");
+		// Older macOS versions then refuse to open the game with a message instead of failing to start it.
+		add("LSMinimumSystemVersion", BS_MACOS_MINIMUM_VERSION);
 		if (!info.Company.empty())
 			add("NSHumanReadableCopyright", CopyrightNotice(info.Company));
 		plist += "\t<key>NSHighResolutionCapable</key>\n\t<true/>\n";
@@ -583,6 +585,74 @@ namespace Basalt {
 		outError = "cannot write the Windows resources of '" + FileSystem::PathToUtf8(executable) + "': only Windows can edit executable resources";
 		return false;
 #endif
+	}
+
+	std::optional<SignatureRemoval> RemoveAuthenticodeSignature(std::vector<uint8_t>& image, std::string& outError)
+	{
+		// Offsets from the PE/COFF specification. Every read is bounds-checked first: the runtime is a file on disk.
+		const auto read16 = [&](uint64_t offset) { return static_cast<uint16_t>(image[offset] | image[offset + 1] << 8); };
+		const auto read32 = [&](uint64_t offset) { return static_cast<uint32_t>(read16(offset) | static_cast<uint32_t>(read16(offset + 2)) << 16); };
+		const auto fail = [&](const char* reason) -> std::optional<SignatureRemoval> {
+			outError = reason;
+			return std::nullopt;
+		};
+		if (image.size() < 64 || image[0] != 'M' || image[1] != 'Z')
+			return fail("not a Windows executable (no MZ header)");
+		// The DOS header points at "PE\0\0" and the 20-byte COFF file header, which the optional header follows.
+		const uint64_t peHeader = read32(60);
+		const uint64_t optionalHeader = peHeader + 24;
+		if (optionalHeader > image.size() || std::memcmp(image.data() + peHeader, "PE\0\0", 4) != 0)
+			return fail("not a Windows executable (no PE header)");
+		const uint16_t optionalSize = read16(peHeader + 20);
+		const uint64_t headersEnd = optionalHeader + optionalSize;
+		if (optionalSize < 2 || headersEnd > image.size())
+			return fail("the executable's optional header is truncated");
+		// The data directories follow the PE32 or PE32+ fields; the fifth is the certificate table, whose "address" is a
+		// file offset. CheckSum sits at the same place in both.
+		const uint16_t magic = read16(optionalHeader);
+		if (magic != 0x10B && magic != 0x20B)
+			return fail("the executable's optional header is neither PE32 nor PE32+");
+		const uint64_t directories = optionalHeader + (magic == 0x10B ? 96 : 112);
+		constexpr uint32_t CertificateTable = 4;
+		const uint64_t entry = directories + uint64_t{ CertificateTable } * 8;
+		// An executable whose header has no room for the entry cannot be signed.
+		if (entry + 8 > headersEnd || read32(directories - 4) <= CertificateTable)
+			return SignatureRemoval::Unsigned;
+		const uint64_t tableOffset = read32(entry);
+		const uint64_t tableEnd = tableOffset + read32(entry + 4);
+		if (tableEnd == tableOffset && tableOffset == 0)
+			return SignatureRemoval::Unsigned;
+		if (tableOffset < headersEnd || tableEnd > image.size())
+			return fail("the executable's certificate table lies outside the file or among its headers");
+		// Signing tools may pad the file after the table. Anything else there would be lost along with it.
+		if (std::any_of(image.begin() + static_cast<std::ptrdiff_t>(tableEnd), image.end(), [](uint8_t byte) { return byte != 0; }))
+			return fail("data follows the executable's certificate table");
+		image.resize(tableOffset);
+		std::fill_n(image.begin() + static_cast<std::ptrdiff_t>(entry), 8, uint8_t{ 0 });
+		// The checksum covered the table. Zero means "not computed", which is what linkers write and what Windows accepts
+		// for anything but drivers; signtool computes it again when the developer signs.
+		std::fill_n(image.begin() + static_cast<std::ptrdiff_t>(optionalHeader + 64), 4, uint8_t{ 0 });
+		return SignatureRemoval::Removed;
+	}
+
+	std::optional<SignatureRemoval> RemoveAuthenticodeSignature(const std::filesystem::path& executable, std::string& outError)
+	{
+		std::string reason;
+		const auto fail = [&]() -> std::optional<SignatureRemoval> {
+			outError = "cannot remove the signature of '" + FileSystem::PathToUtf8(executable) + "': " + reason;
+			return std::nullopt;
+		};
+		std::optional<std::vector<uint8_t>> image = FileSystem::ReadBinaryFile(executable, &reason);
+		if (!image)
+			return fail();
+		const std::optional<SignatureRemoval> removal = RemoveAuthenticodeSignature(*image, reason);
+		if (!removal)
+			return fail();
+		if (*removal == SignatureRemoval::Unsigned)
+			return SignatureRemoval::Unsigned;
+		if (!FileSystem::WriteBinaryFile(executable, image->data(), image->size(), reason))
+			return fail();
+		return SignatureRemoval::Removed;
 	}
 
 }

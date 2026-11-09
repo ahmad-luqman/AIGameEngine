@@ -78,6 +78,9 @@ set(BASALT_SHADOW_CASCADES 4)
 set(BASALT_MAX_LIGHTS 256)
 target_compile_definitions(Basalt PUBLIC BS_MAX_LIGHTS=${BASALT_MAX_LIGHTS})
 target_compile_definitions(Basalt PRIVATE BS_SHADOW_CASCADE_COUNT=${BASALT_SHADOW_CASCADES})
+# Exported Info.plists state the macOS the runtime is built for (Project/Packaging.cpp). Defined on every platform, so
+# the Info.plist builder and its tests are the same everywhere.
+target_compile_definitions(Basalt PRIVATE BS_MACOS_MINIMUM_VERSION="${CMAKE_OSX_DEPLOYMENT_TARGET}")
 
 basalt_embed_shaders(Basalt
 	INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/Shaders/Include"

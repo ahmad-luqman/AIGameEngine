@@ -256,11 +256,6 @@ below extend character movement, in order of impact.
 
 ### Shipping
 
-- **Windows code signing — S.** Sign the exported executable and the tools with `signtool` when a certificate is
-  configured (the release pipeline has secrets for macOS notarization only), so SmartScreen does not warn.
-- **Signed and universal tools on macOS — S.** The release signs and notarizes only the sample bundles: sign the
-  editor, runtime and CLI (and their bundled Vulkan libraries) and notarize the tools archive too, and build universal
-  (arm64 + x86-64) binaries for Intel Macs.
 - **Cross-platform export — M.** Export for another desktop OS than the host's, from runtime binaries the release
   publishes.
 

@@ -16,6 +16,7 @@
 #include "TestUtils.h"
 
 #include <algorithm>
+#include <cstring>
 #include <map>
 #include <string>
 #include <vector>
@@ -51,6 +52,56 @@ namespace {
 	#endif
 	}
 #endif
+
+	// A Windows executable as RemoveAuthenticodeSignature reads it: DOS header, PE signature, COFF header and an optional
+	// header (PE32 or PE32+) with directoryCount data directories, then 509 bytes of code (so a signing tool must pad).
+	std::vector<uint8_t> TestExecutable(bool pe32Plus, uint32_t directoryCount = 16)
+	{
+		const size_t optionalSize = (pe32Plus ? 112 : 96) + size_t{ directoryCount } * 8;
+		std::vector<uint8_t> image(64 + 24 + optionalSize, 0);
+		image[0] = 'M';
+		image[1] = 'Z';
+		image[60] = 64;
+		std::memcpy(image.data() + 64, "PE\0\0", 4);
+		image[64 + 20] = static_cast<uint8_t>(optionalSize & 0xFF);
+		image[64 + 21] = static_cast<uint8_t>(optionalSize >> 8);
+		image[88] = 0x0B;
+		image[89] = pe32Plus ? 0x02 : 0x01;
+		// A checksum, which a removal must clear.
+		image[88 + 64] = 0x78;
+		image[88 + 65] = 0x56;
+		image[88 + 66] = 0x34;
+		image[88 + 67] = 0x12;
+		image[88 + (pe32Plus ? 108 : 92)] = static_cast<uint8_t>(directoryCount);
+		image.insert(image.end(), 509, 0xCC);
+		return image;
+	}
+
+	void Write32(std::vector<uint8_t>& image, size_t offset, uint32_t value)
+	{
+		for (int i = 0; i < 4; ++i)
+			image[offset + i] = static_cast<uint8_t>(value >> (8 * i));
+	}
+
+	// The certificate table's directory entry (the fifth data directory).
+	size_t CertificateEntry(bool pe32Plus)
+	{
+		return 88 + (pe32Plus ? 112 : 96) + 4 * 8;
+	}
+
+	// What signtool does to an executable: pad it to 8 bytes, append a WIN_CERTIFICATE (here 32 bytes of stand-in
+	// PKCS#7) and point the certificate table's directory entry at it.
+	std::vector<uint8_t> SignTestExecutable(std::vector<uint8_t> image, bool pe32Plus)
+	{
+		image.resize((image.size() + 7) / 8 * 8, 0);
+		const auto offset = static_cast<uint32_t>(image.size());
+		const std::vector<uint8_t> certificate = { 40, 0, 0, 0, 0x00, 0x02, 0x02, 0x00 };
+		image.insert(image.end(), certificate.begin(), certificate.end());
+		image.insert(image.end(), 32, 0xA5);
+		Write32(image, CertificateEntry(pe32Plus), offset);
+		Write32(image, CertificateEntry(pe32Plus) + 4, 40);
+		return image;
+	}
 
 	void WriteIcon(const std::filesystem::path& path, const IconImage& icon)
 	{
@@ -516,6 +567,12 @@ TEST_SUITE("Packaging")
 		CHECK(plist.find("Copyright \xC2\xA9 Stone &lt;Works&gt;") != std::string::npos);
 		CHECK(plist.find("CFBundleIconFile") == std::string::npos);
 		CHECK(plist.find('\r') == std::string::npos);
+		// The macOS the runtime is built for (CMAKE_OSX_DEPLOYMENT_TARGET), as major.minor.
+		const std::string minimumKey = "<key>LSMinimumSystemVersion</key>\n\t<string>";
+		const size_t minimum = plist.find(minimumKey);
+		REQUIRE(minimum != std::string::npos);
+		const std::string minimumVersion = plist.substr(minimum + minimumKey.size(), plist.find('<', minimum + minimumKey.size()) - minimum - minimumKey.size());
+		CHECK_MESSAGE(ParseProjectVersion(minimumVersion + ".0"), minimumVersion);
 
 		info.IconFileName = "Rock_Roll.icns";
 		info.Company.clear();
@@ -909,6 +966,128 @@ TEST_SUITE("Packaging")
 #else
 		CHECK_FALSE(WriteWindowsResources(directory.GetPath() / "Game.exe", info, nullptr, error));
 		CHECK(error.find("only Windows") != std::string::npos);
+#endif
+	}
+
+	TEST_CASE("Exports remove the runtime's Authenticode signature")
+	{
+		std::string error;
+		for (const bool pe32Plus : { false, true })
+		{
+			CAPTURE(pe32Plus);
+			const std::vector<uint8_t> plainImage = TestExecutable(pe32Plus);
+			std::vector<uint8_t> image = plainImage;
+			CHECK(RemoveAuthenticodeSignature(image, error) == SignatureRemoval::Unsigned);
+			CHECK(image == plainImage);
+
+			// The table, its directory entry and the checksum go; the padding before the table stays.
+			const std::vector<uint8_t> signedImage = SignTestExecutable(plainImage, pe32Plus);
+			std::vector<uint8_t> expected = plainImage;
+			expected.resize(signedImage.size() - 40, 0);
+			Write32(expected, 88 + 64, 0);
+			image = signedImage;
+			REQUIRE_MESSAGE(RemoveAuthenticodeSignature(image, error) == SignatureRemoval::Removed, error);
+			CHECK(image == expected);
+			CHECK(RemoveAuthenticodeSignature(image, error) == SignatureRemoval::Unsigned);
+
+			// Zero padding after the table is a signing tool's; it goes with the table.
+			image = signedImage;
+			image.insert(image.end(), 7, 0);
+			REQUIRE_MESSAGE(RemoveAuthenticodeSignature(image, error) == SignatureRemoval::Removed, error);
+			CHECK(image == expected);
+
+			// Anything else after it would be lost, so nothing is removed.
+			image = signedImage;
+			image.push_back(1);
+			CHECK_FALSE(RemoveAuthenticodeSignature(image, error));
+			CHECK(BasaltTest::Contains(error, "data follows"));
+			CHECK(std::equal(signedImage.begin(), signedImage.end(), image.begin()));
+
+			// A table past the end of the file, or among the headers, is no signature a tool wrote.
+			image = signedImage;
+			Write32(image, CertificateEntry(pe32Plus) + 4, 41);
+			CHECK_FALSE(RemoveAuthenticodeSignature(image, error));
+			CHECK(BasaltTest::Contains(error, "outside the file"));
+			image = signedImage;
+			Write32(image, CertificateEntry(pe32Plus), 64);
+			CHECK_FALSE(RemoveAuthenticodeSignature(image, error));
+			CHECK(BasaltTest::Contains(error, "outside the file"));
+			image = signedImage;
+			Write32(image, CertificateEntry(pe32Plus), 0xFFFFFFF8u);
+			Write32(image, CertificateEntry(pe32Plus) + 4, 0xFFFFFFF0u);
+			CHECK_FALSE(RemoveAuthenticodeSignature(image, error));
+			CHECK(BasaltTest::Contains(error, "outside the file"));
+
+			// Without a certificate table directory, an executable has no signature, whatever bytes follow.
+			image = SignTestExecutable(TestExecutable(pe32Plus, 4), pe32Plus);
+			const std::vector<uint8_t> fourDirectories = image;
+			CHECK(RemoveAuthenticodeSignature(image, error) == SignatureRemoval::Unsigned);
+			CHECK(image == fourDirectories);
+
+			// Every prefix of a signed executable is refused or read within its bounds (AddressSanitizer checks the latter).
+			for (size_t size = 0; size < signedImage.size(); ++size)
+			{
+				std::vector<uint8_t> prefix(signedImage.begin(), signedImage.begin() + static_cast<std::ptrdiff_t>(size));
+				CHECK_FALSE(RemoveAuthenticodeSignature(prefix, error));
+			}
+		}
+
+		std::vector<uint8_t> image = TestExecutable(true);
+		image[0] = 'Z';
+		CHECK_FALSE(RemoveAuthenticodeSignature(image, error));
+		CHECK(BasaltTest::Contains(error, "no MZ header"));
+		image = TestExecutable(true);
+		image[65] = 'X';
+		CHECK_FALSE(RemoveAuthenticodeSignature(image, error));
+		CHECK(BasaltTest::Contains(error, "no PE header"));
+		image = TestExecutable(true);
+		Write32(image, 60, static_cast<uint32_t>(image.size()));
+		CHECK_FALSE(RemoveAuthenticodeSignature(image, error));
+		CHECK(BasaltTest::Contains(error, "no PE header"));
+		image = TestExecutable(true);
+		image[89] = 0x03;
+		CHECK_FALSE(RemoveAuthenticodeSignature(image, error));
+		CHECK(BasaltTest::Contains(error, "neither PE32 nor PE32+"));
+		image = TestExecutable(true);
+		image[64 + 21] = 0x40;
+		CHECK_FALSE(RemoveAuthenticodeSignature(image, error));
+		CHECK(BasaltTest::Contains(error, "truncated"));
+	}
+
+	TEST_CASE("A signed executable file is rewritten without its signature, an unsigned one is left alone")
+	{
+		BasaltTest::TempDirectory directory("PackagingSignature");
+		std::string error;
+		const std::vector<uint8_t> plainImage = TestExecutable(true);
+		const std::vector<uint8_t> signedImage = SignTestExecutable(plainImage, true);
+		const std::filesystem::path executable = directory.GetPath() / "Game.exe";
+		REQUIRE(FileSystem::WriteBinaryFile(executable, signedImage.data(), signedImage.size()));
+		REQUIRE_MESSAGE(RemoveAuthenticodeSignature(executable, error) == SignatureRemoval::Removed, error);
+		auto stripped = FileSystem::ReadBinaryFile(executable);
+		REQUIRE(stripped);
+		CHECK(stripped->size() == signedImage.size() - 40);
+		CHECK(RemoveAuthenticodeSignature(*stripped, error) == SignatureRemoval::Unsigned);
+
+		// An unsigned file is not written at all: a read-only one stays as it is.
+		REQUIRE(FileSystem::WriteBinaryFile(executable, plainImage.data(), plainImage.size()));
+		std::filesystem::permissions(executable, std::filesystem::perms::owner_write | std::filesystem::perms::group_write | std::filesystem::perms::others_write, std::filesystem::perm_options::remove);
+		CHECK(RemoveAuthenticodeSignature(executable, error) == SignatureRemoval::Unsigned);
+		std::filesystem::permissions(executable, std::filesystem::perms::owner_write, std::filesystem::perm_options::add);
+
+		CHECK_FALSE(RemoveAuthenticodeSignature(directory.GetPath() / "Missing.exe", error));
+		CHECK(BasaltTest::Contains(error, "Missing.exe"));
+		const std::string text = "not an executable";
+		REQUIRE(FileSystem::WriteTextFile(executable, text));
+		CHECK_FALSE(RemoveAuthenticodeSignature(executable, error));
+		CHECK(BasaltTest::Contains(error, "Game.exe"));
+		CHECK(BasaltTest::Contains(error, "no MZ header"));
+#if defined(_WIN32)
+		// A real executable from the linker: unsigned, as the build leaves it.
+		wchar_t self[MAX_PATH] = {};
+		REQUIRE(GetModuleFileNameW(nullptr, self, MAX_PATH) > 0);
+		auto image = FileSystem::ReadBinaryFile(self);
+		REQUIRE(image);
+		CHECK(RemoveAuthenticodeSignature(*image, error) == SignatureRemoval::Unsigned);
 #endif
 	}
 }

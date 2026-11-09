@@ -58,7 +58,8 @@ Each platform packages the host's runtime, so build each package on its own plat
 <Name>.app/Contents/
   Info.plist  PkgInfo
   MacOS/<Name>                         the runtime
-  Frameworks/libvulkan.1.dylib         the Vulkan loader and MoltenVK (VULKAN_SDK, then Homebrew)
+  Frameworks/libvulkan.1.dylib         the Vulkan loader and MoltenVK ($VULKAN_SDK/lib, then next to the
+                                       runtime, then Homebrew)
   Frameworks/libMoltenVK.dylib
   Resources/<Name>.icns                with a project icon: 16-1024 px PNG representations, none larger than the
                                        source icon (but at least 16 px)
@@ -67,12 +68,27 @@ Each platform packages the host's runtime, so build each package on its own plat
 ```
 
 The runtime finds its project in `Contents/Resources` when none is next to the executable, and the Vulkan loader
-finds MoltenVK through the manifest there. Every export replaces the whole bundle. Sign the bundle before
-distributing it (see below).
+finds MoltenVK through the manifest there. `Info.plist` states the oldest macOS the runtime is built for
+(`LSMinimumSystemVersion`: 13.3, `CMAKE_OSX_DEPLOYMENT_TARGET`). Every export replaces the whole bundle.
+
+The bundle holds the architectures of the runtime and of the libraries it was given: a release's tools are universal
+(arm64 and x86-64) and carry universal libraries next to the runtime, which an export from them picks up unless
+`VULKAN_SDK` names others (the LunarG SDK's are universal too; Homebrew's hold one architecture, so a bundle made with
+them runs only on Macs of that kind). `lipo -archs` on the files says which.
+
+Every macOS export, folder or bundle, is signed ad hoc as its last step (`/usr/bin/codesign`, part of macOS): the
+libraries, then the executable or the bundle, which seals everything under `Contents`. A release's runtime carries
+Basalt's Developer ID with the hardened runtime, whose library validation would refuse Vulkan libraries signed by
+anyone else, and which would name Basalt's publisher as the game's; the ad hoc signature names no one. Sign the
+export with your own identity before distributing it (see below).
 
 **Windows: a folder.** The same layout as a folder export, but the executable carries a version resource (Explorer's
 Details tab) and, with a project icon, the icon: an `RT_GROUP_ICON` named `GLFW_ICON` (which GLFW's Win32 backend also
 loads as the window class icon) with PNG images from 16 to 256 px. Zip the folder to distribute it.
+
+Every Windows export, folder or package, removes the Authenticode signature of the runtime it copies (a release's
+runtime is signed by Basalt's publisher): rewriting resources would break it, and the game is yours to sign (see
+below). An export refuses a runtime whose certificate table is not at the end of the file, where signing tools put it.
 
 **Linux: an AppImage.**
 
@@ -172,8 +188,34 @@ to Apple's notary service with credentials stored once with
 waits for the result (printing Apple's log when it is rejected) and staples the ticket, so the game also opens offline. Sign again after any change to the
 bundle, and zip it with `ditto -c -k --keepParent`, which keeps the signature intact.
 
-Windows executables are not signed. SmartScreen warns about unsigned downloads until they earn a reputation; sign
-them with `signtool` and your own certificate when that matters.
+Given a folder instead (a folder export, or the tools' `bin/`), the script signs the `.dylib` files and the executables
+(Mach-O files) directly in it, libraries first, and verifies each. Notarizing a folder submits those files; since only
+bundles, disk images and installers can hold a ticket, macOS checks each one online the first time it runs.
+
+### Signing on Windows
+
+`scripts/sign-windows.py` signs executables with `signtool` (from the Windows SDK; `--signtool` or `SIGNTOOL` name
+another), using SHA-256 and an RFC 3161 timestamp, and then verifies them:
+
+```powershell
+python scripts\sign-windows.py Dist\MyGame --thumbprint 0123456789ABCDEF0123456789ABCDEF01234567 --description "My Game"
+```
+
+A folder stands for the `.exe` and `.dll` files directly in it; files may be named too. Sign after every export, which
+never keeps a signature (see Packages). The certificate is taken from the current user's or the machine's certificate
+store by its SHA-1 thumbprint (`Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert` lists them). Certificates issued
+since June 2023 keep their key on a hardware token or in a cloud HSM, whose key storage provider puts them in the store;
+an older `.pfx` file gets there with `Import-PfxCertificate -FilePath cert.pfx -CertStoreLocation Cert:\CurrentUser\My
+-Password (Read-Host -AsSecureString)`. A signing service with its own signtool library, such as Azure Trusted Signing,
+is used with `--dlib <Azure.CodeSigning.Dlib.dll> --dlib-metadata <metadata.json> --timestamp-url
+http://timestamp.acs.microsoft.com`.
+
+The timestamp (default `http://timestamp.digicert.com`, any RFC 3161 server works with any certificate) keeps the
+signature valid after the certificate expires; a server that fails is asked again twice, and `--no-timestamp` leaves it
+out. Verification (`signtool verify /pa`) requires a certificate that chains to a root this machine trusts;
+`--allow-untrusted` skips it, for test certificates only. A signature names the publisher in Windows' prompts and file
+properties; SmartScreen may still warn about a new program until downloads of it build a reputation, whatever the
+certificate.
 
 ## Crash reports
 
@@ -245,11 +287,20 @@ runs `scripts/package_release.py`, which writes:
   `--require-appimage`).
 - `SHA256SUMS.txt`, built from each platform's `SHA256SUMS-<platform>.txt`.
 
-A final job publishes them as a GitHub release with generated notes. Each platform has one architecture: Apple
-Silicon on macOS (`macos-15`) and x86-64 on Windows and Linux. Pull requests that change the main inputs of the packages
-(the workflow, the packaging scripts, the Project module, the runtime, the Process, Window, VulkanLoader, PackArchive and
-CrashReporter sources, the samples), and manual runs
-(`workflow_dispatch`), run everything except publishing. Locally:
+A final job publishes them as a GitHub release with generated notes. Windows and Linux are x86-64 (`windows-x64`,
+`linux-x64`). macOS is universal (`macos-universal`): built on Apple Silicon (`macos-15`) for both arm64 and x86-64
+(`CMAKE_OSX_ARCHITECTURES`), for macOS 13.3 or later, with a Vulkan loader built the same way at the Vulkan-Headers pin
+and MoltenVK's universal release (`scripts/ci-universal-vulkan.sh`, which pins its version and checksum).
+`package_release.py --require-universal` fails unless the CLI holds both architectures, every Mach-O file shipped (the
+tools, their libraries, each sample's executable and libraries) must hold the same ones, and where the Mac can run x86-64
+code (Rosetta 2, which the runners have) the x86-64 half of the packaged tools and of each sample is started too. A local
+run without `CMAKE_OSX_ARCHITECTURES` packages `macos-arm64`.
+
+After signing, the packaged CLI (`project.info` on a sample) and runtime (headless) are started again from the tools
+archive's folder, as each sample is. Pull requests that change the main inputs of the packages (the workflow, the
+packaging and signing scripts, the top-level `CMakeLists.txt`, the Project module, the runtime, the Process, Window,
+VulkanLoader, PackArchive and CrashReporter sources, the samples), and manual runs (`workflow_dispatch`), run everything
+except publishing. Locally:
 
 ```bash
 scripts/build.sh Dist
@@ -260,11 +311,11 @@ On Linux, `--gzip-level 1` gzips the `.tar.gz` archives fastest (the default is 
 warn that it has no effect). The `ReleasePackaging` test uses it, because a Debug build's binaries hold hundreds of
 megabytes of debug information.
 
-**macOS signing in CI.** Without secrets, the samples are signed ad hoc, and a tag release shows a warning. To sign and
-notarize them, add all of these repository secrets. Once `MACOS_CERTIFICATE` is set, the job fails and names any other
-one that is missing; without it, the rest are ignored, and a tag release also says in its notes that the macOS samples
-are signed ad hoc. Only the samples are signed: the tools archive is not, so macOS quarantines downloaded tools until you allow
-them.
+**macOS signing in CI.** Without secrets, the tools and samples are signed ad hoc, and a tag release shows a warning.
+To sign and notarize them, add all of these repository secrets. Once `MACOS_CERTIFICATE` is set, the job fails and names
+any other one that is missing; without it, the rest are ignored, and a tag release also says in its notes that the macOS
+tools and samples are signed ad hoc. With them, the tools (the editor, the runtime, the CLI and their Vulkan libraries)
+are signed with the hardened runtime and notarized as a folder, and each sample's bundle is notarized and stapled.
 
 | Secret | Value |
 |--------|-------|
@@ -272,6 +323,18 @@ them.
 | `MACOS_CERTIFICATE_PASSWORD` | the `.p12` password |
 | `MACOS_SIGNING_IDENTITY` | e.g. `Developer ID Application: Acme Games (TEAMID)` |
 | `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD` | notarytool credentials (an app-specific password) |
+
+**Windows signing in CI.** Without secrets, the Windows tools and samples are not signed, a tag release shows a warning
+and says so in its notes. With these two secrets, the certificate goes into the runner's certificate store and
+`package_release.py --windows-certificate <thumbprint>` signs the three tools and each sample's executable (timestamped by
+DigiCert's server), each then started again. A certificate whose key lives on a token or in a cloud HSM cannot be a
+secret: sign on a machine that holds it, or replace the import step with the service's own (such as Azure Trusted
+Signing's, then `scripts/sign-windows.py --dlib`).
+
+| Secret | Value |
+|--------|-------|
+| `WINDOWS_CERTIFICATE` | base64 of the code signing certificate exported as `.pfx` with its private key |
+| `WINDOWS_CERTIFICATE_PASSWORD` | the `.pfx` password (the job fails when only the certificate is set) |
 
 The pipeline pins appimagetool 1.9.1 and the type2 AppImage runtime by SHA-256. To update them, change the URLs and
 checksums in the workflow together.
