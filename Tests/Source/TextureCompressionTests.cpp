@@ -1,17 +1,17 @@
 #include <doctest/doctest.h>
 
-#include <Basalt/Asset/TextureCompression.h>
-#include <Basalt/Asset/ImageUtils.h>
-#include <Basalt/Asset/Thumbnails.h>
-#include <Basalt/Scene/ComponentRegistry.h>
-#include <Basalt/Scene/Entity.h>
-#include <Basalt/Core/FileSystem.h>
+#include <Breccia/Asset/TextureCompression.h>
+#include <Breccia/Asset/ImageUtils.h>
+#include <Breccia/Asset/Thumbnails.h>
+#include <Breccia/Scene/ComponentRegistry.h>
+#include <Breccia/Scene/Entity.h>
+#include <Breccia/Core/FileSystem.h>
 
 #include "TestUtils.h"
 
 #include <algorithm>
 
-using namespace Basalt;
+using namespace Breccia;
 
 namespace {
 	TextureSource Source(uint32_t width = 7, uint32_t height = 5)
@@ -85,7 +85,7 @@ TEST_CASE("KTX2 rejects truncated overflowing unsupported and inconsistent heade
 
 TEST_CASE("BC7 imports keep sources reuse content cache and recover corrupt cache entries")
 {
-	BasaltTest::TempDirectory temp("TextureImport");
+	BrecciaTest::TempDirectory temp("TextureImport");
 	const auto& root = temp.GetPath();
 	auto source = Source();
 	std::string error;
@@ -163,7 +163,7 @@ TEST_CASE("Basis ETC1S and Zstd UASTC KTX2 transcode to BC7 with all mip levels"
 	for (const auto* name : { "ETC1S.ktx2", "UASTC.ktx2" })
 	{
 		std::string error;
-		auto texture = TextureSource::LoadFromFile(std::filesystem::path(BASALT_TEST_DATA_DIR) / "Textures" / name, error);
+		auto texture = TextureSource::LoadFromFile(std::filesystem::path(BRECCIA_TEST_DATA_DIR) / "Textures" / name, error);
 		REQUIRE_MESSAGE(texture, name, ": ", error);
 		CHECK(texture->Format == TextureFormat::BC7);
 		CHECK(texture->Width == 8);
@@ -184,7 +184,7 @@ TEST_CASE("Basis ETC1S and Zstd UASTC KTX2 transcode to BC7 with all mip levels"
 
 TEST_CASE("KTX2 rejects overflowing and truncated Basis global data before third-party decoding")
 {
-	const auto original = FileSystem::ReadBinaryFile(std::filesystem::path(BASALT_TEST_DATA_DIR) / "Textures/ETC1S.ktx2");
+	const auto original = FileSystem::ReadBinaryFile(std::filesystem::path(BRECCIA_TEST_DATA_DIR) / "Textures/ETC1S.ktx2");
 	REQUIRE(original);
 	for (const auto& range : { std::pair<uint64_t, uint64_t>{ UINT64_MAX - 15, 256 }, { UINT64_MAX, UINT64_MAX }, { original->size() - 1, 1 }, { 80, 1 } })
 	{
@@ -401,7 +401,7 @@ TEST_CASE("Every material registry field participates in the editor preview key"
 TEST_CASE("Material previews track every asset field")
 {
 	// The editor re-renders a material preview when one of these files changes, so none may be missing.
-	BasaltTest::TempProject project("PreviewDependencies");
+	BrecciaTest::TempProject project("PreviewDependencies");
 	const auto* info = ComponentRegistry::Find("Material");
 	REQUIRE(info);
 	CHECK(MaterialPreviewDependencies(MaterialComponent{}).empty());
@@ -426,7 +426,7 @@ TEST_CASE("Material previews track every asset field")
 
 TEST_CASE("Compression cache is optional while output errors retain their filesystem cause")
 {
-	BasaltTest::TempDirectory temp("CompressionIO");
+	BrecciaTest::TempDirectory temp("CompressionIO");
 	const auto& root = temp.GetPath();
 	const auto source = Source();
 	std::string error;
@@ -448,13 +448,13 @@ TEST_CASE("Uncompressed Basis levels must store their declared size")
 	// A FuzzTexture crash: UASTC without supercompression whose level length differs from its uncompressed length
 	// reached an assert inside the Basis transcoder.
 	std::string error;
-	CHECK_FALSE(TextureSource::LoadFromFile(std::filesystem::path(BASALT_TEST_DATA_DIR) / "Textures/UncompressedLengthMismatch.ktx2", error));
+	CHECK_FALSE(TextureSource::LoadFromFile(std::filesystem::path(BRECCIA_TEST_DATA_DIR) / "Textures/UncompressedLengthMismatch.ktx2", error));
 	CHECK(error.find("mip 0 stores 26 bytes but declares 64 uncompressed") != std::string::npos);
 }
 
 TEST_CASE("Malformed Zstandard texture fixture reports a decode error")
 {
 	std::string error;
-	CHECK_FALSE(TextureSource::LoadFromFile(std::filesystem::path(BASALT_TEST_DATA_DIR) / "Textures/ZstdRegression.ktx2", error));
+	CHECK_FALSE(TextureSource::LoadFromFile(std::filesystem::path(BRECCIA_TEST_DATA_DIR) / "Textures/ZstdRegression.ktx2", error));
 	CHECK(error.find("Basis transcode failed") != std::string::npos);
 }

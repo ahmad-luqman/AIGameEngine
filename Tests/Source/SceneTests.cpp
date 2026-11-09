@@ -2,16 +2,16 @@
 
 #include <doctest/doctest.h>
 
-#include <Basalt/Core/Log.h>
-#include <Basalt/Particles/ParticleSystem.h>
-#include <Basalt/Physics/PhysicsWorld.h>
-#include <Basalt/Scene/ComponentRegistry.h>
-#include <Basalt/Scene/JointFields.h>
-#include <Basalt/Scene/Entity.h>
-#include <Basalt/Scene/Scene.h>
-#include <Basalt/Scene/SceneDiff.h>
-#include <Basalt/Scene/SceneSerializer.h>
-#include <Basalt/Scripting/ScriptEngine.h>
+#include <Breccia/Core/Log.h>
+#include <Breccia/Particles/ParticleSystem.h>
+#include <Breccia/Physics/PhysicsWorld.h>
+#include <Breccia/Scene/ComponentRegistry.h>
+#include <Breccia/Scene/JointFields.h>
+#include <Breccia/Scene/Entity.h>
+#include <Breccia/Scene/Scene.h>
+#include <Breccia/Scene/SceneDiff.h>
+#include <Breccia/Scene/SceneSerializer.h>
+#include <Breccia/Scripting/ScriptEngine.h>
 
 #include "TestUtils.h"
 
@@ -21,7 +21,7 @@
 #include <map>
 #include <set>
 
-using namespace Basalt;
+using namespace Breccia;
 
 namespace {
 
@@ -107,7 +107,7 @@ TEST_SUITE("Scene")
 {
 	TEST_CASE("Runtime UUIDs repeat across copies and simulation, skip collisions and ignore gameplay draws")
 	{
-		BasaltTest::TempProject project("RuntimeUUIDs");
+		BrecciaTest::TempProject project("RuntimeUUIDs");
 		Project::GetActive()->GetConfig().RandomSeed = 1234;
 		Ref<Scene> edit = CreateRef<Scene>();
 		Entity root = edit->CreateEntityWithUUID(42, "Root");
@@ -122,7 +122,7 @@ TEST_SUITE("Scene")
 			else
 				scene->OnRuntimeStart();
 			if (draw)
-				CHECK(BasaltTest::Eval(*scene, "for i = 1, 100 do math.random() end Math.Seed(99)") == "");
+				CHECK(BrecciaTest::Eval(*scene, "for i = 1, 100 do math.random() end Math.Seed(99)") == "");
 			std::vector<uint64_t> ids;
 			Entity spawned = scene->CreateEntity("Spawned");
 			ids.push_back(spawned.GetUUID());
@@ -168,7 +168,7 @@ TEST_SUITE("Scene")
 
 	TEST_CASE("Runtime UUID stream continues across Scene.Load")
 	{
-		BasaltTest::TempProject project("RuntimeUUIDLoad");
+		BrecciaTest::TempProject project("RuntimeUUIDLoad");
 		project.WriteFile("Assets/Scenes/Empty.bscene", R"({"Name":"Empty","Entities":[]})");
 		std::vector<uint64_t> baseline;
 		{
@@ -182,8 +182,8 @@ TEST_SUITE("Scene")
 		scene.OnRuntimeStart();
 		Entity first = scene.CreateEntity("First");
 		CHECK(static_cast<uint64_t>(first.GetUUID()) == baseline[0]);
-		CHECK(BasaltTest::Eval(scene, "Scene.Load('Assets/Scenes/Empty.bscene')") == "");
-		scene.OnUpdate(BasaltTest::Step);
+		CHECK(BrecciaTest::Eval(scene, "Scene.Load('Assets/Scenes/Empty.bscene')") == "");
+		scene.OnUpdate(BrecciaTest::Step);
 		CHECK_FALSE(scene.GetEntityByUUID(baseline[0]));
 		// Editing the project seed during play takes effect only on the next session.
 		Project::GetActive()->GetConfig().RandomSeed++;
@@ -194,7 +194,7 @@ TEST_SUITE("Scene")
 
 	TEST_CASE("Runtime identity starts before OnCreate and resets when the same scene restarts")
 	{
-		BasaltTest::TempProject project("RuntimeIdentityRestart");
+		BrecciaTest::TempProject project("RuntimeIdentityRestart");
 		Project::GetActive()->GetConfig().RandomSeed = 1234;
 		const std::string script = project.WriteFile("Assets/Scripts/Spawn.lua", R"(
 			return { OnCreate = function(self) Scene.CreateEntity("CreatedAtStart") end }
@@ -225,7 +225,7 @@ TEST_SUITE("Scene")
 
 	TEST_CASE("Scene loads reserve every saved ID before generating omitted or zero IDs")
 	{
-		BasaltTest::TempProject project("LoadedIDReservation");
+		BrecciaTest::TempProject project("LoadedIDReservation");
 		Project::GetActive()->GetConfig().RandomSeed = 1234;
 		constexpr uint64_t FirstDraw = 3532910284440527571ULL;
 		for (bool omitted : { false, true })
@@ -239,8 +239,8 @@ TEST_SUITE("Scene")
 			project.WriteFile("Assets/Scenes/Reservation.bscene", data.dump());
 			Scene scene;
 			scene.OnRuntimeStart();
-			CHECK(BasaltTest::Eval(scene, "Scene.Load('Assets/Scenes/Reservation.bscene')") == "");
-			scene.OnUpdate(BasaltTest::Step);
+			CHECK(BrecciaTest::Eval(scene, "Scene.Load('Assets/Scenes/Reservation.bscene')") == "");
+			scene.OnUpdate(BrecciaTest::Step);
 			Entity saved = scene.FindEntityByName("Saved");
 			Entity generated = scene.FindEntityByName("Generated");
 			REQUIRE(saved);
@@ -269,7 +269,7 @@ TEST_SUITE("Scene")
 
 	TEST_CASE("Generated prefab IDs never overwrite source-ID remapping keys")
 	{
-		BasaltTest::TempProject project("PrefabSourceIDReservation");
+		BrecciaTest::TempProject project("PrefabSourceIDReservation");
 		Project::GetActive()->GetConfig().RandomSeed = 1234;
 		for (bool omitted : { false, true })
 		{
@@ -296,7 +296,7 @@ TEST_SUITE("Scene")
 
 	TEST_CASE("Duplicate source IDs are rejected before creating scene or prefab entities")
 	{
-		BasaltTest::TempProject project("DuplicateSourceIDs");
+		BrecciaTest::TempProject project("DuplicateSourceIDs");
 		const auto data = nlohmann::json::parse(R"({"Entities":[{"ID":42,"Name":"A"},{"ID":42,"Name":"B"}]})");
 		Scene scene;
 		std::string error;
@@ -671,7 +671,7 @@ TEST_SUITE("Serialization")
 
 	TEST_CASE("Scene files save and load, preserving hierarchy order and settings")
 	{
-		BasaltTest::TempProject project("SceneFiles");
+		BrecciaTest::TempProject project("SceneFiles");
 		Ref<Scene> scene = CreateRef<Scene>("Level1");
 		Entity a = scene->CreateEntity("A");
 		Entity b = scene->CreateEntity("B");
@@ -705,7 +705,7 @@ TEST_SUITE("Serialization")
 
 	TEST_CASE("Loading reports malformed scenes with context")
 	{
-		BasaltTest::TempProject project("BadScenes");
+		BrecciaTest::TempProject project("BadScenes");
 		std::string error;
 
 		CHECK_FALSE(SceneSerializer::LoadScene(project.GetDirectory() / "missing.bscene", error));
@@ -730,7 +730,7 @@ TEST_SUITE("Serialization")
 
 	TEST_CASE("Scenes from before named physics layers load when their layer settings convert losslessly")
 	{
-		BasaltTest::TempProject project("LegacyLayers");
+		BrecciaTest::TempProject project("LegacyLayers");
 		std::string error;
 
 		// What every earlier build wrote for a RigidBody: an index and a full 32-bit or 16-bit mask.
@@ -745,7 +745,7 @@ TEST_SUITE("Serialization")
 		// Saving writes the new format.
 		const nlohmann::json saved = SceneSerializer::SerializeScene(*legacy);
 		CHECK(saved.dump().find("CollisionMask") == std::string::npos);
-		CHECK(BasaltTest::CountLogMessages(since, "before named physics layers") <= 1);
+		CHECK(BrecciaTest::CountLogMessages(since, "before named physics layers") <= 1);
 
 		// A mask that excluded layers has no equivalent without project layers.
 		project.WriteFile("masked.bscene", R"({"Entities":[{"ID":5,"Name":"Ghost","Components":{"RigidBody":{"Layer":1,"CollisionMask":3}}}]})");
@@ -760,7 +760,7 @@ TEST_SUITE("Serialization")
 
 	TEST_CASE("Prefabs save and instantiate with fresh UUIDs")
 	{
-		BasaltTest::TempProject project("Prefabs");
+		BrecciaTest::TempProject project("Prefabs");
 		Scene scene;
 		Entity root = scene.CreateEntity("Enemy");
 		root.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Dynamic;
@@ -1115,7 +1115,7 @@ TEST_SUITE("Serialization")
 
 	TEST_CASE("Joints inside a duplicated tree or prefab connect the copies")
 	{
-		BasaltTest::TempProject project("JointPrefab");
+		BrecciaTest::TempProject project("JointPrefab");
 		Scene scene;
 		Entity anchor = scene.CreateEntity("Anchor");
 		Entity chain = scene.CreateEntity("Chain");
@@ -1148,7 +1148,7 @@ TEST_SUITE("Serialization")
 
 	TEST_CASE("Joint entities inside a duplicated tree or prefab move the copied body")
 	{
-		BasaltTest::TempProject project("JointBodyPrefab");
+		BrecciaTest::TempProject project("JointBodyPrefab");
 		Scene scene;
 		Entity anchor = scene.CreateEntity("Anchor");
 		Entity rung = scene.CreateEntity("Rung");
@@ -1210,7 +1210,7 @@ TEST_SUITE("Serialization")
 
 	TEST_CASE("A prefab with joints spawned during play builds them between the new copies")
 	{
-		BasaltTest::TempProject project("JointPrefabPlay");
+		BrecciaTest::TempProject project("JointPrefabPlay");
 		Scene scene;
 		auto addBody = [](Entity entity, RigidBodyType type) {
 			entity.AddComponent<RigidBodyComponent>().Type = type;
@@ -1273,7 +1273,7 @@ TEST_SUITE("Scene loading")
 
 		// Scenes A and B share the manager (same ID, so it is skipped in B while the persistent one lives); each
 		// has its own level entity. B's manager has a child of its own that is skipped with it.
-		void WriteSwitchProject(const BasaltTest::TempProject& project)
+		void WriteSwitchProject(const BrecciaTest::TempProject& project)
 		{
 			project.WriteFile("Assets/Scripts/Manager.lua", R"(
 				local M = {}
@@ -1298,7 +1298,7 @@ TEST_SUITE("Scene loading")
 				return L
 			)");
 			project.WriteFile("Assets/Scenes/A.bscene", R"({
-				"Format": "BasaltScene", "Version": 1, "Name": "A",
+				"Format": "BrecciaScene", "Version": 1, "Name": "A",
 				"Renderer": { "Exposure": 3.0, "SSAOEnabled": false },
 				"Physics": { "Gravity": [0, -20, 0] },
 				"Entities": [
@@ -1308,7 +1308,7 @@ TEST_SUITE("Scene loading")
 				]
 			})");
 			project.WriteFile("Assets/Scenes/B.bscene", R"({
-				"Format": "BasaltScene", "Version": 1, "Name": "B",
+				"Format": "BrecciaScene", "Version": 1, "Name": "B",
 				"Physics": { "Gravity": [0, -1, 0] },
 				"Entities": [
 					{ "ID": 102, "Name": "OtherManagerChild", "Parent": 100, "Components": {} },
@@ -1321,20 +1321,20 @@ TEST_SUITE("Scene loading")
 			})");
 		}
 
-		using BasaltTest::Eval;
+		using BrecciaTest::Eval;
 
 	}
 
 	TEST_CASE("Scene.Load replaces the scene at the end of the frame and keeps persistent entities")
 	{
-		BasaltTest::TempProject project("SceneLoadSwitch");
+		BrecciaTest::TempProject project("SceneLoadSwitch");
 		WriteSwitchProject(project);
 		std::string error;
 		Ref<Scene> scene = SceneSerializer::LoadScene(project.GetDirectory() / "Assets/Scenes/A.bscene", error);
 		REQUIRE_MESSAGE(scene, error);
 		CHECK(scene->GetPath() == "Assets/Scenes/A.bscene");
 		scene->OnRuntimeStart();
-		scene->OnUpdate(BasaltTest::Step);
+		scene->OnUpdate(BrecciaTest::Step);
 		CHECK(Eval(*scene, "Scene.GetName() .. ' ' .. Scene.GetPath()") == "A Assets/Scenes/A.bscene");
 		const UUID managerID = 100;
 		CHECK(scene->IsPersistent(scene->GetEntityByUUID(101)));
@@ -1345,7 +1345,7 @@ TEST_SUITE("Scene loading")
 		CHECK(scene->HasPendingLoad());
 		CHECK(scene->FindEntityByName("LevelA"));
 		const auto ticksBefore = scene->GetScriptEngine()->GetInstanceField(scene->GetEntityByUUID(managerID), "Ticks");
-		scene->OnUpdate(BasaltTest::Step);
+		scene->OnUpdate(BrecciaTest::Step);
 
 		CHECK_FALSE(scene->HasPendingLoad());
 		CHECK(scene->GetName() == "B");
@@ -1366,7 +1366,7 @@ TEST_SUITE("Scene loading")
 
 		// The manager's state and timer carried over.
 		for (int i = 0; i < 6; i++)
-			scene->OnUpdate(BasaltTest::Step);
+			scene->OnUpdate(BrecciaTest::Step);
 		const auto ticksAfter = scene->GetScriptEngine()->GetInstanceField(scene->GetEntityByUUID(managerID), "Ticks");
 		REQUIRE(ticksBefore.has_value());
 		REQUIRE(ticksAfter.has_value());
@@ -1375,7 +1375,7 @@ TEST_SUITE("Scene loading")
 
 		// Loading A again: the persistent manager stays the only one.
 		CHECK(Eval(*scene, "Scene.Load('Assets/Scenes/A.bscene')") == "");
-		scene->OnUpdate(BasaltTest::Step);
+		scene->OnUpdate(BrecciaTest::Step);
 		CHECK(scene->FindEntitiesByName("Manager").size() == 1);
 		CHECK(scene->FindEntityByName("LevelA"));
 		CHECK_FALSE(scene->FindEntityByName("LevelB"));
@@ -1390,10 +1390,10 @@ TEST_SUITE("Scene loading")
 
 	TEST_CASE("Scene.Load rejects bad paths and invalid files without touching the playing scene")
 	{
-		BasaltTest::TempProject project("SceneLoadErrors");
+		BrecciaTest::TempProject project("SceneLoadErrors");
 		WriteSwitchProject(project);
 		project.WriteFile("Assets/Scenes/Broken.bscene", "{ not json");
-		project.WriteFile("Assets/Scenes/BadEntity.bscene", R"({ "Format": "BasaltScene", "Version": 1, "Entities": [ { "ID": 1, "Name": "X", "Parent": 77 } ] })");
+		project.WriteFile("Assets/Scenes/BadEntity.bscene", R"({ "Format": "BrecciaScene", "Version": 1, "Entities": [ { "ID": 1, "Name": "X", "Parent": 77 } ] })");
 		project.WriteFile("Assets/Scenes/Notes.txt", "{}");
 		std::string error;
 		Ref<Scene> scene = SceneSerializer::LoadScene(project.GetDirectory() / "Assets/Scenes/A.bscene", error);
@@ -1427,7 +1427,7 @@ TEST_SUITE("Scene loading")
 		CHECK_FALSE(scene->SetPersistent(scene->FindEntityByName("ManagerChild")));
 		// Normalized paths inside the project are fine.
 		CHECK(scene->RequestLoad("Assets/Scripts/../Scenes/B.bscene", error));
-		scene->OnUpdate(BasaltTest::Step);
+		scene->OnUpdate(BrecciaTest::Step);
 		CHECK(scene->GetPath() == "Assets/Scenes/B.bscene");
 		CHECK(scene->FindEntityByName("LevelB"));
 		scene->OnRuntimeStop();
@@ -1435,7 +1435,7 @@ TEST_SUITE("Scene loading")
 
 	TEST_CASE("Entities spawned by OnDestroy while a scene unloads are destroyed too")
 	{
-		BasaltTest::TempProject project("SceneLoadSpawnOnDestroy");
+		BrecciaTest::TempProject project("SceneLoadSpawnOnDestroy");
 		WriteSwitchProject(project);
 		project.WriteFile("Assets/Scripts/Spawner.lua", R"(
 			local S = {}
@@ -1452,7 +1452,7 @@ TEST_SUITE("Scene loading")
 		scene.OnRuntimeStart();
 		std::string error;
 		REQUIRE(scene.RequestLoad("Assets/Scenes/B.bscene", error));
-		scene.OnUpdate(BasaltTest::Step);
+		scene.OnUpdate(BrecciaTest::Step);
 		// Each unload pass spawns one more "Remains"; after MaxUnloadPasses the last one is kept, reported as a
 		// script error that names it.
 		CHECK(scene.FindEntitiesByName("Remains").size() == 1);
@@ -1466,7 +1466,7 @@ TEST_SUITE("Scene loading")
 
 	TEST_CASE("A persistent entity parented under the level still survives a load")
 	{
-		BasaltTest::TempProject project("SceneLoadPersistentParent");
+		BrecciaTest::TempProject project("SceneLoadPersistentParent");
 		WriteSwitchProject(project);
 		std::string error;
 		Ref<Scene> scene = SceneSerializer::LoadScene(project.GetDirectory() / "Assets/Scenes/A.bscene", error);
@@ -1483,7 +1483,7 @@ TEST_SUITE("Scene loading")
 		)") == "");
 		// Still marked, under a level that is not.
 		CHECK(scene->IsPersistent(scene->GetEntityByUUID(100)));
-		scene->OnUpdate(BasaltTest::Step);
+		scene->OnUpdate(BrecciaTest::Step);
 		Entity manager = scene->GetEntityByUUID(100);
 		REQUIRE(manager);
 		// Moved back to the root, where it was in the world, with its child.
@@ -1498,7 +1498,7 @@ TEST_SUITE("Scene loading")
 
 	TEST_CASE("Loads requested while a load is applied run at the end of the next update")
 	{
-		BasaltTest::TempProject project("SceneLoadChained");
+		BrecciaTest::TempProject project("SceneLoadChained");
 		WriteSwitchProject(project);
 		project.WriteFile("Assets/Scripts/Redirect.lua", R"(
 			local R = {}
@@ -1510,7 +1510,7 @@ TEST_SUITE("Scene loading")
 			function L:OnDestroy() Scene.Load("Assets/Scenes/Splash.bscene") end
 			return L
 		)");
-		project.WriteFile("Assets/Scenes/Splash.bscene", R"({ "Format": "BasaltScene", "Version": 1,
+		project.WriteFile("Assets/Scenes/Splash.bscene", R"({ "Format": "BrecciaScene", "Version": 1,
 			"Entities": [ { "ID": 400, "Name": "Splash", "Parent": 0, "Components": { "Script": { "Script": "Assets/Scripts/Redirect.lua" } } } ] })");
 
 		// A splash screen whose OnCreate moves on to the next scene.
@@ -1519,10 +1519,10 @@ TEST_SUITE("Scene loading")
 			scene.OnRuntimeStart();
 			std::string error;
 			REQUIRE(scene.RequestLoad("Assets/Scenes/Splash.bscene", error));
-			scene.OnUpdate(BasaltTest::Step);
+			scene.OnUpdate(BrecciaTest::Step);
 			CHECK(scene.GetName() == "Splash");
 			CHECK(scene.HasPendingLoad());
-			scene.OnUpdate(BasaltTest::Step);
+			scene.OnUpdate(BrecciaTest::Step);
 			CHECK(scene.GetName() == "B");
 			CHECK_FALSE(scene.HasPendingLoad());
 			CHECK(scene.GetScriptEngine()->GetErrors().empty());
@@ -1535,10 +1535,10 @@ TEST_SUITE("Scene loading")
 			scene.OnRuntimeStart();
 			std::string error;
 			REQUIRE(scene.RequestLoad("Assets/Scenes/A.bscene", error));
-			scene.OnUpdate(BasaltTest::Step);
+			scene.OnUpdate(BrecciaTest::Step);
 			CHECK(scene.GetName() == "A");
 			CHECK(scene.HasPendingLoad());
-			scene.OnUpdate(BasaltTest::Step);
+			scene.OnUpdate(BrecciaTest::Step);
 			CHECK(scene.GetName() == "Splash");
 			scene.OnRuntimeStop();
 		}
@@ -1546,9 +1546,9 @@ TEST_SUITE("Scene loading")
 
 	TEST_CASE("A loaded scene starts its particles, cameras and scripts like a played one")
 	{
-		BasaltTest::TempProject project("SceneLoadStart");
+		BrecciaTest::TempProject project("SceneLoadStart");
 		WriteSwitchProject(project);
-		project.WriteFile("Assets/Scenes/Full.bscene", R"({ "Format": "BasaltScene", "Version": 1, "Name": "Named Differently",
+		project.WriteFile("Assets/Scenes/Full.bscene", R"({ "Format": "BrecciaScene", "Version": 1, "Name": "Named Differently",
 			"Entities": [
 				{ "ID": 500, "Name": "Sparks", "Parent": 0, "Components": { "ParticleEmitter": { "PlayOnStart": true } } },
 				{ "ID": 501, "Name": "Idle", "Parent": 0, "Components": { "ParticleEmitter": { "PlayOnStart": false } } },
@@ -1562,7 +1562,7 @@ TEST_SUITE("Scene loading")
 		scene.OnRuntimeStart();
 		std::string error;
 		REQUIRE(scene.RequestLoad("Assets/Scenes/Full.bscene", error));
-		scene.OnUpdate(BasaltTest::Step);
+		scene.OnUpdate(BrecciaTest::Step);
 
 		// The file's "Name" wins over its file name; the path is the file's.
 		CHECK(scene.GetName() == "Named Differently");
@@ -1580,14 +1580,14 @@ TEST_SUITE("Scene loading")
 
 	TEST_CASE("Reloading a scene restarts it, deterministically")
 	{
-		BasaltTest::TempProject project("SceneLoadReload");
+		BrecciaTest::TempProject project("SceneLoadReload");
 		WriteSwitchProject(project);
 		project.WriteFile("Assets/Scripts/Ticker.lua", R"(
 			local T = {}
 			function T:OnCreate() self.Timer = Timer.Every(0.05, function() Ticks = (Ticks or 0) + 1 end) Tickers = (Tickers or {}) table.insert(Tickers, self.Timer) end
 			return T
 		)");
-		project.WriteFile("Assets/Scenes/Ball.bscene", R"({ "Format": "BasaltScene", "Version": 1,
+		project.WriteFile("Assets/Scenes/Ball.bscene", R"({ "Format": "BrecciaScene", "Version": 1,
 			"Entities": [
 				{ "ID": 600, "Name": "Floor", "Parent": 0, "Components": { "RigidBody": {}, "BoxCollider": { "HalfExtents": [5, 0.5, 5] } } },
 				{ "ID": 601, "Name": "Ball", "Parent": 0, "Components": { "Transform": { "Translation": [0, 3, 0] }, "RigidBody": { "Type": "Dynamic" }, "SphereCollider": {}, "Script": { "Script": "Assets/Scripts/Ticker.lua" } } }
@@ -1601,12 +1601,12 @@ TEST_SUITE("Scene loading")
 			for (int reload = 0; reload < 2; reload++)
 			{
 				for (int i = 0; i < 30; i++)
-					scene->OnUpdate(BasaltTest::Step);
+					scene->OnUpdate(BrecciaTest::Step);
 				REQUIRE(scene->RequestLoad("Assets/Scenes/Ball.bscene", error));
-				scene->OnUpdate(BasaltTest::Step);
+				scene->OnUpdate(BrecciaTest::Step);
 			}
 			for (int i = 0; i < 60; i++)
-				scene->OnUpdate(BasaltTest::Step);
+				scene->OnUpdate(BrecciaTest::Step);
 			// The same two entities each time; the old instances' timers ended with them.
 			CHECK(scene->GetEntityCount() == 2);
 			CHECK(Eval(*scene, "#Tickers .. ' ' .. tostring(Tickers[1]:IsActive()) .. tostring(Tickers[2]:IsActive()) .. tostring(Tickers[3]:IsActive())") == "3 falsefalsetrue");
@@ -1626,7 +1626,7 @@ TEST_SUITE("Scene loading")
 
 	TEST_CASE("Stopping play drops a pending load; a destroyed persistent entity is loaded again")
 	{
-		BasaltTest::TempProject project("SceneLoadStop");
+		BrecciaTest::TempProject project("SceneLoadStop");
 		WriteSwitchProject(project);
 		std::string error;
 		Ref<Scene> scene = SceneSerializer::LoadScene(project.GetDirectory() / "Assets/Scenes/A.bscene", error);
@@ -1636,13 +1636,13 @@ TEST_SUITE("Scene loading")
 		scene->OnRuntimeStop();
 		CHECK_FALSE(scene->HasPendingLoad());
 		scene->OnRuntimeStart();
-		scene->OnUpdate(BasaltTest::Step);
+		scene->OnUpdate(BrecciaTest::Step);
 		CHECK(scene->GetName() == "A");
 
 		// The persistent manager is destroyed; B's copy is then a new entity, not skipped.
 		scene->DestroyEntity(scene->GetEntityByUUID(100));
 		REQUIRE(scene->RequestLoad("Assets/Scenes/B.bscene", error));
-		scene->OnUpdate(BasaltTest::Step);
+		scene->OnUpdate(BrecciaTest::Step);
 		REQUIRE(scene->GetEntityByUUID(100));
 		CHECK(scene->GetEntityByUUID(102));
 		CHECK(Eval(*scene, "ManagerCreates") == "2");
@@ -1651,12 +1651,12 @@ TEST_SUITE("Scene loading")
 
 	TEST_CASE("Saving records the scene's path; files outside the project keep an absolute one")
 	{
-		BasaltTest::TempProject project("SceneLoadPaths");
+		BrecciaTest::TempProject project("SceneLoadPaths");
 		Scene scene;
 		std::string error;
 		REQUIRE(SceneSerializer::SaveScene(scene, project.GetDirectory() / "Assets/Scenes/Saved.bscene", error));
 		CHECK(scene.GetPath() == "Assets/Scenes/Saved.bscene");
-		BasaltTest::TempDirectory outside("SceneLoadPathsOutside");
+		BrecciaTest::TempDirectory outside("SceneLoadPathsOutside");
 		const std::filesystem::path elsewhere = outside.GetPath() / "Elsewhere.bscene";
 		REQUIRE(SceneSerializer::SaveScene(scene, elsewhere, error));
 		CHECK(scene.GetPath() == elsewhere.lexically_normal().generic_string());
@@ -1664,7 +1664,7 @@ TEST_SUITE("Scene loading")
 
 	TEST_CASE("A persistent entity under another persistent entity stays where it is")
 	{
-		BasaltTest::TempProject project("SceneLoadNestedPersistent");
+		BrecciaTest::TempProject project("SceneLoadNestedPersistent");
 		WriteSwitchProject(project);
 		std::string error;
 		Ref<Scene> scene = SceneSerializer::LoadScene(project.GetDirectory() / "Assets/Scenes/A.bscene", error);
@@ -1678,7 +1678,7 @@ TEST_SUITE("Scene loading")
 			child:SetParent(keeper)
 			Scene.Load("Assets/Scenes/B.bscene")
 		)") == "");
-		scene->OnUpdate(BasaltTest::Step);
+		scene->OnUpdate(BrecciaTest::Step);
 		Entity child = scene->GetEntityByUUID(101);
 		REQUIRE(child);
 		CHECK(child.GetParent() == scene->FindEntityByName("Keeper"));
@@ -1691,7 +1691,7 @@ TEST_SUITE("Scene diff")
 	TEST_CASE("DiffScenes matches entities by ID and reports field paths")
 	{
 		using json = nlohmann::json;
-		const json from = { { "Format", "BasaltScene" }, { "Version", 1 }, { "Name", "A" }, { "Entities", { { { "ID", 1 }, { "Name", "One" }, { "Parent", 0 }, { "Components", { { "Transform", { { "Translation", { 0.0, 0.0, 0.0 } } } } } } }, { { "ID", 2 }, { "Name", "Two" }, { "Parent", 0 }, { "Components", json::object() } } } } };
+		const json from = { { "Format", "BrecciaScene" }, { "Version", 1 }, { "Name", "A" }, { "Entities", { { { "ID", 1 }, { "Name", "One" }, { "Parent", 0 }, { "Components", { { "Transform", { { "Translation", { 0.0, 0.0, 0.0 } } } } } } }, { { "ID", 2 }, { "Name", "Two" }, { "Parent", 0 }, { "Components", json::object() } } } } };
 		json to = from;
 		to["Version"] = 2;
 		to["Name"] = "B";
@@ -1866,7 +1866,7 @@ TEST_SUITE("Serialization")
 
 TEST_CASE("UI navigation and widget callback references remap in duplicated trees and prefabs")
 {
-	BasaltTest::TempProject project("UIReferencePrefab");
+	BrecciaTest::TempProject project("UIReferencePrefab");
 	Scene scene;
 	Entity external = scene.CreateEntity("External");
 	Entity root = scene.CreateEntity("UI root");

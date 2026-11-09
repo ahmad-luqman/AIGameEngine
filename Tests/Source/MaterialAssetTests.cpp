@@ -1,19 +1,19 @@
 #include <doctest/doctest.h>
 #include <spdlog/fmt/fmt.h>
 
-#include <Basalt/Asset/AssetKey.h>
-#include <Basalt/Asset/AssetManager.h>
-#include <Basalt/Asset/AssetRegistry.h>
-#include <Basalt/Asset/ImageUtils.h>
-#include <Basalt/Asset/MaterialAsset.h>
-#include <Basalt/Asset/Thumbnails.h>
-#include <Basalt/Automation/CommandRegistry.h>
-#include <Basalt/Core/JobSystem.h>
-#include <Basalt/Core/JsonUtils.h>
-#include <Basalt/Core/Log.h>
-#include <Basalt/Project/ProjectValidator.h>
-#include <Basalt/Scene/ComponentRegistry.h>
-#include <Basalt/Scene/SceneSerializer.h>
+#include <Breccia/Asset/AssetKey.h>
+#include <Breccia/Asset/AssetManager.h>
+#include <Breccia/Asset/AssetRegistry.h>
+#include <Breccia/Asset/ImageUtils.h>
+#include <Breccia/Asset/MaterialAsset.h>
+#include <Breccia/Asset/Thumbnails.h>
+#include <Breccia/Automation/CommandRegistry.h>
+#include <Breccia/Core/JobSystem.h>
+#include <Breccia/Core/JsonUtils.h>
+#include <Breccia/Core/Log.h>
+#include <Breccia/Project/ProjectValidator.h>
+#include <Breccia/Scene/ComponentRegistry.h>
+#include <Breccia/Scene/SceneSerializer.h>
 
 #include "AnimationTestUtils.h"
 #include "AutomationTestUtils.h"
@@ -26,13 +26,13 @@
 #include <limits>
 #include <set>
 
-using namespace Basalt;
+using namespace Breccia;
 using json = nlohmann::json;
 using AnimationTest::ClearAssetCache;
-using BasaltTest::Contains;
-using BasaltTest::Run;
-using BasaltTest::RunError;
-using BasaltTest::TempProject;
+using BrecciaTest::Contains;
+using BrecciaTest::Run;
+using BrecciaTest::RunError;
+using BrecciaTest::TempProject;
 
 namespace {
 
@@ -108,7 +108,7 @@ namespace {
 	{
 		const auto root = project.GetDirectory() / "Assets" / "Models";
 		std::filesystem::create_directories(root);
-		BasaltTest::WriteSphereGltf(root);
+		BrecciaTest::WriteSphereGltf(root);
 		WritePixel("Assets/Models/Paint.png");
 		json data = ParseJson(*FileSystem::ReadTextFile(root / "Sphere.gltf"));
 		data["extensionsUsed"] = { "KHR_texture_transform" };
@@ -409,8 +409,8 @@ TEST_SUITE("MaterialAsset")
 		const auto unresolved = AssetManager::GetMaterial("Assets/Materials/Rock.bmaterial");
 		REQUIRE(unresolved);
 		CHECK(AssetRegistry::IsUnresolvedKey(unresolved->AlbedoMap));
-		CHECK(BasaltTest::CountLogMessages(since, "unresolved asset UUID") == 1);
-		CHECK(BasaltTest::CountLogMessages(since, "(hint: Assets/Textures/Rock.png)") == 1);
+		CHECK(BrecciaTest::CountLogMessages(since, "unresolved asset UUID") == 1);
+		CHECK(BrecciaTest::CountLogMessages(since, "(hint: Assets/Textures/Rock.png)") == 1);
 		const auto report = ValidateProject(*Project::GetActive());
 		CHECK(std::any_of(report.GetIssues().begin(), report.GetIssues().end(), [](const ValidationIssue& issue) { return issue.File == "Assets/Materials/Rock.bmaterial" && issue.Message.find("unresolved asset UUID") != std::string::npos; }));
 		WritePixel(texture);
@@ -458,7 +458,7 @@ TEST_SUITE("MaterialAsset")
 		const auto since = Log::GetHistory().GetTotalCount();
 		CHECK_FALSE(AssetManager::GetMaterial(path));
 		CHECK_FALSE(AssetManager::GetMaterial(path));
-		CHECK(BasaltTest::CountLogMessages(since, "Clearcoat 9 must be in [0, 1]") == 1);
+		CHECK(BrecciaTest::CountLogMessages(since, "Clearcoat 9 must be in [0, 1]") == 1);
 		CHECK(AssetManager::GetError(path).find("Clearcoat") != std::string::npos);
 		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath(path), R"({"Version": 1, "Metallic": 1})"));
 		AssetManager::ReloadChanged({ path });

@@ -3,19 +3,19 @@
 
 #include <doctest/doctest.h>
 
-#include <Basalt/Core/FileSystem.h>
-#include <Basalt/Math/Math.h>
-#include <Basalt/Scene/ComponentRegistry.h>
-#include <Basalt/Scene/Prefab.h>
-#include <Basalt/Scene/SceneSerializer.h>
-#include <Basalt/Scripting/LuaJson.h>
+#include <Breccia/Core/FileSystem.h>
+#include <Breccia/Math/Math.h>
+#include <Breccia/Scene/ComponentRegistry.h>
+#include <Breccia/Scene/Prefab.h>
+#include <Breccia/Scene/SceneSerializer.h>
+#include <Breccia/Scripting/LuaJson.h>
 
 #include <glm/gtc/quaternion.hpp>
 
 #include <functional>
 
-using namespace Basalt;
-using namespace BasaltTest;
+using namespace Breccia;
+using namespace BrecciaTest;
 using json = nlohmann::json;
 
 namespace {
@@ -43,12 +43,12 @@ namespace {
 
 		json Run(const std::string& command, const json& params = json::object())
 		{
-			return BasaltTest::Run(Commands, Session, command, params);
+			return BrecciaTest::Run(Commands, Session, command, params);
 		}
 
 		std::string RunError(const std::string& command, const json& params = json::object())
 		{
-			return BasaltTest::RunError(Commands, Session, command, params);
+			return BrecciaTest::RunError(Commands, Session, command, params);
 		}
 
 		Entity EntityFrom(const json& result)
@@ -77,7 +77,7 @@ namespace {
 		{
 			json source;
 			std::string error;
-			REQUIRE_MESSAGE(Prefab::ReadSource(Basalt::Project::ResolvePath(Path), source, error), error);
+			REQUIRE_MESSAGE(Prefab::ReadSource(Breccia::Project::ResolvePath(Path), source, error), error);
 			return source;
 		}
 
@@ -104,7 +104,7 @@ namespace {
 		// Writes the prefab file directly and reports the change, as the file watcher does for an external edit.
 		AssetReloadReport WriteExternally(const std::function<void(json& file)>& edit)
 		{
-			json file = ParseJson(*FileSystem::ReadTextFile(Basalt::Project::ResolvePath(Path)));
+			json file = ParseJson(*FileSystem::ReadTextFile(Breccia::Project::ResolvePath(Path)));
 			edit(file);
 			Directory.WriteFile(Path, file.dump());
 			return Session.ReloadAssets({ { Path, FileChangeType::Modified } });
@@ -300,7 +300,7 @@ TEST_SUITE("PrefabEditing")
 		PrefabFixture f;
 		auto scene = f.Session.GetScene();
 		// A prefab written before source IDs were fresh: its IDs are the authoring entities' UUIDs.
-		f.Directory.WriteFile(f.Path, json{ { "Format", "BasaltPrefab" }, { "Version", 3 }, { "Entities", SceneSerializer::SerializeEntityTree(f.Source) } }.dump());
+		f.Directory.WriteFile(f.Path, json{ { "Format", "BrecciaPrefab" }, { "Version", 3 }, { "Entities", SceneSerializer::SerializeEntityTree(f.Source) } }.dump());
 		Entity instance = f.Instantiate();
 		Entity child = PrefabFixture::ChildNamed(instance, "Child");
 		child.AddComponent<BoneAttachmentComponent>().Target = f.Source.GetUUID();
@@ -459,7 +459,7 @@ TEST_SUITE("PrefabEditing")
 
 		f.Run("prefab.open", { { "path", f.Path } });
 		const auto edit = f.Session.GetEditScene();
-		const std::string original = *FileSystem::ReadTextFile(Basalt::Project::ResolvePath(f.Path));
+		const std::string original = *FileSystem::ReadTextFile(Breccia::Project::ResolvePath(f.Path));
 		f.Directory.WriteFile(f.Path, original + " ");
 		CHECK(Contains(f.RunError("prefab.save"), "changed on disk"));
 		CHECK(f.Session.GetEditScene() == edit);
@@ -553,7 +553,7 @@ TEST_SUITE("PrefabEditing")
 		first.AddComponent<BoneAttachmentComponent>().Target = added.GetUUID();
 		scene->DestroyEntity(PrefabFixture::ChildNamed(first, "Child"));
 		// Someone else edited the file meanwhile; Apply merges into it rather than overwriting it.
-		json file = ParseJson(*FileSystem::ReadTextFile(Basalt::Project::ResolvePath(f.Path)));
+		json file = ParseJson(*FileSystem::ReadTextFile(Breccia::Project::ResolvePath(f.Path)));
 		file["Entities"][0]["Name"] = "Renamed";
 		f.Directory.WriteFile(f.Path, file.dump());
 		const json result = f.Run("prefab.apply", { { "entity", IdOf(first) } });
@@ -769,7 +769,7 @@ TEST_SUITE("PrefabEditing")
 			CHECK_FALSE(Contains(issue["message"].get<std::string>(), "predate its last save"));
 
 		// A deleted prefab: opening reports each instance, changes nothing and validation adds no outdated warning.
-		std::filesystem::remove(Basalt::Project::ResolvePath(f.Path));
+		std::filesystem::remove(Breccia::Project::ResolvePath(f.Path));
 		const json missing = f.Run("scene.open", { { "path", "Assets/Main.bscene" } });
 		CHECK(missing["warnings"].size() == 2);
 		CHECK_FALSE(f.Session.IsDirty());
@@ -803,7 +803,7 @@ TEST_SUITE("PrefabEditing")
 		PrefabFixture f;
 		const std::string badPath = "Assets/Prefabs/Bad.bprefab";
 		auto writeBadPrefab = [&](const json& entities, int version = 3) {
-			f.Directory.WriteFile(badPath, json{ { "Format", "BasaltPrefab" }, { "Version", version }, { "Entities", entities } }.dump());
+			f.Directory.WriteFile(badPath, json{ { "Format", "BrecciaPrefab" }, { "Version", version }, { "Entities", entities } }.dump());
 		};
 		const auto before = f.Session.GetScene()->GetEntityCount();
 		const json root = { { "ID", 10 }, { "Name", "Root" }, { "Parent", 0 }, { "Components", json::object() } };
@@ -818,8 +818,8 @@ TEST_SUITE("PrefabEditing")
 		f.RunError("prefab.instantiate", { { "path", badPath } });
 		writeBadPrefab(json::array({ root }), 99);
 		CHECK(Contains(f.RunError("prefab.instantiate", { { "path", badPath } }), "newer than the supported version"));
-		f.Directory.WriteFile(badPath, json{ { "Format", "BasaltScene" }, { "Entities", json::array({ root }) } }.dump());
-		CHECK(Contains(f.RunError("prefab.instantiate", { { "path", badPath } }), "expected \"BasaltPrefab\""));
+		f.Directory.WriteFile(badPath, json{ { "Format", "BrecciaScene" }, { "Entities", json::array({ root }) } }.dump());
+		CHECK(Contains(f.RunError("prefab.instantiate", { { "path", badPath } }), "expected \"BrecciaPrefab\""));
 		// These pass the structure checks and fail while creating entities: nothing created is left behind.
 		writeBadPrefab(json::array({ root, child, json{ { "ID", 13 }, { "Name", "Lost" }, { "Parent", 999 } } }));
 		CHECK(Contains(f.RunError("prefab.instantiate", { { "path", badPath } }), "unknown parent"));
@@ -854,7 +854,7 @@ TEST_SUITE("PrefabEditing")
 		CHECK(instance.GetComponent<PointLightComponent>().Radius == 42);
 		CHECK(f.Session.IsDirty());
 
-		json file = ParseJson(*FileSystem::ReadTextFile(Basalt::Project::ResolvePath(f.Path)));
+		json file = ParseJson(*FileSystem::ReadTextFile(Breccia::Project::ResolvePath(f.Path)));
 		file["Entities"][0]["Components"]["PointLight"]["Radius"] = 43;
 		CHECK(f.Run("asset.write", { { "path", f.Path }, { "content", file.dump() } })["prefabInstances"] == 2);
 		file["Entities"][0]["Components"]["PointLight"]["Radius"] = -1;
@@ -864,7 +864,7 @@ TEST_SUITE("PrefabEditing")
 		CHECK(instance.GetComponent<PointLightComponent>().Radius == 43);
 
 		// A deleted prefab leaves its instances as they are, with a warning.
-		std::filesystem::remove(Basalt::Project::ResolvePath(f.Path));
+		std::filesystem::remove(Breccia::Project::ResolvePath(f.Path));
 		const auto removed = f.Session.ReloadAssets({ { f.Path, FileChangeType::Removed } });
 		CHECK(removed.PrefabInstances == 0);
 		REQUIRE(removed.PrefabErrors.size() == 2);
@@ -1107,7 +1107,7 @@ TEST_SUITE("PrefabEditing")
 		Entity otherInstance = f.EntityFrom(f.Run("prefab.instantiate", { { "path", "Assets/Prefabs/Other.bprefab" } }));
 		json otherSource;
 		std::string error;
-		REQUIRE(Prefab::ReadSource(Basalt::Project::ResolvePath("Assets/Prefabs/Other.bprefab"), otherSource, error));
+		REQUIRE(Prefab::ReadSource(Breccia::Project::ResolvePath("Assets/Prefabs/Other.bprefab"), otherSource, error));
 		instance.GetComponent<PointLightComponent>().Radius = 23;
 		const json result = f.Run("prefab.create", { { "entity", IdOf(instance) }, { "path", "Assets/Prefabs/Other.bprefab" } });
 		CHECK(result["linked"] == false);
@@ -1115,7 +1115,7 @@ TEST_SUITE("PrefabEditing")
 		CHECK(Contains(result["warnings"][0].get<std::string>(), "stays an instance of Assets/Prefabs/Test.bprefab"));
 		CHECK(instance.GetComponent<PrefabComponent>().Prefab == f.Path);
 		json rewritten;
-		REQUIRE(Prefab::ReadSource(Basalt::Project::ResolvePath("Assets/Prefabs/Other.bprefab"), rewritten, error));
+		REQUIRE(Prefab::ReadSource(Breccia::Project::ResolvePath("Assets/Prefabs/Other.bprefab"), rewritten, error));
 		CHECK(rewritten[0]["ID"] == otherSource[0]["ID"]);
 		CHECK(otherInstance.GetComponent<PointLightComponent>().Radius == 23);
 	}
@@ -1294,15 +1294,15 @@ TEST_SUITE("PrefabEditing")
 		PrefabFixture f;
 		f.Directory.WriteFile("Assets/Script.lua", "return {}");
 		const json record = { { "Name", "NoID" }, { "Parent", 0 }, { "Components", { { "Script", { { "Script", "Assets/Script.lua" } } } } } };
-		json file = { { "Format", "BasaltScene" }, { "Version", 3 }, { "Entities", json::array({ { { "ID", 5 }, { "Name", "Holder" }, { "Parent", 0 }, { "Components", { { "Prefab", { { "Prefab", f.Path }, { "Members", { { "9", 5 } } }, { "Baseline", { { "9", record } } } } } } } } }) } };
+		json file = { { "Format", "BrecciaScene" }, { "Version", 3 }, { "Entities", json::array({ { { "ID", 5 }, { "Name", "Holder" }, { "Parent", 0 }, { "Components", { { "Prefab", { { "Prefab", f.Path }, { "Members", { { "9", 5 } } }, { "Baseline", { { "9", record } } } } } } } } }) } };
 		f.Directory.WriteFile("Assets/Broken.bscene", file.dump());
 		// The record has no ID, which the migration never reads.
 		f.Run("asset.move", { { "from", "Assets/Script.lua" }, { "to", "Assets/Moved.lua" } });
-		CHECK(Contains(*FileSystem::ReadTextFile(Basalt::Project::ResolvePath("Assets/Broken.bscene")), "\"UUID\""));
+		CHECK(Contains(*FileSystem::ReadTextFile(Breccia::Project::ResolvePath("Assets/Broken.bscene")), "\"UUID\""));
 		file["Entities"][0]["Components"]["Prefab"]["Baseline"]["9"] = 7;
 		f.Directory.WriteFile("Assets/Broken.bscene", file.dump());
 		CHECK(Contains(f.RunError("asset.move", { { "from", "Assets/Moved.lua" }, { "to", "Assets/Again.lua" } }), "is not an entity record"));
-		CHECK(std::filesystem::exists(Basalt::Project::ResolvePath("Assets/Moved.lua")));
+		CHECK(std::filesystem::exists(Breccia::Project::ResolvePath("Assets/Moved.lua")));
 	}
 
 	TEST_CASE("prefab.create leaves trees unlinked while a prefab is open or the game runs")

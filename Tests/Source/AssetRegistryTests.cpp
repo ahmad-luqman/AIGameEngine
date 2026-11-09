@@ -1,15 +1,15 @@
 #include <doctest/doctest.h>
 
-#include <Basalt/Asset/AssetManager.h>
-#include <Basalt/Asset/AssetRegistry.h>
-#include <Basalt/Asset/MeshImporter.h>
-#include <Basalt/Asset/MeshOptimizer.h>
-#include <Basalt/Asset/Thumbnails.h>
-#include <Basalt/Core/FileSystem.h>
-#include <Basalt/Core/JsonUtils.h>
-#include <Basalt/Project/ProjectValidator.h>
-#include <Basalt/Scene/ComponentRegistry.h>
-#include <Basalt/Scene/SceneSerializer.h>
+#include <Breccia/Asset/AssetManager.h>
+#include <Breccia/Asset/AssetRegistry.h>
+#include <Breccia/Asset/MeshImporter.h>
+#include <Breccia/Asset/MeshOptimizer.h>
+#include <Breccia/Asset/Thumbnails.h>
+#include <Breccia/Core/FileSystem.h>
+#include <Breccia/Core/JsonUtils.h>
+#include <Breccia/Project/ProjectValidator.h>
+#include <Breccia/Scene/ComponentRegistry.h>
+#include <Breccia/Scene/SceneSerializer.h>
 
 #include "AutomationTestUtils.h"
 #include "TestUtils.h"
@@ -22,7 +22,7 @@
 #include <set>
 #include <span>
 
-using namespace Basalt;
+using namespace Breccia;
 using json = nlohmann::json;
 
 namespace {
@@ -120,7 +120,7 @@ TEST_SUITE("AssetPipeline")
 
 	TEST_CASE("UUID resolution survives restart and paired external moves and never substitutes a hint")
 	{
-		BasaltTest::TempProject project("AssetIdentity");
+		BrecciaTest::TempProject project("AssetIdentity");
 		auto& assets = Project::GetActive()->GetAssets();
 		std::string error;
 		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/a.lua"), "return {}"));
@@ -151,7 +151,7 @@ TEST_SUITE("AssetPipeline")
 
 	TEST_CASE("Registry rejects duplicates, corrupt sidecars, escapes and occupied move destinations")
 	{
-		BasaltTest::TempProject project("AssetConflicts");
+		BrecciaTest::TempProject project("AssetConflicts");
 		auto& assets = Project::GetActive()->GetAssets();
 		std::string error;
 		for (const auto* name : { "Assets/a.lua", "Assets/b.lua" })
@@ -177,7 +177,7 @@ TEST_SUITE("AssetPipeline")
 
 	TEST_CASE("Symlink aliases cannot move or delete their target assets")
 	{
-		BasaltTest::TempProject project("AssetSymlinks");
+		BrecciaTest::TempProject project("AssetSymlinks");
 		auto& assets = Project::GetActive()->GetAssets();
 		std::string error;
 		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/real.lua"), "return {}"));
@@ -211,7 +211,7 @@ TEST_SUITE("AssetPipeline")
 
 	TEST_CASE("Scene and prefab persistence use identity while snapshots stay path based")
 	{
-		BasaltTest::TempProject project("AssetPersistence");
+		BrecciaTest::TempProject project("AssetPersistence");
 		std::string error;
 		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/tex.png"), "texture"));
 		Scene scene;
@@ -245,10 +245,10 @@ TEST_SUITE("AssetPipeline")
 
 	TEST_CASE("Move commands migrate legacy disk references and preserve IDs and open scene edits")
 	{
-		BasaltTest::TempProject project("AssetCommands");
+		BrecciaTest::TempProject project("AssetCommands");
 		CommandRegistry registry;
 		AutomationSession session;
-		using BasaltTest::Run;
+		using BrecciaTest::Run;
 		const auto from = "Assets/file.lua";
 		Run(registry, session, "asset.write", { { "path", from }, { "content", "return {}" } });
 		Run(registry, session, "scene.new", { { "name", "Identity" }, { "empty", true } });
@@ -482,7 +482,7 @@ TEST_SUITE("AssetPipeline")
 
 	TEST_CASE("Unrelated corrupt metadata does not lock out authoring or prefab spawning")
 	{
-		BasaltTest::TempProject project("AssetDiagnostics");
+		BrecciaTest::TempProject project("AssetDiagnostics");
 		std::string error;
 		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/bad.png"), "x"));
 		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/bad.png.meta"), "foreign metadata"));
@@ -502,7 +502,7 @@ TEST_SUITE("AssetPipeline")
 
 	TEST_CASE("Legacy references outside Assets and literal hash filenames remain saveable")
 	{
-		BasaltTest::TempProject project("AssetLegacyPaths");
+		BrecciaTest::TempProject project("AssetLegacyPaths");
 		Scene scene;
 		auto entity = scene.CreateEntity("Legacy");
 		auto& material = entity.AddComponent<MaterialComponent>();
@@ -525,10 +525,10 @@ TEST_SUITE("AssetPipeline")
 
 	TEST_CASE("Start scene IDs survive paired moves and remain repairable when unresolved")
 	{
-		BasaltTest::TempProject project("StartSceneIdentity");
+		BrecciaTest::TempProject project("StartSceneIdentity");
 		CommandRegistry registry;
 		AutomationSession session;
-		using BasaltTest::Run;
+		using BrecciaTest::Run;
 		Run(registry, session, "scene.new", { { "name", "Start" }, { "empty", true } });
 		Run(registry, session, "scene.save", { { "path", "Assets/Scenes/Start.bscene" } });
 		Run(registry, session, "project.set", { { "startScene", "Assets/Scenes/Start.bscene" } });
@@ -558,11 +558,11 @@ TEST_SUITE("AssetPipeline")
 
 	TEST_CASE("Failed moves preserve documents and embedded image moves retarget disk and open references")
 	{
-		BasaltTest::TempProject project("MoveFailures");
+		BrecciaTest::TempProject project("MoveFailures");
 		CommandRegistry registry;
 		AutomationSession session;
-		using BasaltTest::Run;
-		using BasaltTest::RunError;
+		using BrecciaTest::Run;
+		using BrecciaTest::RunError;
 		Run(registry, session, "scene.new", { { "empty", true } });
 		Run(registry, session, "entity.create", { { "name", "Model" }, { "components", { { "Material", { { "AlbedoMap", "./Assets/model.glb#image/0" } } } } } });
 		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/model.glb"), "binary"));
@@ -585,15 +585,15 @@ TEST_SUITE("AssetPipeline")
 
 	TEST_CASE("Deletion removes identity so a replacement file cannot inherit it")
 	{
-		BasaltTest::TempProject project("AssetDeletion");
+		BrecciaTest::TempProject project("AssetDeletion");
 		CommandRegistry registry;
 		AutomationSession session;
-		using BasaltTest::Run;
+		using BrecciaTest::Run;
 		Run(registry, session, "asset.write", { { "path", "Assets/deleted.lua" }, { "content", "return {}" } });
 		const auto old = Run(registry, session, "asset.id", { { "path", "Assets/deleted.lua" } })["uuid"];
 		Run(registry, session, "asset.delete", { { "path", "Assets/deleted.lua" } });
 		CHECK_FALSE(FileSystem::Exists(Project::ResolvePath("Assets/deleted.lua.meta")));
-		CHECK_FALSE(BasaltTest::RunError(registry, session, "asset.resolve", { { "uuid", old } }).empty());
+		CHECK_FALSE(BrecciaTest::RunError(registry, session, "asset.resolve", { { "uuid", old } }).empty());
 		Run(registry, session, "asset.write", { { "path", "Assets/deleted.lua" }, { "content", "replacement" } });
 		CHECK(Run(registry, session, "asset.id", { { "path", "Assets/deleted.lua" } })["uuid"] != old);
 		CHECK(Run(registry, session, "asset.refresh")["changed"].empty());
@@ -601,7 +601,7 @@ TEST_SUITE("AssetPipeline")
 
 	TEST_CASE("UUID prefab thumbnail dependencies follow moved assets")
 	{
-		BasaltTest::TempProject project("UUIDThumbnails");
+		BrecciaTest::TempProject project("UUIDThumbnails");
 		Scene scene;
 		auto entity = scene.CreateEntity("Preview");
 		entity.AddComponent<MaterialComponent>().AlbedoMap = "Assets/image.png";
@@ -616,13 +616,13 @@ TEST_SUITE("AssetPipeline")
 
 	TEST_CASE("Imported opaque meshes generate LODs while blended and skinned meshes retain full detail")
 	{
-		BasaltTest::TempDirectory directory("ImportedLODs");
+		BrecciaTest::TempDirectory directory("ImportedLODs");
 		std::string error;
-		const auto opaquePath = BasaltTest::WriteSphereGltf(directory.GetPath());
+		const auto opaquePath = BrecciaTest::WriteSphereGltf(directory.GetPath());
 		auto opaque = MeshImporter::LoadGltf(opaquePath, "Sphere.gltf", error);
 		REQUIRE_MESSAGE(opaque, error);
 		REQUIRE_FALSE(opaque->Submeshes[0].LODs.empty());
-		const auto blendedPath = BasaltTest::WriteSphereGltf(directory.GetPath(), true);
+		const auto blendedPath = BrecciaTest::WriteSphereGltf(directory.GetPath(), true);
 		auto blended = MeshImporter::LoadGltf(blendedPath, "Blend.gltf", error);
 		REQUIRE_MESSAGE(blended, error);
 		CHECK(blended->Submeshes[0].LODs.empty());
@@ -630,7 +630,7 @@ TEST_SUITE("AssetPipeline")
 		for (size_t i = 0; i < original->Indices.size(); ++i)
 			CHECK(blended->Vertices[blended->Indices[i]].Position == original->Vertices[original->Indices[i]].Position);
 		// Transmission draws in the blended pass too, so it also keeps its triangle order and full detail.
-		const auto transmissivePath = BasaltTest::WriteSphereGltf(directory.GetPath() / "Transmissive");
+		const auto transmissivePath = BrecciaTest::WriteSphereGltf(directory.GetPath() / "Transmissive");
 		auto json = nlohmann::json::parse(*FileSystem::ReadTextFile(transmissivePath));
 		json["materials"][0]["extensions"]["KHR_materials_transmission"] = { { "transmissionFactor", 0.5 } };
 		REQUIRE(FileSystem::WriteTextFile(transmissivePath, json.dump()));
@@ -640,7 +640,7 @@ TEST_SUITE("AssetPipeline")
 		CHECK(transmissive->Submeshes[0].LODs.empty());
 		for (size_t i = 0; i < original->Indices.size(); ++i)
 			CHECK(transmissive->Vertices[transmissive->Indices[i]].Position == original->Vertices[original->Indices[i]].Position);
-		auto skinned = MeshImporter::LoadGltf(std::filesystem::path(BASALT_TEST_DATA_DIR) / "Animation/TwoJoint.gltf", "TwoJoint.gltf", error);
+		auto skinned = MeshImporter::LoadGltf(std::filesystem::path(BRECCIA_TEST_DATA_DIR) / "Animation/TwoJoint.gltf", "TwoJoint.gltf", error);
 		REQUIRE_MESSAGE(skinned, error);
 		for (const auto& submesh : skinned->Submeshes)
 			CHECK(submesh.LODs.empty());
@@ -672,7 +672,7 @@ TEST_SUITE("AssetPipeline")
 	}
 	TEST_CASE("Metadata import locks prevent replacing concurrent identities and failed scans keep the index")
 	{
-		BasaltTest::TempProject project("AssetImportLock");
+		BrecciaTest::TempProject project("AssetImportLock");
 		const auto root = Project::GetActive()->GetDirectory();
 		REQUIRE(FileSystem::WriteTextFile(root / "Assets/a.lua", "x"));
 		std::filesystem::create_directory(root / "Assets/a.lua.meta.importing");
@@ -691,7 +691,7 @@ TEST_SUITE("AssetPipeline")
 
 	TEST_CASE("Component readers share UUID decoding and LOD validation across APIs")
 	{
-		BasaltTest::TempProject project("AssetReaders");
+		BrecciaTest::TempProject project("AssetReaders");
 		std::string error;
 		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/source.png"), "texture"));
 		json reference;
@@ -708,10 +708,10 @@ TEST_SUITE("AssetPipeline")
 	}
 	TEST_CASE("Asset migration preserves version-one timestep meaning and normalized start scene paths")
 	{
-		BasaltTest::TempProject project("LegacyVersionMigration");
+		BrecciaTest::TempProject project("LegacyVersionMigration");
 		CommandRegistry registry;
 		AutomationSession session;
-		using BasaltTest::Run;
+		using BrecciaTest::Run;
 		Run(registry, session, "scene.new", { { "empty", true } });
 		Run(registry, session, "entity.create", { { "name", "Reference" }, { "components", { { "Material", { { "AlbedoMap", "Assets/old.png" } } } } } });
 		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/old.png"), "texture"));
@@ -731,7 +731,7 @@ TEST_SUITE("AssetPipeline")
 		Run(registry, session, "project.set", { { "startScene", "./Assets/Scenes/Legacy.bscene" } });
 		const auto before = FileSystem::ReadTextFile(Project::GetActive()->GetProjectFilePath());
 		REQUIRE(FileSystem::WriteTextFile(Project::ResolvePath("Assets/blocker"), "file"));
-		CHECK_FALSE(BasaltTest::RunError(registry, session, "asset.move", { { "from", "Assets/Scenes/Legacy.bscene" }, { "to", "Assets/blocker/failed.bscene" } }).empty());
+		CHECK_FALSE(BrecciaTest::RunError(registry, session, "asset.move", { { "from", "Assets/Scenes/Legacy.bscene" }, { "to", "Assets/blocker/failed.bscene" } }).empty());
 		CHECK(FileSystem::ReadTextFile(Project::GetActive()->GetProjectFilePath()) == before);
 		Run(registry, session, "asset.move", { { "from", "Assets/Scenes/Legacy.bscene" }, { "to", "Assets/Scenes/Current.bscene" } });
 		CHECK(Project::GetActive()->GetConfig().StartScene == "Assets/Scenes/Current.bscene");
@@ -742,7 +742,7 @@ TEST_SUITE("AssetPipeline")
 
 	TEST_CASE("Deleted and ambiguous component identities stay editable without selecting their hints")
 	{
-		BasaltTest::TempProject project("UnresolvedComponents");
+		BrecciaTest::TempProject project("UnresolvedComponents");
 		const auto source = Project::ResolvePath("Assets/model.glb");
 		const auto scenePath = Project::ResolvePath("Assets/Scenes/Unresolved.bscene");
 		REQUIRE(FileSystem::WriteTextFile(source, "model"));

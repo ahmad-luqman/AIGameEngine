@@ -1,13 +1,13 @@
 #define DOCTEST_CONFIG_IMPLEMENT
 #include <doctest/doctest.h>
 
-#include <Basalt/Core/Base.h>
-#include <Basalt/Core/CrashReporter.h>
-#include <Basalt/Core/FileSystem.h>
-#include <Basalt/Core/JobSystem.h>
-#include <Basalt/Core/Log.h>
-#include <Basalt/Core/Platform.h>
-#include <Basalt/Physics/PhysicsWorld.h>
+#include <Breccia/Core/Base.h>
+#include <Breccia/Core/CrashReporter.h>
+#include <Breccia/Core/FileSystem.h>
+#include <Breccia/Core/JobSystem.h>
+#include <Breccia/Core/Log.h>
+#include <Breccia/Core/Platform.h>
+#include <Breccia/Physics/PhysicsWorld.h>
 
 #include "TestUtils.h"
 
@@ -34,7 +34,7 @@
 // A pure virtual call for crash-report purecall: the base constructor calls Pure through a function the compiler cannot
 // see into. Outside the anonymous namespace on purpose: GCC devirtualizes calls on a class hierarchy only one file can
 // see (a pure virtual call being undefined, to the only override), and then nothing crashes.
-namespace BasaltCrashTest {
+namespace BrecciaCrashTest {
 
 	struct PureBase;
 	void CallPure(PureBase& object);
@@ -66,7 +66,7 @@ namespace BasaltCrashTest {
 
 namespace {
 
-	// Whether the last run's filters selected no test case. A BasaltTests ctest entry whose --source-file patterns
+	// Whether the last run's filters selected no test case. A BrecciaTests ctest entry whose --source-file patterns
 	// stopped matching would otherwise pass without running anything (doctest reports success then). doctest does not
 	// count test cases marked doctest::skip, so an entry of only those would fail too (none exist).
 	bool s_SelectedNothing = false;
@@ -107,15 +107,15 @@ namespace {
 		return result + frame[0];
 	}
 
-	Basalt::CrashDialogKind ParseDialogKind(std::string_view kind)
+	Breccia::CrashDialogKind ParseDialogKind(std::string_view kind)
 	{
 		if (kind == "kdialog")
-			return Basalt::CrashDialogKind::KDialog;
+			return Breccia::CrashDialogKind::KDialog;
 		if (kind == "xmessage")
-			return Basalt::CrashDialogKind::XMessage;
+			return Breccia::CrashDialogKind::XMessage;
 		if (kind == "osascript")
-			return Basalt::CrashDialogKind::Osascript;
-		return Basalt::CrashDialogKind::Zenity;
+			return Breccia::CrashDialogKind::Osascript;
+		return Breccia::CrashDialogKind::Zenity;
 	}
 
 	// A real crash of the requested kind (crash-report).
@@ -137,7 +137,7 @@ namespace {
 			throw Number("42"); // NOLINT(bugprone-std-exception-baseclass)
 		else if (kind == "purecall")
 		{
-			const BasaltCrashTest::PureDerived derived;
+			const BrecciaCrashTest::PureDerived derived;
 		}
 #if defined(_WIN32)
 		else if (kind == "invalid-parameter")
@@ -151,7 +151,7 @@ namespace {
 		}
 #endif
 		else if (kind == "trap")
-			BS_DEBUGBREAK();
+			BR_DEBUGBREAK();
 		else if (kind == "stackoverflow")
 			std::printf("%d\n", Recurse(0, Number("1000000000")));
 		else if (kind == "thread-segv")
@@ -164,7 +164,7 @@ namespace {
 		{
 			// A thread of its own needs a ThreadStack: the installing thread's alternate stack does not reach it.
 			std::thread worker([] {
-				const Basalt::CrashReporter::ThreadStack stack;
+				const Breccia::CrashReporter::ThreadStack stack;
 				CrashNow("stackoverflow");
 			});
 			worker.join();
@@ -173,14 +173,14 @@ namespace {
 		{
 			// A ThreadStack on the installing thread must leave its stack in place when it ends.
 			{
-				const Basalt::CrashReporter::ThreadStack stack;
+				const Breccia::CrashReporter::ThreadStack stack;
 			}
 			CrashNow("stackoverflow");
 		}
 		else if (kind == "job-stackoverflow")
 		{
 			// Polled rather than waited for: a waiting thread helps run jobs, and this one must run on a worker.
-			const Basalt::JobHandle job = Basalt::JobSystem::Get().Submit([] { CrashNow("stackoverflow"); });
+			const Breccia::JobHandle job = Breccia::JobSystem::Get().Submit([] { CrashNow("stackoverflow"); });
 			while (!job.IsComplete())
 				std::this_thread::yield();
 		}
@@ -206,12 +206,12 @@ namespace {
 		std::exit(2);
 	}
 
-	// `BasaltTests --basalt-child <actions...>` acts as a child process for the RunProcess tests, so they need no shell
-	// or other platform tool. With BASALT_TEST_CHILD_ACTIONS set (space-separated actions), it does the same whatever
+	// `BrecciaTests --breccia-child <actions...>` acts as a child process for the RunProcess tests, so they need no shell
+	// or other platform tool. With BRECCIA_TEST_CHILD_ACTIONS set (space-separated actions), it does the same whatever
 	// its arguments, standing in for an exported game (smoke tests). Actions run in order: print <text> (stdout), error
 	// <text> (stderr), env <name>, cwd, sleep <ms>, spam <bytes>, utf8 <count> (prints "é" count times), invalid (prints
 	// bytes that are not UTF-8), fd <descriptor> (POSIX: whether it is open), crash (a real access violation on Windows,
-	// SIGABRT elsewhere), trap (BS_DEBUGBREAK), args (prints every remaining argument on its own line), exit <code>,
+	// SIGABRT elsewhere), trap (BR_DEBUGBREAK), args (prints every remaining argument on its own line), exit <code>,
 	// crash-report <kind> (installs the crash reporter as "CrashChild", then calls Install again from two threads at
 	// once, logs "crash-test sentinel 42", then crashes: kind is segv, abort, terminate, throw-int, purecall,
 	// invalid-parameter (Windows), trap, stackoverflow, nested-stackoverflow, thread-segv, thread-stackoverflow,
@@ -239,12 +239,12 @@ namespace {
 			}
 			else if (action == "env")
 			{
-				const auto variable = Basalt::Platform::GetEnvVar(value);
+				const auto variable = Breccia::Platform::GetEnvVar(value);
 				std::printf("%s=%s\n", value, variable ? variable->c_str() : "<unset>");
 				i++;
 			}
 			else if (action == "cwd")
-				std::printf("%s\n", Basalt::FileSystem::PathToUtf8(std::filesystem::current_path()).c_str());
+				std::printf("%s\n", Breccia::FileSystem::PathToUtf8(std::filesystem::current_path()).c_str());
 			else if (action == "sleep")
 			{
 				std::fflush(stdout);
@@ -298,14 +298,14 @@ namespace {
 			else if (action == "trap")
 			{
 				std::fflush(stdout);
-				BS_DEBUGBREAK();
+				BR_DEBUGBREAK();
 			}
 			else if (action == "crash-script")
 			{
-				static Basalt::CrashText s_Script;
+				static Breccia::CrashText s_Script;
 				if (i + 3 >= actions.size())
 					return 2;
-				Basalt::CrashReporter::FormatAppleScript(s_Script, actions[i + 1], actions[i + 2], actions[i + 3]);
+				Breccia::CrashReporter::FormatAppleScript(s_Script, actions[i + 1], actions[i + 2], actions[i + 3]);
 				std::printf("%s", s_Script.CStr());
 				i += 3;
 			}
@@ -314,65 +314,65 @@ namespace {
 				if (i + 4 >= actions.size())
 					return 2;
 				const std::string& mode = actions[i + 4];
-				Basalt::CrashReporterOptions options;
+				Breccia::CrashReporterOptions options;
 				options.ApplicationName = "CrashChild";
-				options.DialogTools = Basalt::CrashDialogTools{ Basalt::FileSystem::PathFromUtf8(actions[i + 2]), ParseDialogKind(actions[i + 1]), Basalt::FileSystem::PathFromUtf8(actions[i + 3]) };
-				Basalt::Log::Init();
-				if (!Basalt::CrashReporter::Install(options))
+				options.DialogTools = Breccia::CrashDialogTools{ Breccia::FileSystem::PathFromUtf8(actions[i + 2]), ParseDialogKind(actions[i + 1]), Breccia::FileSystem::PathFromUtf8(actions[i + 3]) };
+				Breccia::Log::Init();
+				if (!Breccia::CrashReporter::Install(options))
 					return 77;
 				// Automated runs leave dialogs off: nothing may show, or a run would wait on a box nobody closes.
 				if (mode == "off")
 				{
-					Basalt::CrashReporter::ShowErrorDialog("no dialog");
+					Breccia::CrashReporter::ShowErrorDialog("no dialog");
 					return 0;
 				}
 				if (mode == "disabled")
 				{
-					Basalt::CrashReporter::ShowErrorDialog("no dialog");
+					Breccia::CrashReporter::ShowErrorDialog("no dialog");
 					// Tells the test the call above has had its chance: it cannot wait for something that must not happen.
-					Basalt::CrashReporter::SetDialogEnabled(true);
-					Basalt::CrashReporter::ShowErrorDialog("dialogs on");
+					Breccia::CrashReporter::SetDialogEnabled(true);
+					Breccia::CrashReporter::ShowErrorDialog("dialogs on");
 					return 0;
 				}
-				Basalt::CrashReporter::SetDialogEnabled(true);
+				Breccia::CrashReporter::SetDialogEnabled(true);
 				if (mode == "error")
 				{
-					Basalt::CrashReporter::ShowErrorDialog("The \"archive\" is broken: $(touch injected)\nsecond line");
+					Breccia::CrashReporter::ShowErrorDialog("The \"archive\" is broken: $(touch injected)\nsecond line");
 					return 0;
 				}
 				if (mode == "long")
 				{
 					// Quotes, which AppleScript doubles in size, past what any buffer holds.
-					Basalt::CrashReporter::ShowErrorDialog(std::string(40000, '"'));
+					Breccia::CrashReporter::ShowErrorDialog(std::string(40000, '"'));
 					return 0;
 				}
 				CrashNow("segv");
 			}
 			else if (action == "crash-report")
 			{
-				Basalt::Log::Init();
+				Breccia::Log::Init();
 				// This thread installs (it gets the alternate signal stack the stack overflow needs); later calls, two of them at
 				// once, return the first call's result and change nothing. A stand-in dialog: whatever goes wrong with the check
 				// that keeps dialogs off here, these crashes must never open real alerts on a developer's screen.
-				Basalt::CrashReporterOptions options;
+				Breccia::CrashReporterOptions options;
 				options.ApplicationName = "CrashChild";
-				options.DialogTools = Basalt::CrashDialogTools{ "/usr/bin/true", Basalt::CrashDialogKind::Zenity, {} };
-				if (!Basalt::CrashReporter::Install(options))
+				options.DialogTools = Breccia::CrashDialogTools{ "/usr/bin/true", Breccia::CrashDialogKind::Zenity, {} };
+				if (!Breccia::CrashReporter::Install(options))
 				{
 					std::printf("crash reports unavailable\n");
 					return 77;
 				}
 				bool again = false;
-				std::thread other([&again] { again = Basalt::CrashReporter::Install({ "Other" }); });
-				const bool repeated = Basalt::CrashReporter::Install({ "Other" });
+				std::thread other([&again] { again = Breccia::CrashReporter::Install({ "Other" }); });
+				const bool repeated = Breccia::CrashReporter::Install({ "Other" });
 				other.join();
-				if (!again || !repeated || Basalt::CrashReporter::GetReportDirectory().parent_path().filename() != "CrashChild")
+				if (!again || !repeated || Breccia::CrashReporter::GetReportDirectory().parent_path().filename() != "CrashChild")
 				{
 					std::fprintf(stderr, "a repeated Install disagreed with the first\n");
 					return 2;
 				}
-				Basalt::CrashReporter::SetContext("Project: Crash Test 1.2.3");
-				BS_CORE_ERROR("crash-test sentinel {}", 42);
+				Breccia::CrashReporter::SetContext("Project: Crash Test 1.2.3");
+				BR_CORE_ERROR("crash-test sentinel {}", 42);
 				std::fflush(stdout);
 				CrashNow(value);
 			}
@@ -389,7 +389,7 @@ namespace {
 
 int main(int argc, char** argv)
 {
-	if (const auto actions = Basalt::Platform::GetEnvVar("BASALT_TEST_CHILD_ACTIONS"))
+	if (const auto actions = Breccia::Platform::GetEnvVar("BRECCIA_TEST_CHILD_ACTIONS"))
 	{
 		std::vector<std::string> list;
 		std::istringstream stream(*actions);
@@ -397,41 +397,41 @@ int main(int argc, char** argv)
 			list.push_back(action);
 		return RunChild(list);
 	}
-	if (argc > 1 && std::string_view(argv[1]) == "--basalt-child")
+	if (argc > 1 && std::string_view(argv[1]) == "--breccia-child")
 	{
 		// UTF-8 like the arguments the RunProcess tests pass (argv is in the ANSI code page on Windows).
-		const std::vector<std::string> arguments = Basalt::Platform::GetProcessArguments(argc, argv);
+		const std::vector<std::string> arguments = Breccia::Platform::GetProcessArguments(argc, argv);
 		return RunChild(arguments.size() > 2 ? std::vector<std::string>(arguments.begin() + 2, arguments.end()) : std::vector<std::string>());
 	}
-	Basalt::Log::Init();
+	Breccia::Log::Init();
 	// Keep test output readable: engine logs still reach LogHistory, but only warnings hit the console.
-	Basalt::Log::SetConsoleLevel(Basalt::LogLevel::Warn);
+	Breccia::Log::SetConsoleLevel(Breccia::LogLevel::Warn);
 	// Lua Storage writes save data under the user data directory; tests must never touch the real one.
 	// Inside this run's scratch directory, so test processes running at the same time never share it.
-	const std::filesystem::path userData = BasaltTest::GetRunDirectory() / "UserData";
-	if (!Basalt::Platform::SetEnvVar(Basalt::Platform::UserDataDirectoryVariable, Basalt::FileSystem::PathToUtf8(userData)))
+	const std::filesystem::path userData = BrecciaTest::GetRunDirectory() / "UserData";
+	if (!Breccia::Platform::SetEnvVar(Breccia::Platform::UserDataDirectoryVariable, Breccia::FileSystem::PathToUtf8(userData)))
 	{
-		BS_CORE_CRITICAL("Tests: cannot set {}", Basalt::Platform::UserDataDirectoryVariable);
+		BR_CORE_CRITICAL("Tests: cannot set {}", Breccia::Platform::UserDataDirectoryVariable);
 		return 1;
 	}
 
 	// Tests start thousands of worlds, which in Debug costs in proportion to what each reserves. What games get has its own test.
-	Basalt::PhysicsCapacity capacity;
+	Breccia::PhysicsCapacity capacity;
 	capacity.MaxBodyPairs = 65536;
 	capacity.MaxContactConstraints = 16384;
-	Basalt::PhysicsWorld::SetDefaultCapacity(capacity);
+	Breccia::PhysicsWorld::SetDefaultCapacity(capacity);
 
 	doctest::Context context;
 	context.applyCommandLine(argc, argv);
 	int result = context.run();
 	if (result == 0 && s_SelectedNothing)
 	{
-		BS_CORE_ERROR("Tests: the filters selected no test case");
+		BR_CORE_ERROR("Tests: the filters selected no test case");
 		result = 1;
 	}
 	std::error_code error;
-	std::filesystem::remove_all(BasaltTest::GetRunDirectory(), error);
+	std::filesystem::remove_all(BrecciaTest::GetRunDirectory(), error);
 
-	Basalt::Log::Shutdown();
+	Breccia::Log::Shutdown();
 	return result;
 }

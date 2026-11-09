@@ -2,7 +2,7 @@
 // streaming does, and seeking back as a loop does.
 #include "FuzzCommon.h"
 
-#include <Basalt/Audio/AudioEngine.h>
+#include <Breccia/Audio/AudioEngine.h>
 
 #include <miniaudio.h>
 
@@ -11,9 +11,9 @@
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 {
-	BasaltFuzz::Init();
+	BrecciaFuzz::Init();
 	std::string error;
-	(void)Basalt::AudioEngine::CanDecode(std::span(data, size), error);
+	(void)Breccia::AudioEngine::CanDecode(std::span(data, size), error);
 
 	ma_decoder decoder;
 	const ma_decoder_config config = ma_decoder_config_init(ma_format_f32, 2, 48000);

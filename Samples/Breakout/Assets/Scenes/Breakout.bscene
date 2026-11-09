@@ -1155,7 +1155,7 @@
 			"Parent": 11224955567977599728
 		}
 	],
-	"Format": "BasaltScene",
+	"Format": "BrecciaScene",
 	"Name": "Breakout",
 	"Physics": {
 		"Gravity": [

@@ -38,7 +38,7 @@ If a deliberate change to physics, the runtime UUID stream, scene serialization 
 the batch and copy the new hashes from the errors (the batch keeps going after a mismatch):
 
 ```bash
-./build/bin/basalt --project Tests/Data/Determinism --no-save batch Tests/Data/Determinism/Determinism.batch.json
+./build/bin/breccia --project Tests/Data/Determinism --no-save batch Tests/Data/Determinism/Determinism.batch.json
 ```
 
 A hash after loading that differs means the scene loads differently (transforms, settings); later ones

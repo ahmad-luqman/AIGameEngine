@@ -1,19 +1,19 @@
 #include <doctest/doctest.h>
 
-#include <Basalt/Asset/AssetManager.h>
-#include <Basalt/Core/JobSystem.h>
-#include <Basalt/Core/FileSystem.h>
-#include <Basalt/Core/Log.h>
-#include <Basalt/Project/Project.h>
-#include <Basalt/Scene/ComponentRegistry.h>
-#include <Basalt/Scene/Entity.h>
-#include <Basalt/Scene/Scene.h>
-#include <Basalt/UI/GameUI.h>
-#include <Basalt/UI/UIFonts.h>
-#include <Basalt/UI/UIGeometry.h>
-#include <Basalt/UI/UILayout.h>
-#include <Basalt/UI/UIRenderer.h>
-#include <Basalt/UI/UIRules.h>
+#include <Breccia/Asset/AssetManager.h>
+#include <Breccia/Core/JobSystem.h>
+#include <Breccia/Core/FileSystem.h>
+#include <Breccia/Core/Log.h>
+#include <Breccia/Project/Project.h>
+#include <Breccia/Scene/ComponentRegistry.h>
+#include <Breccia/Scene/Entity.h>
+#include <Breccia/Scene/Scene.h>
+#include <Breccia/UI/GameUI.h>
+#include <Breccia/UI/UIFonts.h>
+#include <Breccia/UI/UIGeometry.h>
+#include <Breccia/UI/UILayout.h>
+#include <Breccia/UI/UIRenderer.h>
+#include <Breccia/UI/UIRules.h>
 
 #include "TestUtils.h"
 #include "UITestUtils.h"
@@ -29,8 +29,8 @@
 #include <string>
 #include <vector>
 
-using namespace Basalt;
-using namespace BasaltTest;
+using namespace Breccia;
+using namespace BrecciaTest;
 
 namespace {
 
@@ -47,7 +47,7 @@ TEST_SUITE("UI")
 {
 	TEST_CASE("GameUI maps the mouse into the game's coordinates and shares its routing with Input")
 	{
-		BasaltTest::ScopedGameInput restore;
+		BrecciaTest::ScopedGameInput restore;
 		// Without a resolution, game coordinates are the viewport's.
 		CHECK(GameUI::GetResolution() == glm::vec2(1920.0f, 1080.0f));
 		CHECK(GameUI::ToGamePosition({ 12.0f, 34.0f }) == glm::vec2(12.0f, 34.0f));
@@ -583,7 +583,7 @@ TEST_SUITE("UI")
 	{
 		ImGuiTestContext imgui;
 		AssetManager::Clear();
-		const std::string texture = std::string(BASALT_TEST_DATA_DIR) + "/FeatureTest/Assets/Textures/UIPanel.png";
+		const std::string texture = std::string(BRECCIA_TEST_DATA_DIR) + "/FeatureTest/Assets/Textures/UIPanel.png";
 		AssetManager::RequestTexture(texture);
 		// No scene renderer or preload command publishes this completed decode.
 		JobSystem::Get().WaitIdle();
@@ -690,15 +690,15 @@ TEST_SUITE("UI")
 		GameUI::SetViewportSize({ 1920.0f, 1080.0f });
 		GameUI::BeginFrame();
 
-		CHECK(BasaltTest::Eval(scene, "UI.Text('Legacy', 100, 50, 40, Vec4(1, 0, 0, 1), 'Center')") == "");
-		CHECK(BasaltTest::Eval(scene, "UI.Text('Opts', -20, -20, { Size = 24, Anchor = 'BottomRight', Font = 'Assets/Fonts/X.ttf', Shadow = false, Width = 300 })") == "");
-		CHECK(BasaltTest::Eval(scene, "UI.Text('Pivot', 0, 0, { Anchor = Vec2(0.5, 0.25), Pivot = Vec2(0, 1), Align = 'Right' })") == "");
-		CHECK(BasaltTest::Eval(scene, "UI.Rect(10, 10, 100, 20)") == "");
-		CHECK(BasaltTest::Eval(scene, "UI.Rect(0, 0, 100, 20, { Color = Vec4(1, 1, 1, 1), Anchor = 'Top' })") == "");
-		CHECK(BasaltTest::Eval(scene, "UI.Image('Assets/Textures/Panel.png', 0, 0, 64, 64, Vec4(1, 1, 1, 0.5))") == "");
-		CHECK(BasaltTest::Eval(scene, "UI.Image('Assets/Textures/Panel.png', 0, 0, 64, 64, { Slice = Vec4(4, 5, 6, 7), SliceScale = 2, Tint = Vec4(0, 1, 0, 1), Anchor = 'Center' })") == "");
+		CHECK(BrecciaTest::Eval(scene, "UI.Text('Legacy', 100, 50, 40, Vec4(1, 0, 0, 1), 'Center')") == "");
+		CHECK(BrecciaTest::Eval(scene, "UI.Text('Opts', -20, -20, { Size = 24, Anchor = 'BottomRight', Font = 'Assets/Fonts/X.ttf', Shadow = false, Width = 300 })") == "");
+		CHECK(BrecciaTest::Eval(scene, "UI.Text('Pivot', 0, 0, { Anchor = Vec2(0.5, 0.25), Pivot = Vec2(0, 1), Align = 'Right' })") == "");
+		CHECK(BrecciaTest::Eval(scene, "UI.Rect(10, 10, 100, 20)") == "");
+		CHECK(BrecciaTest::Eval(scene, "UI.Rect(0, 0, 100, 20, { Color = Vec4(1, 1, 1, 1), Anchor = 'Top' })") == "");
+		CHECK(BrecciaTest::Eval(scene, "UI.Image('Assets/Textures/Panel.png', 0, 0, 64, 64, Vec4(1, 1, 1, 0.5))") == "");
+		CHECK(BrecciaTest::Eval(scene, "UI.Image('Assets/Textures/Panel.png', 0, 0, 64, 64, { Slice = Vec4(4, 5, 6, 7), SliceScale = 2, Tint = Vec4(0, 1, 0, 1), Anchor = 'Center' })") == "");
 		// A negative size draws nothing (a health bar below zero health), rather than raising an error.
-		CHECK(BasaltTest::Eval(scene, "UI.Rect(0, 0, 200 * -5 / 100, 20)") == "");
+		CHECK(BrecciaTest::Eval(scene, "UI.Rect(0, 0, 200 * -5 / 100, 20)") == "");
 
 		const std::vector<UIDrawCommand> commands = GetImmediateCommands();
 		REQUIRE(commands.size() == 8);
@@ -728,8 +728,8 @@ TEST_SUITE("UI")
 		CHECK(commands[6].Pivot == glm::vec2(0.5f, 0.5f));
 		CHECK(commands[7].Size == glm::vec2(0.0f, 20.0f));
 
-		CHECK(BasaltTest::Eval(scene, "local r = UI.GetRect(Scene.FindEntityByName('HUD')) return r.x .. ',' .. r.y .. ',' .. r.z .. ',' .. r.w") == "1600.0,20.0,300.0,80.0");
-		CHECK(BasaltTest::Eval(scene, "return UI.GetRect(Scene.FindEntityByName('Plain')) == nil") == "true");
+		CHECK(BrecciaTest::Eval(scene, "local r = UI.GetRect(Scene.FindEntityByName('HUD')) return r.x .. ',' .. r.y .. ',' .. r.z .. ',' .. r.w") == "1600.0,20.0,300.0,80.0");
+		CHECK(BrecciaTest::Eval(scene, "return UI.GetRect(Scene.FindEntityByName('Plain')) == nil") == "true");
 
 		const std::pair<const char*, const char*> errors[] = {
 			{ "UI.Text('x', 0, 0, { Colour = Vec4(1) })", "unknown option 'Colour'" },
@@ -766,10 +766,10 @@ TEST_SUITE("UI")
 			{ "UI.Image('a.png', 0, 0, 1, 1, 'red')", "a Vec4 tint or an options table" },
 			{ "UI.Text('x', 0, 0, { Font = 42 })", "option 'Font' must be a string" },
 		};
-		BasaltTest::CheckLuaErrors(*scene.GetScriptEngine(), errors);
+		BrecciaTest::CheckLuaErrors(*scene.GetScriptEngine(), errors);
 		// The limits themselves are accepted.
 		const uint64_t accepted = GameUI::GetCommandCount();
-		CHECK(BasaltTest::Eval(scene, "UI.Rect(1e6, -1e6, 1e6, 0) UI.Text('x', 0, 0, 4) UI.Text('x', 0, 0, 512)") == "");
+		CHECK(BrecciaTest::Eval(scene, "UI.Rect(1e6, -1e6, 1e6, 0) UI.Text('x', 0, 0, 4) UI.Text('x', 0, 0, 512)") == "");
 		CHECK(GameUI::GetCommandCount() == accepted + 3);
 		GameUI::BeginFrame();
 		for (int i = 0; i < 8; i++)
@@ -926,7 +926,7 @@ TEST_SUITE("UI")
 	// (Here rather than in UIFontTests.cpp: it needs imgui_internal.h, which clashes with the stb copy there.)
 	TEST_CASE("UIFonts empties its cache when its ImGui context shuts down, with one hook per context")
 	{
-		BasaltTest::TempProject project("UIFontsHook");
+		BrecciaTest::TempProject project("UIFontsHook");
 		ImGuiTestContext imgui;
 		CHECK(UIFonts::Get("Assets/Fonts/Missing.ttf") == UIFonts::GetDefault());
 		CHECK_FALSE(UIFonts::GetError("Assets/Fonts/Missing.ttf").empty());

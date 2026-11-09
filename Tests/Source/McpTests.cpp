@@ -1,24 +1,24 @@
 #include <doctest/doctest.h>
 
-#include <Basalt/Automation/AutomationSession.h>
-#include <Basalt/Automation/AutomationConnection.h>
-#include <Basalt/Automation/EditorCommandSchemas.h>
-#include <Basalt/Automation/EditorPreferences.h>
-#include <Basalt/Automation/GameView.h>
-#include <Basalt/Automation/ViewportSettings.h>
-#include <Basalt/Core/Log.h>
-#include <Basalt/Automation/CommandRegistry.h>
-#include <Basalt/Automation/CommandSchema.h>
-#include <Basalt/Automation/McpServer.h>
-#include <Basalt/Core/JsonUtils.h>
-#include <Basalt/Scene/Scene.h>
+#include <Breccia/Automation/AutomationSession.h>
+#include <Breccia/Automation/AutomationConnection.h>
+#include <Breccia/Automation/EditorCommandSchemas.h>
+#include <Breccia/Automation/EditorPreferences.h>
+#include <Breccia/Automation/GameView.h>
+#include <Breccia/Automation/ViewportSettings.h>
+#include <Breccia/Core/Log.h>
+#include <Breccia/Automation/CommandRegistry.h>
+#include <Breccia/Automation/CommandSchema.h>
+#include <Breccia/Automation/McpServer.h>
+#include <Breccia/Core/JsonUtils.h>
+#include <Breccia/Scene/Scene.h>
 
 #include "TestUtils.h"
 
 #include <limits>
 #include <sstream>
 
-using namespace Basalt;
+using namespace Breccia;
 using json = nlohmann::json;
 
 namespace {
@@ -265,7 +265,7 @@ TEST_CASE("Automation connections select, retain and reset their protocol withou
 	CHECK(connection.HandleRequest(registry, session, "").empty());
 	CHECK(ParseJson(connection.HandleRequest(registry, session, R"({"jsonrpc":)"))["error"]["code"] == -32700);
 	CHECK(ParseJson(connection.HandleRequest(registry, session, ""))["error"]["code"] == -32700);
-	CHECK(ParseJson(connection.HandleRequest(registry, session, Initialize().dump()))["result"]["serverInfo"]["version"] == BS_VERSION);
+	CHECK(ParseJson(connection.HandleRequest(registry, session, Initialize().dump()))["result"]["serverInfo"]["version"] == BR_VERSION);
 	CHECK(connection.HandleRequest(registry, session, R"({"jsonrpc":"2.0","method":"notifications/initialized"})").empty());
 	CHECK(ParseJson(connection.HandleRequest(registry, session, Request("tools/list").dump()))["result"]["tools"].size() == registry.GetCommands().size());
 	CHECK(ParseJson(connection.HandleRequest(registry, session, R"({"command":"scene.info"})"))["error"]["code"] == -32600);
@@ -393,8 +393,8 @@ TEST_CASE("MCP stream failures are diagnosed and invalid host UTF8 cannot break 
 	std::ostringstream brokenOutput;
 	brokenOutput.setstate(std::ios::badbit);
 	CHECK_FALSE(server.Serve(input, brokenOutput, registry, session));
-	CHECK(BasaltTest::CountLogMessages(since, "failed to read stdin") == 1);
-	CHECK(BasaltTest::CountLogMessages(since, "failed to write response") == 1);
+	CHECK(BrecciaTest::CountLogMessages(since, "failed to read stdin") == 1);
+	CHECK(BrecciaTest::CountLogMessages(since, "failed to write response") == 1);
 	REQUIRE(registry.Register({ "test.utf8", "", CommandSchema::Object(), [](AutomationSession&, const json&) { return json{ { "value", std::string(1, static_cast<char>(0xff)) } }; } }));
 	Start(server, registry, session);
 	std::istringstream call(Request("tools/call", { { "name", "test.utf8" } }).dump() + "\n");
@@ -411,7 +411,7 @@ TEST_CASE("Every built-in schema admits a request the handler can read")
 	for (const auto& [name, command] : registry.GetCommands())
 	{
 		INFO(name);
-		BasaltTest::TempProject project("SchemaWitness");
+		BrecciaTest::TempProject project("SchemaWitness");
 		REQUIRE(project.IsValid());
 		AutomationSession session;
 		registry.Execute(session, "scene.new", { { "empty", true } });

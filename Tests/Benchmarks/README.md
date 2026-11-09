@@ -12,8 +12,8 @@ Build and run (idle machine, plugged in, no concurrent builds):
 
 ```sh
 scripts/build.sh Release
-python3 -B Tests/Benchmarks/Run.py --binary build-release/bin/BasaltBenchmark --mode cpu --output build-release/Tests/Benchmark-cpu.json
-python3 -B Tests/Benchmarks/Run.py --binary build-release/bin/BasaltBenchmark --mode gpu --output build-release/Tests/Benchmark-gpu.json
+python3 -B Tests/Benchmarks/Run.py --binary build-release/bin/BrecciaBenchmark --mode cpu --output build-release/Tests/Benchmark-cpu.json
+python3 -B Tests/Benchmarks/Run.py --binary build-release/bin/BrecciaBenchmark --mode gpu --output build-release/Tests/Benchmark-gpu.json
 ```
 
 Both modes discard 60 warmup frames and measure 180 frames with a monotonic clock. CPU mode measures
@@ -42,8 +42,8 @@ Native stage failures preserve a JSON failure report, including any partial samp
 preserves process failures, timeouts, malformed reports and threshold failures with `passed: false`
 and a reason. Unwritable output paths are reported as I/O errors; CI still keeps the ctest failure log.
 
-To register gates locally, configure Release with `-DBASALT_BENCHMARK_TESTS=ON` (and
-`-DBASALT_GPU_TESTS=ON` for GPU), build, then `ctest --test-dir build-release -L benchmark --output-on-failure`.
+To register gates locally, configure Release with `-DBRECCIA_BENCHMARK_TESTS=ON` (and
+`-DBRECCIA_GPU_TESTS=ON` for GPU), build, then `ctest --test-dir build-release -L benchmark --output-on-failure`.
 Other configurations reject this option; sanitizer/coverage runs exercise correctness, not performance.
 
 `Baselines/` stores measured session-3 reports. Their `sourceRevision`, `recordedAtUTC`, `hardware`

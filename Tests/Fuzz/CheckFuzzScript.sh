@@ -204,8 +204,8 @@ for mode in "" build-and-run build; do
 	output="$(FUZZ_MODE="$mode" fuzz FuzzGamma)" || fail "FUZZ_MODE '$mode' failed: $output"
 	configure="$(grep -- "^-S \. -B build-fuzz " "$work/cmake.calls")" ||
 		fail "FUZZ_MODE '$mode' did not configure: $(cat "$work/cmake.calls")"
-	for flag in "-G Ninja" -DCMAKE_BUILD_TYPE=Debug -DBASALT_FUZZ=ON "-DBASALT_SANITIZE=address;undefined" \
-		-DBASALT_BUILD_EDITOR=OFF -DBASALT_BUILD_RUNTIME=OFF -DBASALT_BUILD_TESTS=OFF; do
+	for flag in "-G Ninja" -DCMAKE_BUILD_TYPE=Debug -DBRECCIA_FUZZ=ON "-DBRECCIA_SANITIZE=address;undefined" \
+		-DBRECCIA_BUILD_EDITOR=OFF -DBRECCIA_BUILD_RUNTIME=OFF -DBRECCIA_BUILD_TESTS=OFF; do
 		[[ " $configure " == *" $flag "* ]] || fail "FUZZ_MODE '$mode' configured without $flag: $configure"
 	done
 	[[ "$configure" == *"-DCMAKE_CXX_COMPILER="*"clang++ "* ]] || fail "FUZZ_MODE '$mode' configured without Clang: $configure"

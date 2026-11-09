@@ -1,17 +1,17 @@
 #include <doctest/doctest.h>
 
-#include <Basalt/Automation/AutomationSession.h>
-#include <Basalt/Automation/CommandRegistry.h>
-#include <Basalt/Core/FileSystem.h>
-#include <Basalt/Core/JsonUtils.h>
-#include <Basalt/Core/Platform.h>
-#include <Basalt/Project/Project.h>
-#include <Basalt/Project/ProjectValidator.h>
-#include <Basalt/Project/SaveData.h>
-#include <Basalt/Project/SmokeTest.h>
-#include <Basalt/Scene/Components.h>
-#include <Basalt/Scene/Entity.h>
-#include <Basalt/Scene/SceneSerializer.h>
+#include <Breccia/Automation/AutomationSession.h>
+#include <Breccia/Automation/CommandRegistry.h>
+#include <Breccia/Core/FileSystem.h>
+#include <Breccia/Core/JsonUtils.h>
+#include <Breccia/Core/Platform.h>
+#include <Breccia/Project/Project.h>
+#include <Breccia/Project/ProjectValidator.h>
+#include <Breccia/Project/SaveData.h>
+#include <Breccia/Project/SmokeTest.h>
+#include <Breccia/Scene/Components.h>
+#include <Breccia/Scene/Entity.h>
+#include <Breccia/Scene/SceneSerializer.h>
 
 #include "TestUtils.h"
 
@@ -24,7 +24,7 @@
 	#include <unistd.h>
 #endif
 
-using namespace Basalt;
+using namespace Breccia;
 
 namespace {
 
@@ -60,7 +60,7 @@ namespace {
 
 	std::string SaveFile(const nlohmann::json& values, int version = SaveData::FormatVersion)
 	{
-		return nlohmann::json{ { "Format", "BasaltSaveData" }, { "Version", version }, { "Values", values } }.dump();
+		return nlohmann::json{ { "Format", "BrecciaSaveData" }, { "Version", version }, { "Values", values } }.dump();
 	}
 
 }
@@ -69,7 +69,7 @@ TEST_SUITE("Project")
 {
 	TEST_CASE("Save data round-trips through its file and rejects malformed text")
 	{
-		BasaltTest::TempDirectory directory("SaveDataRoundTrip");
+		BrecciaTest::TempDirectory directory("SaveDataRoundTrip");
 		const std::filesystem::path path = directory.GetPath() / "Game" / SaveData::FileName;
 		std::string error;
 
@@ -107,7 +107,7 @@ TEST_SUITE("Project")
 		REQUIRE_MESSAGE(data.Save(error), error);
 		REQUIRE(data.Set("Score", 42, error));
 		REQUIRE_MESSAGE(data.Save(error), error);
-		CHECK_FALSE(BasaltTest::HasTempFiles(path.parent_path()));
+		CHECK_FALSE(BrecciaTest::HasTempFiles(path.parent_path()));
 
 		SaveData reloaded(path);
 		REQUIRE_MESSAGE(reloaded.Load(error), error);
@@ -124,13 +124,13 @@ TEST_SUITE("Project")
 		const std::pair<const char*, const char*> invalid[] = {
 			{ "{", "not valid JSON" },
 			{ "[]", "JSON object" },
-			{ R"({"Format": "BasaltScene", "Version": 1, "Values": {}})", "'Format'" },
-			{ R"({"Format": "BasaltSaveData", "Version": 0, "Values": {}})", "'Version'" },
-			{ R"({"Format": "BasaltSaveData", "Version": 99, "Values": {}})", "newer than supported" },
-			{ R"({"Format": "BasaltSaveData", "Version": 1, "Values": []})", "'Values'" },
-			{ R"({"Format": "BasaltSaveData", "Version": 1})", "'Values'" },
-			{ R"({"Format": "BasaltSaveData", "Version": 1, "Values": {"": 1}})", "empty key" },
-			{ R"({"Format": "BasaltSaveData", "Version": 1, "Values": {}, "Extra": 1})", "unknown key 'Extra'" },
+			{ R"({"Format": "BrecciaScene", "Version": 1, "Values": {}})", "'Format'" },
+			{ R"({"Format": "BrecciaSaveData", "Version": 0, "Values": {}})", "'Version'" },
+			{ R"({"Format": "BrecciaSaveData", "Version": 99, "Values": {}})", "newer than supported" },
+			{ R"({"Format": "BrecciaSaveData", "Version": 1, "Values": []})", "'Values'" },
+			{ R"({"Format": "BrecciaSaveData", "Version": 1})", "'Values'" },
+			{ R"({"Format": "BrecciaSaveData", "Version": 1, "Values": {"": 1}})", "empty key" },
+			{ R"({"Format": "BrecciaSaveData", "Version": 1, "Values": {}, "Extra": 1})", "unknown key 'Extra'" },
 		};
 		for (const auto& [text, expected] : invalid)
 		{
@@ -143,14 +143,14 @@ TEST_SUITE("Project")
 		}
 		SaveData parsed(path);
 		// A null value (a hand edit) counts as no value.
-		CHECK(parsed.LoadFromString(R"({"Format": "BasaltSaveData", "Version": 1, "Values": {"Coins": 5, "Gone": null}})", error));
+		CHECK(parsed.LoadFromString(R"({"Format": "BrecciaSaveData", "Version": 1, "Values": {"Coins": 5, "Gone": null}})", error));
 		CHECK(*parsed.Find("Coins") == 5);
 		CHECK(parsed.Find("Gone") == nullptr);
 	}
 
 	TEST_CASE("A malformed save file is moved to a backup that is never overwritten")
 	{
-		BasaltTest::TempDirectory directory("SaveDataCorrupt");
+		BrecciaTest::TempDirectory directory("SaveDataCorrupt");
 		const std::filesystem::path path = directory.GetPath() / SaveData::FileName;
 		const std::filesystem::path firstBackup = directory.GetPath() / "SaveData.corrupt.json";
 		const std::filesystem::path secondBackup = directory.GetPath() / "SaveData.corrupt.2.json";
@@ -184,7 +184,7 @@ TEST_SUITE("Project")
 
 	TEST_CASE("Save data that cannot be read or comes from a newer version is never overwritten")
 	{
-		BasaltTest::TempDirectory directory("SaveDataProtected");
+		BrecciaTest::TempDirectory directory("SaveDataProtected");
 		const std::filesystem::path path = directory.GetPath() / SaveData::FileName;
 		std::string error;
 
@@ -201,7 +201,7 @@ TEST_SUITE("Project")
 		CHECK_FALSE(std::filesystem::exists(directory.GetPath() / "SaveData.corrupt.json"));
 
 		// A newer version is recognized whatever else it changed (here a key this version does not know).
-		const std::string newerLayout = R"({"Format": "BasaltSaveData", "Version": 2, "Metadata": {}, "Values": []})";
+		const std::string newerLayout = R"({"Format": "BrecciaSaveData", "Version": 2, "Metadata": {}, "Values": []})";
 		REQUIRE(FileSystem::WriteTextFile(path, newerLayout));
 		CHECK_FALSE(data.Load(error));
 		CHECK(error.find("newer version") != std::string::npos);
@@ -247,9 +247,9 @@ TEST_SUITE("Project")
 
 		// A set but unusable override never falls back to the real user directory.
 		{
-			BasaltTest::ScopedEnvVar relative(Platform::UserDataDirectoryVariable, "relative/dir");
+			BrecciaTest::ScopedEnvVar relative(Platform::UserDataDirectoryVariable, "relative/dir");
 			CHECK_FALSE(Platform::GetUserDataDirectory(error));
-			CHECK(error.find("BASALT_USER_DATA_DIR is set to 'relative/dir', which is not an absolute path") != std::string::npos);
+			CHECK(error.find("BRECCIA_USER_DATA_DIR is set to 'relative/dir', which is not an absolute path") != std::string::npos);
 			CHECK_FALSE(SaveData::GetDefaultPath("Game", error));
 		}
 		CHECK(Platform::GetUserDataDirectory(error) == base);
@@ -271,7 +271,7 @@ TEST_SUITE("Project")
 
 	TEST_CASE("Save data that cannot be moved aside or saved within the limit is not written")
 	{
-		BasaltTest::TempDirectory directory("SaveDataLimits");
+		BrecciaTest::TempDirectory directory("SaveDataLimits");
 		const std::filesystem::path path = directory.GetPath() / SaveData::FileName;
 		std::string error;
 
@@ -299,28 +299,28 @@ TEST_SUITE("Project")
 	TEST_CASE("Without an override, the user data directory comes from the platform's variables")
 	{
 		std::string error;
-		BasaltTest::ScopedEnvVar noOverride(Platform::UserDataDirectoryVariable, std::nullopt);
-#if defined(BS_PLATFORM_WINDOWS)
-		BasaltTest::ScopedEnvVar appData("APPDATA", "C:\\Users\\Player\\AppData\\Roaming");
+		BrecciaTest::ScopedEnvVar noOverride(Platform::UserDataDirectoryVariable, std::nullopt);
+#if defined(BR_PLATFORM_WINDOWS)
+		BrecciaTest::ScopedEnvVar appData("APPDATA", "C:\\Users\\Player\\AppData\\Roaming");
 		CHECK(Platform::GetUserDataDirectory(error) == std::filesystem::path("C:\\Users\\Player\\AppData\\Roaming"));
 #else
-		BasaltTest::ScopedEnvVar home("HOME", "/home/player");
-	#if defined(BS_PLATFORM_MACOS)
+		BrecciaTest::ScopedEnvVar home("HOME", "/home/player");
+	#if defined(BR_PLATFORM_MACOS)
 		CHECK(Platform::GetUserDataDirectory(error) == std::filesystem::path("/home/player/Library/Application Support"));
 	#else
 		{
-			BasaltTest::ScopedEnvVar xdg("XDG_DATA_HOME", "/data/player");
+			BrecciaTest::ScopedEnvVar xdg("XDG_DATA_HOME", "/data/player");
 			CHECK(Platform::GetUserDataDirectory(error) == std::filesystem::path("/data/player"));
 		}
 		{
 			// The XDG spec ignores a relative XDG_DATA_HOME.
-			BasaltTest::ScopedEnvVar xdg("XDG_DATA_HOME", "relative");
+			BrecciaTest::ScopedEnvVar xdg("XDG_DATA_HOME", "relative");
 			CHECK(Platform::GetUserDataDirectory(error) == std::filesystem::path("/home/player/.local/share"));
 		}
 	#endif
 		{
-			BasaltTest::ScopedEnvVar relativeHome("HOME", "relative/home");
-			BasaltTest::ScopedEnvVar noXdg("XDG_DATA_HOME", std::nullopt);
+			BrecciaTest::ScopedEnvVar relativeHome("HOME", "relative/home");
+			BrecciaTest::ScopedEnvVar noXdg("XDG_DATA_HOME", std::nullopt);
 			CHECK_FALSE(Platform::GetUserDataDirectory(error));
 			CHECK(error.find("HOME is set to 'relative/home', which is not an absolute path") != std::string::npos);
 		}
@@ -329,7 +329,7 @@ TEST_SUITE("Project")
 
 	TEST_CASE("The project's fixed timestep is the default physics step, which scenes may override")
 	{
-		BasaltTest::TempProject temp("FixedTimestep");
+		BrecciaTest::TempProject temp("FixedTimestep");
 		REQUIRE(temp.IsValid());
 		const Ref<Project>& project = Project::GetActive();
 		CHECK(project->GetConfig().FixedTimestep == DefaultFixedTimestep);
@@ -364,14 +364,14 @@ TEST_SUITE("Project")
 		CHECK(reloaded->GetConfig().FixedTimestep == 0.02f);
 		for (const char* bad : { "0", "-0.01", "0.3", "\"fast\"" })
 		{
-			temp.WriteFile(Project::FileName, std::string(R"({"Format": "BasaltProject", "FixedTimestep": )") + bad + "}");
+			temp.WriteFile(Project::FileName, std::string(R"({"Format": "BrecciaProject", "FixedTimestep": )") + bad + "}");
 			CHECK_FALSE(Project::Load(temp.GetDirectory(), error));
 			CHECK(error.find("FixedTimestep") != std::string::npos);
 		}
 		// Window sizes the runtime cannot open are rejected too (a negative one would wrap around).
 		for (const char* bad : { R"("WindowWidth": -1)", R"("WindowWidth": 20)", R"("WindowHeight": 20000)", R"("WindowHeight": "tall")" })
 		{
-			temp.WriteFile(Project::FileName, std::string(R"({"Format": "BasaltProject", )") + bad + "}");
+			temp.WriteFile(Project::FileName, std::string(R"({"Format": "BrecciaProject", )") + bad + "}");
 			CHECK_FALSE(Project::Load(temp.GetDirectory(), error));
 			CHECK(error.find("must be an integer in [64, 16384]") != std::string::npos);
 		}
@@ -379,7 +379,7 @@ TEST_SUITE("Project")
 
 	TEST_CASE("Scenes store the fixed timestep only as an override, and null removes it")
 	{
-		BasaltTest::TempProject temp("FixedTimestepOverride");
+		BrecciaTest::TempProject temp("FixedTimestepOverride");
 		REQUIRE(temp.IsValid());
 		Scene scene;
 		CHECK_FALSE(SceneSerializer::SerializeScene(scene)["Physics"].contains("FixedTimestep"));
@@ -410,13 +410,13 @@ TEST_SUITE("Project")
 
 	TEST_CASE("Version 1 scenes, which always stored the default step, follow the project's step")
 	{
-		BasaltTest::TempProject temp("FixedTimestepMigration");
+		BrecciaTest::TempProject temp("FixedTimestepMigration");
 		REQUIRE(temp.IsValid());
 		// What the version 1 serializer wrote into every scene: the 1/60 s default as a float.
 		const auto load = [](int version, double step) {
 			Scene scene;
 			std::string error;
-			const nlohmann::json data = { { "Format", "BasaltScene" }, { "Version", version }, { "Physics", { { "FixedTimestep", step } } } };
+			const nlohmann::json data = { { "Format", "BrecciaScene" }, { "Version", version }, { "Physics", { { "FixedTimestep", step } } } };
 			REQUIRE_MESSAGE(SceneSerializer::DeserializeScene(scene, data, error), error);
 			return scene.GetPhysicsSettings().FixedTimestep;
 		};
@@ -431,7 +431,7 @@ TEST_SUITE("Project")
 		CHECK(SceneSerializer::SerializeScene(scene)["Version"] == SceneSerializer::FormatVersion);
 		// A migrated scene saves without a step; a scene.settings patch (no Version) keeps an exact 1/60 s override.
 		std::string error;
-		REQUIRE(SceneSerializer::DeserializeScene(scene, { { "Format", "BasaltScene" }, { "Version", 1 }, { "Physics", { { "FixedTimestep", 0.016666668 } } } }, error));
+		REQUIRE(SceneSerializer::DeserializeScene(scene, { { "Format", "BrecciaScene" }, { "Version", 1 }, { "Physics", { { "FixedTimestep", 0.016666668 } } } }, error));
 		CHECK_FALSE(SceneSerializer::SerializeScene(scene)["Physics"].contains("FixedTimestep"));
 		REQUIRE(SceneSerializer::DeserializeScene(scene, { { "Physics", { { "FixedTimestep", 1.0 / 60.0 } } } }, error));
 		CHECK(scene.GetPhysicsSettings().FixedTimestep == DefaultFixedTimestep);
@@ -440,7 +440,7 @@ TEST_SUITE("Project")
 
 	TEST_CASE("Fixed timestep commands: project.set and project.info, scene.settings and scene.info")
 	{
-		BasaltTest::TempProject temp("FixedTimestepCommands");
+		BrecciaTest::TempProject temp("FixedTimestepCommands");
 		REQUIRE(temp.IsValid());
 		CommandRegistry registry;
 		AutomationSession session;
@@ -472,7 +472,7 @@ TEST_SUITE("Project")
 
 	TEST_CASE("Project validation accepts a complete project")
 	{
-		BasaltTest::TempProject temp("ValidateClean");
+		BrecciaTest::TempProject temp("ValidateClean");
 		REQUIRE(temp.IsValid());
 		temp.WriteFile("Assets/Scripts/Mover.lua", "local Mover = {}\nfunction Mover:OnUpdate(dt) end\nreturn Mover\n");
 		// A module loaded with require may return anything; only Script components need a class table.
@@ -495,14 +495,14 @@ TEST_SUITE("Project")
 
 	TEST_CASE("Validation asks the decoders about audio clips, whatever the file is called")
 	{
-		BasaltTest::TempProject temp("ClipValidation");
+		BrecciaTest::TempProject temp("ClipValidation");
 		REQUIRE(temp.IsValid());
 		const Ref<Project>& project = Project::GetActive();
 		std::error_code copyError;
-		std::filesystem::copy_file(std::filesystem::path(BASALT_TEST_DATA_DIR) / "Audio" / "Vorbis.ogg", temp.GetDirectory() / "Assets" / "Audio" / "Music.ogg", copyError);
+		std::filesystem::copy_file(std::filesystem::path(BRECCIA_TEST_DATA_DIR) / "Audio" / "Vorbis.ogg", temp.GetDirectory() / "Assets" / "Audio" / "Music.ogg", copyError);
 		REQUIRE_FALSE(copyError);
-		temp.WriteFile("Assets/Audio/Beep.WAV", BasaltTest::MakeWav(0.1f));
-		temp.WriteFile("Assets/Audio/Beep.sound", BasaltTest::MakeWav(0.1f));
+		temp.WriteFile("Assets/Audio/Beep.WAV", BrecciaTest::MakeWav(0.1f));
+		temp.WriteFile("Assets/Audio/Beep.sound", BrecciaTest::MakeWav(0.1f));
 		temp.WriteFile("Assets/Audio/Broken.wav", "not audio at all");
 		temp.WriteFile("Assets/Audio/Unused.ogg", "nothing refers to this");
 		const auto writeScene = [&](const std::string& name, const std::vector<std::string>& clips) {
@@ -516,7 +516,7 @@ TEST_SUITE("Project")
 		writeScene("AlsoBad", { "Assets/Audio/Music.ogg" });
 		writeScene("Wrong", { "Assets/audio/broken.wav", "../Outside.wav", "builtin://Cube" });
 		temp.WriteFile("Outside.wav", "not audio at all");
-		temp.WriteFile("Assets/Prefabs/Radio.bprefab", R"({"Format": "BasaltPrefab", "Version": 4, "Entities": [
+		temp.WriteFile("Assets/Prefabs/Radio.bprefab", R"({"Format": "BrecciaPrefab", "Version": 4, "Entities": [
 			{"ID": 1, "Name": "Root", "Parent": 0, "Components": {"AudioSource": {"Clip": "Assets/Audio/Music.ogg"}}}]})");
 		project->GetConfig().StartScene = "Assets/Scenes/Good.bscene";
 
@@ -541,7 +541,7 @@ TEST_SUITE("Project")
 
 	TEST_CASE("The project file keeps the script instruction limit and refuses a bad one")
 	{
-		BasaltTest::TempProject temp("InstructionLimitFile");
+		BrecciaTest::TempProject temp("InstructionLimitFile");
 		REQUIRE(temp.IsValid());
 		const std::filesystem::path file = temp.GetDirectory() / Project::FileName;
 		CHECK(Project::GetActive()->GetConfig().ScriptInstructionLimit == DefaultScriptInstructionLimit);
@@ -579,7 +579,7 @@ TEST_SUITE("Project")
 
 	TEST_CASE("Project validation reports what would break the exported game")
 	{
-		BasaltTest::TempProject temp("ValidateProblems");
+		BrecciaTest::TempProject temp("ValidateProblems");
 		REQUIRE(temp.IsValid());
 		const Ref<Project>& project = Project::GetActive();
 		CHECK(Contains(Messages(ValidateProject(*project), ValidationSeverity::Error), "no StartScene"));
@@ -598,7 +598,7 @@ TEST_SUITE("Project")
 			{"ID": 8, "Name": "H", "Components": {"Material": {"AlbedoMap": "/Absolute/Wall.png"}}},
 			{"ID": 9, "Name": "I", "Components": {"Mesh": {"Mesh": "Ship.glb"}, "AudioSource": {"Clip": "Assets\\Audio\\Beep.wav"}}},
 			{"ID": 10, "Name": "J", "Components": {"Material": {"ClearcoatMap": "Assets/Textures/Coat.ktx2"}}}]})");
-		temp.WriteFile("Assets/Prefabs/Hollow.bprefab", R"({"Format": "BasaltPrefab", "Version": 1, "Entities": [
+		temp.WriteFile("Assets/Prefabs/Hollow.bprefab", R"({"Format": "BrecciaPrefab", "Version": 1, "Entities": [
 			{"ID": 1, "Name": "Root", "Parent": 0, "Components": {"Mesh": {"Mesh": "Assets/Models/Gone.glb"}}}]})");
 		temp.WriteFile("Assets/Scenes/Corrupt.bscene", R"({"Entities": [{"ID": 1, "Components": {"Bogus": {}}}]})");
 		temp.WriteFile("Assets/Prefabs/Bad.bprefab", "{not json");
@@ -640,7 +640,7 @@ TEST_SUITE("Project")
 
 	TEST_CASE("Project validation caps the listed issues but counts them all")
 	{
-		BasaltTest::TempProject temp("ValidateCap");
+		BrecciaTest::TempProject temp("ValidateCap");
 		REQUIRE(temp.IsValid());
 		std::string entities;
 		for (size_t i = 0; i < ValidationReport::MaxIssues + 25; i++)
@@ -667,12 +667,12 @@ TEST_SUITE("Project")
 	// The messages name the files: path::string() would throw on Windows for these names, turning the report into a crash.
 	TEST_CASE("Project and scene load errors name files in CJK characters as UTF-8")
 	{
-		BasaltTest::TempDirectory directory("LoadErrors-日本語");
+		BrecciaTest::TempDirectory directory("LoadErrors-日本語");
 		std::string error;
 		REQUIRE(FileSystem::WriteTextFile(directory.GetPath() / Project::FileName, "[1"));
 		CHECK_FALSE(Project::Load(directory.GetPath(), error));
 		CHECK_MESSAGE(error.find(FileSystem::PathToUtf8(directory.GetPath() / Project::FileName) + "' is not valid JSON") != std::string::npos, error);
-		REQUIRE(FileSystem::WriteTextFile(directory.GetPath() / Project::FileName, R"({"Format": "BasaltProject", "Name": "x", "RandomSeed": -1})"));
+		REQUIRE(FileSystem::WriteTextFile(directory.GetPath() / Project::FileName, R"({"Format": "BrecciaProject", "Name": "x", "RandomSeed": -1})"));
 		CHECK_FALSE(Project::Load(directory.GetPath(), error));
 		CHECK_MESSAGE(error.find("日本語") != std::string::npos, error);
 		CHECK_MESSAGE(error.find("RandomSeed") != std::string::npos, error);
@@ -685,7 +685,7 @@ TEST_SUITE("Project")
 
 	TEST_CASE("Project validation reports project file problems")
 	{
-		BasaltTest::TempProject temp("ValidateProjectFile");
+		BrecciaTest::TempProject temp("ValidateProjectFile");
 		REQUIRE(temp.IsValid());
 		const Ref<Project>& project = Project::GetActive();
 		temp.WriteFile("Assets/Scenes/Main.bscene", R"({"Entities": []})");
@@ -708,7 +708,7 @@ TEST_SUITE("Project")
 		// Permissions do not stop root, which then reads the folder.
 		if (geteuid() == 0)
 			return;
-		BasaltTest::TempProject temp("ValidateUnreadable");
+		BrecciaTest::TempProject temp("ValidateUnreadable");
 		REQUIRE(temp.IsValid());
 		temp.WriteFile("Assets/Scenes/Main.bscene", R"({"Entities": []})");
 		temp.WriteFile("Assets/Locked/Broken.lua", "local x = = 1\n");
@@ -726,7 +726,7 @@ TEST_SUITE("Project")
 
 	TEST_CASE("Input actions live in Input.binput: set, saved, loaded, validated and exported")
 	{
-		BasaltTest::TempProject temp("ProjectInputActions");
+		BrecciaTest::TempProject temp("ProjectInputActions");
 		REQUIRE(temp.IsValid());
 		CommandRegistry registry;
 		AutomationSession session;
@@ -741,7 +741,7 @@ TEST_SUITE("Project")
 		RunCommand(registry, session, "project.set", { { "inputActions", actions } });
 		REQUIRE(std::filesystem::exists(file));
 		const nlohmann::json info = RunCommand(registry, session, "project.info")["inputActions"];
-		CHECK(info["Format"] == "BasaltInput");
+		CHECK(info["Format"] == "BrecciaInput");
 		CHECK(info["Actions"][0]["Bindings"][0]["Key"] == "Space");
 		const nlohmann::json saved = ParseJson(*FileSystem::ReadTextFile(file));
 		CHECK(saved == info);
@@ -795,8 +795,8 @@ TEST_SUITE("Project")
 		CHECK(error.find("parse error at line 1") != std::string::npos);
 
 		// A broken file is not exported (the game would not start).
-		const BasaltTest::ScopedFakeVulkanSdk sdk(temp);
-		BasaltTest::TempDirectory exportDirectory("ProjectInputActionsExport");
+		const BrecciaTest::ScopedFakeVulkanSdk sdk(temp);
+		BrecciaTest::TempDirectory exportDirectory("ProjectInputActionsExport");
 		const auto output = exportDirectory.GetPath() / "Build";
 		CHECK(RunCommandError(registry, session, "project.export", { { "output", output.string() }, { "validate", false } }).find("invalid input actions file") != std::string::npos);
 		CHECK_FALSE(std::filesystem::exists(output / Project::InputFileName));
@@ -819,7 +819,7 @@ TEST_SUITE("Project")
 
 	TEST_CASE("project.validate and project.export refuse a broken project; project.smoke_test needs an executable")
 	{
-		BasaltTest::TempProject temp("ValidateCommands");
+		BrecciaTest::TempProject temp("ValidateCommands");
 		REQUIRE(temp.IsValid());
 		CommandRegistry registry;
 		AutomationSession session;
@@ -839,16 +839,16 @@ TEST_SUITE("Project")
 		CHECK(assertError.find("found 1 error(s)\nAssets/Scenes/Main.bscene: references the missing file 'Assets/Missing.glb'") != std::string::npos);
 		CHECK(assertError.find("Ghost") == std::string::npos);
 
-		BasaltTest::TempDirectory exportDirectory("ValidateCommandsExport");
+		BrecciaTest::TempDirectory exportDirectory("ValidateCommandsExport");
 		const auto output = exportDirectory.GetPath() / "Build";
 		const std::string error = RunCommandError(registry, session, "project.export", { { "output", output.string() } });
 		CHECK(error.find("not exported: project validation found 1 error") != std::string::npos);
 		CHECK_FALSE(std::filesystem::exists(output));
 		CHECK(RunCommandError(registry, session, "project.export", { { "output", output.string() }, { "smokeTestFrames", -1 } }).find("smokeTestFrames") != std::string::npos);
 		CHECK(RunCommandError(registry, session, "project.export", { { "output", output.string() }, { "smokeTestTimeout", 0 } }).find("smokeTestTimeout") != std::string::npos);
-		// validate: false exports anyway (BasaltRuntime is built next to the tests). On macOS the exporter bundles
+		// validate: false exports anyway (BrecciaRuntime is built next to the tests). On macOS the exporter bundles
 		// the Vulkan loader and MoltenVK: point it at stand-ins so the test does not need the Vulkan SDK.
-		const BasaltTest::ScopedFakeVulkanSdk sdk(temp);
+		const BrecciaTest::ScopedFakeVulkanSdk sdk(temp);
 		const nlohmann::json exported = RunCommand(registry, session, "project.export", { { "output", output.string() }, { "validate", false } });
 		CHECK(exported["validation"].is_null());
 		CHECK(std::filesystem::exists(exported["executable"].get<std::string>()));
@@ -870,13 +870,13 @@ TEST_SUITE("Project")
 
 	TEST_CASE("A smoke test reports a game that crashes")
 	{
-		// The test binary stands in for an exported game: BASALT_TEST_CHILD_ACTIONS makes it act whatever its
+		// The test binary stands in for an exported game: BRECCIA_TEST_CHILD_ACTIONS makes it act whatever its
 		// arguments (TestMain.cpp).
-		const BasaltTest::ScopedEnvVar actions("BASALT_TEST_CHILD_ACTIONS", "print playing crash");
+		const BrecciaTest::ScopedEnvVar actions("BRECCIA_TEST_CHILD_ACTIONS", "print playing crash");
 #if defined(_WIN32)
-		const std::filesystem::path game = FileSystem::GetExecutableDirectory() / "BasaltTests.exe";
+		const std::filesystem::path game = FileSystem::GetExecutableDirectory() / "BrecciaTests.exe";
 #else
-		const std::filesystem::path game = FileSystem::GetExecutableDirectory() / "BasaltTests";
+		const std::filesystem::path game = FileSystem::GetExecutableDirectory() / "BrecciaTests";
 #endif
 		const SmokeTestResult result = RunSmokeTest(game, 10, std::chrono::seconds(30));
 		CHECK_FALSE(result.Passed());

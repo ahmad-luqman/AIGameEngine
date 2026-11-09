@@ -1,11 +1,11 @@
-# Basalt
+# Breccia
 
 A desktop 3D engine built for agent-driven development, for Windows, macOS and Linux: C++20, Vulkan through
 [nvrhi](https://github.com/NVIDIA-RTX/NVRHI), PBR with image-based lighting, soft shadows and SSAO, Jolt
 physics, Lua scripting, an editor — and a complete JSON automation API so AI agents can build and test games
 without touching the GUI.
 
-Basalt is early alpha (0.1.0, no release yet). Its code is held to production standards (unit tests, fuzzing,
+Breccia is early alpha (0.1.0, no release yet). Its code is held to production standards (unit tests, fuzzing,
 sanitizers and pinned physics determinism on every CI platform), but it has no users or shipped games yet. What is in
 scope and what is not (networking is next; consoles are a non-goal) is in [ROADMAP.md](ROADMAP.md#scope).
 
@@ -24,14 +24,14 @@ macOS with Homebrew: development builds load Homebrew's Vulkan validation layer 
 ## Use
 
 ```bash
-build/bin/BasaltEditor --project Samples/Tetris          # editor (automation server on 127.0.0.1:7420)
-build/bin/BasaltRuntime --project Samples/Tetris         # play a project
-build/bin/BasaltRuntime --project P --frames 60 --offscreen --screenshot shot.png
-build/bin/basalt help                                    # automation API from the command line
-build/bin/basalt --project Samples/Tetris project.validate     # missing assets, broken scenes/scripts
-build/bin/basalt --project Samples/Tetris project.export '{"output": "Dist/Tetris", "smokeTestFrames": 120}'
-build/bin/basalt --project Samples/Tetris project.export '{"output": "Dist/Tetris", "package": true}'  # .app / .exe / AppImage
-build/bin/basalt --project Samples/Tetris project.export '{"output": "Dist/Tetris", "archive": true}'  # Assets in one .bpak
+build/bin/BrecciaEditor --project Samples/Tetris          # editor (automation server on 127.0.0.1:7420)
+build/bin/BrecciaRuntime --project Samples/Tetris         # play a project
+build/bin/BrecciaRuntime --project P --frames 60 --offscreen --screenshot shot.png
+build/bin/breccia help                                    # automation API from the command line
+build/bin/breccia --project Samples/Tetris project.validate     # missing assets, broken scenes/scripts
+build/bin/breccia --project Samples/Tetris project.export '{"output": "Dist/Tetris", "smokeTestFrames": 120}'
+build/bin/breccia --project Samples/Tetris project.export '{"output": "Dist/Tetris", "package": true}'  # .app / .exe / AppImage
+build/bin/breccia --project Samples/Tetris project.export '{"output": "Dist/Tetris", "archive": true}'  # Assets in one .bpak
 ```
 
 ## Documentation
@@ -45,7 +45,7 @@ build/bin/basalt --project Samples/Tetris project.export '{"output": "Dist/Tetri
 - [ROADMAP.md](ROADMAP.md) — scope, planned work and known gaps; [ROADMAP-SESSIONS.md](ROADMAP-SESSIONS.md) — the same work as session milestones
 - [Docs/MaturityAssessment.md](Docs/MaturityAssessment.md) — measured maturity and gap analysis against other engines
 - [Docs/TestedHardware.md](Docs/TestedHardware.md) — real-GPU smoke test procedure and results
-- [.claude/skills/basalt-make-game](.claude/skills/basalt-make-game/SKILL.md) — building a game as an AI agent
+- [.claude/skills/breccia-make-game](.claude/skills/breccia-make-game/SKILL.md) — building a game as an AI agent
 - [Samples/Tetris](Samples/Tetris) — a game built entirely through the automation API
 - [Samples/MarbleRun](Samples/MarbleRun) — a physics showcase (joints, triggers, particles, spatial audio, UI) whose
   test is written as `assert.*`, `events.poll` and `scene.diff` checks

@@ -17,7 +17,7 @@ fi
 
 cmake -S . -B "$buildDir" -G Ninja -DCMAKE_BUILD_TYPE=Debug \
 	-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
-	-DBASALT_COVERAGE=ON -DBASALT_CHECK_FORMAT=OFF -DBASALT_GPU_TESTS=OFF
+	-DBRECCIA_COVERAGE=ON -DBRECCIA_CHECK_FORMAT=OFF -DBRECCIA_GPU_TESTS=OFF
 cmake --build "$buildDir"
 
 profileDir="$PWD/$buildDir/profiles"
@@ -28,11 +28,11 @@ LLVM_PROFILE_FILE="$profileDir/%p-%m.profraw" ctest --test-dir "$buildDir" --out
 
 outDir="$buildDir/coverage"
 mkdir -p "$outDir"
-"${profdata[@]}" merge -sparse "$profileDir"/*.profraw -o "$outDir/basalt.profdata"
+"${profdata[@]}" merge -sparse "$profileDir"/*.profraw -o "$outDir/breccia.profdata"
 
-objects=("$buildDir/bin/BasaltTests" -object "$buildDir/bin/basalt")
+objects=("$buildDir/bin/BrecciaTests" -object "$buildDir/bin/breccia")
 ignore='(_deps|Tests/|ThirdParty|/build[^/]*/)'
-"${cov[@]}" report "${objects[@]}" -instr-profile="$outDir/basalt.profdata" -ignore-filename-regex="$ignore" | tee "$outDir/summary.txt"
-"${cov[@]}" show "${objects[@]}" -instr-profile="$outDir/basalt.profdata" -ignore-filename-regex="$ignore" \
+"${cov[@]}" report "${objects[@]}" -instr-profile="$outDir/breccia.profdata" -ignore-filename-regex="$ignore" | tee "$outDir/summary.txt"
+"${cov[@]}" show "${objects[@]}" -instr-profile="$outDir/breccia.profdata" -ignore-filename-regex="$ignore" \
 	-format=html -output-dir="$outDir/html" -show-line-counts-or-regions
 echo "HTML report: $outDir/html/index.html"

@@ -26,5 +26,5 @@ Cache/Thumbnails/
 # Python rendering-test helpers
 __pycache__/
 
-# Dependency sources that CI restores from its cache (BASALT_DEPS_SOURCE_DIR)
+# Dependency sources that CI restores from its cache (BRECCIA_DEPS_SOURCE_DIR)
 /_deps/

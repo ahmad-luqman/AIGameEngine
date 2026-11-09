@@ -122,7 +122,7 @@ for animation in animations:
     for channel in animation['channels']:
         channel['target']['node'] += 1
 
-model = dict(asset=dict(version='2.0', generator='Basalt test fixture'),
+model = dict(asset=dict(version='2.0', generator='Breccia test fixture'),
     buffers=[dict(byteLength=len(blob), uri='data:application/octet-stream;base64,' + base64.b64encode(blob).decode())],
     bufferViews=views, accessors=accessors,
     materials=[dict(name='Blue', doubleSided=True, pbrMetallicRoughness=dict(baseColorFactor=[.1, .4, 1, 1], metallicFactor=0, roughnessFactor=.6))],

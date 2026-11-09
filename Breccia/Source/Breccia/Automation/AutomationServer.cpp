@@ -1,0 +1,322 @@
+#include "Breccia/Automation/AutomationServer.h"
+
+#include "Breccia/Automation/AutomationLimits.h"
+#include "Breccia/Core/Assert.h"
+#include "Breccia/Core/Base.h"
+#include "Breccia/Core/CrashReporter.h"
+#include "Breccia/Core/FileSystem.h"
+#include "Breccia/Core/Log.h"
+
+#if defined(BR_PLATFORM_WINDOWS)
+	#include <winsock2.h>
+	#include <ws2tcpip.h>
+using SocketHandle = SOCKET;
+static const SocketHandle s_InvalidSocket = INVALID_SOCKET;
+#else
+	#include <arpa/inet.h>
+	#include <netinet/in.h>
+	#include <sys/select.h>
+	#include <sys/socket.h>
+	#include <unistd.h>
+using SocketHandle = int;
+static const SocketHandle s_InvalidSocket = -1;
+#endif
+
+#include <algorithm>
+#include <cerrno>
+#include <cstring>
+#include <string_view>
+#include <system_error>
+
+namespace Breccia {
+
+	namespace {
+
+		SocketHandle ToSocket(intptr_t value)
+		{
+			return static_cast<SocketHandle>(value);
+		}
+
+		// A frame without what the JSON parser skips before a value: white space, and the byte order mark some Windows tools write.
+		std::string_view SkipToFrameStart(std::string_view frame)
+		{
+			constexpr std::string_view ByteOrderMark = "\xEF\xBB\xBF";
+			if (frame.starts_with(ByteOrderMark))
+				frame.remove_prefix(ByteOrderMark.size());
+			frame.remove_prefix(std::min(frame.find_first_not_of(" \t\r"), frame.size()));
+			return frame;
+		}
+
+		// The start of a refused frame for the log: it came from anyone, so only plain text, and not much of it.
+		std::string DescribeRefusedFrame(std::string_view frame)
+		{
+			constexpr size_t MaxLength = 40;
+			std::string text(frame.substr(0, MaxLength));
+			std::ranges::replace_if(text, [](char character) { return character < ' ' || character > '~'; }, '?');
+			return text;
+		}
+
+		void CloseSocket(SocketHandle socket)
+		{
+#if defined(BR_PLATFORM_WINDOWS)
+			closesocket(socket);
+#else
+			close(socket);
+#endif
+		}
+
+		// Waits until the socket is readable or the timeout passes. Returns >0 readable, 0 timeout, <0 error.
+		int WaitReadable(SocketHandle socket, int timeoutMilliseconds)
+		{
+			fd_set set;
+			FD_ZERO(&set);
+			FD_SET(socket, &set);
+			timeval timeout;
+			timeout.tv_sec = timeoutMilliseconds / 1000;
+			timeout.tv_usec = static_cast<decltype(timeout.tv_usec)>(timeoutMilliseconds % 1000) * 1000;
+			return select(static_cast<int>(socket) + 1, &set, nullptr, nullptr, &timeout);
+		}
+
+		// The reason the last socket call failed.
+		std::string LastSocketError()
+		{
+#if defined(BR_PLATFORM_WINDOWS)
+			const int code = WSAGetLastError();
+			if (code == WSAETIMEDOUT || code == WSAEWOULDBLOCK)
+				return "timed out (the client stopped reading)";
+			return FileSystem::DescribeError(std::error_code(code, std::system_category()));
+#else
+			const int code = errno;
+			if (code == EAGAIN || code == EWOULDBLOCK)
+				return "timed out (the client stopped reading)";
+			return std::generic_category().message(code);
+#endif
+		}
+
+		// False with outError when the client did not take all of the data.
+		bool SendAll(SocketHandle socket, const std::string& data, std::string& outError)
+		{
+			size_t sent = 0;
+			while (sent < data.size())
+			{
+#if defined(BR_PLATFORM_WINDOWS)
+				const int result = send(socket, data.data() + sent, static_cast<int>(data.size() - sent), 0);
+#elif defined(BR_PLATFORM_LINUX)
+				const ssize_t result = send(socket, data.data() + sent, data.size() - sent, MSG_NOSIGNAL);
+#else
+				const ssize_t result = send(socket, data.data() + sent, data.size() - sent, 0);
+#endif
+				if (result <= 0)
+				{
+					outError = result == 0 ? std::string("connection closed") : LastSocketError();
+					return false;
+				}
+				sent += static_cast<size_t>(result);
+			}
+			return true;
+		}
+
+	}
+
+	AutomationServer::~AutomationServer()
+	{
+		Stop();
+	}
+
+	bool AutomationServer::Start(uint16_t port, RequestHandler handler, std::string& outError)
+	{
+		return StartWithFactory(port, [handler = std::move(handler)]() { return ClientHandler{ handler, nullptr }; }, outError);
+	}
+
+	bool AutomationServer::StartWithFactory(uint16_t port, HandlerFactory factory, std::string& outError)
+	{
+		if (m_Running)
+		{
+			outError = "server already running";
+			return false;
+		}
+
+#if defined(BR_PLATFORM_WINDOWS)
+		WSADATA wsaData;
+		if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
+		{
+			outError = "WSAStartup failed";
+			return false;
+		}
+#endif
+
+		SocketHandle listenSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+		if (listenSocket == s_InvalidSocket)
+		{
+			outError = "cannot create socket";
+			return false;
+		}
+
+		int reuse = 1;
+#if defined(BR_PLATFORM_WINDOWS)
+		// On Windows SO_REUSEADDR would let another process bind (hijack) the same port; demand exclusivity.
+		setsockopt(listenSocket, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, reinterpret_cast<const char*>(&reuse), sizeof(reuse));
+#else
+		// Allows restarting the editor immediately while old connections linger in TIME_WAIT.
+		setsockopt(listenSocket, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&reuse), sizeof(reuse));
+#endif
+#if defined(BR_PLATFORM_MACOS)
+		setsockopt(listenSocket, SOL_SOCKET, SO_NOSIGPIPE, &reuse, sizeof(reuse));
+#endif
+
+		sockaddr_in address;
+		std::memset(&address, 0, sizeof(address));
+		address.sin_family = AF_INET;
+		address.sin_port = htons(port);
+		address.sin_addr.s_addr = htonl(INADDR_LOOPBACK); // never reachable from other machines
+
+		if (bind(listenSocket, reinterpret_cast<sockaddr*>(&address), sizeof(address)) != 0 || listen(listenSocket, 4) != 0)
+		{
+			CloseSocket(listenSocket);
+			outError = "cannot listen on 127.0.0.1:" + std::to_string(port) + " (port in use?)";
+			return false;
+		}
+
+		socklen_t length = sizeof(address);
+		getsockname(listenSocket, reinterpret_cast<sockaddr*>(&address), &length);
+		m_Port = ntohs(address.sin_port);
+		m_ListenSocket = static_cast<intptr_t>(listenSocket);
+		m_Factory = std::move(factory);
+		m_Stopping = false;
+		m_Running = true;
+		m_Thread = std::thread([this]() {
+			const CrashReporter::ThreadStack crashStack;
+			Run();
+		});
+		BR_CORE_INFO("Automation server listening on 127.0.0.1:{}", m_Port);
+		return true;
+	}
+
+	void AutomationServer::Stop()
+	{
+		if (!m_Running)
+			return;
+		m_Stopping = true;
+		if (m_Thread.joinable())
+			m_Thread.join();
+		CloseSocket(ToSocket(m_ListenSocket));
+		m_ListenSocket = -1;
+		m_Running = false;
+#if defined(BR_PLATFORM_WINDOWS)
+		WSACleanup();
+#endif
+	}
+
+	void AutomationServer::Run()
+	{
+		const SocketHandle listenSocket = ToSocket(m_ListenSocket);
+		while (!m_Stopping)
+		{
+			if (WaitReadable(listenSocket, IdlePollMilliseconds) <= 0)
+				continue;
+			SocketHandle client = accept(listenSocket, nullptr, nullptr);
+			if (client == s_InvalidSocket)
+				continue;
+#if defined(BR_PLATFORM_MACOS)
+			int noSigPipe = 1;
+			setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, sizeof(noSigPipe));
+#endif
+			// Event streams send data the client did not ask for; one that stops reading must not block us forever.
+			const int timeoutMilliseconds = m_SendTimeoutMilliseconds;
+#if defined(BR_PLATFORM_WINDOWS)
+			const DWORD sendTimeout = static_cast<DWORD>(timeoutMilliseconds);
+			const int timeoutSet = setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&sendTimeout), sizeof(sendTimeout));
+#else
+			timeval sendTimeout;
+			sendTimeout.tv_sec = timeoutMilliseconds / 1000;
+			sendTimeout.tv_usec = static_cast<decltype(sendTimeout.tv_usec)>(timeoutMilliseconds % 1000) * 1000;
+			const int timeoutSet = setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &sendTimeout, sizeof(sendTimeout));
+#endif
+			if (timeoutSet != 0)
+				BR_CORE_WARN("Automation: cannot set a send timeout ({}); a client that stops reading can stall the server", LastSocketError());
+			ServeClient(static_cast<intptr_t>(client), m_Factory());
+			CloseSocket(client);
+		}
+	}
+
+	void AutomationServer::ServeClient(intptr_t clientHandle, const ClientHandler& handler)
+	{
+		const SocketHandle client = ToSocket(clientHandle);
+		std::string buffer;
+		char chunk[4096];
+		// Until a frame that is not blank arrives.
+		bool awaitingFirstFrame = true;
+		BR_CORE_ASSERT(handler.OnRequest, "a client handler needs OnRequest");
+		const auto send = [&](const std::string& data, const char* what) {
+			std::string error;
+			if (SendAll(client, data, error))
+				return true;
+			BR_CORE_WARN("Automation: closing connection; cannot send {} bytes of {}: {}", data.size(), what, error);
+			return false;
+		};
+		const auto sendPending = [&]() {
+			if (!handler.TakePending)
+				return true;
+			const std::string frames = handler.TakePending();
+			return frames.empty() || send(frames, "event frames");
+		};
+
+		while (!m_Stopping)
+		{
+			const int ready = WaitReadable(client, IdlePollMilliseconds);
+			if (ready < 0)
+				return;
+			if (ready == 0)
+			{
+				if (!sendPending())
+					return;
+				continue;
+			}
+
+			const auto received = recv(client, chunk, sizeof(chunk), 0);
+			if (received <= 0)
+				return; // closed or error
+			buffer.append(chunk, static_cast<size_t>(received));
+
+			size_t newline;
+			while ((newline = buffer.find('\n')) != std::string::npos)
+			{
+				if (newline > MaxAutomationLineBytes)
+				{
+					BR_CORE_WARN("Automation: closing connection; frame size {} exceeds {} byte limit", newline, MaxAutomationLineBytes);
+					return;
+				}
+				std::string line = buffer.substr(0, newline);
+				buffer.erase(0, newline + 1);
+				if (!line.empty() && line.back() == '\r')
+					line.pop_back();
+				if (const std::string_view frame = SkipToFrameStart(line); awaitingFirstFrame && !frame.empty())
+				{
+					awaitingFirstFrame = false;
+					// A web page can reach this port: a browser sends a cross-origin POST without a preflight, unless it blocks
+					// local network access. The page chooses the body of its request but not the request line, which fails
+					// here, so nothing behind that line reaches a handler. Every automation client opens with an object or an
+					// array, or malformed JSON that starts like one.
+					if (frame.front() != '{' && frame.front() != '[')
+					{
+						BR_CORE_WARN("Automation: closing connection; its first frame does not open a JSON object or array (an HTTP request from a web page looks like this): '{}'", DescribeRefusedFrame(frame));
+						const std::string refusal = R"({"ok":false,"error":"this port speaks newline-delimited JSON"})";
+						send(refusal + "\n", "a refusal");
+						return;
+					}
+				}
+				const std::string response = handler.OnRequest(line);
+				if (!response.empty() && !send(response + "\n", "a response"))
+					return;
+				if (!sendPending())
+					return;
+			}
+			if (buffer.size() > MaxAutomationLineBytes)
+			{
+				BR_CORE_WARN("Automation: closing connection; frame size {} exceeds {} byte limit", buffer.size(), MaxAutomationLineBytes);
+				return;
+			}
+		}
+	}
+
+}

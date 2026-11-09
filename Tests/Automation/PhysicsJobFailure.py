@@ -4,7 +4,7 @@ import subprocess
 import sys
 
 for mode in ("worker", "barrier"):
-    env = dict(os.environ, BASALT_TEST_PHYSICS_FAILURE=mode)
+    env = dict(os.environ, BRECCIA_TEST_PHYSICS_FAILURE=mode)
     result = subprocess.run(
         [sys.argv[1], "--test-case=Throwing Jolt jobs fail fast on workers and barrier callers"],
         env=env, capture_output=True, text=True, timeout=30,

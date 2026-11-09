@@ -49,6 +49,6 @@
 			"Type": "Button"
 		}
 	],
-	"Format": "BasaltInput",
+	"Format": "BrecciaInput",
 	"Version": 1
 }

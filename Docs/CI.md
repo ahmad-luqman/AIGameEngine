@@ -11,7 +11,7 @@ this page is the overview and the list of gaps to keep in mind when a change dep
 | `fuzz-nightly.yml` | 03:17 UTC every night; manual runs (`-f seconds=N`) | One job builds every fuzz target, then one job per target fuzzes it (1200 s by default), keeping each target's grown corpus in a cache. A failing target uploads `fuzz-crashes-<Target>` (crash inputs and the fuzzer log) |
 | `release.yml` | `v*` tags (publishes a GitHub release); pull requests that change its inputs (listed in the file) and manual runs build and package without publishing | One packaging job per OS (Dist build, `scripts/package_release.py`), then `publish` for tags |
 
-Every job that builds Basalt sets up its runner through `.github/actions/setup-basalt` (the Linux package list, the
+Every job that builds Breccia sets up its runner through `.github/actions/setup-breccia` (the Linux package list, the
 Homebrew packages, the Windows Vulkan SDK, MSVC and Ninja, and the dependency sources). Pull requests that change the
 action also run `release.yml`; `fuzz-nightly.yml` has no pull request trigger, so start it by hand after changing it (its
 header says when and how).
@@ -27,7 +27,7 @@ protection, so renaming or removing jobs blocks nothing; check `gh api repos/ahm
   and the nightly fuzz build restores, never saves, CI's fuzz cache. ccache drops files unused for a week. The clang-tidy
   jobs compile only shaders, and `release.yml`'s Dist builds run without a compiler cache.
 - **Dependency sources.** One entry per OS, shared by every job and workflow, holds the pinned third-party sources
-  (`scripts/ci-fetch-deps.sh`, used through `BASALT_DEPS_SOURCE_DIR` by `cmake/DependencySources.cmake`). Its key hashes
+  (`scripts/ci-fetch-deps.sh`, used through `BRECCIA_DEPS_SOURCE_DIR` by `cmake/DependencySources.cmake`). Its key hashes
   `cmake/Dependencies.cmake` and `scripts/ci-fetch-deps.sh`, so a change to either makes every job of the first run of a
   pull request fetch the sources again (about 1.5-2 minutes each). That run saves an entry that only the pull request's
   later runs can read (manual runs on its branch save their own); other refs miss until `main` saves one.

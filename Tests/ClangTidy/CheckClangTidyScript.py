@@ -32,19 +32,19 @@ def rejected(expected, *arguments, env=None):
         fail(f"'{' '.join(arguments)}' was accepted or did not print '{expected}':\n{result.stdout}")
 
 
-# This build: every compile command of Basalt's own source directories, and nothing else.
+# This build: every compile command of Breccia's own source directories, and nothing else.
 with open(os.path.join(build_dir, "ClangTidyTargets.txt"), encoding="utf-8") as file:
     targets = file.read().split()
-for target in ("Basalt", "BasaltTests", "BasaltCLI", "BasaltBenchmark"):
+for target in ("Breccia", "BrecciaTests", "BrecciaCLI", "BrecciaBenchmark"):
     if target not in targets:
         fail(f"ClangTidyTargets.txt lacks {target}: {targets}")
 everything = listed("-p", build_dir)
 if len(everything) != len(set(everything)) or everything != sorted(everything):
     fail("the selection is not a sorted list of unique files")
 real_source = os.path.realpath(source_dir)
-owned_dirs = [os.path.join(real_source, path) for path in ("Basalt/Source", "Basalt-Editor/Source", "Basalt-Runtime/Source",
-    "Basalt-CLI/Source", "Tests/Source", "Tests/Rendering", "Tests/Benchmarks", "Tests/Fuzz")]
-generated = os.path.join(os.path.realpath(build_dir), "Basalt", "EmbeddedShaders", "EmbeddedShaders.cpp")
+owned_dirs = [os.path.join(real_source, path) for path in ("Breccia/Source", "Breccia-Editor/Source", "Breccia-Runtime/Source",
+    "Breccia-CLI/Source", "Tests/Source", "Tests/Rendering", "Tests/Benchmarks", "Tests/Fuzz")]
+generated = os.path.join(os.path.realpath(build_dir), "Breccia", "EmbeddedShaders", "EmbeddedShaders.cpp")
 
 
 def in_owned_dirs(path):
@@ -53,7 +53,7 @@ def in_owned_dirs(path):
 
 for path in everything:
     if path != generated and not in_owned_dirs(path):
-        fail(f"a file outside Basalt's source directories was selected: {path}")
+        fail(f"a file outside Breccia's source directories was selected: {path}")
 if generated not in everything:
     fail(f"{generated} was not selected")
 # A coverage floor: a target dropping out of the list (or the filter) would leave its files unchecked.
@@ -61,7 +61,7 @@ with open(os.path.join(build_dir, "compile_commands.json"), encoding="utf-8") as
     compiled = {os.path.realpath(os.path.join(entry["directory"], entry["file"])) for entry in json.load(file)}
 unchecked = sorted(path for path in compiled - set(everything) if in_owned_dirs(path))
 if unchecked:
-    fail("compiled Basalt sources are not selected:\n  " + "\n  ".join(unchecked))
+    fail("compiled Breccia sources are not selected:\n  " + "\n  ".join(unchecked))
 
 # Shards: each file exactly once, sizes within one of each other.
 for count in (1, 2, 3, 5):

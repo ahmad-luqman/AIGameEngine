@@ -1,10 +1,10 @@
-#include "Basalt/Renderer/PlayStatistics.h"
+#include "Breccia/Renderer/PlayStatistics.h"
 
-#include "Basalt/Scene/Scene.h"
+#include "Breccia/Scene/Scene.h"
 
 #include <doctest/doctest.h>
 
-using namespace Basalt;
+using namespace Breccia;
 
 namespace {
 	GpuStatistics Ready(float ms)

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Fails if a configured build tree does not use CI's caches, which would otherwise only show as a slower build:
-# - it downloaded a dependency instead of taking it from BASALT_DEPS_SOURCE_DIR (a stale stamp, a dependency the fetch
+# - it downloaded a dependency instead of taking it from BRECCIA_DEPS_SOURCE_DIR (a stale stamp, a dependency the fetch
 #   left out, a configure that does not see the variable; see scripts/ci-fetch-deps.sh);
 # - CMAKE_C_COMPILER_LAUNCHER or CMAKE_CXX_COMPILER_LAUNCHER is set in the environment but the tree does not compile
 #   through it. Jobs without a compiler cache leave them unset (release.yml) or empty (ci.yml's clang-tidy jobs), and only
@@ -21,7 +21,7 @@ fi
 
 downloaded=("$1"/_deps/*-src)
 if [[ ${#downloaded[@]} -gt 0 ]]; then
-	echo "::error::$1 downloaded ${downloaded[*]##*/} instead of using BASALT_DEPS_SOURCE_DIR (${BASALT_DEPS_SOURCE_DIR:-unset})." \
+	echo "::error::$1 downloaded ${downloaded[*]##*/} instead of using BRECCIA_DEPS_SOURCE_DIR (${BRECCIA_DEPS_SOURCE_DIR:-unset})." \
 		"If the restored cache lacks them, delete its deps-src entry (gh cache delete) so the next run fetches again." >&2
 	exit 1
 fi

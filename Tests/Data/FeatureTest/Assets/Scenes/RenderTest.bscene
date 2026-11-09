@@ -1,5 +1,5 @@
 {
-	"Format": "BasaltScene",
+	"Format": "BrecciaScene",
 	"Version": 1,
 	"Name": "RenderTest",
 	"Renderer": { "Exposure": 1.0, "Tonemapper": "ACES", "SSAOEnabled": true },

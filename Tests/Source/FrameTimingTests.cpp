@@ -1,10 +1,10 @@
-#include "Basalt/Core/FrameTiming.h"
+#include "Breccia/Core/FrameTiming.h"
 
 #include <doctest/doctest.h>
 
 #include <limits>
 
-using namespace Basalt;
+using namespace Breccia;
 
 TEST_CASE("Host frame timing averages real latency, including stalls, and evicts old samples")
 {

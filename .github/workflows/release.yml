@@ -15,21 +15,21 @@ on:
   pull_request:
     paths:
       - .github/workflows/release.yml
-      - .github/actions/setup-basalt/**
+      - .github/actions/setup-breccia/**
       - scripts/ci-*.sh
       - scripts/package_release.py
       - scripts/sign-macos.sh
       - scripts/sign-windows.py
       - CMakeLists.txt
-      - Basalt/CMakeLists.txt
+      - Breccia/CMakeLists.txt
       - cmake/Dependencies.cmake
-      - Basalt/Source/Basalt/Project/**
-      - Basalt/Source/Basalt/Core/Process.*
-      - Basalt/Source/Basalt/Core/Window.*
-      - Basalt/Source/Basalt/Core/PackArchive.*
-      - Basalt/Source/Basalt/Core/CrashReporter.*
-      - Basalt/Source/Basalt/Renderer/VulkanLoader.*
-      - Basalt-Runtime/**
+      - Breccia/Source/Breccia/Project/**
+      - Breccia/Source/Breccia/Core/Process.*
+      - Breccia/Source/Breccia/Core/Window.*
+      - Breccia/Source/Breccia/Core/PackArchive.*
+      - Breccia/Source/Breccia/Core/CrashReporter.*
+      - Breccia/Source/Breccia/Renderer/VulkanLoader.*
+      - Breccia-Runtime/**
       - Samples/**
   workflow_dispatch:
 
@@ -68,7 +68,7 @@ jobs:
       # after the build (Homebrew's hold one architecture).
       - name: Set up the build tools
         timeout-minutes: 30
-        uses: ./.github/actions/setup-basalt
+        uses: ./.github/actions/setup-breccia
 
       # Pinned and checksummed. The type2 runtime is passed explicitly; appimagetool would otherwise download the
       # latest one while it builds each AppImage.
@@ -103,7 +103,7 @@ jobs:
       # builds both architectures into each binary (package_release.py --require-universal checks).
       # The default shell (pwsh on Windows), not bash: Git Bash's PATH puts its own link before MSVC's link.exe.
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Dist -DBASALT_BUILD_TESTS=OFF -DBASALT_CHECK_FORMAT=OFF ${{ runner.os == 'macOS' && '"-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"' || '' }}
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Dist -DBRECCIA_BUILD_TESTS=OFF -DBRECCIA_CHECK_FORMAT=OFF ${{ runner.os == 'macOS' && '"-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"' || '' }}
 
       - name: Check that the build uses the caches
         shell: bash
@@ -160,7 +160,7 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -k "$password" "$keychain"
           security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
           rm "$RUNNER_TEMP/certificate.p12"
-          xcrun notarytool store-credentials basalt-notary --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --keychain "$keychain"
+          xcrun notarytool store-credentials breccia-notary --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --keychain "$keychain"
           echo "SIGN_IDENTITY=$MACOS_SIGNING_IDENTITY" >> "$GITHUB_ENV"
 
       # With a code signing certificate in the repository secrets, the Windows tools and samples are signed with signtool
@@ -219,7 +219,7 @@ jobs:
           arguments=(--build build --output dist)
           [[ "$RUNNER_OS" == "Linux" ]] && arguments+=(--require-appimage)
           [[ "$RUNNER_OS" == "macOS" ]] && arguments+=(--require-universal)
-          [[ -n "${SIGN_IDENTITY:-}" ]] && arguments+=(--sign-identity "$SIGN_IDENTITY" --notarize basalt-notary)
+          [[ -n "${SIGN_IDENTITY:-}" ]] && arguments+=(--sign-identity "$SIGN_IDENTITY" --notarize breccia-notary)
           [[ -n "${WINDOWS_CERTIFICATE_THUMBPRINT:-}" ]] && arguments+=(--windows-certificate "$WINDOWS_CERTIFICATE_THUMBPRINT")
           # A signing service's library and metadata, which a replacement for the import step sets (Docs/Shipping.md).
           [[ -n "${WINDOWS_SIGNING_DLIB:-}" ]] && arguments+=(--windows-dlib "$WINDOWS_SIGNING_DLIB" --windows-dlib-metadata "${WINDOWS_SIGNING_METADATA:-}")
@@ -264,4 +264,4 @@ jobs:
           # Platform notes (unsigned or ad hoc signed packages) come before the generated notes.
           cat dist/NOTES-*.md > "$RUNNER_TEMP/notes.md" 2>/dev/null || true
           rm -f dist/NOTES-*.md
-          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "Basalt ${GITHUB_REF_NAME#v}" --notes-file "$RUNNER_TEMP/notes.md" --generate-notes --verify-tag
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "Breccia ${GITHUB_REF_NAME#v}" --notes-file "$RUNNER_TEMP/notes.md" --generate-notes --verify-tag

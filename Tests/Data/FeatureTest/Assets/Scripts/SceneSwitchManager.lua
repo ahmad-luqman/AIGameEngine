@@ -3,7 +3,7 @@
 --
 -- FeatureTest.batch.json plays SceneSwitchA, calls SceneSwitchTest.Report(), then plays it again and calls
 -- SceneSwitchTest.CheckSaved(), which needs the save data written at the end of the first session. ctest points
--- BASALT_USER_DATA_DIR at the build directory, so this never touches the real user data directory.
+-- BRECCIA_USER_DATA_DIR at the build directory, so this never touches the real user data directory.
 
 local Checks = require("Assets.Scripts.Lib.Checks")
 -- Bound to the session's SceneSwitchTest table in OnCreate.

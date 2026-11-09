@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Downloads every pinned dependency (cmake/Dependencies.cmake), optional ones included, into <dir>/<name>-src without
 # git history (most of their size), and stamps <dir> with the hash of Dependencies.cmake, which
-# cmake/DependencySources.cmake requires before it uses the directory through BASALT_DEPS_SOURCE_DIR.
+# cmake/DependencySources.cmake requires before it uses the directory through BRECCIA_DEPS_SOURCE_DIR.
 # Usage: scripts/ci-fetch-deps.sh <dir>
 # CI runs it on a dependency-cache miss, before the build's own configure, so cache hits and misses compile the same
 # paths. Locally, one fetch into a shared directory lets several worktrees use the same sources.
@@ -33,11 +33,11 @@ sourceDir="$(nativePath "$(cd "$1" && pwd)")"
 scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
 
-# BASALT_PROFILE adds Tracy, and the editor (on by default) adds nativefiledialog where it builds (on Linux only with the
-# D-Bus development files), so one fetch serves every job on this OS. BASALT_DEPS_SOURCE_DIR is unset: the directory
+# BRECCIA_PROFILE adds Tracy, and the editor (on by default) adds nativefiledialog where it builds (on Linux only with the
+# D-Bus development files), so one fetch serves every job on this OS. BRECCIA_DEPS_SOURCE_DIR is unset: the directory
 # has no stamp until this finishes, so the configure would only warn that it ignores it.
-if ! env -u BASALT_DEPS_SOURCE_DIR cmake -S "$(nativePath "$root")" -B "$(nativePath "$scratch")" -G Ninja \
-	-DFETCHCONTENT_BASE_DIR="$sourceDir" -DBASALT_PROFILE=ON -DBASALT_CHECK_FORMAT=OFF > "$scratch/configure.log" 2>&1; then
+if ! env -u BRECCIA_DEPS_SOURCE_DIR cmake -S "$(nativePath "$root")" -B "$(nativePath "$scratch")" -G Ninja \
+	-DFETCHCONTENT_BASE_DIR="$sourceDir" -DBRECCIA_PROFILE=ON -DBRECCIA_CHECK_FORMAT=OFF > "$scratch/configure.log" 2>&1; then
 	cat "$scratch/configure.log" >&2
 	exit 1
 fi

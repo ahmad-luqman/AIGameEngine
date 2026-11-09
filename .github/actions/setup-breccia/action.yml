@@ -1,0 +1,99 @@
+name: Set up Breccia's build tools
+description: >-
+  Installs what building Breccia needs on the runner's OS (Linux packages, Homebrew packages, or the Vulkan SDK, MSVC and
+  Ninja on Windows), restores the dependency sources into _deps (fetching and saving them on a cache miss) and points
+  BRECCIA_DEPS_SOURCE_DIR at them.
+
+# Used by every job that builds Breccia, in ci.yml, fuzz-nightly.yml and release.yml, after checking out the repository
+# (the steps run its scripts). release.yml also runs on pull requests that change this file; fuzz-nightly.yml has no pull
+# request trigger, so start it by hand after changing this file (see its header). Composite steps cannot set
+# timeout-minutes, so callers put one on the step that uses this action. scripts/ci-apt-install.sh limits each apt
+# attempt itself; Homebrew, the Vulkan SDK install and the dependency fetch have only the caller's limit.
+inputs:
+  apt-packages:
+    description: >-
+      Ubuntu packages to install besides the base set every Linux build needs (e.g. clang), separated by spaces or
+      newlines; ignored on other OSes.
+    default: ""
+  brew-packages:
+    description: >-
+      Homebrew packages to install besides ninja and shaderc, separated by spaces or newlines; ignored on other OSes.
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    # The base set: Ninja, glslc and the Vulkan loader, D-Bus for the editor's file dialogs, and GLFW's X11 and Wayland
+    # headers. Without the D-Bus files the fetch's configure leaves out nativefiledialog and scripts/ci-fetch-deps.sh
+    # fails, and any Linux job may be the one that fetches.
+    - name: Install packages (Linux)
+      if: runner.os == 'Linux'
+      shell: bash
+      env:
+        EXTRA_PACKAGES: ${{ inputs.apt-packages }}
+      run: |
+        read -ra extra <<< "${EXTRA_PACKAGES//$'\n'/ }"
+        scripts/ci-apt-install.sh ninja-build glslc libvulkan1 libdbus-1-dev libx11-dev libxrandr-dev libxinerama-dev \
+          libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols "${extra[@]}"
+
+    - name: Install packages (macOS)
+      if: runner.os == 'macOS'
+      shell: bash
+      env:
+        EXTRA_PACKAGES: ${{ inputs.brew-packages }}
+      run: |
+        read -ra extra <<< "${EXTRA_PACKAGES//$'\n'/ }"
+        brew install ninja shaderc "${extra[@]}"
+
+    - name: Install Vulkan SDK (Windows)
+      if: runner.os == 'Windows'
+      uses: jakoch/install-vulkan-sdk-action@v1
+      with:
+        vulkan_version: latest
+        install_runtime: true
+        cache: true
+        stripdown: true
+
+    - name: Set up MSVC (Windows)
+      if: runner.os == 'Windows'
+      uses: ilammy/msvc-dev-cmd@v1
+
+    - name: Install Ninja (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: choco install ninja -y
+
+    # One cache entry per OS, shared by every job and workflow (each ref also reads main's entries). The key changes with
+    # cmake/Dependencies.cmake and the fetch script, and cmake/DependencySources.cmake ignores a directory whose stamp does
+    # not match the pins. No restore-keys: the fetch refuses a directory that is not empty.
+    - name: Restore dependency sources
+      id: deps
+      uses: actions/cache/restore@v4
+      with:
+        path: _deps
+        key: deps-src-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'scripts/ci-fetch-deps.sh') }}
+
+    # A miss fetches into the same directory, so hits and misses compile the same paths. The fetch configures the
+    # project, and CMake's compiler probes compile through the launcher named in the environment, which the caller's
+    # compiler cache step may not have installed yet; cleared here, the fetch does not depend on the step order.
+    - name: Fetch dependency sources
+      if: steps.deps.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        CMAKE_C_COMPILER_LAUNCHER: ""
+        CMAKE_CXX_COMPILER_LAUNCHER: ""
+      run: scripts/ci-fetch-deps.sh _deps
+
+    # Saved right away (actions/cache saves only after a successful job), so a later failing step does not leave the next
+    # runs fetching again.
+    - name: Save dependency sources
+      if: steps.deps.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: _deps
+        key: ${{ steps.deps.outputs.cache-primary-key }}
+
+    # printf writes the path (D:\a\... on Windows) as data, whatever the shell's echo settings.
+    - name: Use the dependency sources
+      shell: bash
+      run: printf 'BRECCIA_DEPS_SOURCE_DIR=%s/_deps\n' "$GITHUB_WORKSPACE" >> "$GITHUB_ENV"

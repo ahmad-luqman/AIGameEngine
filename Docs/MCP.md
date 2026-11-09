@@ -7,13 +7,13 @@ use the same validation path.
 
 ## Headless MCP server
 
-Build Basalt, then configure an MCP client to launch the absolute path to `build/bin/basalt`:
+Build Breccia, then configure an MCP client to launch the absolute path to `build/bin/breccia`:
 
 ```json
 {
   "mcpServers": {
-    "basalt": {
-      "command": "/absolute/path/to/build/bin/basalt",
+    "breccia": {
+      "command": "/absolute/path/to/build/bin/breccia",
       "args": ["--project", "/absolute/path/to/game", "mcp"]
     }
   }
@@ -42,7 +42,7 @@ a **custom TCP transport**, not an HTTP endpoint. Standard stdio clients can use
 ```json
 {
   "mcpServers": {
-    "basalt-editor": {
+    "breccia-editor": {
       "command": "python3",
       "args": ["/absolute/path/to/scripts/mcp_editor.py", "--port", "7420"]
     }
@@ -69,7 +69,7 @@ automation API; use it for trusted local clients.
 
 ## Protocol
 
-Basalt supports MCP `2025-11-25`, advertising only the `tools` capability. Unsupported client versions
+Breccia supports MCP `2025-11-25`, advertising only the `tools` capability. Unsupported client versions
 receive this supported version so the client can decide whether to continue. Send `initialize` with
 `protocolVersion`, `capabilities`, and `clientInfo` (`name`, `version`), followed by
 `notifications/initialized`. Then use:
@@ -142,7 +142,7 @@ Agents can follow a running game and check it without polling or screenshots:
   session, so one subscription sees gaps. A client that reads one line per request must set such frames aside
   (see `Tests/Automation/EditorViewport.py`). The server serves one connection at a time, so subscribe on the
   connection that sends the commands. MCP clients and the CLI get polled subscriptions instead (on the editor's TCP
-  server an MCP client's still end with its connection; `basalt mcp`'s end with the process): `events.poll {subscription}` returns the queued events (at most 1024 wait;
+  server an MCP client's still end with its connection; `breccia mcp`'s end with the process): `events.poll {subscription}` returns the queued events (at most 1024 wait;
   `dropped` counts the rest). Two options turn a poll into an assertion that fails, leaving the events queued,
   unless they hold: `assertTypes` lists event types that must be there, and `expect` lists event patterns that must
   each match an event of its own (list a pattern twice to require two such events). A pattern matches an event that
@@ -166,9 +166,9 @@ Agents can follow a running game and check it without polling or screenshots:
 ## Schemas and help
 
 ```sh
-basalt help entity.create
-basalt help # all commands, including inputSchema
-basalt serve # legacy automation protocol, unchanged
+breccia help entity.create
+breccia help # all commands, including inputSchema
+breccia serve # legacy automation protocol, unchanged
 ```
 
 The legacy JSON request for one command's help is
@@ -312,7 +312,7 @@ costs one view.
   `cameraSpeed` (fly speed multiplier, 0.1–10; also the viewport's Speed slider and RMB + wheel), `theme` (`Dark` or
   `Light`), `recentProjects` (most recent first, at most 10; `[]` clears; opened projects are added) and `autoReload`
   (watch `Assets/` and reload changed files, hot reloading scripts in Play). It returns them with `file` and
-  `layoutFile`: both live in `<user data>/BasaltEditor/` (`BASALT_USER_DATA_DIR` moves it), the window layout
+  `layoutFile`: both live in `<user data>/BrecciaEditor/` (`BRECCIA_USER_DATA_DIR` moves it), the window layout
   included (an `imgui.ini` in the working directory is copied there once). Without a user data directory, or when the
   preferences file cannot be read (it is left alone then), `file` is empty, `persistent` is false and the layout stays
   in `./imgui.ini`. A file that does not hold valid preferences is moved to `Preferences.json.invalid` and the defaults

@@ -1,0 +1,247 @@
+#include "Breccia/Core/Application.h"
+
+#include "Breccia/Audio/AudioEngine.h"
+#include "Breccia/Core/Assert.h"
+#include "Breccia/Core/CrashReporter.h"
+#include "Breccia/Core/FileSystem.h"
+#include "Breccia/Core/Input.h"
+#include "Breccia/Core/Profiler.h"
+#include "Breccia/Core/Timer.h"
+#include "Breccia/ImGui/ImGuiLayer.h"
+#include "Breccia/Renderer/GraphicsDevice.h"
+#include "Breccia/Renderer/VulkanLoader.h"
+
+#include <ranges>
+#include <system_error>
+
+namespace Breccia {
+
+	Application* Application::s_Instance = nullptr;
+
+	Application::Application(const ApplicationSpecification& specification)
+		: m_Specification(specification)
+	{
+		BR_CORE_ASSERT(!s_Instance, "Only one Application may exist at a time");
+		s_Instance = this;
+
+		Log::Init();
+
+		if (!m_Specification.WorkingDirectory.empty())
+		{
+			std::error_code error;
+			std::filesystem::current_path(m_Specification.WorkingDirectory, error);
+			if (error)
+			{
+				BR_CORE_ERROR("Cannot change working directory to '{}': {}", FileSystem::PathToUtf8(m_Specification.WorkingDirectory), FileSystem::DescribeError(error));
+				return;
+			}
+		}
+
+		AudioEngine::Init(m_Specification.Headless);
+
+		if (m_Specification.Headless)
+		{
+			m_Initialized = true;
+			return;
+		}
+
+		if (!VulkanLoader::Load())
+			return;
+
+		GraphicsDeviceSpecification deviceSpecification;
+		deviceSpecification.ApplicationName = m_Specification.Name;
+		deviceSpecification.EnableValidation = m_Specification.EnableValidation;
+		deviceSpecification.VSync = m_Specification.VSync;
+		deviceSpecification.DeviceSelector = m_Specification.GpuSelector;
+
+		if (m_Specification.Offscreen)
+		{
+			m_GraphicsDevice = GraphicsDevice::CreateOffscreen(m_Specification.WindowWidth, m_Specification.WindowHeight, deviceSpecification);
+		}
+		else
+		{
+			WindowSpecification windowSpecification;
+			windowSpecification.Title = m_Specification.Name;
+			windowSpecification.Width = m_Specification.WindowWidth;
+			windowSpecification.Height = m_Specification.WindowHeight;
+			windowSpecification.StartMaximized = m_Specification.StartMaximized;
+			m_Window = CreateScope<Window>(windowSpecification);
+			if (!m_Window->IsValid())
+				return;
+			m_Window->SetEventCallback(BR_BIND_EVENT_FN(Application::OnEvent));
+			m_GraphicsDevice = GraphicsDevice::Create(*m_Window, deviceSpecification);
+		}
+		if (!m_GraphicsDevice)
+			return;
+
+		if (m_Specification.EnableImGui)
+		{
+			m_ImGuiLayer = new ImGuiLayer();
+			PushOverlay(m_ImGuiLayer);
+		}
+
+		m_Initialized = true;
+	}
+
+	Application::~Application()
+	{
+		if (m_GraphicsDevice)
+			m_GraphicsDevice->WaitIdle();
+
+		// Run deferred work (e.g. queued layer pushes) so ownership of everything queued is resolved.
+		ExecuteMainThreadQueue();
+		// Layers may own GPU resources, so they go before the device.
+		m_LayerStack.Clear();
+		m_ImGuiLayer = nullptr;
+		m_GraphicsDevice.reset();
+		m_Window.reset();
+		VulkanLoader::Unload();
+		AudioEngine::Shutdown();
+
+		s_Instance = nullptr;
+	}
+
+	void Application::PushLayer(Layer* layer)
+	{
+		// Layers may push layers from their callbacks; mutating the stack mid-iteration is not allowed.
+		if (m_IteratingLayers)
+			SubmitToMainThread([this, layer]() { m_LayerStack.PushLayer(layer); });
+		else
+			m_LayerStack.PushLayer(layer);
+	}
+
+	void Application::PushOverlay(Layer* overlay)
+	{
+		if (m_IteratingLayers)
+			SubmitToMainThread([this, overlay]() { m_LayerStack.PushOverlay(overlay); });
+		else
+			m_LayerStack.PushOverlay(overlay);
+	}
+
+	void Application::Close()
+	{
+		m_Running = false;
+	}
+
+	void Application::SubmitToMainThread(std::function<void()> function)
+	{
+		std::scoped_lock lock(m_MainThreadQueueMutex);
+		m_MainThreadQueue.emplace_back(std::move(function));
+	}
+
+	void Application::OnEvent(Event& event)
+	{
+		Input::OnEvent(event);
+
+		EventDispatcher dispatcher(event);
+		dispatcher.Dispatch<WindowCloseEvent>(BR_BIND_EVENT_FN(Application::OnWindowClose));
+
+		const bool wasIterating = m_IteratingLayers;
+		m_IteratingLayers = true;
+		for (Layer* layer : std::views::reverse(m_LayerStack))
+		{
+			if (event.Handled)
+				break;
+			layer->OnEvent(event);
+		}
+		m_IteratingLayers = wasIterating;
+	}
+
+	int Application::Run()
+	{
+		if (!m_Initialized)
+		{
+			// Startup logged why it failed; the newest error is the best reason a player can be shown.
+			const std::optional<std::string> reason = Log::GetHistory().GetLastError();
+			BR_CORE_CRITICAL("Application '{}' failed to initialize", m_Specification.Name);
+			CrashReporter::ShowErrorDialog(fmt::format("{} could not start.\n\n{}", m_Specification.Name, reason.value_or("It reported no reason.")));
+			return 1;
+		}
+
+		Timer frameTimer;
+		while (m_Running)
+		{
+			BR_PROFILE_FRAME();
+			BR_PROFILE_SCOPE("Frame");
+			float deltaTime = frameTimer.Elapsed();
+			frameTimer.Reset();
+			// The initial timer interval precedes any work; it is not a completed host frame.
+			if (m_FrameCount > 0)
+				m_FrameTiming.Add(deltaTime * 1000.0f);
+			if (m_Specification.FixedTimestep > 0.0f)
+				deltaTime = m_Specification.FixedTimestep;
+			// Clamp long stalls (debugger breaks, window drags) so simulations stay stable.
+			deltaTime = std::min(deltaTime, 0.1f);
+			const Timestep timestep(deltaTime);
+			m_Time += deltaTime;
+
+			if (m_Window)
+				m_Window->PollEvents();
+
+			ExecuteMainThreadQueue();
+
+			const bool minimized = m_Window && m_Window->IsMinimized();
+			m_IteratingLayers = true;
+			for (Layer* layer : m_LayerStack)
+				layer->OnUpdate(timestep);
+
+			if (m_GraphicsDevice && !minimized && m_GraphicsDevice->BeginFrame())
+			{
+				for (Layer* layer : m_LayerStack)
+					layer->OnRender();
+
+				if (m_ImGuiLayer && m_ImGuiLayer->IsInitialized())
+				{
+					m_ImGuiLayer->Begin();
+					for (Layer* layer : m_LayerStack)
+						layer->OnImGuiRender();
+					m_ImGuiLayer->End();
+				}
+
+				m_GraphicsDevice->Present();
+			}
+			m_IteratingLayers = false;
+
+			Input::EndFrame();
+			m_FrameCount++;
+
+			if (m_Specification.MaxFrames > 0 && m_FrameCount >= m_Specification.MaxFrames)
+				m_Running = false;
+		}
+
+		if (m_GraphicsDevice)
+			m_GraphicsDevice->WaitIdle();
+		for (Layer* layer : m_LayerStack)
+			layer->OnRunFinished();
+		return m_ExitCode;
+	}
+
+	bool Application::OnWindowClose(WindowCloseEvent& event)
+	{
+		m_Running = false;
+		return true;
+	}
+
+	void Application::ExecuteMainThreadQueue()
+	{
+		std::vector<std::function<void()>> queue;
+		{
+			std::scoped_lock lock(m_MainThreadQueueMutex);
+			queue.swap(m_MainThreadQueue);
+		}
+		for (auto& function : queue)
+			function();
+	}
+
+	Application& Application::Get()
+	{
+		BR_CORE_ASSERT(s_Instance, "No Application instance");
+		return *s_Instance;
+	}
+
+	bool Application::HasInstance()
+	{
+		return s_Instance != nullptr;
+	}
+
+}

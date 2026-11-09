@@ -6,7 +6,7 @@ name: Fuzz (nightly)
 # image, and the targets link everything but the C and C++ runtimes statically (the Vulkan loader and GLFW's window
 # system libraries are opened at run time, which the targets never reach). The matrix and the tarball take their targets
 # from scripts/fuzz.sh --list; the build builds the same ones (fuzz.sh without a filter). Each target's grown corpus is
-# cached between nights. After changing this workflow, .github/actions/setup-basalt or the FUZZ_MODE paths of
+# cached between nights. After changing this workflow, .github/actions/setup-breccia or the FUZZ_MODE paths of
 # scripts/fuzz.sh, start it by hand on the branch (gh workflow run fuzz-nightly.yml --ref <branch> -f seconds=60):
 # nothing else runs it before the next night.
 on:
@@ -62,7 +62,7 @@ jobs:
 
       - name: Set up the build tools
         timeout-minutes: 30
-        uses: ./.github/actions/setup-basalt
+        uses: ./.github/actions/setup-breccia
         with:
           apt-packages: clang
 

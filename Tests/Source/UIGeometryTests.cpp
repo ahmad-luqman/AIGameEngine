@@ -1,14 +1,14 @@
 #include <doctest/doctest.h>
 
-#include <Basalt/Scene/Entity.h>
-#include <Basalt/Core/Log.h>
-#include <Basalt/Core/FileSystem.h>
-#include <Basalt/UI/UIFonts.h>
-#include <Basalt/Scene/Scene.h>
-#include <Basalt/UI/GameUI.h>
-#include <Basalt/UI/UILayout.h>
-#include <Basalt/UI/UIRenderer.h>
-#include <Basalt/UI/UIRules.h>
+#include <Breccia/Scene/Entity.h>
+#include <Breccia/Core/Log.h>
+#include <Breccia/Core/FileSystem.h>
+#include <Breccia/UI/UIFonts.h>
+#include <Breccia/Scene/Scene.h>
+#include <Breccia/UI/GameUI.h>
+#include <Breccia/UI/UILayout.h>
+#include <Breccia/UI/UIRenderer.h>
+#include <Breccia/UI/UIRules.h>
 
 #include "UITestUtils.h"
 #include "TestUtils.h"
@@ -21,7 +21,7 @@
 #include <cmath>
 #include <limits>
 
-using namespace Basalt;
+using namespace Breccia;
 
 TEST_SUITE("UI foundation")
 {
@@ -103,7 +103,7 @@ TEST_SUITE("UI foundation")
 
 	TEST_CASE("text measurement uses drawing line breaks and works without a GPU")
 	{
-		BasaltTest::ImGuiTestContext context;
+		BrecciaTest::ImGuiTestContext context;
 		const auto single = UIRenderer::MeasureText("Hello", 24);
 		const auto doubleLine = UIRenderer::MeasureText("Hello\nHello", 24);
 		CHECK(single.x > 0);
@@ -118,9 +118,9 @@ TEST_SUITE("UI foundation")
 
 TEST_CASE("transformed UI text retains glyphs before final GPU clipping")
 {
-	BasaltTest::ImGuiTestContext context;
+	BrecciaTest::ImGuiTestContext context;
 	ImGui::NewFrame();
-	BasaltTest::ImGuiTestContext::MarkTexturesUploaded();
+	BrecciaTest::ImGuiTestContext::MarkTexturesUploaded();
 	ImDrawList* list = ImGui::GetForegroundDrawList();
 	UIDrawCommand command;
 	command.Kind = UIDrawKind::Text;
@@ -129,7 +129,7 @@ TEST_CASE("transformed UI text retains glyphs before final GPU clipping")
 	command.Transform[2] = { 600, 600, 1 };
 	command.Clip = UIBox{ { 90, 90 }, { 300, 100 } };
 	UIRenderer::Draw(list, { 0, 0 }, { 1920, 1080 }, { 1920, 1080 }, std::span(&command, 1), {});
-	BasaltTest::ImGuiTestContext::MarkTexturesUploaded();
+	BrecciaTest::ImGuiTestContext::MarkTexturesUploaded();
 	CHECK(list->VtxBuffer.Size > 0);
 	for (const auto& draw : list->CmdBuffer)
 	{
@@ -145,9 +145,9 @@ TEST_CASE("transformed UI text retains glyphs before final GPU clipping")
 
 TEST_CASE("sprite sheet rendering maps UV rectangles to the selected row-major cell")
 {
-	BasaltTest::ImGuiTestContext context;
+	BrecciaTest::ImGuiTestContext context;
 	ImGui::NewFrame();
-	BasaltTest::ImGuiTestContext::MarkTexturesUploaded();
+	BrecciaTest::ImGuiTestContext::MarkTexturesUploaded();
 	ImDrawList* list = ImGui::GetForegroundDrawList();
 	UIDrawCommand command;
 	command.Kind = UIDrawKind::Image;
@@ -182,12 +182,12 @@ TEST_CASE("UI foundation Lua options validate transforms sprites and clip stack"
 {
 	Scene scene;
 	scene.OnRuntimeStart();
-	CHECK(BasaltTest::Eval(scene, "local s=UI.MeasureText('Hello', {Size=20}); assert(s.x>0 and s.y==20)") == "");
-	CHECK(BasaltTest::Eval(scene, "UI.PushClip(0,0,100,100); UI.Rect(0,0,200,200,{Rotation=45,Scale=Vec2(2,1)}); UI.PopClip()") == "");
-	CHECK(BasaltTest::Eval(scene, "UI.Image('sheet',0,0,20,20,{UVMin=Vec2(0.2,0),UVMax=Vec2(1,1),SpriteColumns=4,SpriteRows=2,SpriteFrame=7})") == "");
-	CHECK_FALSE(BasaltTest::Eval(scene, "UI.PopClip()").empty());
-	CHECK_FALSE(BasaltTest::Eval(scene, "UI.Image('sheet',0,0,20,20,{SpriteColumns=2.5})").empty());
-	CHECK_FALSE(BasaltTest::Eval(scene, "UI.MeasureText('Hello',{Size=0})").empty());
+	CHECK(BrecciaTest::Eval(scene, "local s=UI.MeasureText('Hello', {Size=20}); assert(s.x>0 and s.y==20)") == "");
+	CHECK(BrecciaTest::Eval(scene, "UI.PushClip(0,0,100,100); UI.Rect(0,0,200,200,{Rotation=45,Scale=Vec2(2,1)}); UI.PopClip()") == "");
+	CHECK(BrecciaTest::Eval(scene, "UI.Image('sheet',0,0,20,20,{UVMin=Vec2(0.2,0),UVMax=Vec2(1,1),SpriteColumns=4,SpriteRows=2,SpriteFrame=7})") == "");
+	CHECK_FALSE(BrecciaTest::Eval(scene, "UI.PopClip()").empty());
+	CHECK_FALSE(BrecciaTest::Eval(scene, "UI.Image('sheet',0,0,20,20,{SpriteColumns=2.5})").empty());
+	CHECK_FALSE(BrecciaTest::Eval(scene, "UI.MeasureText('Hello',{Size=0})").empty());
 	scene.OnRuntimeStop();
 }
 
@@ -226,9 +226,9 @@ TEST_CASE("composed UI scales stop unsafe subtrees and retain finite renderer ou
 			CHECK(IsUsableUITransform(item.Rect, item.Transform));
 		std::vector<UIDrawCommand> commands;
 		UILayout::BuildCommands(scene, { 1920, 1080 }, commands);
-		BasaltTest::ImGuiTestContext context;
+		BrecciaTest::ImGuiTestContext context;
 		ImGui::NewFrame();
-		BasaltTest::ImGuiTestContext::MarkTexturesUploaded();
+		BrecciaTest::ImGuiTestContext::MarkTexturesUploaded();
 		ImDrawList* list = ImGui::GetForegroundDrawList();
 		UIRenderer::Draw(list, { 0, 0 }, { 1920, 1080 }, { 1920, 1080 }, commands, {});
 		for (const auto& vertex : list->VtxBuffer)
@@ -255,16 +255,16 @@ TEST_CASE("small usable UI transforms retain inverse hit testing")
 
 TEST_CASE("UI renderer suppresses transformed glyphs outside its finite numeric envelope")
 {
-	BasaltTest::ImGuiTestContext context;
+	BrecciaTest::ImGuiTestContext context;
 	ImGui::NewFrame();
-	BasaltTest::ImGuiTestContext::MarkTexturesUploaded();
+	BrecciaTest::ImGuiTestContext::MarkTexturesUploaded();
 	ImDrawList* list = ImGui::GetForegroundDrawList();
 	UIDrawCommand command;
 	command.Kind = UIDrawKind::Text;
 	command.Text = "Huge glyph";
 	command.Transform[0][0] = command.Transform[1][1] = 1e9f;
 	UIRenderer::Draw(list, { 0, 0 }, { 1920, 1080 }, { 1920, 1080 }, std::span(&command, 1), {});
-	BasaltTest::ImGuiTestContext::MarkTexturesUploaded();
+	BrecciaTest::ImGuiTestContext::MarkTexturesUploaded();
 	for (const auto& vertex : list->VtxBuffer)
 	{
 		CHECK(std::isfinite(vertex.pos.x));
@@ -302,7 +302,7 @@ TEST_CASE("text fields retain their own clip and intersect inherited clipping af
 		}
 		field.AddComponent<UITextInputComponent>().Text = "A very long text field value that extends well beyond its rectangle";
 		scene.OnRuntimeStart();
-		REQUIRE(BasaltTest::Eval(scene, "UI.SetFocus(Scene.FindEntityByName('Long text field'))") == "");
+		REQUIRE(BrecciaTest::Eval(scene, "UI.SetFocus(Scene.FindEntityByName('Long text field'))") == "");
 		const auto items = UILayout::Layout(scene, { 1920, 1080 });
 		const auto item = std::find_if(items.begin(), items.end(), [&](const auto& value) { return value.Owner == field; });
 		REQUIRE(item != items.end());
@@ -316,12 +316,12 @@ TEST_CASE("text fields retain their own clip and intersect inherited clipping af
 		CHECK(*text->Clip == expected);
 		CHECK(text->Transform == item->Transform);
 		CHECK(text->Text.find('|') != std::string::npos);
-		BasaltTest::ImGuiTestContext context;
+		BrecciaTest::ImGuiTestContext context;
 		ImGui::NewFrame();
-		BasaltTest::ImGuiTestContext::MarkTexturesUploaded();
+		BrecciaTest::ImGuiTestContext::MarkTexturesUploaded();
 		ImDrawList* list = ImGui::GetForegroundDrawList();
 		UIRenderer::Draw(list, { 0, 0 }, { 1920, 1080 }, { 1920, 1080 }, std::span(&*text, 1), {});
-		BasaltTest::ImGuiTestContext::MarkTexturesUploaded();
+		BrecciaTest::ImGuiTestContext::MarkTexturesUploaded();
 		for (const auto& draw : list->CmdBuffer)
 		{
 			if (!draw.ElemCount)
@@ -400,7 +400,7 @@ TEST_CASE("draw command clips reject negative extents and frame reset clears an 
 
 TEST_CASE("new UI component repairs report one layout warning per component")
 {
-	BasaltTest::ScopedGameInput restore;
+	BrecciaTest::ScopedGameInput restore;
 	Input::Reset();
 	Scene scene;
 	Entity input = scene.CreateEntity("Invalid input");
@@ -412,7 +412,7 @@ TEST_CASE("new UI component repairs report one layout warning per component")
 	scroll.AddComponent<UIScrollViewComponent>().ScrollSpeed = -1;
 	const uint64_t before = Log::GetHistory().GetTotalCount();
 	scene.OnRuntimeStart();
-	REQUIRE(BasaltTest::Eval(scene, "UI.SetFocus(Scene.FindEntityByName('Invalid input'))") == "");
+	REQUIRE(BrecciaTest::Eval(scene, "UI.SetFocus(Scene.FindEntityByName('Invalid input'))") == "");
 	Input::SetKeyState(KeyCode::Home, true);
 	scene.OnUpdate(1.0f / 60.0f);
 	Input::SetKeyState(KeyCode::Home, false);
@@ -435,8 +435,8 @@ TEST_CASE("new UI component repairs report one layout warning per component")
 TEST_CASE("headless text measurement retains loaded fonts and coexists with a host context")
 {
 	REQUIRE(ImGui::GetCurrentContext() == nullptr);
-	BasaltTest::TempProject project("HeadlessMeasureFont");
-	const auto data = BasaltTest::ReadKarla();
+	BrecciaTest::TempProject project("HeadlessMeasureFont");
+	const auto data = BrecciaTest::ReadKarla();
 	const auto fontPath = project.GetDirectory() / "Assets/Measure.ttf";
 	REQUIRE(FileSystem::WriteBinaryFile(fontPath, data.data(), data.size()));
 	const std::string path = FileSystem::PathToUtf8(fontPath);
@@ -449,7 +449,7 @@ TEST_CASE("headless text measurement retains loaded fonts and coexists with a ho
 		CHECK(ImGui::GetCurrentContext() == nullptr);
 	}
 	{
-		BasaltTest::ImGuiTestContext host;
+		BrecciaTest::ImGuiTestContext host;
 		ImGuiContext* context = ImGui::GetCurrentContext();
 		std::string error;
 		REQUIRE(UIFonts::LoadFromMemory(data, "Host Karla", error));

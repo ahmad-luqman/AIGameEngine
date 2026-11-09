@@ -3,18 +3,18 @@
 #include "AnimationTestUtils.h"
 #include "TestUtils.h"
 
-#include <Basalt/Animation/AnimatedModel.h>
-#include <Basalt/Asset/MeshOptimizer.h>
-#include <Basalt/Core/Log.h>
-#include <Basalt/Renderer/RenderMath.h>
-#include <Basalt/Scene/VertexSnap.h>
+#include <Breccia/Animation/AnimatedModel.h>
+#include <Breccia/Asset/MeshOptimizer.h>
+#include <Breccia/Core/Log.h>
+#include <Breccia/Renderer/RenderMath.h>
+#include <Breccia/Scene/VertexSnap.h>
 
 #include <nlohmann/json.hpp>
 
 #include <fstream>
 
-using namespace Basalt;
-using namespace BasaltTest;
+using namespace Breccia;
+using namespace BrecciaTest;
 using AnimationTest::ClearAssetCache;
 using AnimationTest::Clip;
 using AnimationTest::MutableClip;
@@ -773,7 +773,7 @@ TEST_SUITE("MorphTargets")
 
 		// A model without the target logs once; the weight applies again when a model with it returns.
 		const auto since = Log::GetHistory().GetTotalCount();
-		animator.Mesh = (std::filesystem::path(BASALT_TEST_DATA_DIR) / "Animation/TwoJoint.gltf").string();
+		animator.Mesh = (std::filesystem::path(BRECCIA_TEST_DATA_DIR) / "Animation/TwoJoint.gltf").string();
 		system.Update(0);
 		system.Update(0);
 		CHECK(CountLogMessages(since, "morph target 'Smile' is not in") == 1);

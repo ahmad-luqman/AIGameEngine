@@ -172,7 +172,7 @@ The glTF importer supports `KHR_texture_basisu`, `KHR_mesh_quantization`, `KHR_t
 required extensions fail with the extension name. Optional unknown extensions retain core fallbacks.
 Basis image sources work as external files, data URIs or GLB buffer views. The `KHR_texture_basisu` image
 source is authoritative when present: a malformed or unsupported KTX2 reports an asset-load error, and
-Basalt does not silently substitute the optional core PNG/JPEG source. Quantized accessors unpack through
+Breccia does not silently substitute the optional core PNG/JPEG source. Quantized accessors unpack through
 the same vertex path as floats. Texture transforms apply scale, rotation, then offset, independently for
 every map; UV0 and UV1 are supported (other coordinate sets fail import). Transformed alpha sampling is
 shared by lighting, depth, picking and masked shadows. `normalTexture.scale` and `occlusionTexture.strength`

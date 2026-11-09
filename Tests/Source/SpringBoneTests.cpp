@@ -3,20 +3,20 @@
 #include "AnimationTestUtils.h"
 #include "TestUtils.h"
 
-#include <Basalt/Animation/AnimatedModel.h>
-#include <Basalt/Animation/AnimationPose.h>
-#include <Basalt/Animation/AnimationSystem.h>
-#include <Basalt/Animation/InverseKinematics.h>
-#include <Basalt/Animation/SpringBones.h>
-#include <Basalt/Core/Log.h>
-#include <Basalt/Math/Math.h>
-#include <Basalt/Physics/PhysicsWorld.h>
-#include <Basalt/Physics/StaticPhysicsShapes.h>
-#include <Basalt/Project/ProjectValidator.h>
-#include <Basalt/Scene/ComponentRegistry.h>
-#include <Basalt/Scene/Entity.h>
-#include <Basalt/Scene/SceneSerializer.h>
-#include <Basalt/Scripting/ScriptEngine.h>
+#include <Breccia/Animation/AnimatedModel.h>
+#include <Breccia/Animation/AnimationPose.h>
+#include <Breccia/Animation/AnimationSystem.h>
+#include <Breccia/Animation/InverseKinematics.h>
+#include <Breccia/Animation/SpringBones.h>
+#include <Breccia/Core/Log.h>
+#include <Breccia/Math/Math.h>
+#include <Breccia/Physics/PhysicsWorld.h>
+#include <Breccia/Physics/StaticPhysicsShapes.h>
+#include <Breccia/Project/ProjectValidator.h>
+#include <Breccia/Scene/ComponentRegistry.h>
+#include <Breccia/Scene/Entity.h>
+#include <Breccia/Scene/SceneSerializer.h>
+#include <Breccia/Scripting/ScriptEngine.h>
 
 #include <nlohmann/json.hpp>
 
@@ -30,8 +30,8 @@
 #include <span>
 #include <tuple>
 
-using namespace Basalt;
-using namespace BasaltTest;
+using namespace Breccia;
+using namespace BrecciaTest;
 using json = nlohmann::json;
 
 using namespace AnimationTest;
@@ -1742,7 +1742,7 @@ TEST_SUITE("Animation")
 	{
 		ClearAssetCache clear;
 		Scene scene;
-		const std::string armature = (std::filesystem::path(BASALT_TEST_DATA_DIR) / "Animation/BipedArmature.gltf").string();
+		const std::string armature = (std::filesystem::path(BRECCIA_TEST_DATA_DIR) / "Animation/BipedArmature.gltf").string();
 		auto biped = AddBiped(scene, { RightArm() });
 		// The other model's animated pose, without springs.
 		auto reference = scene.CreateEntity("Reference");

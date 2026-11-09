@@ -5,7 +5,7 @@
 #include <string>
 #include <utility>
 
-namespace Basalt::Tests {
+namespace Breccia::Tests {
 	using namespace nvrhi;
 
 	// Forwards the pinned nvrhi device API while rejecting one named texture allocation in tests.

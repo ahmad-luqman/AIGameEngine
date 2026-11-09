@@ -1,22 +1,22 @@
 #include <doctest/doctest.h>
 
-#include <Basalt/Automation/AutomationSession.h>
-#include <Basalt/Automation/CommandRegistry.h>
-#include <Basalt/Project/Project.h>
-#include <Basalt/Renderer/GraphicsSettings.h>
-#include <Basalt/Renderer/PostProcessSettings.h>
-#include <Basalt/Scene/ComponentRegistry.h>
-#include <Basalt/Scene/Entity.h>
-#include <Basalt/Scene/SceneSerializer.h>
-#include <Basalt/Scripting/ScriptEngine.h>
+#include <Breccia/Automation/AutomationSession.h>
+#include <Breccia/Automation/CommandRegistry.h>
+#include <Breccia/Project/Project.h>
+#include <Breccia/Renderer/GraphicsSettings.h>
+#include <Breccia/Renderer/PostProcessSettings.h>
+#include <Breccia/Scene/ComponentRegistry.h>
+#include <Breccia/Scene/Entity.h>
+#include <Breccia/Scene/SceneSerializer.h>
+#include <Breccia/Scripting/ScriptEngine.h>
 
 #include "TestUtils.h"
 
 #include <limits>
 #include <memory>
 
-using namespace Basalt;
-using namespace BasaltTest;
+using namespace Breccia;
+using namespace BrecciaTest;
 
 TEST_SUITE("PostProcess")
 {

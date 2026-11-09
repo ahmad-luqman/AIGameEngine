@@ -1,5 +1,5 @@
 {
-	"Format": "BasaltScene",
+	"Format": "BrecciaScene",
 	"Version": 1,
 	"Name": "FeatureTest",
 	"Renderer": { "Exposure": 0.8, "Tonemapper": "ACES", "SSAOEnabled": true, "ShadowsEnabled": true, "ShadowDistance": 40 },
@@ -211,7 +211,7 @@
 			"UIRect": { "AnchorMin": [0, 1], "AnchorMax": [1, 1], "Pivot": [0.5, 1], "Size": [0, 64] },
 			"UIImage": { "Color": [0, 0, 0, 0.45] } } },
 		{ "ID": 204, "Name": "BannerText", "Parent": 203, "Components": {
-			"UIText": { "Text": "Basalt feature test: UI components", "FontSize": 36, "HorizontalAlign": "Center", "VerticalAlign": "Middle" } } },
+			"UIText": { "Text": "Breccia feature test: UI components", "FontSize": 36, "HorizontalAlign": "Center", "VerticalAlign": "Middle" } } },
 		{ "ID": 205, "Name": "HiddenMenu", "Parent": 200, "Components": {
 			"UIRect": { "Visible": false, "AnchorMin": [0, 0], "AnchorMax": [1, 1] },
 			"UIImage": { "Color": [1, 0, 0, 1] } } },

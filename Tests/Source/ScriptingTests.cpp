@@ -1,21 +1,21 @@
 #include <doctest/doctest.h>
 
-#include <Basalt/Core/FileSystem.h>
-#include <Basalt/Core/Input.h>
-#include <Basalt/Core/Log.h>
-#include <Basalt/Core/Platform.h>
-#include <Basalt/Core/MemoryTracker.h>
-#include <Basalt/Physics/PhysicsWorld.h>
-#include <Basalt/Project/Project.h>
-#include <Basalt/Project/SaveData.h>
-#include <Basalt/Scene/ComponentRegistry.h>
-#include <Basalt/Scene/Entity.h>
-#include <Basalt/Scene/Scene.h>
-#include <Basalt/Scene/SceneSerializer.h>
-#include <Basalt/Scripting/LuaJson.h>
-#include <Basalt/Scripting/ScriptEngine.h>
-#include <Basalt/Scripting/ScriptGlue.h>
-#include <Basalt/UI/GameUI.h>
+#include <Breccia/Core/FileSystem.h>
+#include <Breccia/Core/Input.h>
+#include <Breccia/Core/Log.h>
+#include <Breccia/Core/Platform.h>
+#include <Breccia/Core/MemoryTracker.h>
+#include <Breccia/Physics/PhysicsWorld.h>
+#include <Breccia/Project/Project.h>
+#include <Breccia/Project/SaveData.h>
+#include <Breccia/Scene/ComponentRegistry.h>
+#include <Breccia/Scene/Entity.h>
+#include <Breccia/Scene/Scene.h>
+#include <Breccia/Scene/SceneSerializer.h>
+#include <Breccia/Scripting/LuaJson.h>
+#include <Breccia/Scripting/ScriptEngine.h>
+#include <Breccia/Scripting/ScriptGlue.h>
+#include <Breccia/UI/GameUI.h>
 
 #include "TestUtils.h"
 
@@ -35,11 +35,11 @@
 	#include <unistd.h>
 #endif
 
-using namespace Basalt;
+using namespace Breccia;
 
 namespace {
 
-	using BasaltTest::Step;
+	using BrecciaTest::Step;
 
 	Entity AddScripted(Scene& scene, const std::string& name, const std::string& script, nlohmann::json properties = nlohmann::json::object())
 	{
@@ -59,7 +59,7 @@ namespace {
 	constexpr uint32_t TestInstructionLimit = 200000;
 	constexpr const char* TestLimitMessage = "ran 200000 instructions without returning";
 
-	struct LimitedProject : BasaltTest::TempProject
+	struct LimitedProject : BrecciaTest::TempProject
 	{
 		explicit LimitedProject(const std::string& name, uint32_t limit = TestInstructionLimit)
 			: TempProject(name)
@@ -92,7 +92,7 @@ TEST_SUITE("Scripting")
 {
 	TEST_CASE("ScriptEngine tracks its Lua heap and preserves warning controls and continuations")
 	{
-		BasaltTest::TempProject project("LuaWarningsAndMemory");
+		BrecciaTest::TempProject project("LuaWarningsAndMemory");
 		const auto path = project.WriteFile("Assets/Warnings.lua", R"(
 			warn("hidden-warning")
 			warn("@on")
@@ -110,11 +110,11 @@ TEST_SUITE("Scripting")
 			AddScripted(scene, "Warnings", path);
 			scene.OnRuntimeStart();
 			CHECK(MemoryTracker::Get(MemoryCategory::Lua).Bytes > before);
-			CHECK(BasaltTest::CountLogMessages(since, "visible-warning") == 1);
-			CHECK(BasaltTest::CountLogMessages(since, "Lua warning: @off") == 1);
-			CHECK(BasaltTest::CountLogMessages(since, "still-enabled-warning") == 1);
-			CHECK(BasaltTest::CountLogMessages(since, "hidden-warning") == 0);
-			CHECK(BasaltTest::CountLogMessages(since, "disabled-warning") == 0);
+			CHECK(BrecciaTest::CountLogMessages(since, "visible-warning") == 1);
+			CHECK(BrecciaTest::CountLogMessages(since, "Lua warning: @off") == 1);
+			CHECK(BrecciaTest::CountLogMessages(since, "still-enabled-warning") == 1);
+			CHECK(BrecciaTest::CountLogMessages(since, "hidden-warning") == 0);
+			CHECK(BrecciaTest::CountLogMessages(since, "disabled-warning") == 0);
 			scene.OnRuntimeStop();
 		}
 		CHECK(MemoryTracker::Get(MemoryCategory::Lua).Bytes == before);
@@ -122,7 +122,7 @@ TEST_SUITE("Scripting")
 
 	TEST_CASE("Spawned script and compound contact callbacks repeat in the same order")
 	{
-		BasaltTest::TempProject project("RuntimeContactOrder");
+		BrecciaTest::TempProject project("RuntimeContactOrder");
 		const std::string script = project.WriteFile("Assets/Scripts/Order.lua", R"(
 			local Order = {}
 			function Order:OnCreate() Trace = (Trace or "") .. "C" .. self.Entity.Name .. ";" end
@@ -154,25 +154,25 @@ TEST_SUITE("Scripting")
 				boxes.push_back(body);
 			}
 			scene.OnUpdate(Step);
-			CHECK(BasaltTest::Eval(scene, "return Begins") == "8");
+			CHECK(BrecciaTest::Eval(scene, "return Begins") == "8");
 			// One compound child leaves while the other still touches: no entity-pair end yet.
 			for (Entity body : boxes)
 				body.GetTransform().Translation.y = 0.8f;
 			scene.OnUpdate(Step);
 			scene.OnUpdate(Step);
-			CHECK(BasaltTest::Eval(scene, "return Ends or 0") == "0");
+			CHECK(BrecciaTest::Eval(scene, "return Ends or 0") == "0");
 			// A rebuild releases every sub-shape once, then starts one new pair per entity.
 			scene.GetPhysicsWorld()->RecreateBody(zone);
-			CHECK(BasaltTest::Eval(scene, "return Ends") == "8");
+			CHECK(BrecciaTest::Eval(scene, "return Ends") == "8");
 			scene.OnUpdate(Step);
-			CHECK(BasaltTest::Eval(scene, "return Begins") == "16");
+			CHECK(BrecciaTest::Eval(scene, "return Begins") == "16");
 			for (Entity body : boxes)
 				body.GetTransform().Translation.y = 3.0f;
 			scene.OnUpdate(Step);
 			scene.OnUpdate(Step);
-			CHECK(BasaltTest::Eval(scene, "return Ends") == "16");
+			CHECK(BrecciaTest::Eval(scene, "return Ends") == "16");
 			CHECK(scene.GetScriptEngine()->GetErrors().empty());
-			const std::string trace = BasaltTest::Eval(scene, "return Trace");
+			const std::string trace = BrecciaTest::Eval(scene, "return Trace");
 			scene.OnRuntimeStop();
 			return trace;
 		};
@@ -189,7 +189,7 @@ TEST_SUITE("Scripting")
 
 	TEST_CASE("Rebuilding a body remains safe when its contact exit destroys its entity")
 	{
-		BasaltTest::TempProject project("RebuildExitDestroy");
+		BrecciaTest::TempProject project("RebuildExitDestroy");
 		const std::string script = project.WriteFile("Assets/Scripts/DestroyOnExit.lua", R"(
 			return { OnTriggerExit = function(self, other) self.Entity:Destroy() end }
 		)");
@@ -213,7 +213,7 @@ TEST_SUITE("Scripting")
 
 	TEST_CASE("Script lifecycle, properties and per-entity overrides")
 	{
-		BasaltTest::TempProject project("ScriptLifecycle");
+		BrecciaTest::TempProject project("ScriptLifecycle");
 		const std::string script = project.WriteFile("Assets/Scripts/Counter.lua", R"(
 			local Counter = {}
 			Counter.Properties = { Speed = 2.0, Label = "default", Offset = Vec3(1, 2, 3), Enabled = true }
@@ -394,7 +394,7 @@ TEST_SUITE("Scripting")
 			return Sibling
 		)");
 		project.WriteFile("Assets/Scripts/Endless.lua", "local S = {} function S:OnCreate() while true do end end return S");
-		project.WriteFile("Assets/Prefabs/Pair.bprefab", R"({"Format": "BasaltPrefab", "Version": 4, "Entities": [
+		project.WriteFile("Assets/Prefabs/Pair.bprefab", R"({"Format": "BrecciaPrefab", "Version": 4, "Entities": [
 			{"ID": 1, "Name": "Root", "Parent": 0, "Components": {"Script": {"Script": "Assets/Scripts/Endless.lua"}}},
 			{"ID": 2, "Name": "Child", "Parent": 1, "Components": {"Script": {"Script": "Assets/Scripts/Sibling.lua"}}}]})");
 		const std::string spawner = project.WriteFile("Assets/Scripts/Spawner.lua", R"(
@@ -765,7 +765,7 @@ TEST_SUITE("Scripting")
 
 	TEST_CASE("Script errors are isolated to the failing instance")
 	{
-		BasaltTest::TempProject project("ScriptErrors");
+		BrecciaTest::TempProject project("ScriptErrors");
 		const std::string broken = project.WriteFile("Assets/Scripts/Broken.lua", R"(
 			local Broken = {}
 			function Broken:OnUpdate(dt) local x = nil; return x.field end
@@ -804,7 +804,7 @@ TEST_SUITE("Scripting")
 
 	TEST_CASE("Lua API: transforms, components, hierarchy, spawning and destruction")
 	{
-		BasaltTest::TempProject project("ScriptApi");
+		BrecciaTest::TempProject project("ScriptApi");
 		project.WriteFile("Assets/Prefabs/Bullet.bprefab", R"({"Entities":[{"ID":1,"Name":"Bullet","Components":{"Mesh":{"Mesh":"builtin://Sphere"}}},
 			{"ID":2,"Name":"Trail","Parent":1}]})");
 		const std::string script = project.WriteFile("Assets/Scripts/Api.lua", R"(
@@ -888,7 +888,7 @@ TEST_SUITE("Scripting")
 
 	TEST_CASE("Scripts receive collision and trigger callbacks")
 	{
-		BasaltTest::TempProject project("ScriptContacts");
+		BrecciaTest::TempProject project("ScriptContacts");
 		const std::string script = project.WriteFile("Assets/Scripts/Contacts.lua", R"(
 			local Contacts = {}
 			function Contacts:OnCreate() self.Hits = 0; self.Triggers = 0 end
@@ -928,7 +928,7 @@ TEST_SUITE("Scripting")
 
 	TEST_CASE("OnCollisionBegin receives the contact point, normal and impulse")
 	{
-		BasaltTest::TempProject project("ScriptContactInfo");
+		BrecciaTest::TempProject project("ScriptContactInfo");
 		const std::string script = project.WriteFile("Assets/Scripts/Contact.lua", R"(
 			local Contact = {}
 			function Contact:OnCollisionBegin(other, contact)
@@ -995,7 +995,7 @@ TEST_SUITE("Scripting")
 
 	TEST_CASE("Trigger and end callbacks receive where the bodies met or parted")
 	{
-		BasaltTest::TempProject project("ScriptContactEnds");
+		BrecciaTest::TempProject project("ScriptContactEnds");
 		const std::string script = project.WriteFile("Assets/Scripts/Contact.lua", R"(
 			local Contact = {}
 			-- Keeps the first event of each kind; a destroyed body's contacts end without one.
@@ -1084,7 +1084,7 @@ TEST_SUITE("Scripting")
 
 	TEST_CASE("Collision ends against a triangle-mesh floor report the parting, in either UUID order")
 	{
-		BasaltTest::TempProject project("ScriptMeshEnds");
+		BrecciaTest::TempProject project("ScriptMeshEnds");
 		const std::string script = project.WriteFile("Assets/Scripts/End.lua", R"(
 			local End = {}
 			function End:OnCollisionEnd(other, contact)
@@ -1128,7 +1128,7 @@ TEST_SUITE("Scripting")
 
 	TEST_CASE("A rebuilt body ends its contacts without a contact on both sides, then begins them again")
 	{
-		BasaltTest::TempProject project("ScriptRebuildEnds");
+		BrecciaTest::TempProject project("ScriptRebuildEnds");
 		const std::string script = project.WriteFile("Assets/Scripts/Count.lua", R"(
 			local Count = {}
 			function Count:OnCreate() self.Begins = 0; self.NilEnds = 0 end
@@ -1164,7 +1164,7 @@ TEST_SUITE("Scripting")
 	TEST_CASE("A resting body with a mirrored, non-uniform scale under a turned, scaled parent stays in contact")
 	{
 		// No rebuild or teleport may sneak in from rounding in the decomposed scale or rotation.
-		BasaltTest::TempProject project("ScriptRestingScale");
+		BrecciaTest::TempProject project("ScriptRestingScale");
 		const std::string script = project.WriteFile("Assets/Scripts/Rest.lua", R"(
 			local Rest = {}
 			function Rest:OnCreate() self.Begins = 0; self.Ends = 0 end
@@ -1199,7 +1199,7 @@ TEST_SUITE("Scripting")
 	TEST_CASE("Animating a trigger's or a body's scale keeps their overlaps and contacts")
 	{
 		// The zone and the ground pulse every frame; the ball rests on the ground inside the zone.
-		BasaltTest::TempProject project("ScriptPulse");
+		BrecciaTest::TempProject project("ScriptPulse");
 		const std::string script = project.WriteFile("Assets/Scripts/Pulse.lua", R"(
 			local Pulse = {}
 			function Pulse:OnCreate() self.Begins = 0; self.Ends = 0; self.Enters = 0; self.Exits = 0; self.Frame = 0 end
@@ -1245,7 +1245,7 @@ TEST_SUITE("Scripting")
 	TEST_CASE("Editing a mesh's render settings does not rebuild its MeshCollider")
 	{
 		// A rebuild would end and restart the box's contact with the floor (and re-pose joints) every frame.
-		BasaltTest::TempProject project("ScriptMeshRebuild");
+		BrecciaTest::TempProject project("ScriptMeshRebuild");
 		const std::string script = project.WriteFile("Assets/Scripts/Floor.lua", R"(
 			local Floor = {}
 			function Floor:OnCreate() self.Hits = 0; self.Ends = 0 end
@@ -1283,7 +1283,7 @@ TEST_SUITE("Scripting")
 
 	TEST_CASE("Scripts drive joint motors and receive OnJointBreak")
 	{
-		BasaltTest::TempProject project("ScriptJoints");
+		BrecciaTest::TempProject project("ScriptJoints");
 		const std::string script = project.WriteFile("Assets/Scripts/Joints.lua", R"(
 			local Joints = {}
 			function Joints:OnCreate() self.Breaks = 0; self.BrokeWith = "" end
@@ -1339,7 +1339,7 @@ TEST_SUITE("Scripting")
 
 	TEST_CASE("OnJointBreak reaches a joint entity, the body it moves and the connected entity")
 	{
-		BasaltTest::TempProject project("ScriptJointEntity");
+		BrecciaTest::TempProject project("ScriptJointEntity");
 		const std::string script = project.WriteFile("Assets/Scripts/Listener.lua", R"(
 			local Listener = {}
 			function Listener:OnCreate() self.Breaks = 0; self.BrokeWith = "" end
@@ -1387,7 +1387,7 @@ TEST_SUITE("Scripting")
 	{
 		// Regression: the hook held a joint moving the lamp and connected to itself, and was notified twice
 		// (the second time with itself as the other entity).
-		BasaltTest::TempProject project("ScriptJointHolderConnected");
+		BrecciaTest::TempProject project("ScriptJointHolderConnected");
 		const std::string script = project.WriteFile("Assets/Scripts/Listener.lua", R"(
 			local Listener = {}
 			function Listener:OnCreate() self.Breaks = 0; self.BrokeWith = "" end
@@ -1428,7 +1428,7 @@ TEST_SUITE("Scripting")
 
 	TEST_CASE("OnJointBreak may destroy the other entity during the same step")
 	{
-		BasaltTest::TempProject project("ScriptJointDestroy");
+		BrecciaTest::TempProject project("ScriptJointDestroy");
 		const std::string script = project.WriteFile("Assets/Scripts/Breaker.lua", R"(
 			local Breaker = {}
 			function Breaker:OnCreate() self.Breaks = 0; self.Built = self.Entity:HasJoint() end
@@ -1482,7 +1482,7 @@ TEST_SUITE("Scripting")
 
 	TEST_CASE("Entity:IsSleeping reports sleeping bodies, awake ones and nil without a body")
 	{
-		BasaltTest::TempProject project("ScriptSleep");
+		BrecciaTest::TempProject project("ScriptSleep");
 		const std::string script = project.WriteFile("Assets/Scripts/Watcher.lua", R"(
 			local Watcher = {}
 			function Watcher:OnUpdate(dt)
@@ -1531,7 +1531,7 @@ TEST_SUITE("Scripting")
 
 	TEST_CASE("Scripts read injected input, apply physics and request quit")
 	{
-		BasaltTest::TempProject project("ScriptInput");
+		BrecciaTest::TempProject project("ScriptInput");
 		const std::string script = project.WriteFile("Assets/Scripts/Mover.lua", R"(
 			local Mover = {}
 			Mover.Properties = { Speed = 4.0 }
@@ -1582,7 +1582,7 @@ TEST_SUITE("Scripting")
 
 	TEST_CASE("Lua physics queries take layers, ignore and trigger options and return all hits")
 	{
-		BasaltTest::TempProject project("ScriptQueries");
+		BrecciaTest::TempProject project("ScriptQueries");
 		const std::string script = project.WriteFile("Assets/Scripts/Probe.lua", R"(
 			local Probe = {}
 			local function fails(pattern, ...)
@@ -1673,7 +1673,7 @@ TEST_SUITE("Scripting")
 
 	TEST_CASE("Bodies on an ignored layer pair raise no collision or trigger events")
 	{
-		BasaltTest::TempProject project("IgnoredPairEvents");
+		BrecciaTest::TempProject project("IgnoredPairEvents");
 		const std::string script = project.WriteFile("Assets/Scripts/Counter.lua", R"(
 			local Counter = {}
 			function Counter:OnCreate() self.Collisions = 0; self.Triggers = 0 end
@@ -1722,7 +1722,7 @@ TEST_SUITE("Scripting")
 
 	TEST_CASE("ExecuteString and property discovery")
 	{
-		BasaltTest::TempProject project("ScriptConsole");
+		BrecciaTest::TempProject project("ScriptConsole");
 		const std::string script = project.WriteFile("Assets/Scripts/Props.lua", R"(
 			local Props = {}
 			Props.Properties = { Health = 100, Name = "Orc", Velocity = Vec3(0, 1, 0), Alive = true }
@@ -1788,7 +1788,7 @@ TEST_SUITE("Scripting")
 
 	TEST_CASE("Lua's random numbers start from the project seed; math.randomseed() returns to it")
 	{
-		BasaltTest::TempProject project("LuaRandomSeed");
+		BrecciaTest::TempProject project("LuaRandomSeed");
 		REQUIRE(project.IsValid());
 		auto draw = [](const char* code) {
 			Scene scene;
@@ -1857,7 +1857,7 @@ TEST_SUITE("Scripting")
 
 	TEST_CASE("Scripts added at runtime start on the next update; require loads project modules")
 	{
-		BasaltTest::TempProject project("ScriptRuntimeAdd");
+		BrecciaTest::TempProject project("ScriptRuntimeAdd");
 		project.WriteFile("Assets/Scripts/Lib/Util.lua", "return { Double = function(x) return x * 2 end }");
 		const std::string script = project.WriteFile("Assets/Scripts/Late.lua", R"(
 			local Util = require("Assets.Scripts.Lib.Util")
@@ -1882,7 +1882,7 @@ TEST_SUITE("Gameplay scripting")
 {
 	TEST_CASE("Timer.After and Timer.Every fire on game time, in creation order, and can be cancelled")
 	{
-		BasaltTest::TempProject project("ScriptTimers");
+		BrecciaTest::TempProject project("ScriptTimers");
 		const std::string script = project.WriteFile("Assets/Scripts/Timers.lua", R"(
 			local T = {}
 			local function record(name) return function() table.insert(Fired, name .. "@" .. Time.GetFrame()) end end
@@ -1912,7 +1912,7 @@ TEST_SUITE("Gameplay scripting")
 		ScriptEngine& engine = *scene.GetScriptEngine();
 		std::string result;
 		// Nothing fires before the first update, even with a zero delay.
-		CHECK(BasaltTest::Eval(engine, "#Fired") == "0");
+		CHECK(BrecciaTest::Eval(engine, "#Fired") == "0");
 		CHECK(engine.ExecuteString("CancelReturned == true and CancelAgain == false", result));
 		CHECK(result == "true");
 
@@ -1921,9 +1921,9 @@ TEST_SUITE("Gameplay scripting")
 		CHECK(engine.GetErrors().empty());
 		// Update N runs with Time.GetFrame() == N - 1. 0.5 s is update 30; Every fires at 15, 30 and 45 and the
 		// earlier-created After runs first at 30.
-		CHECK(BasaltTest::Eval(engine, "table.concat(Fired, ' ')") == "zero@0 fromUpdate@3 every@14 after@29 every@29 every@44");
-		CHECK(BasaltTest::Eval(engine, "SelfCancelCount") == "2");
-		CHECK(BasaltTest::Eval(engine, "local s = Scene.FindEntityByName('Timers'):GetScript() return tostring(s.After:IsActive()) .. tostring(s.Every:IsActive()) .. tostring(s.SelfCancel:IsActive())") == "falsefalsefalse");
+		CHECK(BrecciaTest::Eval(engine, "table.concat(Fired, ' ')") == "zero@0 fromUpdate@3 every@14 after@29 every@29 every@44");
+		CHECK(BrecciaTest::Eval(engine, "SelfCancelCount") == "2");
+		CHECK(BrecciaTest::Eval(engine, "local s = Scene.FindEntityByName('Timers'):GetScript() return tostring(s.After:IsActive()) .. tostring(s.Every:IsActive()) .. tostring(s.SelfCancel:IsActive())") == "falsefalsefalse");
 
 		// Bad arguments are errors, not silently ignored timers.
 		const std::pair<const char*, const char*> invalid[] = {
@@ -1935,13 +1935,13 @@ TEST_SUITE("Gameplay scripting")
 			{ "Timer.Every(1, function() end, 0)", "count must be an integer from 1" },
 			{ "Timer.Every(1, function() end, 2.5)", "count must be an integer from 1" },
 		};
-		BasaltTest::CheckLuaErrors(engine, invalid);
+		BrecciaTest::CheckLuaErrors(engine, invalid);
 		scene.OnRuntimeStop();
 	}
 
 	TEST_CASE("Timers stop when the scene pauses; repeating timers skip periods missed in a long frame")
 	{
-		BasaltTest::TempProject project("ScriptTimerPause");
+		BrecciaTest::TempProject project("ScriptTimerPause");
 		Scene scene;
 		scene.OnRuntimeStart();
 		ScriptEngine& engine = *scene.GetScriptEngine();
@@ -1950,20 +1950,20 @@ TEST_SUITE("Gameplay scripting")
 		scene.SetPaused(true);
 		for (int i = 0; i < 30; i++)
 			scene.OnUpdate(Step);
-		CHECK(BasaltTest::Eval(engine, "#Ticks") == "0");
+		CHECK(BrecciaTest::Eval(engine, "#Ticks") == "0");
 		scene.SetPaused(false);
 		// One 0.35 s frame: fires once, and the next period is the next 0.1 s boundary (0.4 s).
 		scene.OnUpdate(0.35f);
 		scene.OnUpdate(0.04f);
 		scene.OnUpdate(0.02f);
-		CHECK(BasaltTest::Eval(engine, "table.concat(Ticks, ' ')") == "0 2");
+		CHECK(BrecciaTest::Eval(engine, "table.concat(Ticks, ' ')") == "0 2");
 		CHECK(engine.GetErrors().empty());
 		scene.OnRuntimeStop();
 	}
 
 	TEST_CASE("Coroutines wait for seconds and frames, start right away and can be stopped")
 	{
-		BasaltTest::TempProject project("ScriptCoroutines");
+		BrecciaTest::TempProject project("ScriptCoroutines");
 		project.WriteFile("Assets/Scripts/Base.lua", R"(
 			local Base = {}
 			function Base:Describe() return "base" end
@@ -2012,7 +2012,7 @@ TEST_SUITE("Gameplay scripting")
 		scene.OnRuntimeStart();
 		ScriptEngine& engine = *scene.GetScriptEngine();
 		std::string result;
-		CHECK(BasaltTest::Eval(engine, "tostring(StartedImmediately) .. tostring(DoneActive) .. Inherited") == "truefalsebase");
+		CHECK(BrecciaTest::Eval(engine, "tostring(StartedImmediately) .. tostring(DoneActive) .. Inherited") == "truefalsebase");
 		REQUIRE(engine.ExecuteString("tostring(EarlyOk) .. ' ' .. EarlyError", result));
 		CHECK(result.find("false") == 0);
 		CHECK(result.find("early failure") != std::string::npos);
@@ -2024,7 +2024,7 @@ TEST_SUITE("Gameplay scripting")
 		// WaitFrames(2) from OnCreate resumes on update 2, Wait(0.5) half a second later, a bare yield next frame.
 		CHECK(result == "start xy@0 frames@1 seconds@31 yield@32");
 		// OnCreate plus updates 1-10 (stopped in update 11's OnUpdate, before coroutines run).
-		CHECK(BasaltTest::Eval(engine, "LoopCount") == "11");
+		CHECK(BrecciaTest::Eval(engine, "LoopCount") == "11");
 		REQUIRE(engine.ExecuteString("local s = Scene.FindEntityByName('Coroutines'):GetScript() return tostring(StopReturned) .. tostring(s.Main:IsActive()) .. tostring(s.Other:IsActive()) .. tostring(s.Timer:IsActive())", result));
 		// StopAllCoroutines ends the coroutines but leaves the instance's timers alone.
 		CHECK(result == "truefalsefalsetrue");
@@ -2033,7 +2033,7 @@ TEST_SUITE("Gameplay scripting")
 
 	TEST_CASE("Wait and WaitFrames only suspend engine coroutines; coroutine errors disable the owner")
 	{
-		BasaltTest::TempProject project("ScriptCoroutineErrors");
+		BrecciaTest::TempProject project("ScriptCoroutineErrors");
 		const std::string script = project.WriteFile("Assets/Scripts/Faulty.lua", R"(
 			local F = {}
 			function F:OnCreate()
@@ -2113,7 +2113,7 @@ TEST_SUITE("Gameplay scripting")
 
 	TEST_CASE("Timers, coroutines and event handlers end with the instance that owns them")
 	{
-		BasaltTest::TempProject project("ScriptOwnership");
+		BrecciaTest::TempProject project("ScriptOwnership");
 		const std::string owner = project.WriteFile("Assets/Scripts/Owner.lua", R"(
 			local O = {}
 			function O:OnCreate()
@@ -2171,7 +2171,7 @@ TEST_SUITE("Gameplay scripting")
 		CHECK(engine.GetErrors()[1].find("FaultyTimer.lua:6: timer failure") != std::string::npos);
 		CHECK(engine.GetErrors()[1].find("(in a timer of 'Faulty'") != std::string::npos);
 		// Released right away, not just skipped: the handle reports it.
-		CHECK(BasaltTest::Eval(engine, "FailingTicks .. tostring(FailingHeard) .. tostring(FailingHandler:IsActive())") == "1nilfalse");
+		CHECK(BrecciaTest::Eval(engine, "FailingTicks .. tostring(FailingHeard) .. tostring(FailingHandler:IsActive())") == "1nilfalse");
 		// The timer was due in update 3, after that update's OnUpdate.
 		CHECK(Field(scene, broken, "Updates") == 3);
 
@@ -2182,25 +2182,25 @@ TEST_SUITE("Gameplay scripting")
 		CHECK(result.find("Timer.After: the calling script instance is being destroyed or has failed") != std::string::npos);
 		CHECK(result.find("Events.On: the calling script instance is being destroyed") != std::string::npos);
 		CHECK(result.find("StartCoroutine: this instance is being destroyed or has failed") != std::string::npos);
-		CHECK(BasaltTest::Eval(engine, "tostring(Handles[1]:IsActive()) .. tostring(Handles[2]:IsActive()) .. tostring(Handles[3]:IsActive())") == "falsefalsefalse");
+		CHECK(BrecciaTest::Eval(engine, "tostring(Handles[1]:IsActive()) .. tostring(Handles[2]:IsActive()) .. tostring(Handles[3]:IsActive())") == "falsefalsefalse");
 
 		for (int i = 0; i < 12; i++)
 			scene.OnUpdate(Step);
-		CHECK(BasaltTest::Eval(engine, "Events.Emit('Ping')") == "0");
+		CHECK(BrecciaTest::Eval(engine, "Events.Emit('Ping')") == "0");
 		REQUIRE(engine.ExecuteString("Counts.Timer .. ' ' .. Counts.Coroutine .. ' ' .. Counts.Event", result));
 		CHECK(before.find(result) == 0);
-		CHECK(BasaltTest::Eval(engine, "SessionTicks") == "6");
+		CHECK(BrecciaTest::Eval(engine, "SessionTicks") == "6");
 
 		// Play stopping ends the session's own tasks too.
 		REQUIRE(engine.ExecuteString("SessionHandle = Timer.After(1, function() end) SessionEvent = Events.On('X', function() end)", result));
 		engine.Stop();
-		CHECK(BasaltTest::Eval(engine, "tostring(SessionHandle:IsActive()) .. tostring(SessionEvent:IsActive())") == "falsefalse");
+		CHECK(BrecciaTest::Eval(engine, "tostring(SessionHandle:IsActive()) .. tostring(SessionEvent:IsActive())") == "falsefalse");
 		scene.OnRuntimeStop();
 	}
 
 	TEST_CASE("Events reach their handlers in subscription order with every argument")
 	{
-		BasaltTest::TempProject project("ScriptEvents");
+		BrecciaTest::TempProject project("ScriptEvents");
 		const std::string listener = project.WriteFile("Assets/Scripts/Listener.lua", R"(
 			local L = {}
 			function L:OnCreate()
@@ -2263,15 +2263,15 @@ TEST_SUITE("Gameplay scripting")
 		AddScripted(scene, "Killer", killer);
 		scene.OnUpdate(Step);
 		CHECK_FALSE(scene.GetEntityByUUID(doomedID));
-		CHECK(BasaltTest::Eval(engine, "KilledEmit .. ' ' .. table.concat(Received2, ' ')") == "1 listener");
-		CHECK(BasaltTest::Eval(engine, "Received = {} return Events.Emit('Hit', nil, 'x')") == "4");
-		CHECK(BasaltTest::Eval(engine, "table.concat(Received, ' ')") == "listener:2 b late late");
-		CHECK(BasaltTest::Eval(engine, "Events.Emit('Nobody')") == "0");
+		CHECK(BrecciaTest::Eval(engine, "KilledEmit .. ' ' .. table.concat(Received2, ' ')") == "1 listener");
+		CHECK(BrecciaTest::Eval(engine, "Received = {} return Events.Emit('Hit', nil, 'x')") == "4");
+		CHECK(BrecciaTest::Eval(engine, "table.concat(Received, ' ')") == "listener:2 b late late");
+		CHECK(BrecciaTest::Eval(engine, "Events.Emit('Nobody')") == "0");
 
 		// Emit works from inside a coroutine (the handler runs on the coroutine's thread).
 		REQUIRE(engine.ExecuteString("Events.On('Co', function(v) CoValue = v end)", result));
 		REQUIRE(engine.ExecuteString("Scene.FindEntityByName('Listener'):GetScript():StartCoroutine(function() Events.Emit('Co', 'from coroutine') end)", result));
-		CHECK(BasaltTest::Eval(engine, "CoValue") == "from coroutine");
+		CHECK(BrecciaTest::Eval(engine, "CoValue") == "from coroutine");
 
 		// Endless recursion is stopped at MaxEmitDepth and reported once.
 		REQUIRE(engine.ExecuteString("Events.On('Loop', function() Events.Emit('Loop') end)", result));
@@ -2279,7 +2279,7 @@ TEST_SUITE("Gameplay scripting")
 		REQUIRE(engine.GetErrors().size() == 1);
 		CHECK(engine.GetErrors()[0].find("nested more than 32 levels") != std::string::npos);
 		// The depth unwound, and the failing session handler was unsubscribed.
-		CHECK(BasaltTest::Eval(engine, "Events.On('After', function() end) return Events.Emit('After') .. ' ' .. Events.Emit('Loop')") == "1 0");
+		CHECK(BrecciaTest::Eval(engine, "Events.On('After', function() end) return Events.Emit('After') .. ' ' .. Events.Emit('Loop')") == "1 0");
 
 		const std::pair<const char*, const char*> invalid[] = {
 			{ "Events.On('', function() end)", "Events.On: the event name must be a non-empty string" },
@@ -2287,13 +2287,13 @@ TEST_SUITE("Gameplay scripting")
 			{ "Events.Once('x', 'nope')", "Events.Once: expected a function, got string" },
 			{ "Events.Emit()", "Events.Emit: the event name must be a non-empty string" },
 		};
-		BasaltTest::CheckLuaErrors(engine, invalid);
+		BrecciaTest::CheckLuaErrors(engine, invalid);
 		scene.OnRuntimeStop();
 	}
 
 	TEST_CASE("An error in an event handler disables only its owner")
 	{
-		BasaltTest::TempProject project("ScriptEventErrors");
+		BrecciaTest::TempProject project("ScriptEventErrors");
 		const std::string faulty = project.WriteFile("Assets/Scripts/Faulty.lua", R"(
 			local F = {}
 			function F:OnCreate()
@@ -2330,12 +2330,12 @@ TEST_SUITE("Gameplay scripting")
 		REQUIRE(engine.GetErrors().size() == 1);
 		CHECK(engine.GetErrors()[0].find("Faulty.lua:5: handler failure") != std::string::npos);
 		CHECK(engine.GetErrors()[0].find("(in a handler of event 'Go' of 'Faulty'") != std::string::npos);
-		CHECK(BasaltTest::Eval(engine, "tostring(SessionHeard) .. ' ' .. tostring(SecondHeard) .. ' ' .. Events.Emit('Other')") == "true nil 0");
+		CHECK(BrecciaTest::Eval(engine, "tostring(SessionHeard) .. ' ' .. tostring(SecondHeard) .. ' ' .. Events.Emit('Other')") == "true nil 0");
 		scene.OnUpdate(Step);
 		CHECK(Field(scene, entity, "Updates") == 0);
 
 		// A failing handler of the session is unsubscribed (it would fail on every emit).
-		CHECK(BasaltTest::Eval(engine, "Events.On('Bad', function() error('session failure') end) return Events.Emit('Bad') .. ' ' .. Events.Emit('Bad')") == "1 0");
+		CHECK(BrecciaTest::Eval(engine, "Events.On('Bad', function() error('session failure') end) return Events.Emit('Bad') .. ' ' .. Events.Emit('Bad')") == "1 0");
 		REQUIRE(engine.GetErrors().size() == 2);
 		CHECK(engine.GetErrors()[1].find("(in a handler of event 'Bad' of the play session)") != std::string::npos);
 
@@ -2351,11 +2351,11 @@ TEST_SUITE("Gameplay scripting")
 			end
 			return B
 		)");
-		REQUIRE(BasaltTest::Eval(engine, "Events.On('Hit', function(bullet) bullet:Destroy() end) Events.On('Hit', function() error('another instance') end)") == "");
+		REQUIRE(BrecciaTest::Eval(engine, "Events.On('Hit', function(bullet) bullet:Destroy() end) Events.On('Hit', function() error('another instance') end)") == "");
 		const size_t errorsBefore = engine.GetErrors().size();
 		AddScripted(scene, "Bullet", bullet);
 		scene.OnUpdate(Step);
-		CHECK(BasaltTest::Eval(engine, "HitCount .. ' ' .. tostring(BulletContinued)") == "2 true");
+		CHECK(BrecciaTest::Eval(engine, "HitCount .. ' ' .. tostring(BulletContinued)") == "2 true");
 		CHECK_FALSE(scene.FindEntityByName("Bullet"));
 		// Only the failing session handler's error.
 		REQUIRE(engine.GetErrors().size() == errorsBefore + 1);
@@ -2364,14 +2364,14 @@ TEST_SUITE("Gameplay scripting")
 		// An instance whose own handler fails while it emits does not carry on as if nothing happened.
 		AddScripted(scene, "SelfEmitter", selfEmitter);
 		scene.OnUpdate(Step);
-		CHECK(BasaltTest::Eval(engine, "tostring(SelfEmitOk) .. ' ' .. tostring(AfterEmit)") == "false true");
-		CHECK(BasaltTest::Eval(engine, "SelfEmitError").find("a handler of this instance failed") != std::string::npos);
+		CHECK(BrecciaTest::Eval(engine, "tostring(SelfEmitOk) .. ' ' .. tostring(AfterEmit)") == "false true");
+		CHECK(BrecciaTest::Eval(engine, "SelfEmitError").find("a handler of this instance failed") != std::string::npos);
 		scene.OnRuntimeStop();
 	}
 
 	TEST_CASE("Storage keeps values across play sessions in the user data directory")
 	{
-		BasaltTest::TempProject project("ScriptStorage");
+		BrecciaTest::TempProject project("ScriptStorage");
 		std::string error;
 		const auto savePath = SaveData::GetDefaultPath("ScriptStorage", error);
 		REQUIRE_MESSAGE(savePath.has_value(), error);
@@ -2382,7 +2382,7 @@ TEST_SUITE("Gameplay scripting")
 			Scene scene;
 			scene.OnRuntimeStart();
 			ScriptEngine& engine = *scene.GetScriptEngine();
-			CHECK(BasaltTest::Eval(engine, "Storage.Get('Missing', 7) == 7 and Storage.Get('Missing') == nil and not Storage.Has('Missing')") == "true");
+			CHECK(BrecciaTest::Eval(engine, "Storage.Get('Missing', 7) == 7 and Storage.Get('Missing') == nil and not Storage.Has('Missing')") == "true");
 			REQUIRE(engine.ExecuteString(R"(
 				Storage.Set("Score", 42)
 				Storage.Set("Name", "Ada")
@@ -2394,9 +2394,9 @@ TEST_SUITE("Gameplay scripting")
 				DeleteReturned = tostring(Storage.Delete("Doomed")) .. tostring(Storage.Delete("Doomed"))
 			)",
 										 result));
-			CHECK(BasaltTest::Eval(engine, "table.concat(Storage.GetKeys(), ',') .. ' ' .. DeleteReturned") == "Name,Position,Progress,Score truefalse");
+			CHECK(BrecciaTest::Eval(engine, "table.concat(Storage.GetKeys(), ',') .. ' ' .. DeleteReturned") == "Name,Position,Progress,Score truefalse");
 			CHECK_FALSE(std::filesystem::exists(*savePath));
-			CHECK(BasaltTest::Eval(engine, "local ok, err = Storage.Save() return tostring(ok) .. tostring(err)") == "truenil");
+			CHECK(BrecciaTest::Eval(engine, "local ok, err = Storage.Save() return tostring(ok) .. tostring(err)") == "truenil");
 			CHECK(std::filesystem::exists(*savePath));
 
 			const std::pair<const char*, const char*> invalid[] = {
@@ -2411,9 +2411,9 @@ TEST_SUITE("Gameplay scripting")
 				{ "Storage.Set('T', { ['\\255'] = 1 })", "strings must be valid UTF-8 text" },
 				{ "Storage.Set('\\255', 1)", "strings must be valid UTF-8 text" },
 			};
-			BasaltTest::CheckLuaErrors(engine, invalid);
+			BrecciaTest::CheckLuaErrors(engine, invalid);
 			// Unsaved changes are dropped by Load (and when play stops).
-			CHECK(BasaltTest::Eval(engine, "Storage.Set('Score', 1) Storage.Load() return Storage.Get('Score')") == "42");
+			CHECK(BrecciaTest::Eval(engine, "Storage.Set('Score', 1) Storage.Load() return Storage.Get('Score')") == "42");
 			REQUIRE(engine.ExecuteString("Storage.Set('Unsaved', true)", result));
 			CHECK(engine.GetErrors().empty());
 			scene.OnRuntimeStop();
@@ -2438,7 +2438,7 @@ TEST_SUITE("Gameplay scripting")
 			Scene scene;
 			scene.OnRuntimeStart();
 			ScriptEngine& engine = *scene.GetScriptEngine();
-			CHECK(BasaltTest::Eval(engine, "Storage.Get('Score') == nil") == "true");
+			CHECK(BrecciaTest::Eval(engine, "Storage.Get('Score') == nil") == "true");
 			REQUIRE(engine.GetErrors().size() == 1);
 			CHECK(engine.GetErrors()[0].find("unreadable") != std::string::npos);
 			CHECK(std::filesystem::exists(savePath->parent_path() / "SaveData.corrupt.json"));
@@ -2457,7 +2457,7 @@ TEST_SUITE("Gameplay scripting")
 		scene.OnRuntimeStop();
 
 		// Script files load without a scene (property discovery): calling these at load time is an error.
-		BasaltTest::TempProject project("ScriptGameplayNoScene");
+		BrecciaTest::TempProject project("ScriptGameplayNoScene");
 		const std::pair<const char*, const char*> scripts[] = {
 			{ "Assets/Scripts/A.lua", "Timer.After(1, function() end) return {}" },
 			{ "Assets/Scripts/B.lua", "Events.Emit('x') return {}" },
@@ -2475,7 +2475,7 @@ TEST_SUITE("Gameplay scripting")
 
 	TEST_CASE("Coroutines nest, stop themselves and take many arguments")
 	{
-		BasaltTest::TempProject project("ScriptCoroutineNesting");
+		BrecciaTest::TempProject project("ScriptCoroutineNesting");
 		const std::string script = project.WriteFile("Assets/Scripts/Nesting.lua", R"(
 			local N = {}
 			function N:OnCreate()
@@ -2527,20 +2527,20 @@ TEST_SUITE("Gameplay scripting")
 		Entity stopperEntity = AddScripted(scene, "Stopper", stopper);
 		scene.OnRuntimeStart();
 		ScriptEngine& engine = *scene.GetScriptEngine();
-		CHECK(BasaltTest::Eval(engine, "ArgCount .. ' ' .. ArgLast .. ' ' .. tostring(StopFinished)") == "200 200 false");
-		CHECK(BasaltTest::Eval(engine, "StopTimer").find("StopCoroutine: the handle is a timer or another instance's coroutine") != std::string::npos);
+		CHECK(BrecciaTest::Eval(engine, "ArgCount .. ' ' .. ArgLast .. ' ' .. tostring(StopFinished)") == "200 200 false");
+		CHECK(BrecciaTest::Eval(engine, "StopTimer").find("StopCoroutine: the handle is a timer or another instance's coroutine") != std::string::npos);
 		// Another instance's coroutine cannot be stopped through StopCoroutine either.
-		CHECK(BasaltTest::Eval(engine, "local s = Scene.FindEntityByName('Stopper'):GetScript() return select(2, pcall(function() return Scene.FindEntityByName('Nesting'):GetScript():StopCoroutine(s.Other) end))").find("another instance's coroutine") != std::string::npos);
+		CHECK(BrecciaTest::Eval(engine, "local s = Scene.FindEntityByName('Stopper'):GetScript() return select(2, pcall(function() return Scene.FindEntityByName('Nesting'):GetScript():StopCoroutine(s.Other) end))").find("another instance's coroutine") != std::string::npos);
 
 		for (int i = 0; i < 20; i++)
 			scene.OnUpdate(Step);
 		CHECK(engine.GetErrors().empty());
 		// WaitFrames(1) from OnCreate resumes on update 1; the inner Wait(0.2) on update 12.
-		CHECK(BasaltTest::Eval(engine, "table.concat(Trace, ' ')") == "outer@0 inner@11");
+		CHECK(BrecciaTest::Eval(engine, "table.concat(Trace, ' ')") == "outer@0 inner@11");
 		// A coroutine that stops itself runs on until its next wait, then ends.
-		CHECK(BasaltTest::Eval(engine, "tostring(Reached) .. ' ' .. tostring(After) .. ' ' .. tostring(OtherRan)") == "true nil nil");
+		CHECK(BrecciaTest::Eval(engine, "tostring(Reached) .. ' ' .. tostring(After) .. ' ' .. tostring(OtherRan)") == "true nil nil");
 		CHECK(Field(scene, stopperEntity, "Timer").is_null());
-		CHECK(BasaltTest::Eval(engine, "local s = Scene.FindEntityByName('Stopper'):GetScript() return tostring(s.Timer:IsActive()) .. tostring(s.Handle:IsActive())") == "truefalse");
+		CHECK(BrecciaTest::Eval(engine, "local s = Scene.FindEntityByName('Stopper'):GetScript() return tostring(s.Timer:IsActive()) .. tostring(s.Handle:IsActive())") == "truefalse");
 		scene.OnRuntimeStop();
 	}
 
@@ -2549,7 +2549,7 @@ TEST_SUITE("Gameplay scripting")
 	// emitted, or play stopped).
 	TEST_CASE("Timers and event handlers created in a coroutine outlive it")
 	{
-		BasaltTest::TempProject project("ScriptCoroutineReferences");
+		BrecciaTest::TempProject project("ScriptCoroutineReferences");
 		const std::string script = project.WriteFile("Assets/Scripts/Creator.lua", R"(
 			local C = {}
 			function C:OnCreate()
@@ -2570,11 +2570,11 @@ TEST_SUITE("Gameplay scripting")
 		scene.OnRuntimeStart();
 		ScriptEngine& engine = *scene.GetScriptEngine();
 		// The finished coroutine's thread is collected.
-		CHECK(BasaltTest::Eval(engine, "collectgarbage('collect') return tostring(Weak[1])") == "nil");
+		CHECK(BrecciaTest::Eval(engine, "collectgarbage('collect') return tostring(Weak[1])") == "nil");
 		for (int i = 0; i < 10; i++)
 			scene.OnUpdate(Step);
-		CHECK(BasaltTest::Eval(engine, "collectgarbage('collect') return Events.Emit('Ping', 7)") == "1");
-		CHECK(BasaltTest::Eval(engine, "TimerFired .. ' ' .. PingHeard .. ' ' .. Ticks") == "1 7 3");
+		CHECK(BrecciaTest::Eval(engine, "collectgarbage('collect') return Events.Emit('Ping', 7)") == "1");
+		CHECK(BrecciaTest::Eval(engine, "TimerFired .. ' ' .. PingHeard .. ' ' .. Ticks") == "1 7 3");
 		CHECK(engine.GetErrors().empty());
 		// Stopping releases the references (with the main thread).
 		scene.OnRuntimeStop();
@@ -2582,7 +2582,7 @@ TEST_SUITE("Gameplay scripting")
 
 	TEST_CASE("Top-level script code belongs to the play session")
 	{
-		BasaltTest::TempProject project("ScriptTopLevelOwner");
+		BrecciaTest::TempProject project("ScriptTopLevelOwner");
 		project.WriteFile("Assets/Scripts/Module.lua", R"(
 			Timer.After(0.05, function() TopLevelFired = true end)
 			return {}
@@ -2603,14 +2603,14 @@ TEST_SUITE("Gameplay scripting")
 			scene.OnUpdate(Step);
 		// The loader that happened to load the class first is gone; the timer was the session's.
 		CHECK_FALSE(scene.FindEntityByName("Loader"));
-		CHECK(BasaltTest::Eval(scene, "tostring(TopLevelFired)") == "true");
+		CHECK(BrecciaTest::Eval(scene, "tostring(TopLevelFired)") == "true");
 		CHECK(scene.GetScriptEngine()->GetErrors().empty());
 		scene.OnRuntimeStop();
 	}
 
 	TEST_CASE("Storage reports what it could not do instead of losing data")
 	{
-		BasaltTest::TempProject project("ScriptStorageFailures");
+		BrecciaTest::TempProject project("ScriptStorageFailures");
 		std::string error;
 		const auto savePath = SaveData::GetDefaultPath("ScriptStorageFailures", error);
 		REQUIRE_MESSAGE(savePath.has_value(), error);
@@ -2622,15 +2622,15 @@ TEST_SUITE("Gameplay scripting")
 			Scene scene;
 			scene.OnRuntimeStart();
 			ScriptEngine& engine = *scene.GetScriptEngine();
-			const std::string loaded = BasaltTest::Eval(engine, "local ok, err = Storage.Load() return tostring(ok) .. ' ' .. err");
+			const std::string loaded = BrecciaTest::Eval(engine, "local ok, err = Storage.Load() return tostring(ok) .. ' ' .. err");
 			CHECK(loaded.find("false") == 0);
 			CHECK(loaded.find("unreadable") != std::string::npos);
 			CHECK(engine.GetErrors().empty());
 			// Moved aside, so saving afresh is safe.
-			CHECK(BasaltTest::Eval(engine, "Storage.Set('Score', 3) return tostring(Storage.Save())") == "true");
+			CHECK(BrecciaTest::Eval(engine, "Storage.Set('Score', 3) return tostring(Storage.Save())") == "true");
 			// A damaged file found mid-session: Load says so.
 			REQUIRE(FileSystem::WriteTextFile(*savePath, "{ broken"));
-			CHECK(BasaltTest::Eval(engine, "local ok, err = Storage.Load() return tostring(ok) .. ' ' .. tostring(err ~= nil)") == "false true");
+			CHECK(BrecciaTest::Eval(engine, "local ok, err = Storage.Load() return tostring(ok) .. ' ' .. tostring(err ~= nil)") == "false true");
 			scene.OnRuntimeStop();
 		}
 
@@ -2641,7 +2641,7 @@ TEST_SUITE("Gameplay scripting")
 			Scene scene;
 			scene.OnRuntimeStart();
 			ScriptEngine& engine = *scene.GetScriptEngine();
-			const std::string saved = BasaltTest::Eval(engine, "Storage.Set('Score', 1) local ok, err = Storage.Save() return tostring(ok) .. ' ' .. err");
+			const std::string saved = BrecciaTest::Eval(engine, "Storage.Set('Score', 1) local ok, err = Storage.Save() return tostring(ok) .. ' ' .. err");
 			CHECK(saved.find("false") == 0);
 			CHECK(saved.find("ScriptStorageFailures") != std::string::npos);
 			scene.OnRuntimeStop();
@@ -2650,10 +2650,10 @@ TEST_SUITE("Gameplay scripting")
 
 		// Without a usable user data directory, Storage raises an error naming the variable.
 		{
-			BasaltTest::ScopedEnvVar relative(Platform::UserDataDirectoryVariable, "relative/dir");
+			BrecciaTest::ScopedEnvVar relative(Platform::UserDataDirectoryVariable, "relative/dir");
 			Scene scene;
 			scene.OnRuntimeStart();
-			CHECK(BasaltTest::Eval(scene, "Storage.Get('Score')").find("Storage: no user data directory: BASALT_USER_DATA_DIR is set to 'relative/dir'") != std::string::npos);
+			CHECK(BrecciaTest::Eval(scene, "Storage.Get('Score')").find("Storage: no user data directory: BRECCIA_USER_DATA_DIR is set to 'relative/dir'") != std::string::npos);
 			scene.OnRuntimeStop();
 		}
 	}
@@ -2662,7 +2662,7 @@ TEST_SUITE("Gameplay scripting")
 	// coroutine.yield() then waited as long as the inner coroutine's Wait.
 	TEST_CASE("A coroutine's bare yield waits one frame even after starting a coroutine that waits")
 	{
-		BasaltTest::TempProject project("ScriptCoroutineWaitLeak");
+		BrecciaTest::TempProject project("ScriptCoroutineWaitLeak");
 		const std::string script = project.WriteFile("Assets/Scripts/Outer.lua", R"(
 			local O = {}
 			function O:OnCreate()
@@ -2679,13 +2679,13 @@ TEST_SUITE("Gameplay scripting")
 		scene.OnRuntimeStart();
 		for (int i = 0; i < 3; i++)
 			scene.OnUpdate(Step);
-		CHECK(BasaltTest::Eval(scene, "tostring(ResumedAt)") == "0");
+		CHECK(BrecciaTest::Eval(scene, "tostring(ResumedAt)") == "0");
 		scene.OnRuntimeStop();
 	}
 
 	TEST_CASE("Coroutine errors are reported safely, with their to-be-closed variables closed")
 	{
-		BasaltTest::TempProject project("ScriptCoroutineErrorObjects");
+		BrecciaTest::TempProject project("ScriptCoroutineErrorObjects");
 		const std::string script = project.WriteFile("Assets/Scripts/Thrower.lua", R"(
 			local T = {}
 			T.Properties = { Kind = "" }
@@ -2734,16 +2734,16 @@ TEST_SUITE("Gameplay scripting")
 		// It failed in update 1 (after that OnUpdate) and never updated again.
 		CHECK(Field(scene, raising, "Updates") == 1);
 		// Every coroutine's guard was closed, the plain one with the error it failed with.
-		CHECK(BasaltTest::Eval(engine, "Closed") == "4");
+		CHECK(BrecciaTest::Eval(engine, "Closed") == "4");
 		CHECK(engine.GetErrors()[3].find("registering error object") != std::string::npos);
 		// The timer the failing instance's __tostring created ended with it.
-		CHECK(BasaltTest::Eval(engine, "tostring(LateTimer:IsActive()) .. ' ' .. tostring(LateFired)") == "false nil");
+		CHECK(BrecciaTest::Eval(engine, "tostring(LateTimer:IsActive()) .. ' ' .. tostring(LateFired)") == "false nil");
 		scene.OnRuntimeStop();
 	}
 
 	TEST_CASE("Bindings called by finalizers while the Lua state closes do nothing")
 	{
-		BasaltTest::TempProject project("ScriptFinalizers");
+		BrecciaTest::TempProject project("ScriptFinalizers");
 		const std::string script = project.WriteFile("Assets/Scripts/Finalizer.lua", R"(
 			local F = {}
 			function F:OnCreate()
@@ -2771,23 +2771,23 @@ TEST_SUITE("Gameplay scripting")
 
 	TEST_CASE("Storage.Save and Storage.Load report a missing save location instead of raising")
 	{
-		BasaltTest::TempProject project("ScriptStorageNowhere");
-		BasaltTest::ScopedEnvVar relative(Platform::UserDataDirectoryVariable, "relative/dir");
+		BrecciaTest::TempProject project("ScriptStorageNowhere");
+		BrecciaTest::ScopedEnvVar relative(Platform::UserDataDirectoryVariable, "relative/dir");
 		Scene scene;
 		scene.OnRuntimeStart();
-		const std::string saved = BasaltTest::Eval(scene, "local ok, err = Storage.Save() return tostring(ok) .. ' ' .. err");
+		const std::string saved = BrecciaTest::Eval(scene, "local ok, err = Storage.Save() return tostring(ok) .. ' ' .. err");
 		CHECK(saved.find("false Storage: no user data directory") == 0);
-		const std::string loaded = BasaltTest::Eval(scene, "local ok, err = Storage.Load() return tostring(ok) .. ' ' .. err");
+		const std::string loaded = BrecciaTest::Eval(scene, "local ok, err = Storage.Load() return tostring(ok) .. ' ' .. err");
 		CHECK(loaded.find("false Storage: no user data directory") == 0);
 		// The others raise.
-		CHECK(BasaltTest::Eval(scene, "Storage.Set('x', 1)").find("error: ") == 0);
+		CHECK(BrecciaTest::Eval(scene, "Storage.Set('x', 1)").find("error: ") == 0);
 		scene.OnRuntimeStop();
 	}
 }
 
 namespace {
 
-	// What Docs/basalt.d.lua declares, read line by line (see the conventions in its header).
+	// What Docs/breccia.d.lua declares, read line by line (see the conventions in its header).
 	struct LuaDefinitions
 	{
 		// Class name -> field name -> the rest of the line (type, then an optional description).
@@ -2891,7 +2891,7 @@ namespace {
 		return missing;
 	}
 
-	// Every global the bindings add (Basalt's are PascalCase; Lua's own are lowercase) as "G name kind", every key
+	// Every global the bindings add (Breccia's are PascalCase; Lua's own are lowercase) as "G name kind", every key
 	// of a plain table as "T table key", and every member of a usertype's instances as "U type member".
 	constexpr const char* IntrospectBindings = R"(
 		local instances = {
@@ -2930,13 +2930,13 @@ namespace {
 
 TEST_SUITE("Scripting")
 {
-	// Docs/basalt.d.lua is written by hand (signatures live only in the C++ bindings) except its component section;
+	// Docs/breccia.d.lua is written by hand (signatures live only in the C++ bindings) except its component section;
 	// this keeps both in sync with what the engine binds.
 	TEST_CASE("Lua input actions read the project's actions; scripts rebind them for the session, through Scene.Load")
 	{
-		using BasaltTest::Eval;
-		BasaltTest::ScopedGameInput restore;
-		BasaltTest::TempProject project("ScriptInputActions");
+		using BrecciaTest::Eval;
+		BrecciaTest::ScopedGameInput restore;
+		BrecciaTest::TempProject project("ScriptInputActions");
 		std::string error;
 		const auto actions = InputActionMap::FromJson(
 			{ { "Actions",
@@ -2973,18 +2973,18 @@ TEST_SUITE("Scripting")
 		Input::SetKeyState(KeyCode::W, true);
 		CHECK(Eval(scene, "return Input.IsActionDown('Jump')") == "true");
 		CHECK(Project::GetActive()->GetConfig().InputActions == *actions);
-		BasaltTest::CheckLuaErrors(*scene.GetScriptEngine(),
-								   std::array<std::pair<const char*, const char*>, 9>{ {
-									   { "Input.SetBindings('Jump', { Key = 'Space' })", "Input.SetBindings('Jump'): expected a list of bindings, such as { { Key = 'Space' } }" },
-									   { "Input.SetBindings('Jump', { { Key = 'Space', Scale = 0/0 } })", "Input.SetBindings('Jump'): binding Scale must be a number" },
-									   { "Input.SetBindings('Jump', { function() end })", "Input.SetBindings('Jump'): cannot convert a Lua function to data" },
-									   { "Input.GetAction('Dash')", "unknown input action 'Dash' (defined: Jump, MoveX)" },
-									   { "Input.IsActionPressed('jump')", "unknown input action 'jump'" },
-									   { "Input.SetBindings('Jump', { { Key = 'Nope' } })", "Input.SetBindings('Jump'): binding: unknown Key 'Nope'" },
-									   { "Input.SetBindings('Jump', { { Key = 'A', Scale = 3 } })", "Scale must be a number in [-1, 1]" },
-									   { "Input.SetBindings('Dash', {})", "unknown input action 'Dash'" },
-									   { "Input.ResetBindings('Dash')", "unknown input action 'Dash'" },
-								   } });
+		BrecciaTest::CheckLuaErrors(*scene.GetScriptEngine(),
+									std::array<std::pair<const char*, const char*>, 9>{ {
+										{ "Input.SetBindings('Jump', { Key = 'Space' })", "Input.SetBindings('Jump'): expected a list of bindings, such as { { Key = 'Space' } }" },
+										{ "Input.SetBindings('Jump', { { Key = 'Space', Scale = 0/0 } })", "Input.SetBindings('Jump'): binding Scale must be a number" },
+										{ "Input.SetBindings('Jump', { function() end })", "Input.SetBindings('Jump'): cannot convert a Lua function to data" },
+										{ "Input.GetAction('Dash')", "unknown input action 'Dash' (defined: Jump, MoveX)" },
+										{ "Input.IsActionPressed('jump')", "unknown input action 'jump'" },
+										{ "Input.SetBindings('Jump', { { Key = 'Nope' } })", "Input.SetBindings('Jump'): binding: unknown Key 'Nope'" },
+										{ "Input.SetBindings('Jump', { { Key = 'A', Scale = 3 } })", "Scale must be a number in [-1, 1]" },
+										{ "Input.SetBindings('Dash', {})", "unknown input action 'Dash'" },
+										{ "Input.ResetBindings('Dash')", "unknown input action 'Dash'" },
+									} });
 		// An empty table removes every binding; Scene.Load keeps the session's bindings.
 		CHECK(Eval(scene, "Input.SetBindings('MoveX', {}) return #Input.GetBindings('MoveX')") == "0");
 		CHECK(Eval(scene, "Scene.Load('Assets/Scenes/Next.bscene') return true") == "true");
@@ -3015,8 +3015,8 @@ TEST_SUITE("Scripting")
 
 	TEST_CASE("Lua reads the mouse in the host's game coordinates and only the input routed to the game")
 	{
-		using BasaltTest::Eval;
-		BasaltTest::ScopedGameInput restore;
+		using BrecciaTest::Eval;
+		BrecciaTest::ScopedGameInput restore;
 		Scene scene;
 		scene.OnRuntimeStart();
 		// The headless view: script coordinates are Input's.
@@ -3055,9 +3055,9 @@ TEST_SUITE("Scripting")
 
 	TEST_CASE("Input.SetCursorMode stores the game's cursor; play starts and stops with Normal")
 	{
-		using BasaltTest::Eval;
-		BasaltTest::ScopedGameInput restore;
-		BasaltTest::TempProject project("ScriptCursorMode");
+		using BrecciaTest::Eval;
+		BrecciaTest::ScopedGameInput restore;
+		BrecciaTest::TempProject project("ScriptCursorMode");
 		Scene next("Next");
 		std::string error;
 		REQUIRE(SceneSerializer::SaveScene(next, Project::ResolvePath("Assets/Scenes/Next.bscene"), error));
@@ -3081,9 +3081,9 @@ TEST_SUITE("Scripting")
 		CHECK(Input::GetCursorMode() == CursorMode::Normal);
 	}
 
-	TEST_CASE("LuaTypeDefinitions: Docs/basalt.d.lua declares exactly the bound Lua API and every component")
+	TEST_CASE("LuaTypeDefinitions: Docs/breccia.d.lua declares exactly the bound Lua API and every component")
 	{
-		const std::optional<std::string> text = FileSystem::ReadTextFile(std::filesystem::path(BASALT_SOURCE_DIR) / "Docs" / "basalt.d.lua");
+		const std::optional<std::string> text = FileSystem::ReadTextFile(std::filesystem::path(BRECCIA_SOURCE_DIR) / "Docs" / "breccia.d.lua");
 		REQUIRE(text);
 		const LuaDefinitions definitions = ParseLuaDefinitions(*text);
 
@@ -3091,8 +3091,8 @@ TEST_SUITE("Scripting")
 		scene.OnRuntimeStart();
 		// The definitions are Lua too: they must compile (editors would report a syntax error as broken types).
 		REQUIRE(text->find("]=====]") == std::string::npos);
-		CHECK(BasaltTest::Eval(scene, fmt::format("local _, problem = load([=====[{}]=====], 'basalt.d.lua') return tostring(problem)", *text)) == "nil");
-		const std::string introspected = BasaltTest::Eval(scene, IntrospectBindings);
+		CHECK(BrecciaTest::Eval(scene, fmt::format("local _, problem = load([=====[{}]=====], 'breccia.d.lua') return tostring(problem)", *text)) == "nil");
+		const std::string introspected = BrecciaTest::Eval(scene, IntrospectBindings);
 		REQUIRE_FALSE(introspected.starts_with("error: "));
 
 		std::map<std::string, std::string> globals;
@@ -3141,7 +3141,7 @@ TEST_SUITE("Scripting")
 				for (const std::string& function : functions)
 				{
 					const std::string check = fmt::format("return {}.{} ~= nil", name, function);
-					CHECK_MESSAGE(BasaltTest::Eval(scene, check) == "true", name, ".", function, " is not bound");
+					CHECK_MESSAGE(BrecciaTest::Eval(scene, check) == "true", name, ".", function, " is not bound");
 				}
 		}
 		scene.OnRuntimeStop();
@@ -3168,7 +3168,7 @@ TEST_SUITE("Scripting")
 {
 	TEST_CASE("Hot reload moves instances onto the new class and keeps their fields")
 	{
-		BasaltTest::TempProject project("ScriptHotReload");
+		BrecciaTest::TempProject project("ScriptHotReload");
 		const std::string script = project.WriteFile("Assets/Scripts/Mover.lua", R"(
 			local Mover = {}
 			Mover.Properties = { Speed = 1.0 }
@@ -3222,7 +3222,7 @@ TEST_SUITE("Scripting")
 
 	TEST_CASE("A hot reload that does not load keeps the previous version running")
 	{
-		BasaltTest::TempProject project("ScriptHotReloadError");
+		BrecciaTest::TempProject project("ScriptHotReloadError");
 		const std::string script = project.WriteFile("Assets/Scripts/Counter.lua", R"(
 			local Counter = {}
 			function Counter:OnCreate() self.Count = 0 end
@@ -3254,7 +3254,7 @@ TEST_SUITE("Scripting")
 
 	TEST_CASE("Hot reload revives disabled instances and starts scripts that failed to load")
 	{
-		BasaltTest::TempProject project("ScriptHotReloadRevive");
+		BrecciaTest::TempProject project("ScriptHotReloadRevive");
 		const std::string crashing = project.WriteFile("Assets/Scripts/Crashing.lua", R"(
 			local Crashing = {}
 			function Crashing:OnCreate() self.Count = 0 end
@@ -3296,7 +3296,7 @@ TEST_SUITE("Scripting")
 
 	TEST_CASE("Hot reload of a required module reloads the scripts")
 	{
-		BasaltTest::TempProject project("ScriptHotReloadModule");
+		BrecciaTest::TempProject project("ScriptHotReloadModule");
 		const std::string module = project.WriteFile("Assets/Scripts/Tuning.lua", "return { Step = 1 }");
 		const std::string script = project.WriteFile("Assets/Scripts/User.lua", R"(
 			local Tuning = require("Assets.Scripts.Tuning")
@@ -3324,7 +3324,7 @@ TEST_SUITE("Scripting")
 	// CJK names are outside Windows CI's ANSI code page: hot reload finds the module's file only by its UTF-8 name.
 	TEST_CASE("Hot reload of a module named in CJK characters reloads the scripts that require it")
 	{
-		BasaltTest::TempProject project("ScriptHotReloadCJK-資産");
+		BrecciaTest::TempProject project("ScriptHotReloadCJK-資産");
 		// Broken at first: the class fails to load, and the failed require is what a fixed module must retry.
 		const std::string module = project.WriteFile("Assets/Scripts/調整.lua", "return = broken");
 		const std::string script = project.WriteFile("Assets/Scripts/利用者.lua", R"(
@@ -3355,7 +3355,7 @@ TEST_SUITE("Scripting")
 	// part way, keeping the old version of every changed module.
 	TEST_CASE("A failed require of a name that is not UTF-8 leaves hot reload working")
 	{
-		BasaltTest::TempProject project("ScriptHotReloadInvalidName");
+		BrecciaTest::TempProject project("ScriptHotReloadInvalidName");
 		const std::string module = project.WriteFile("Assets/Scripts/Tuning.lua", "return { Step = 1 }");
 		const std::string script = project.WriteFile("Assets/Scripts/User.lua", R"(
 			local Tuning = require("Assets.Scripts.Tuning")
@@ -3371,7 +3371,7 @@ TEST_SUITE("Scripting")
 		scene.OnRuntimeStart();
 		scene.OnUpdate(Step);
 		REQUIRE(Field(scene, entity, "Total") == 1);
-		const std::string missing = BasaltTest::Eval(scene, "Missing");
+		const std::string missing = BrecciaTest::Eval(scene, "Missing");
 		CHECK_MESSAGE(missing.find("not found") != std::string::npos, missing);
 		CHECK_MESSAGE(missing.find("no file '") != std::string::npos, missing);
 
@@ -3385,7 +3385,7 @@ TEST_SUITE("Scripting")
 
 	TEST_CASE("require reports missing modules and load errors by UTF-8 file name, and skips folders named like modules")
 	{
-		BasaltTest::TempProject project("ScriptRequireDisk-資産");
+		BrecciaTest::TempProject project("ScriptRequireDisk-資産");
 		project.WriteFile("Assets/Scripts/壊れ.lua", "return {");
 		// A folder named like the "?.lua" template is no module: the "?/init.lua" one is found next.
 		std::error_code error;
@@ -3395,18 +3395,18 @@ TEST_SUITE("Scripting")
 		Scene scene;
 		scene.OnRuntimeStart();
 
-		const std::string missing = BasaltTest::Eval(scene, "local ok, message = pcall(require, 'Assets.Scripts.無い') return message");
+		const std::string missing = BrecciaTest::Eval(scene, "local ok, message = pcall(require, 'Assets.Scripts.無い') return message");
 		CHECK_MESSAGE(missing.find("module 'Assets.Scripts.無い' not found") != std::string::npos, missing);
 		CHECK_MESSAGE(missing.find("/Assets/Scripts/無い.lua'") != std::string::npos, missing);
 		CHECK_MESSAGE(missing.find("/Assets/Scripts/無い/init.lua'") != std::string::npos, missing);
 		CHECK_MESSAGE(missing.find("\n\t\n") == std::string::npos, missing);
-		const std::string broken = BasaltTest::Eval(scene, "local ok, message = pcall(require, 'Assets.Scripts.壊れ') return message");
+		const std::string broken = BrecciaTest::Eval(scene, "local ok, message = pcall(require, 'Assets.Scripts.壊れ') return message");
 		CHECK_MESSAGE(broken.find("error loading module 'Assets.Scripts.壊れ' from file '") != std::string::npos, broken);
 		CHECK_MESSAGE(broken.find("/Assets/Scripts/壊れ.lua'") != std::string::npos, broken);
-		CHECK(BasaltTest::Eval(scene, "return require('Assets.Scripts.道具')") == "init");
+		CHECK(BrecciaTest::Eval(scene, "return require('Assets.Scripts.道具')") == "init");
 		// A file where a template expects a folder names no module either (ENOTDIR, or Windows' own code for it).
 		project.WriteFile("Assets/Scripts/Util", "not a folder");
-		const std::string throughFile = BasaltTest::Eval(scene, "local ok, message = pcall(require, 'Assets.Scripts.Util.Helper') return message");
+		const std::string throughFile = BrecciaTest::Eval(scene, "local ok, message = pcall(require, 'Assets.Scripts.Util.Helper') return message");
 		CHECK_MESSAGE(throughFile.find("module 'Assets.Scripts.Util.Helper' not found") != std::string::npos, throughFile);
 #if !defined(_WIN32)
 		// A file that exists but cannot be read is a load error, not a missing module (root reads it anyway).
@@ -3415,7 +3415,7 @@ TEST_SUITE("Scripting")
 			const std::filesystem::path locked = project.GetDirectory() / FileSystem::PathFromUtf8(project.WriteFile("Assets/Scripts/鍵.lua", "return 1"));
 			std::filesystem::permissions(locked, std::filesystem::perms::none, error);
 			REQUIRE_FALSE(error);
-			const std::string unreadable = BasaltTest::Eval(scene, "local ok, message = pcall(require, 'Assets.Scripts.鍵') return message");
+			const std::string unreadable = BrecciaTest::Eval(scene, "local ok, message = pcall(require, 'Assets.Scripts.鍵') return message");
 			std::filesystem::permissions(locked, std::filesystem::perms::owner_all, error);
 			CHECK_MESSAGE(unreadable.find("error loading module 'Assets.Scripts.鍵' from file '") != std::string::npos, unreadable);
 		}
@@ -3425,7 +3425,7 @@ TEST_SUITE("Scripting")
 
 	TEST_CASE("require and hot reload report a package.path that is not text")
 	{
-		BasaltTest::TempProject project("ScriptPackagePathNotText");
+		BrecciaTest::TempProject project("ScriptPackagePathNotText");
 		const std::string module = project.WriteFile("Assets/Scripts/Tuning.lua", "return { Step = 1 }");
 		const std::string script = project.WriteFile("Assets/Scripts/User.lua", R"(
 			local Tuning = require("Assets.Scripts.Tuning")
@@ -3439,7 +3439,7 @@ TEST_SUITE("Scripting")
 		scene.OnRuntimeStart();
 		scene.OnUpdate(Step);
 		REQUIRE(Field(scene, entity, "Total") == 1);
-		const std::string message = BasaltTest::Eval(scene, "package.path = {} local ok, message = pcall(require, 'Assets.Scripts.Other') return message");
+		const std::string message = BrecciaTest::Eval(scene, "package.path = {} local ok, message = pcall(require, 'Assets.Scripts.Other') return message");
 		CHECK_MESSAGE(message.find("'package.path' must be a string") != std::string::npos, message);
 
 		// The search cannot run: every script loads again (require could not load a new module version anyway, so the cached
@@ -3461,7 +3461,7 @@ TEST_SUITE("Scripting")
 	{
 		if (geteuid() == 0)
 			return; // root inspects any folder
-		BasaltTest::TempProject project("ScriptHotReloadUninspectable");
+		BrecciaTest::TempProject project("ScriptHotReloadUninspectable");
 		const std::string module = project.WriteFile("Assets/Scripts/Tuning.lua", "return { Step = 1 }");
 		project.WriteFile("Assets/Scripts/Locked/Mod.lua", "return 1");
 		const std::filesystem::path locked = project.GetDirectory() / "Assets/Scripts/Locked";
@@ -3491,7 +3491,7 @@ TEST_SUITE("Scripting")
 		scene.OnRuntimeStart();
 		scene.OnUpdate(Step);
 		REQUIRE(Field(scene, entity, "Total") == 1);
-		const std::string message = BasaltTest::Eval(scene, "Locked");
+		const std::string message = BrecciaTest::Eval(scene, "Locked");
 		CHECK_MESSAGE(message.find("error loading module 'Assets.Scripts.Locked.Mod': cannot inspect '") != std::string::npos, message);
 
 		project.WriteFile(module, "return { Step = 100 }");
@@ -3513,7 +3513,7 @@ TEST_SUITE("Scripting")
 {
 	TEST_CASE("Hot reload of a module required through another module reaches its users")
 	{
-		BasaltTest::TempProject project("ScriptHotReloadModuleChain");
+		BrecciaTest::TempProject project("ScriptHotReloadModuleChain");
 		const std::string tuning = project.WriteFile("Assets/Scripts/Tuning.lua", "return { Step = 1 }");
 		project.WriteFile("Assets/Scripts/Helpers.lua", R"(
 			local Tuning = require("Assets.Scripts.Tuning")
@@ -3540,7 +3540,7 @@ TEST_SUITE("Scripting")
 
 	TEST_CASE("Hot reload retries scripts whose required module failed, once the module is fixed")
 	{
-		BasaltTest::TempProject project("ScriptHotReloadBrokenModule");
+		BrecciaTest::TempProject project("ScriptHotReloadBrokenModule");
 		const std::string module = project.WriteFile("Assets/Scripts/Util.lua", "return = broken");
 		const std::string script = project.WriteFile("Assets/Scripts/User.lua", R"(
 			local Util = require("Assets.Scripts.Util")
@@ -3563,7 +3563,7 @@ TEST_SUITE("Scripting")
 
 	TEST_CASE("Hot reload of a script whose OnCreate failed runs OnCreate, not OnReload")
 	{
-		BasaltTest::TempProject project("ScriptHotReloadOnCreate");
+		BrecciaTest::TempProject project("ScriptHotReloadOnCreate");
 		const std::string script = project.WriteFile("Assets/Scripts/Init.lua", "local I = {} function I:OnCreate() error('boom') end return I");
 		Scene scene;
 		Entity entity = AddScripted(scene, "Init", script);
@@ -3594,7 +3594,7 @@ TEST_SUITE("Scripting")
 
 	TEST_CASE("Errors in OnReload disable the instance and are reported with the reload")
 	{
-		BasaltTest::TempProject project("ScriptHotReloadOnReloadError");
+		BrecciaTest::TempProject project("ScriptHotReloadOnReloadError");
 		const std::string script = project.WriteFile("Assets/Scripts/Bad.lua", "local B = {} function B:OnUpdate(dt) Updates = (Updates or 0) + 1 end return B");
 		Scene scene;
 		AddScripted(scene, "Bad", script);
@@ -3608,19 +3608,19 @@ TEST_SUITE("Scripting")
 		REQUIRE(result.InstanceErrors.size() == 1);
 		CHECK(result.InstanceErrors[0].find("(in OnReload)") != std::string::npos);
 		scene.OnUpdate(Step);
-		CHECK(BasaltTest::Eval(scene, "Updates") == "1");
+		CHECK(BrecciaTest::Eval(scene, "Updates") == "1");
 		// Fixed: it runs again.
 		project.WriteFile(script, "local B = {} function B:OnUpdate(dt) Updates = (Updates or 0) + 1 end return B");
 		result = engine.ReloadScripts({ script });
 		CHECK(result.Instances == 1);
 		scene.OnUpdate(Step);
-		CHECK(BasaltTest::Eval(scene, "Updates") == "2");
+		CHECK(BrecciaTest::Eval(scene, "Updates") == "2");
 		scene.OnRuntimeStop();
 	}
 
 	TEST_CASE("Hot reload skips instances an earlier OnReload destroyed")
 	{
-		BasaltTest::TempProject project("ScriptHotReloadDestroy");
+		BrecciaTest::TempProject project("ScriptHotReloadDestroy");
 		const std::string script = project.WriteFile("Assets/Scripts/Both.lua", "local B = {} return B");
 		Scene scene;
 		AddScripted(scene, "First", script);
@@ -3639,7 +3639,7 @@ TEST_SUITE("Scripting")
 		)");
 		const ScriptReloadResult result = scene.GetScriptEngine()->ReloadScripts({ script });
 		CHECK(result.Instances == 1);
-		CHECK(BasaltTest::Eval(scene, "Trail") == "First;destroy:Second;");
+		CHECK(BrecciaTest::Eval(scene, "Trail") == "First;destroy:Second;");
 		CHECK(scene.GetScriptEngine()->GetErrors().empty());
 		scene.OnUpdate(Step);
 		CHECK_FALSE(scene.FindEntityByName("Second"));
@@ -3648,7 +3648,7 @@ TEST_SUITE("Scripting")
 
 	TEST_CASE("Hot reload ends what the old top-level code started and keeps script metatables")
 	{
-		BasaltTest::TempProject project("ScriptHotReloadTopLevel");
+		BrecciaTest::TempProject project("ScriptHotReloadTopLevel");
 		const std::string source = R"(
 			Events.On("Ping", function() Pings = (Pings or 0) + 1 end)
 			local State = {}
@@ -3666,7 +3666,7 @@ TEST_SUITE("Scripting")
 		Entity custom = AddScripted(scene, "Custom", script);
 		scene.OnRuntimeStart();
 		ScriptEngine& engine = *scene.GetScriptEngine();
-		CHECK(BasaltTest::Eval(scene, "Events.Emit('Ping')") == "1");
+		CHECK(BrecciaTest::Eval(scene, "Events.Emit('Ping')") == "1");
 		for (int i = 0; i < 3; i++)
 		{
 			project.WriteFile(script, std::string(source).replace(source.find("Count = 1"), 9, "Count = 1, Extra = 5, Spin = Vec3(0, 1, 0)"));
@@ -3676,13 +3676,13 @@ TEST_SUITE("Scripting")
 			CHECK(result.Instances == 2);
 		}
 		// One handler, not one per load.
-		BasaltTest::Eval(scene, "Pings = 0; Events.Emit('Ping')");
-		CHECK(BasaltTest::Eval(scene, "Pings") == "1");
+		BrecciaTest::Eval(scene, "Pings = 0; Events.Emit('Ping')");
+		CHECK(BrecciaTest::Eval(scene, "Pings") == "1");
 		// A metatable the script set itself stays (and that instance gets no new fields); the class's is replaced.
-		CHECK(BasaltTest::Eval(scene, "Scene.FindEntityByName('Custom'):GetScript():Kind()") == "state");
+		CHECK(BrecciaTest::Eval(scene, "Scene.FindEntityByName('Custom'):GetScript():Kind()") == "state");
 		CHECK(Field(scene, custom, "Spin").is_null());
 		// Added properties: a vector of its own per instance, and the entity's override (applied as given, as at creation).
-		BasaltTest::Eval(scene, "Scene.FindEntityByName('Plain'):GetScript().Spin.x = 9");
+		BrecciaTest::Eval(scene, "Scene.FindEntityByName('Plain'):GetScript().Spin.x = 9");
 		CHECK(Field(scene, other, "Spin") == nlohmann::json({ 0.0, 1.0, 0.0 }));
 		CHECK(Field(scene, plain, "Extra") == 5);
 		CHECK(Field(scene, other, "Extra") == "not a number");
@@ -3691,14 +3691,14 @@ TEST_SUITE("Scripting")
 
 	TEST_CASE("Hot reload survives a script that replaced the package table")
 	{
-		BasaltTest::TempProject project("ScriptHotReloadPackage");
+		BrecciaTest::TempProject project("ScriptHotReloadPackage");
 		const std::string script = project.WriteFile("Assets/Scripts/Odd.lua", "package = 5; local O = {} return O");
 		Scene scene;
 		AddScripted(scene, "Odd", script);
 		scene.OnRuntimeStart();
 		project.WriteFile(script, "local O = {} function O:OnReload() Reloaded = true end return O");
 		CHECK(scene.GetScriptEngine()->ReloadScripts({ script, "Assets/Scripts/Other.lua" }).Reloaded.size() == 1);
-		CHECK(BasaltTest::Eval(scene, "Reloaded") == "true");
+		CHECK(BrecciaTest::Eval(scene, "Reloaded") == "true");
 		scene.OnRuntimeStop();
 	}
 }
@@ -3707,7 +3707,7 @@ TEST_SUITE("Scripting")
 {
 	TEST_CASE("Hot reload adds properties to an instance whose own metatable rejects writes")
 	{
-		BasaltTest::TempProject project("ScriptHotReloadStrict");
+		BrecciaTest::TempProject project("ScriptHotReloadStrict");
 		// Its metatable chains to the class's, so the instance keeps working with the reloaded methods.
 		const std::string strict = "local function Strict(self) local class = getmetatable(self) setmetatable(self, { __index = class.__index, __newindex = function(_, k) error('strict: ' .. k) end }) end ";
 		const std::string script = project.WriteFile("Assets/Scripts/Strict.lua", strict + "local S = {} function S:OnCreate() Strict(self) end return S");
@@ -3727,7 +3727,7 @@ TEST_SUITE("Scripting")
 
 	TEST_CASE("What a script's top level started fails alone, and a reload starts it afresh")
 	{
-		BasaltTest::TempProject project("ScriptTopLevelFailure");
+		BrecciaTest::TempProject project("ScriptTopLevelFailure");
 		const std::string ticking = project.WriteFile("Assets/Scripts/Ticking.lua", "Fails = 0 Timer.Every(0.01, function() Fails = Fails + 1; error('tick fails') end) Timer.Every(0.01, function() Ticks = (Ticks or 0) + 1 end) local T = {} return T");
 		const std::string handler = project.WriteFile("Assets/Scripts/Handler.lua", "Events.On('Boom', function() error('handler fails') end) Events.On('Calm', function() end) local H = {} return H");
 		const std::string broken = project.WriteFile("Assets/Scripts/Broken.lua", "Events.On('Leak', function() end) error('load fails')");
@@ -3738,15 +3738,15 @@ TEST_SUITE("Scripting")
 		scene.OnRuntimeStart();
 		ScriptEngine& engine = *scene.GetScriptEngine();
 		// What a script that failed to load started is gone.
-		CHECK(BasaltTest::Eval(scene, "Events.Emit('Leak')") == "0");
+		CHECK(BrecciaTest::Eval(scene, "Events.Emit('Leak')") == "0");
 		for (int i = 0; i < 3; i++)
 			scene.OnUpdate(Step);
 		// The failing timer ended alone; the other timer of the same top level runs on.
-		CHECK(BasaltTest::Eval(scene, "Fails") == "1");
-		CHECK(BasaltTest::Eval(scene, "Ticks") == "3");
-		CHECK(BasaltTest::Eval(scene, "Events.Emit('Boom')") == "1");
-		CHECK(BasaltTest::Eval(scene, "Events.Emit('Boom')") == "0");
-		CHECK(BasaltTest::Eval(scene, "Events.Emit('Calm')") == "1");
+		CHECK(BrecciaTest::Eval(scene, "Fails") == "1");
+		CHECK(BrecciaTest::Eval(scene, "Ticks") == "3");
+		CHECK(BrecciaTest::Eval(scene, "Events.Emit('Boom')") == "1");
+		CHECK(BrecciaTest::Eval(scene, "Events.Emit('Boom')") == "0");
+		CHECK(BrecciaTest::Eval(scene, "Events.Emit('Calm')") == "1");
 		const auto mentions = [&](const std::string& text) { return std::count_if(engine.GetErrors().begin(), engine.GetErrors().end(), [&](const std::string& error) { return error.find(text) != std::string::npos; }); };
 		CHECK(mentions("timer started by the top level of '" + ticking + "'") == 1);
 		CHECK(mentions("event 'Boom' started by the top level of '" + handler + "'") == 1);
@@ -3756,13 +3756,13 @@ TEST_SUITE("Scripting")
 			REQUIRE(engine.ReloadScripts({ ticking }).Reloaded.size() == 1);
 		for (int i = 0; i < 3; i++)
 			scene.OnUpdate(Step);
-		CHECK(BasaltTest::Eval(scene, "Fails") == "3");
+		CHECK(BrecciaTest::Eval(scene, "Fails") == "3");
 		scene.OnRuntimeStop();
 	}
 
 	TEST_CASE("A module keeps what its top level started across reloads of the scripts that require it")
 	{
-		BasaltTest::TempProject project("ScriptHotReloadModuleOwner");
+		BrecciaTest::TempProject project("ScriptHotReloadModuleOwner");
 		project.WriteFile("Assets/Scripts/Bus.lua", "Loads = (Loads or 0) + 1 Events.On('Ping', function() Pings = (Pings or 0) + 1 end) return { State = {} }");
 		const std::string helper = project.WriteFile("Assets/Scripts/Helper.lua", "return { Value = 1 }");
 		const std::string user = project.WriteFile("Assets/Scripts/User.lua", "local Bus = require('Assets.Scripts.Bus') local Helper = require('Assets.Scripts.Helper') local U = {} function U:OnCreate() Bus.State.Seen = true end return U");
@@ -3770,28 +3770,28 @@ TEST_SUITE("Scripting")
 		AddScripted(scene, "User", user);
 		scene.OnRuntimeStart();
 		ScriptEngine& engine = *scene.GetScriptEngine();
-		CHECK(BasaltTest::Eval(scene, "Events.Emit('Ping')") == "1");
+		CHECK(BrecciaTest::Eval(scene, "Events.Emit('Ping')") == "1");
 		// The class that first required the module reloads: the module's handler stays (it runs once, cached).
 		REQUIRE(engine.ReloadScripts({ user }).Reloaded.size() == 1);
-		CHECK(BasaltTest::Eval(scene, "Events.Emit('Ping')") == "1");
+		CHECK(BrecciaTest::Eval(scene, "Events.Emit('Ping')") == "1");
 		// An unrelated module changes: Bus is not loaded again, so its state and handler are kept.
 		project.WriteFile(helper, "return { Value = 2 }");
 		REQUIRE(engine.ReloadScripts({ helper }).Reloaded.size() == 1);
-		CHECK(BasaltTest::Eval(scene, "Loads") == "1");
-		CHECK(BasaltTest::Eval(scene, "tostring(require('Assets.Scripts.Bus').State.Seen)") == "true");
-		CHECK(BasaltTest::Eval(scene, "Events.Emit('Ping')") == "1");
+		CHECK(BrecciaTest::Eval(scene, "Loads") == "1");
+		CHECK(BrecciaTest::Eval(scene, "tostring(require('Assets.Scripts.Bus').State.Seen)") == "true");
+		CHECK(BrecciaTest::Eval(scene, "Events.Emit('Ping')") == "1");
 		// Bus itself changes: loaded again, its old handler ends and the new one takes over.
 		project.WriteFile("Assets/Scripts/Bus.lua", "Loads = (Loads or 0) + 1 Events.On('Ping', function() Pings = (Pings or 0) + 1 end) return { State = {}, V = 2 }");
 		REQUIRE(engine.ReloadScripts({ "Assets/Scripts/Bus.lua" }).Reloaded.size() == 1);
-		CHECK(BasaltTest::Eval(scene, "Loads") == "2");
-		CHECK(BasaltTest::Eval(scene, "Events.Emit('Ping')") == "1");
+		CHECK(BrecciaTest::Eval(scene, "Loads") == "2");
+		CHECK(BrecciaTest::Eval(scene, "Events.Emit('Ping')") == "1");
 		CHECK(engine.GetErrors().empty());
 		scene.OnRuntimeStop();
 	}
 
 	TEST_CASE("A running script whose reload a broken module failed is retried when the module is fixed")
 	{
-		BasaltTest::TempProject project("ScriptHotReloadStale");
+		BrecciaTest::TempProject project("ScriptHotReloadStale");
 		const std::string module = project.WriteFile("Assets/Scripts/Util.lua", "return { Value = 1 }");
 		const std::string script = project.WriteFile("Assets/Scripts/Player.lua", "local Util = require('Assets.Scripts.Util') local P = {} function P:OnUpdate(dt) self.Value = Util.Value end return P");
 		Scene scene;
@@ -3803,7 +3803,7 @@ TEST_SUITE("Scripting")
 		// Broken after registering a handler: what its top level started before the error ends with the failed load.
 		project.WriteFile(module, "Events.On('Leak', function() end) error('module fails')");
 		ScriptReloadResult result = engine.ReloadScripts({ module });
-		CHECK(BasaltTest::Eval(scene, "Events.Emit('Leak')") == "0");
+		CHECK(BrecciaTest::Eval(scene, "Events.Emit('Leak')") == "0");
 		CHECK(result.Reloaded.empty());
 		REQUIRE(result.Failed.size() == 1);
 		scene.OnUpdate(Step);
@@ -3820,7 +3820,7 @@ TEST_SUITE("Scripting")
 
 	TEST_CASE("A class that loads on retry but whose OnCreate fails is not counted")
 	{
-		BasaltTest::TempProject project("ScriptHotReloadRetryCreate");
+		BrecciaTest::TempProject project("ScriptHotReloadRetryCreate");
 		const std::string script = project.WriteFile("Assets/Scripts/Retry.lua", "local = broken");
 		Scene scene;
 		AddScripted(scene, "Retry", script);
@@ -3839,7 +3839,7 @@ TEST_SUITE("Scripting")
 {
 	TEST_CASE("A module whose new version does not load keeps its previous version running")
 	{
-		BasaltTest::TempProject project("ScriptHotReloadModuleKept");
+		BrecciaTest::TempProject project("ScriptHotReloadModuleKept");
 		const std::string bus = project.WriteFile("Assets/Scripts/Bus.lua", "Events.On('Ping', function() Pings = (Pings or 0) + 1 end) return { State = { Count = 1 } }");
 		const std::string user = project.WriteFile("Assets/Scripts/User.lua", "local Bus = require('Assets.Scripts.Bus') local U = {} function U:OnUpdate(dt) self.Count = Bus.State.Count end return U");
 		Scene scene;
@@ -3853,18 +3853,18 @@ TEST_SUITE("Scripting")
 		const ScriptReloadResult broken = engine.ReloadScripts({ bus });
 		CHECK(broken.Reloaded.empty());
 		CHECK(broken.Failed.size() == 1);
-		CHECK(BasaltTest::Eval(scene, "Events.Emit('Ping')") == "1");
-		CHECK(BasaltTest::Eval(scene, "Pings") == "1");
-		CHECK(BasaltTest::Eval(scene, "require('Assets.Scripts.Bus').State.Count") == "1");
+		CHECK(BrecciaTest::Eval(scene, "Events.Emit('Ping')") == "1");
+		CHECK(BrecciaTest::Eval(scene, "Pings") == "1");
+		CHECK(BrecciaTest::Eval(scene, "require('Assets.Scripts.Bus').State.Count") == "1");
 		scene.OnUpdate(Step);
 		CHECK(Field(scene, entity, "Count") == 1);
 		// Fixed: the new version replaces it, and only its handler remains.
 		project.WriteFile(bus, "Events.On('Ping', function() Pings = (Pings or 0) + 10 end) return { State = { Count = 2 } }");
 		const ScriptReloadResult fixed = engine.ReloadScripts({ bus });
 		CHECK(fixed.Reloaded == std::vector<std::string>{ user });
-		BasaltTest::Eval(scene, "Pings = 0");
-		CHECK(BasaltTest::Eval(scene, "Events.Emit('Ping')") == "1");
-		CHECK(BasaltTest::Eval(scene, "Pings") == "10");
+		BrecciaTest::Eval(scene, "Pings = 0");
+		CHECK(BrecciaTest::Eval(scene, "Events.Emit('Ping')") == "1");
+		CHECK(BrecciaTest::Eval(scene, "Pings") == "10");
 		scene.OnUpdate(Step);
 		CHECK(Field(scene, entity, "Count") == 2);
 		scene.OnRuntimeStop();
@@ -3872,7 +3872,7 @@ TEST_SUITE("Scripting")
 
 	TEST_CASE("Hot reload finds changed modules after a script replaced the package table, and require returns every value")
 	{
-		BasaltTest::TempProject project("ScriptHotReloadPackageModules");
+		BrecciaTest::TempProject project("ScriptHotReloadPackageModules");
 		const std::string tuning = project.WriteFile("Assets/Scripts/Tuning.lua", "return { Step = 1 }");
 		const std::string script = project.WriteFile("Assets/Scripts/User.lua", R"(
 			local Tuning, file = require("Assets.Scripts.Tuning")
@@ -3889,7 +3889,7 @@ TEST_SUITE("Scripting")
 		scene.OnUpdate(Step);
 		REQUIRE(Field(scene, entity, "Total") == 1);
 		// Lua 5.4's loader data (the file name, UTF-8) is passed through.
-		const std::string loadedFrom = BasaltTest::Eval(scene, "LoadedFrom");
+		const std::string loadedFrom = BrecciaTest::Eval(scene, "LoadedFrom");
 		std::error_code error;
 		CHECK_MESSAGE(std::filesystem::equivalent(FileSystem::PathFromUtf8(loadedFrom), project.GetDirectory() / "Assets/Scripts/Tuning.lua", error), loadedFrom);
 		project.WriteFile(tuning, "return { Step = 100 }");
@@ -3915,7 +3915,7 @@ TEST_SUITE("Scripting")
 		for (size_t index = 0; index < scripts.size(); ++index)
 		{
 			CAPTURE(index);
-			BasaltTest::TempProject project("ScriptClipScope" + std::to_string(index));
+			BrecciaTest::TempProject project("ScriptClipScope" + std::to_string(index));
 			const auto leaky = project.WriteFile("Assets/Scripts/Leaky.lua", scripts[index]);
 			const auto follower = project.WriteFile("Assets/Scripts/Follower.lua", "local F={} function F:OnUpdate() UI.Rect(200,200,20,20) end return F");
 			Scene scene;
@@ -3957,7 +3957,7 @@ TEST_SUITE("Scripting")
 {
 	TEST_CASE("clip leak warnings distinguish callbacks and reset after script reload")
 	{
-		BasaltTest::TempProject project("ClipWarningReload");
+		BrecciaTest::TempProject project("ClipWarningReload");
 		const auto path = project.WriteFile("Assets/Scripts/ClipWarnings.lua", "local S={} function S:OnUpdate() UI.PushClip(0,0,10,10) end function S:OnLateUpdate() UI.PushClip(1,1,10,10) end return S");
 		Scene scene;
 		AddScripted(scene, "Leaky callbacks", path);

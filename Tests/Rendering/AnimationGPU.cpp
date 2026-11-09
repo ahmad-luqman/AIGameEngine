@@ -3,16 +3,16 @@
 
 #include "GPUFixture.h"
 
-#include <Basalt/Animation/AnimationPose.h>
-#include <Basalt/Animation/AnimationSystem.h>
-#include <Basalt/Asset/AssetManager.h>
-#include <Basalt/Asset/ImageUtils.h>
-#include <Basalt/Core/FileSystem.h>
-#include <Basalt/Core/Log.h>
-#include <Basalt/Renderer/RenderMath.h>
-#include <Basalt/Renderer/SceneRenderer.h>
-#include <Basalt/Scene/Entity.h>
-#include <Basalt/Scene/Scene.h>
+#include <Breccia/Animation/AnimationPose.h>
+#include <Breccia/Animation/AnimationSystem.h>
+#include <Breccia/Asset/AssetManager.h>
+#include <Breccia/Asset/ImageUtils.h>
+#include <Breccia/Core/FileSystem.h>
+#include <Breccia/Core/Log.h>
+#include <Breccia/Renderer/RenderMath.h>
+#include <Breccia/Renderer/SceneRenderer.h>
+#include <Breccia/Scene/Entity.h>
+#include <Breccia/Scene/Scene.h>
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <nlohmann/json.hpp>
@@ -21,7 +21,7 @@
 #include <filesystem>
 #include <functional>
 
-using namespace Basalt;
+using namespace Breccia;
 
 namespace {
 	struct ClearAssetCache
@@ -91,9 +91,9 @@ TEST_CASE("GPU skinning matches CPU posed geometry in lighting, normals, depth a
 {
 	ClearAssetCache cacheGuard;
 	auto graphics = CreateTestGraphics();
-	const auto fixture = std::filesystem::path(BASALT_ANIMATION_DATA_DIR) / "TwoJoint.gltf";
+	const auto fixture = std::filesystem::path(BRECCIA_ANIMATION_DATA_DIR) / "TwoJoint.gltf";
 	// A separate cache key keeps CPU vertex deformation from modifying the GPU rig's shared source.
-	const auto referencePath = std::filesystem::path(BASALT_ANIMATION_OUTPUT_DIR) / "Reference.gltf";
+	const auto referencePath = std::filesystem::path(BRECCIA_ANIMATION_OUTPUT_DIR) / "Reference.gltf";
 	std::filesystem::create_directories(referencePath.parent_path());
 	std::filesystem::copy_file(fixture, referencePath, std::filesystem::copy_options::overwrite_existing);
 	Scene gpuScene, cpuScene;
@@ -228,7 +228,7 @@ TEST_CASE("Mesh nodes share one palette upload per instance and fully culled ski
 {
 	ClearAssetCache cacheGuard;
 	auto graphics = CreateTestGraphics();
-	const auto fixture = std::filesystem::path(BASALT_ANIMATION_DATA_DIR) / "TwoJoint.gltf";
+	const auto fixture = std::filesystem::path(BRECCIA_ANIMATION_DATA_DIR) / "TwoJoint.gltf";
 	auto source = AssetManager::GetMesh(fixture.string());
 	REQUIRE(source);
 	const auto meshNode = source->Nodes[1];
@@ -271,10 +271,10 @@ TEST_CASE("GPU morph targets match CPU morphed geometry, skinned and static, in 
 {
 	ClearAssetCache cacheGuard;
 	auto graphics = CreateTestGraphics();
-	const auto fixture = std::filesystem::path(BASALT_ANIMATION_DATA_DIR) / "Morph.gltf";
+	const auto fixture = std::filesystem::path(BRECCIA_ANIMATION_DATA_DIR) / "Morph.gltf";
 	// Separate cache keys hold the CPU-morphed copies: one for the Animator, one for the static mesh's defaults.
-	const auto animatedPath = std::filesystem::path(BASALT_ANIMATION_OUTPUT_DIR) / "MorphAnimated.gltf";
-	const auto staticPath = std::filesystem::path(BASALT_ANIMATION_OUTPUT_DIR) / "MorphStatic.gltf";
+	const auto animatedPath = std::filesystem::path(BRECCIA_ANIMATION_OUTPUT_DIR) / "MorphAnimated.gltf";
+	const auto staticPath = std::filesystem::path(BRECCIA_ANIMATION_OUTPUT_DIR) / "MorphStatic.gltf";
 	std::filesystem::create_directories(animatedPath.parent_path());
 	for (const auto& path : { animatedPath, staticPath })
 		std::filesystem::copy_file(fixture, path, std::filesystem::copy_options::overwrite_existing);
@@ -394,8 +394,8 @@ TEST_CASE("GPU morph weights past one draw record and past the per-draw limit ma
 {
 	ClearAssetCache cacheGuard;
 	auto graphics = CreateTestGraphics();
-	const auto fixture = std::filesystem::path(BASALT_ANIMATION_DATA_DIR) / "ManyMorphs.gltf";
-	const auto referencePath = std::filesystem::path(BASALT_ANIMATION_OUTPUT_DIR) / "ManyMorphsReference.gltf";
+	const auto fixture = std::filesystem::path(BRECCIA_ANIMATION_DATA_DIR) / "ManyMorphs.gltf";
+	const auto referencePath = std::filesystem::path(BRECCIA_ANIMATION_OUTPUT_DIR) / "ManyMorphsReference.gltf";
 	// Sparse and Crowded read the same accessors, so the drawn model shares one submesh's geometry between them
 	// (MeshSource::ShareSubmesh). The reference writes each node's morphed pose into its submesh's vertices in place,
 	// which a shared submesh would overwrite, so its Crowded reads POSITION through an accessor of its own.
@@ -479,7 +479,7 @@ TEST_CASE("Morph truncation warns once per mesh node, also when nodes share a me
 {
 	ClearAssetCache cacheGuard;
 	auto graphics = CreateTestGraphics();
-	const auto fixture = std::filesystem::path(BASALT_ANIMATION_DATA_DIR) / "ManyMorphs.gltf";
+	const auto fixture = std::filesystem::path(BRECCIA_ANIMATION_DATA_DIR) / "ManyMorphs.gltf";
 	const auto source = AssetManager::GetMesh(fixture.string());
 	REQUIRE(source);
 	// A second node on Crowded's mesh, within the limit: the two must not reset each other's episode.

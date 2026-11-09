@@ -15,8 +15,8 @@ concurrency:
 
 # Every build that compiles C++, including those in scripts/coverage.sh and scripts/fuzz.sh, compiles through ccache
 # (build-and-test uses sccache on Windows; the clang-tidy jobs compile only shaders and clear the launchers). The ccache
-# action sets ccache's compiler_check to content only on macOS and Windows. Every job that builds Basalt takes its build
-# tools and dependency sources from .github/actions/setup-basalt.
+# action sets ccache's compiler_check to content only on macOS and Windows. Every job that builds Breccia takes its build
+# tools and dependency sources from .github/actions/setup-breccia.
 env:
   CMAKE_C_COMPILER_LAUNCHER: ccache
   CMAKE_CXX_COMPILER_LAUNCHER: ccache
@@ -94,7 +94,7 @@ jobs:
 
       - name: Set up the build tools
         timeout-minutes: 30
-        uses: ./.github/actions/setup-basalt
+        uses: ./.github/actions/setup-breccia
 
       # Each compiler cache is capped (300M for Release, 1G for Windows Debug, 600M for macOS Debug). One generation of every
       # job's cache plus the dependency sources should fit the repository's 10 GB Actions cache; each run saves a new entry
@@ -109,7 +109,7 @@ jobs:
           evict-old-files: 7d
 
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DBASALT_CHECK_FORMAT=OFF -DBASALT_BENCHMARK_TESTS=${{ matrix.config == 'Release' && 'ON' || 'OFF' }}
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DBRECCIA_CHECK_FORMAT=OFF -DBRECCIA_BENCHMARK_TESTS=${{ matrix.config == 'Release' && 'ON' || 'OFF' }}
 
       # cmake/Dependencies.cmake embeds MSVC debug information (/Z7) in Debug objects when a launcher is set. A dependency
       # that adds /Zi itself would make its objects uncacheable again, and one that drops /Z7 would lose debug information.
@@ -155,7 +155,7 @@ jobs:
 
   # AddressSanitizer + UndefinedBehaviorSanitizer over every headless test. All code, third-party
   # included, is instrumented (cmake/Sanitizers.cmake). It is also CI's only Linux Debug build of the engine, apps and
-  # tests on pull requests (fuzz builds only its targets; coverage runs only on main and manual runs), and its only Tracy (BASALT_PROFILE)
+  # tests on pull requests (fuzz builds only its targets; coverage runs only on main and manual runs), and its only Tracy (BRECCIA_PROFILE)
   # build.
   sanitizers:
     name: ubuntu-24.04 / ASan+UBSan
@@ -166,7 +166,7 @@ jobs:
 
       - name: Set up the build tools
         timeout-minutes: 30
-        uses: ./.github/actions/setup-basalt
+        uses: ./.github/actions/setup-breccia
         with:
           apt-packages: clang
 
@@ -181,19 +181,19 @@ jobs:
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
             -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
-            "-DBASALT_SANITIZE=address;undefined" -DBASALT_CHECK_FORMAT=OFF -DBASALT_PROFILE=ON
+            "-DBRECCIA_SANITIZE=address;undefined" -DBRECCIA_CHECK_FORMAT=OFF -DBRECCIA_PROFILE=ON
 
-      # BASALT_PROFILE quietly does nothing if Tracy's target is missing (Basalt/CMakeLists.txt), and Tracy's crash handlers
+      # BRECCIA_PROFILE quietly does nothing if Tracy's target is missing (Breccia/CMakeLists.txt), and Tracy's crash handlers
       # must stay off under the sanitizers (cmake/Dependencies.cmake). This job stands in for Linux Debug: the tests a
       # missing tool (Python) or a stale name would drop must be registered (CrashReport, which skips here, is checked in
       # lavapipe part 1).
       - name: Check the configuration
         shell: bash
         run: |
-          grep -q -- "-DBASALT_PROFILE" build/compile_commands.json || { echo "::error::Tracy is not enabled"; exit 1; }
+          grep -q -- "-DBRECCIA_PROFILE" build/compile_commands.json || { echo "::error::Tracy is not enabled"; exit 1; }
           grep -q -- "-DTRACY_NO_CRASH_HANDLER" build/compile_commands.json || { echo "::error::Tracy's crash handlers are on"; exit 1; }
           tests=$(ctest --test-dir build -N)
-          for name in BasaltTests BasaltTestShards PhysicsDeterminism FeatureTest; do
+          for name in BrecciaTests BrecciaTestShards PhysicsDeterminism FeatureTest; do
             grep -qE "Test +#[0-9]+: $name\$" <<< "$tests" || { echo "::error::$name is not registered"; exit 1; }
           done
 
@@ -207,7 +207,7 @@ jobs:
       - name: Test
         run: ctest --test-dir build --output-on-failure --no-tests=error -LE "gpu|format" -j "$(nproc)"
 
-  # clang-tidy over the sources of every Basalt target (engine, apps, tests, GPU tests, benchmark and fuzz targets;
+  # clang-tidy over the sources of every Breccia target (engine, apps, tests, GPU tests, benchmark and fuzz targets;
   # third-party code never), split over the matrix's jobs by scripts/clang_tidy.py. Any finding fails the job
   # (WarningsAsErrors in .clang-tidy; the script also fails findings that are not errors). The shard comes from the job's
   # index, so every file is checked by exactly one job whatever the matrix holds; matrix.shard only sets the job count.
@@ -227,7 +227,7 @@ jobs:
 
       - name: Set up the build tools
         timeout-minutes: 30
-        uses: ./.github/actions/setup-basalt
+        uses: ./.github/actions/setup-breccia
         with:
           apt-packages: clang clang-tidy
 
@@ -236,20 +236,20 @@ jobs:
       - name: Configure
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
-            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DBASALT_GPU_TESTS=ON -DBASALT_FUZZ=ON \
-            -DBASALT_CHECK_FORMAT=OFF
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DBRECCIA_GPU_TESTS=ON -DBRECCIA_FUZZ=ON \
+            -DBRECCIA_CHECK_FORMAT=OFF
 
       - name: Check that the build uses the caches
         shell: bash
         run: scripts/ci-check-caches.sh build
 
-      # The only generated files Basalt's sources include: the SPIR-V blobs of the generated EmbeddedShaders.cpp. A
+      # The only generated files Breccia's sources include: the SPIR-V blobs of the generated EmbeddedShaders.cpp. A
       # source that includes another build-time header fails with a missing include until its target is built here too.
       - name: Compile shaders
-        run: cmake --build build --target BasaltShaders
+        run: cmake --build build --target BrecciaShaders
 
       # Only this tree has every kind of target (fuzz targets included), so its selection is checked against every
-      # compiled Basalt source here (no build needed).
+      # compiled Breccia source here (no build needed).
       - name: Check the clang-tidy selection
         run: ctest --test-dir build --output-on-failure --no-tests=error -R "^ClangTidyScript$"
 
@@ -270,7 +270,7 @@ jobs:
 
       - name: Set up the build tools
         timeout-minutes: 30
-        uses: ./.github/actions/setup-basalt
+        uses: ./.github/actions/setup-breccia
         with:
           apt-packages: clang llvm
 
@@ -331,7 +331,7 @@ jobs:
 
       - name: Set up the build tools
         timeout-minutes: 30
-        uses: ./.github/actions/setup-basalt
+        uses: ./.github/actions/setup-breccia
         with:
           apt-packages: mesa-vulkan-drivers vulkan-validationlayers vulkan-tools xvfb xauth
 
@@ -359,7 +359,7 @@ jobs:
           save: ${{ matrix.part == 1 }}
 
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBASALT_GPU_TESTS=ON -DBASALT_GOLDEN_DRIVER=lavapipe -DBASALT_CHECK_FORMAT=OFF -DBASALT_BENCHMARK_TESTS=ON
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBRECCIA_GPU_TESTS=ON -DBRECCIA_GOLDEN_DRIVER=lavapipe -DBRECCIA_CHECK_FORMAT=OFF -DBRECCIA_BENCHMARK_TESTS=ON
 
       - name: Check that the build uses the caches
         shell: bash
@@ -373,12 +373,12 @@ jobs:
       # renamed one would quietly move its test into part 2, and one without the label would leave both parts.
       - name: Verify the expected tests are registered
         run: |
-          ctest --test-dir build -N --show-only=json-v1 > /tmp/basalt-tests.json
+          ctest --test-dir build -N --show-only=json-v1 > /tmp/breccia-tests.json
           python3 -c '
           import json, os, sys
-          labels = {test["name"]: next((p["value"] for p in test.get("properties", []) if p["name"] == "LABELS"), []) for test in json.load(open("/tmp/basalt-tests.json"))["tests"]}
+          labels = {test["name"]: next((p["value"] for p in test.get("properties", []) if p["name"] == "LABELS"), []) for test in json.load(open("/tmp/breccia-tests.json"))["tests"]}
           part1 = set(os.environ["GPU_PART_1"].strip("^()$").split("|"))
-          missing = ({"ViewportGPU", "PostProcessGPU", "PreviewRendererGPU", "BasaltTests", "BasaltTests_Core", "BasaltTestShards", "Benchmark_cpu", "PhysicsDeterminism", "FeatureTest", "CrashReport"} | part1) - labels.keys()
+          missing = ({"ViewportGPU", "PostProcessGPU", "PreviewRendererGPU", "BrecciaTests", "BrecciaTests_Core", "BrecciaTestShards", "Benchmark_cpu", "PhysicsDeterminism", "FeatureTest", "CrashReport"} | part1) - labels.keys()
           missing and sys.exit(f"Missing tests: {missing}")
           unlabelled = {name for name in part1 if "gpu" not in labels[name]}
           unlabelled and sys.exit(f"GPU_PART_1 tests without the gpu label: {unlabelled}")
@@ -439,7 +439,7 @@ jobs:
 
       - name: Set up the build tools
         timeout-minutes: 30
-        uses: ./.github/actions/setup-basalt
+        uses: ./.github/actions/setup-breccia
         with:
           apt-packages: clang
 

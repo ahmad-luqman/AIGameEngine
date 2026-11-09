@@ -1,5 +1,5 @@
 {
-	"Format": "BasaltPrefab",
+	"Format": "BrecciaPrefab",
 	"Version": 1,
 	"Entities": [
 		{ "ID": 1, "Name": "Projectile", "Parent": 0, "Components": {

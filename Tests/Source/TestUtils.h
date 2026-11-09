@@ -1,16 +1,16 @@
 #pragma once
 
-#include <Basalt/Audio/AudioEngine.h>
-#include <Basalt/Core/FileSystem.h>
-#include <Basalt/Core/Input.h>
-#include <Basalt/Core/Log.h>
-#include <Basalt/Core/PackArchive.h>
-#include <Basalt/Core/Platform.h>
-#include <Basalt/Project/Project.h>
-#include <Basalt/Scene/Entity.h>
-#include <Basalt/Scene/Scene.h>
-#include <Basalt/Scripting/ScriptEngine.h>
-#include <Basalt/UI/GameUI.h>
+#include <Breccia/Audio/AudioEngine.h>
+#include <Breccia/Core/FileSystem.h>
+#include <Breccia/Core/Input.h>
+#include <Breccia/Core/Log.h>
+#include <Breccia/Core/PackArchive.h>
+#include <Breccia/Core/Platform.h>
+#include <Breccia/Project/Project.h>
+#include <Breccia/Scene/Entity.h>
+#include <Breccia/Scene/Scene.h>
+#include <Breccia/Scripting/ScriptEngine.h>
+#include <Breccia/UI/GameUI.h>
 
 #include <doctest/doctest.h>
 
@@ -26,26 +26,26 @@
 #include <utility>
 #include <vector>
 
-namespace BasaltTest {
+namespace BrecciaTest {
 
 	// Fixed frame time of the tests (60 Hz).
 	inline constexpr float Step = 1.0f / 60.0f;
 
-	// Scratch root of this test run: <temp>/BasaltTests/Run-<process ID>-<clock>, unique per process, so test runs at the
-	// same time (the BasaltTests shards ctest starts together, Debug and ASan builds) never share or delete each other's
+	// Scratch root of this test run: <temp>/BrecciaTests/Run-<process ID>-<clock>, unique per process, so test runs at the
+	// same time (the BrecciaTests shards ctest starts together, Debug and ASan builds) never share or delete each other's
 	// files. The process ID keeps processes started in the same clock tick apart; the clock keeps a reused process ID out
 	// of a crashed earlier run's leftover directory.
 	inline const std::filesystem::path& GetRunDirectory()
 	{
-		static const std::string run = "Run-" + std::to_string(Basalt::Platform::GetProcessId()) + "-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
-		static const std::filesystem::path directory = std::filesystem::temp_directory_path() / "BasaltTests" / run;
+		static const std::string run = "Run-" + std::to_string(Breccia::Platform::GetProcessId()) + "-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+		static const std::filesystem::path directory = std::filesystem::temp_directory_path() / "BrecciaTests" / run;
 		return directory;
 	}
 
 	// Whether a directory holds a leftover temporary file of FileSystem's atomic writes (*.tmp).
 	inline bool HasTempFiles(const std::filesystem::path& directory)
 	{
-		REQUIRE_MESSAGE(std::filesystem::is_directory(directory), "not a directory: ", Basalt::FileSystem::PathToUtf8(directory));
+		REQUIRE_MESSAGE(std::filesystem::is_directory(directory), "not a directory: ", Breccia::FileSystem::PathToUtf8(directory));
 		std::error_code error;
 		for (const auto& entry : std::filesystem::directory_iterator(directory, error))
 		{
@@ -60,13 +60,13 @@ namespace BasaltTest {
 	{
 	public:
 		explicit TempDirectory(const std::string& name)
-			: m_Path(GetRunDirectory() / Basalt::FileSystem::PathFromUtf8(name))
+			: m_Path(GetRunDirectory() / Breccia::FileSystem::PathFromUtf8(name))
 		{
 			std::error_code error;
 			std::filesystem::remove_all(m_Path, error);
-			REQUIRE_MESSAGE(!error, "cannot empty '", Basalt::FileSystem::PathToUtf8(m_Path), "': ", Basalt::FileSystem::DescribeError(error));
+			REQUIRE_MESSAGE(!error, "cannot empty '", Breccia::FileSystem::PathToUtf8(m_Path), "': ", Breccia::FileSystem::DescribeError(error));
 			std::filesystem::create_directories(m_Path, error);
-			REQUIRE_MESSAGE(!error, "cannot create '", Basalt::FileSystem::PathToUtf8(m_Path), "': ", Basalt::FileSystem::DescribeError(error));
+			REQUIRE_MESSAGE(!error, "cannot create '", Breccia::FileSystem::PathToUtf8(m_Path), "': ", Breccia::FileSystem::DescribeError(error));
 		}
 		~TempDirectory()
 		{
@@ -90,9 +90,9 @@ namespace BasaltTest {
 	{
 #if defined(_WIN32)
 		constexpr wchar_t Units[] = { 0xD800, 0xD801, 0xDC00 };
-		std::wstring name = Basalt::FileSystem::PathFromUtf8(stem).native();
+		std::wstring name = Breccia::FileSystem::PathFromUtf8(stem).native();
 		name.push_back(Units[variant]);
-		return std::filesystem::path(name + Basalt::FileSystem::PathFromUtf8(extension).native());
+		return std::filesystem::path(name + Breccia::FileSystem::PathFromUtf8(extension).native());
 #else
 		return std::filesystem::path(stem + std::string(1, static_cast<char>(0xFF - variant)) + extension);
 #endif
@@ -130,14 +130,14 @@ namespace BasaltTest {
 		// With no value, the variable is removed for the scope.
 		ScopedEnvVar(std::string name, const std::optional<std::string>& value)
 			: m_Name(std::move(name))
-			, m_Previous(Basalt::Platform::GetEnvVar(m_Name.c_str()))
+			, m_Previous(Breccia::Platform::GetEnvVar(m_Name.c_str()))
 		{
-			const bool changed = value ? Basalt::Platform::SetEnvVar(m_Name.c_str(), *value) : Basalt::Platform::UnsetEnvVar(m_Name.c_str());
+			const bool changed = value ? Breccia::Platform::SetEnvVar(m_Name.c_str(), *value) : Breccia::Platform::UnsetEnvVar(m_Name.c_str());
 			REQUIRE_MESSAGE(changed, "cannot change ", m_Name);
 		}
 		~ScopedEnvVar()
 		{
-			const bool restored = m_Previous ? Basalt::Platform::SetEnvVar(m_Name.c_str(), *m_Previous) : Basalt::Platform::UnsetEnvVar(m_Name.c_str());
+			const bool restored = m_Previous ? Breccia::Platform::SetEnvVar(m_Name.c_str(), *m_Previous) : Breccia::Platform::UnsetEnvVar(m_Name.c_str());
 			CHECK_MESSAGE(restored, "cannot restore ", m_Name);
 		}
 
@@ -164,16 +164,16 @@ namespace BasaltTest {
 	private:
 		static void Restore()
 		{
-			Basalt::GameUI::SetHostState({});
-			Basalt::Input::SetCursorMode(Basalt::CursorMode::Normal);
-			Basalt::Input::Reset();
-			Basalt::Input::ForgetInjectedGamepads();
-			Basalt::Input::EndFrame();
+			Breccia::GameUI::SetHostState({});
+			Breccia::Input::SetCursorMode(Breccia::CursorMode::Normal);
+			Breccia::Input::Reset();
+			Breccia::Input::ForgetInjectedGamepads();
+			Breccia::Input::EndFrame();
 		}
 	};
 
 	// The result of a Lua chunk in the engine (see ScriptEngine::ExecuteString), or "error: <message>".
-	inline std::string Eval(Basalt::ScriptEngine& engine, const std::string& code)
+	inline std::string Eval(Breccia::ScriptEngine& engine, const std::string& code)
 	{
 		std::string result;
 		if (!engine.ExecuteString(code, result))
@@ -181,13 +181,13 @@ namespace BasaltTest {
 		return result;
 	}
 
-	inline std::string Eval(Basalt::Scene& scene, const std::string& code)
+	inline std::string Eval(Breccia::Scene& scene, const std::string& code)
 	{
 		return Eval(*scene.GetScriptEngine(), code);
 	}
 
 	// Every snippet must fail with a message containing its expected fragment.
-	inline void CheckLuaErrors(Basalt::ScriptEngine& engine, std::span<const std::pair<const char*, const char*>> cases)
+	inline void CheckLuaErrors(Breccia::ScriptEngine& engine, std::span<const std::pair<const char*, const char*>> cases)
 	{
 		std::string result;
 		for (const auto& [code, expected] : cases)
@@ -197,7 +197,7 @@ namespace BasaltTest {
 		}
 	}
 
-	inline uint64_t IdOf(Basalt::Entity entity)
+	inline uint64_t IdOf(Breccia::Entity entity)
 	{
 		return static_cast<uint64_t>(entity.GetUUID());
 	}
@@ -210,11 +210,11 @@ namespace BasaltTest {
 			: m_Directory(name)
 		{
 			std::string error;
-			m_Project = Basalt::Project::Create(m_Directory.GetPath(), name, error);
-			Basalt::Project::SetActive(m_Project);
+			m_Project = Breccia::Project::Create(m_Directory.GetPath(), name, error);
+			Breccia::Project::SetActive(m_Project);
 		}
 
-		~TempProject() { Basalt::Project::SetActive(nullptr); }
+		~TempProject() { Breccia::Project::SetActive(nullptr); }
 
 		TempProject(const TempProject&) = delete;
 		TempProject& operator=(const TempProject&) = delete;
@@ -222,7 +222,7 @@ namespace BasaltTest {
 		// Writes a project-relative file (a UTF-8 path) and returns its project-relative path.
 		std::string WriteFile(const std::string& relativePath, const std::string& contents) const
 		{
-			Basalt::FileSystem::WriteTextFile(m_Directory.GetPath() / Basalt::FileSystem::PathFromUtf8(relativePath), contents);
+			Breccia::FileSystem::WriteTextFile(m_Directory.GetPath() / Breccia::FileSystem::PathFromUtf8(relativePath), contents);
 			return relativePath;
 		}
 
@@ -231,15 +231,15 @@ namespace BasaltTest {
 
 	private:
 		TempDirectory m_Directory;
-		Basalt::Ref<Basalt::Project> m_Project;
+		Breccia::Ref<Breccia::Project> m_Project;
 	};
 
 	// Mounts an archive for the scope; FileSystem's mount is global, so a failing check must not leak it into other tests.
 	class ScopedMount
 	{
 	public:
-		ScopedMount(const std::filesystem::path& root, Basalt::Ref<Basalt::PackArchive> archive) { Basalt::FileSystem::Mount(root, std::move(archive)); }
-		~ScopedMount() { Basalt::FileSystem::Unmount(); }
+		ScopedMount(const std::filesystem::path& root, Breccia::Ref<Breccia::PackArchive> archive) { Breccia::FileSystem::Mount(root, std::move(archive)); }
+		~ScopedMount() { Breccia::FileSystem::Unmount(); }
 
 		ScopedMount(const ScopedMount&) = delete;
 		ScopedMount& operator=(const ScopedMount&) = delete;
@@ -255,7 +255,7 @@ namespace BasaltTest {
 #if defined(__APPLE__)
 			project.WriteFile("FakeVulkanSDK/lib/libvulkan.1.dylib", "stand-in");
 			project.WriteFile("FakeVulkanSDK/lib/libMoltenVK.dylib", "stand-in");
-			m_Variable.emplace("VULKAN_SDK", Basalt::FileSystem::PathToUtf8(project.GetDirectory() / "FakeVulkanSDK"));
+			m_Variable.emplace("VULKAN_SDK", Breccia::FileSystem::PathToUtf8(project.GetDirectory() / "FakeVulkanSDK"));
 #else
 			(void)project;
 #endif
@@ -270,7 +270,7 @@ namespace BasaltTest {
 	{
 		uint64_t next = 0;
 		int count = 0;
-		for (const Basalt::LogMessage& message : Basalt::Log::GetHistory().GetMessagesSince(since, next))
+		for (const Breccia::LogMessage& message : Breccia::Log::GetHistory().GetMessagesSince(since, next))
 		{
 			if (message.Text.find(text) != std::string::npos)
 				count++;
@@ -326,8 +326,8 @@ namespace BasaltTest {
 	// before the scene so the scene's sounds are released first.
 	struct HeadlessAudio
 	{
-		explicit HeadlessAudio(const Basalt::AudioDevicelessFormat& format = {}) { REQUIRE(Basalt::AudioEngine::Init(true, format)); }
-		~HeadlessAudio() { Basalt::AudioEngine::Shutdown(); }
+		explicit HeadlessAudio(const Breccia::AudioDevicelessFormat& format = {}) { REQUIRE(Breccia::AudioEngine::Init(true, format)); }
+		~HeadlessAudio() { Breccia::AudioEngine::Shutdown(); }
 
 		HeadlessAudio(const HeadlessAudio&) = delete;
 		HeadlessAudio& operator=(const HeadlessAudio&) = delete;

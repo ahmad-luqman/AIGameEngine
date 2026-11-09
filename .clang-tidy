@@ -1,4 +1,4 @@
-# Static analysis for Basalt's own code (scripts/clang_tidy.py, or -DBASALT_CLANG_TIDY=ON while compiling; third-party
+# Static analysis for Breccia's own code (scripts/clang_tidy.py, or -DBRECCIA_CLANG_TIDY=ON while compiling; third-party
 # code is not checked).
 # Disabled checks and why:
 #   bugprone-easily-swappable-parameters    flags most math and rendering signatures (x, y, width, height).
@@ -29,4 +29,4 @@ Checks: >
   -performance-no-int-to-ptr,
   -performance-avoid-endl
 WarningsAsErrors: '*'
-HeaderFilterRegex: '.*/((Basalt|Basalt-Editor|Basalt-Runtime|Basalt-CLI)/Source|Tests/(Source|Rendering|Benchmarks|Fuzz))/.*'
+HeaderFilterRegex: '.*/((Breccia|Breccia-Editor|Breccia-Runtime|Breccia-CLI)/Source|Tests/(Source|Rendering|Benchmarks|Fuzz))/.*'

@@ -1,0 +1,154 @@
+#pragma once
+
+#include "Breccia/Core/Base.h"
+#include "Breccia/Core/Timestep.h"
+#include "Breccia/Core/UUID.h"
+#include "Breccia/Physics/PhysicsWorld.h"
+#include "Breccia/Scripting/ScriptReload.h"
+#include "Breccia/UI/UIWidgetEvent.h"
+
+#include <nlohmann/json.hpp>
+
+#include <optional>
+#include <span>
+#include <string>
+#include <unordered_set>
+#include <vector>
+
+namespace Breccia {
+
+	class Entity;
+	class Scene;
+
+	// Runs Lua behaviours (ScriptComponent) for one playing scene. A script file returns a class table:
+	//
+	//   local Player = {}
+	//   Player.Properties = { Speed = 5.0 }        -- defaults, overridable per entity
+	//   function Player:OnCreate() end
+	//   function Player:OnUpdate(dt) end
+	//   function Player:OnLateUpdate(dt) end      -- after physics
+	//   function Player:OnDestroy() end
+	//   function Player:OnCollisionBegin(other, contact) end
+	//   function Player:OnCollisionEnd(other, contact) end  -- likewise OnTriggerEnter/Exit; end and exit
+	//                                                       -- contacts may be nil (see ContactInfo)
+	//   function Player:OnJointBreak(other) end    -- other is the far body; nil for a joint to the world
+	//   function Player:OnAnimationEvent(name, clip, layer) end  -- an Animator event marker on this entity was crossed
+	//   function Player:OnGamepadConnected(index) end  -- also for gamepads connected before the instance started;
+	//                                                  -- likewise OnGamepadDisconnected
+	//   function Player:OnReload() end             -- after a hot reload replaced the class (ReloadScripts)
+	//   return Player
+	//
+	// Each entity gets an instance table (self) whose fields start as the property values, with
+	// self.Entity referring to its entity, plus engine methods (self:StartCoroutine, ...). A runtime error
+	// disables the failing instance and is recorded (GetErrors) instead of stopping the game.
+	//
+	// The engine also owns the session's timers and coroutines (ScriptTasks), events (ScriptEvents) and save
+	// data (SaveData, loaded on first use). Timers, coroutines and event handlers belong to the instance whose
+	// code created them and end with it; Update runs the due ones after every OnUpdate. The full Lua API is
+	// documented in Docs/ScriptingAPI.md.
+	class ScriptEngine
+	{
+	public:
+		// The project's ScriptInstructionLimit stops scripts that never return, while editing a game (ScriptCallBudget explains
+		// its cost). The runtime, which plays finished games, turns it off for the process: call before the first ScriptEngine,
+		// as sessions keep the hook they started with.
+		static void DisableInstructionLimit();
+		// What sessions starting now run under; 0: no limit.
+		static uint32_t GetInstructionLimit();
+
+		explicit ScriptEngine(Scene* scene);
+		~ScriptEngine();
+
+		ScriptEngine(const ScriptEngine&) = delete;
+		ScriptEngine& operator=(const ScriptEngine&) = delete;
+
+		// Instantiates every ScriptComponent, then calls OnCreate on each in hierarchy order (all instances
+		// exist before the first OnCreate runs).
+		void Start();
+		// Creates the instances of scripts added since the last frame, calls OnGamepadConnected/Disconnected for the
+		// gamepads whose connection changed since the last Update (the first one announces those already connected;
+		// a gamepad replaced at its index is a disconnect and a connect), the widget callbacks of `uiEvents`
+		// (UIInteraction) and OnUpdate, then runs the due timers and coroutines.
+		void Update(Timestep ts, std::span<const UIWidgetEvent> uiEvents);
+		void LateUpdate(Timestep ts);
+		// Calls OnDestroy on every live instance, then ends the session's timers, coroutines and event handlers.
+		void Stop();
+
+		void OnEntityDestroyed(Entity entity);
+		// Calls the event's callback on both entities, each with the other and the contact (Point, Normal
+		// pointing away from the other entity, Impulse) as a table, or nil when there is none (see ContactInfo).
+		void OnContactEvent(ContactEventType type, Entity a, Entity b, const std::optional<ContactInfo>& contact);
+		// Calls OnJointBreak on the joint's body and on the connected entity (if any), each with the other,
+		// and once on the entity holding the JointComponent when it is neither (with the connected entity, or
+		// nil for the world).
+		void OnJointBroken(Entity holder, Entity body, Entity connected);
+		// Calls OnAnimationEvent(name, clip, layer) on the entity whose Animator crossed the marker; layer is the name of the
+		// layer that played the clip, nil for the base playback.
+		void OnAnimationEvent(Entity entity, const std::string& name, const std::string& clip, const std::string& layer);
+
+		// Creates the entity's script instance now (and calls OnCreate) if it has a ScriptComponent and no
+		// instance yet. Used after spawning entities so they are initialized immediately.
+		void EnsureInstance(Entity entity);
+		// Like EnsureInstance for a group (e.g. a spawned prefab): all instances are created first, then
+		// OnCreate is called on each in order.
+		void EnsureInstances(const std::vector<Entity>& entities);
+		bool HasInstance(Entity entity) const;
+		// A field of the entity's script instance (self.<name>) converted to JSON.
+		std::optional<nlohmann::json> GetInstanceField(Entity entity, const std::string& name) const;
+
+		// Hot reload: loads the classes of the changed script files again in this Lua state, and moves their instances
+		// onto the new class. When a changed file is a module loaded through require, it and the modules that required it
+		// are forgotten and every class loads again; a forgotten module that does not load again keeps its previous
+		// version (and its top level's timers and handlers), otherwise those end. A changed file no class runs
+		// also retries the classes that failed to load and those whose last reload failed (it may be the module whose
+		// require failed). Instances keep their fields, and Properties they lack get their values (defaults or the
+		// component's overrides; defaults that changed do not reach existing fields). Then each started instance gets
+		// OnReload; one that had not started, or whose OnCreate failed, gets OnCreate. An instance an error disabled
+		// runs again after a successful reload of its script; one whose script set its own metatable keeps it. A class
+		// that does not load keeps its previous version running, and one that failed to load before gets its instances
+		// now. What the old class's top-level code started (timers, event handlers) ends; the new top level starts its
+		// own. Not carried over: module-level locals start afresh, and functions instances already handed to timers,
+		// coroutines or events keep the old code; a disabled instance's timers and handlers were cancelled when it
+		// failed and are not restarted (OnReload can start them again). Project-relative paths
+		// ("Assets/Scripts/Player.lua").
+		ScriptReloadResult ReloadScripts(const std::vector<std::string>& changedFiles);
+
+		// Runs a chunk of Lua in the scene's script state (editor console / automation). The result of the
+		// last expression (if any) is returned as a string.
+		bool ExecuteString(const std::string& code, std::string& outResult);
+
+		// Records a script error (logged, and returned by GetErrors, e.g. play.step's scriptErrors).
+		void ReportError(const std::string& message);
+		const std::vector<std::string>& GetErrors() const { return m_Errors; }
+		void ClearErrors() { m_Errors.clear(); }
+
+		// Loads a script in an isolated Lua state and returns its Properties defaults (editor inspector).
+		static std::optional<nlohmann::json> LoadScriptProperties(const std::string& scriptPath, std::string& outError);
+		// Compiles a script without running it (syntax errors only). Modules loaded through require may return
+		// anything, so this is the check that applies to every script file.
+		static bool CheckSyntax(const std::string& scriptPath, std::string& outError);
+
+	private:
+		// Creates the instance (properties applied) without calling OnCreate. False if none was created.
+		bool CreateInstance(Entity entity);
+		void StartOrDefer(UUID uuid);
+		// ReloadScripts' work, which may throw sol2 errors (ReloadScripts catches them).
+		void ReloadClasses(const std::vector<std::string>& changedFiles, ScriptReloadResult& result);
+		void DispatchGamepadConnections();
+		// Calls a widget's callback on its target. A callback that cannot be called (no target entity, no script,
+		// no such method) is a script error, reported once per widget, method and problem; a widget or target that an
+		// earlier callback this frame destroyed is skipped.
+		void DispatchUIEvent(const UIWidgetEvent& event);
+
+	private:
+		struct Impl;
+		Scope<Impl> m_Impl;
+		Scene* m_Scene = nullptr;
+		std::vector<std::string> m_Errors;
+		std::unordered_set<std::string> m_ReportedUICallbacks;
+
+		friend struct ScriptEngineAccess;
+		friend struct ScriptClassLoader;
+	};
+
+}

@@ -3957,7 +3957,7 @@
 			"Parent": 0
 		}
 	],
-	"Format": "BasaltScene",
+	"Format": "BrecciaScene",
 	"Name": "Joints",
 	"Physics": {
 		"FixedTimestep": 0.01666666753590107,

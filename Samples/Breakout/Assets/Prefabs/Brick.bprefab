@@ -86,6 +86,6 @@
 			"Parent": 0
 		}
 	],
-	"Format": "BasaltPrefab",
+	"Format": "BrecciaPrefab",
 	"Version": 2
 }

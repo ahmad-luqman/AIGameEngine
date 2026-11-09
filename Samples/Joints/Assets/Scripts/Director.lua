@@ -67,7 +67,7 @@ function Director:OnUpdate(dt)
 	end
 	Debug.DrawLine(self.BungeeHook.Translation, self.Bungee.Translation, Vec4(0.2, 0.75, 0.35, 1))
 
-	UI.Text("Basalt joints", 40, 40, 44)
+	UI.Text("Breccia joints", 40, 40, 44)
 	UI.Text(string.format("Door hinge  %5.1f deg", self.Door:GetJointPosition() or 0), 40, 100, 30)
 	UI.Text(string.format("Piston slider  %4.2f m", self.Piston:GetJointPosition() or 0), 40, 140, 30)
 	UI.Text(string.format("Welds broken  %d", JointsDemoBreaks or 0), 40, 180, 30)

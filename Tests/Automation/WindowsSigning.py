@@ -2,7 +2,7 @@
 """scripts/sign-windows.py against a stand-in signtool on every platform; on Windows also with the real signtool and a
 self-signed certificate, which checks that an export removes the runtime's signature and that the game can be signed.
 
-Usage: WindowsSigning.py <basalt CLI>
+Usage: WindowsSigning.py <breccia CLI>
 """
 import json
 import os
@@ -209,13 +209,13 @@ def signer(path):
 def check_real_signtool(temp, cli):
     """The real signtool with a self-signed certificate: the runtime signed with it loses its signature in an export (folder
     and package), and the exported game signed with it still runs."""
-    thumbprint = powershell("(New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=Basalt Signing Test' -CertStoreLocation Cert:\\CurrentUser\\My -NotAfter (Get-Date).AddDays(1)).Thumbprint")
+    thumbprint = powershell("(New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=Breccia Signing Test' -CertStoreLocation Cert:\\CurrentUser\\My -NotAfter (Get-Date).AddDays(1)).Thumbprint")
     try:
         tools = temp / "Tools"
         tools.mkdir()
-        shutil.copy2(cli, tools / "basalt.exe")
-        shutil.copy2(cli.parent / "BasaltRuntime.exe", tools / "BasaltRuntime.exe")
-        runtime = tools / "BasaltRuntime.exe"
+        shutil.copy2(cli, tools / "breccia.exe")
+        shutil.copy2(cli.parent / "BrecciaRuntime.exe", tools / "BrecciaRuntime.exe")
+        runtime = tools / "BrecciaRuntime.exe"
         signed = sign([str(runtime), "--thumbprint", thumbprint, "--no-timestamp", "--allow-untrusted"], dict(os.environ))
         if signed.returncode != 0 and "cannot find signtool" in signed.stderr and not os.environ.get("CI"):
             print("WindowsSigning: no signtool here (install the Windows SDK), so the real signing check is skipped")
@@ -223,10 +223,10 @@ def check_real_signtool(temp, cli):
         require(signed.returncode == 0, f"signing the runtime: {signed.stdout}{signed.stderr}")
         require(signer(runtime) == thumbprint, "the runtime was not signed")
 
-        env = dict(os.environ, BASALT_USER_DATA_DIR=str(temp / "User Data"))
+        env = dict(os.environ, BRECCIA_USER_DATA_DIR=str(temp / "User Data"))
         for package in (False, True):
             output = temp / f"Export {package}"
-            exported = subprocess.run([str(tools / "basalt.exe"), "--project", str(ROOT / "Samples" / "Tetris"), "project.export",
+            exported = subprocess.run([str(tools / "breccia.exe"), "--project", str(ROOT / "Samples" / "Tetris"), "project.export",
                                        json.dumps({"output": str(output), "package": package, "smokeTestFrames": 10})], capture_output=True, text=True, env=env, timeout=600)
             # The response is the last JSON object, after any log lines.
             start = exported.stdout.rfind("\n{") + 1 if "\n{" in exported.stdout else exported.stdout.find("{")
@@ -252,7 +252,7 @@ def check_real_signtool(temp, cli):
 
 def main():
     cli = Path(sys.argv[1]).resolve()
-    with tempfile.TemporaryDirectory(prefix="Basalt Signing ") as temp:
+    with tempfile.TemporaryDirectory(prefix="Breccia Signing ") as temp:
         check_stand_in(Path(temp))
         if sys.platform == "win32":
             check_real_signtool(Path(temp), cli)

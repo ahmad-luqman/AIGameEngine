@@ -1,6 +1,6 @@
 #include <doctest/doctest.h>
 
-#include "Basalt/Renderer/TemporalHistory.h"
+#include "Breccia/Renderer/TemporalHistory.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -8,7 +8,7 @@
 #include <cmath>
 #include <limits>
 
-using namespace Basalt;
+using namespace Breccia;
 
 TEST_CASE("Temporal jitter repeats without leaving a pixel and shifts both projection types correctly")
 {

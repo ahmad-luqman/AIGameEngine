@@ -2,10 +2,10 @@
 // what was accepted goes through the same steps saving it would take.
 #include "FuzzCommon.h"
 
-#include <Basalt/Core/FileSystem.h>
-#include <Basalt/Project/Project.h>
-#include <Basalt/Scene/Prefab.h>
-#include <Basalt/Scene/SceneSerializer.h>
+#include <Breccia/Core/FileSystem.h>
+#include <Breccia/Project/Project.h>
+#include <Breccia/Scene/Prefab.h>
+#include <Breccia/Scene/SceneSerializer.h>
 
 #include <cstdlib>
 #include <filesystem>
@@ -21,14 +21,14 @@ namespace {
 	std::filesystem::path MakeProject()
 	{
 		std::error_code error;
-		const auto directory = std::filesystem::temp_directory_path(error) / ("BasaltFuzzPrefab-" + std::to_string(std::random_device{}()));
+		const auto directory = std::filesystem::temp_directory_path(error) / ("BrecciaFuzzPrefab-" + std::to_string(std::random_device{}()));
 		std::string createError;
-		Basalt::Project::SetActive(Basalt::Project::Create(directory, "Fuzz", createError));
-		Basalt::FileSystem::WriteTextFile(directory / "Assets/Prefabs/Base.bprefab", R"({ "Format": "BasaltPrefab", "Entities": [
+		Breccia::Project::SetActive(Breccia::Project::Create(directory, "Fuzz", createError));
+		Breccia::FileSystem::WriteTextFile(directory / "Assets/Prefabs/Base.bprefab", R"({ "Format": "BrecciaPrefab", "Entities": [
 			{ "ID": 1, "Name": "Base", "Parent": 0, "Components": { "PointLight": { "Intensity": 1 } } },
 			{ "ID": 2, "Name": "Child", "Parent": 1, "Components": { "BoneAttachment": { "Target": 1 } } }
 		] })");
-		Basalt::FileSystem::WriteTextFile(directory / "Assets/Prefabs/Nest.bprefab", R"({ "Format": "BasaltPrefab", "Version": 4, "Entities": [
+		Breccia::FileSystem::WriteTextFile(directory / "Assets/Prefabs/Nest.bprefab", R"({ "Format": "BrecciaPrefab", "Version": 4, "Entities": [
 			{ "ID": 1, "Name": "Nest", "Parent": 0, "Components": {} },
 			{ "ID": 2, "Parent": 1, "Components": { "Prefab": { "Prefab": "Assets/Prefabs/Base.bprefab" } } }
 		] })");
@@ -39,26 +39,26 @@ namespace {
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 {
-	BasaltFuzz::Init();
+	BrecciaFuzz::Init();
 	static const std::filesystem::path project = MakeProject();
 	nlohmann::json entities;
 	std::string error;
-	Basalt::Prefab::ReadReport report;
+	Breccia::Prefab::ReadReport report;
 	const std::filesystem::path path = project / "Assets/Prefabs/Fuzz.bprefab";
-	if (!Basalt::Prefab::ReadText(BasaltFuzz::AsText(data, size), path, entities, error, &report))
+	if (!Breccia::Prefab::ReadText(BrecciaFuzz::AsText(data, size), path, entities, error, &report))
 		return 0;
-	if (!Basalt::Prefab::Normalize(entities, "Fuzz.bprefab", error))
+	if (!Breccia::Prefab::Normalize(entities, "Fuzz.bprefab", error))
 		return 0;
 	nlohmann::json file;
 	std::vector<std::string> warnings;
-	const auto root = entities[0]["Components"].contains("Prefab") ? Basalt::PrefabFileRoot::Variant : Basalt::PrefabFileRoot::Plain;
-	if (!Basalt::Prefab::ToFileEntities(entities, path, root, file, warnings, error))
+	const auto root = entities[0]["Components"].contains("Prefab") ? Breccia::PrefabFileRoot::Variant : Breccia::PrefabFileRoot::Plain;
+	if (!Breccia::Prefab::ToFileEntities(entities, path, root, file, warnings, error))
 		return 0;
 	// What a prefab reads as, it writes as the same entities, and what it writes it can read: an ID lost here is an entity
 	// lost from every instance.
-	const nlohmann::json document = { { "Format", "BasaltPrefab" }, { "Version", Basalt::SceneSerializer::FormatVersion }, { "Entities", std::move(file) } };
+	const nlohmann::json document = { { "Format", "BrecciaPrefab" }, { "Version", Breccia::SceneSerializer::FormatVersion }, { "Entities", std::move(file) } };
 	nlohmann::json reread;
-	if (!Basalt::Prefab::ReadText(document.dump(), path, reread, error) || !Basalt::Prefab::Normalize(reread, "Fuzz.bprefab", error))
+	if (!Breccia::Prefab::ReadText(document.dump(), path, reread, error) || !Breccia::Prefab::Normalize(reread, "Fuzz.bprefab", error))
 		abort();
 	const auto ids = [](const nlohmann::json& records) {
 		std::set<uint64_t> found;

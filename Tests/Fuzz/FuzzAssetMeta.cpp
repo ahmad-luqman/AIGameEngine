@@ -1,15 +1,15 @@
 #include "FuzzCommon.h"
 
-#include <Basalt/Asset/AssetRegistry.h>
-#include <Basalt/Core/JsonUtils.h>
+#include <Breccia/Asset/AssetRegistry.h>
+#include <Breccia/Core/JsonUtils.h>
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 {
-	BasaltFuzz::Init();
+	BrecciaFuzz::Init();
 	std::string error;
-	const auto parsed = Basalt::ParseJson(BasaltFuzz::AsText(data, size), error);
-	Basalt::AssetRegistry::ParseMeta(parsed, error);
-	Basalt::AssetRegistry registry;
+	const auto parsed = Breccia::ParseJson(BrecciaFuzz::AsText(data, size), error);
+	Breccia::AssetRegistry::ParseMeta(parsed, error);
+	Breccia::AssetRegistry registry;
 	std::string path;
 	registry.Decode(parsed, path, error, true);
 	nlohmann::json encoded;

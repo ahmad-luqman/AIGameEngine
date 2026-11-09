@@ -1,5 +1,5 @@
 {
-	"Format": "BasaltProject",
+	"Format": "BrecciaProject",
 	"Name": "ScriptError",
 	"StartScene": "Assets/Scenes/Main.bscene"
 }

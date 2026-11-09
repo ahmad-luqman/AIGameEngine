@@ -1,5 +1,5 @@
 {
-	"Format": "BasaltProject",
+	"Format": "BrecciaProject",
 	"Fullscreen": false,
 	"Name": "Tetris",
 	"StartScene": "Assets/Scenes/Tetris.bscene",

@@ -99,8 +99,8 @@ else
 	fi
 
 	cmake -S . -B "$buildDir" -G Ninja -DCMAKE_BUILD_TYPE=Debug "${compiler[@]}" \
-		-DBASALT_FUZZ=ON -DBASALT_SANITIZE="address;undefined" \
-		-DBASALT_BUILD_EDITOR=OFF -DBASALT_BUILD_RUNTIME=OFF -DBASALT_BUILD_TESTS=OFF > /dev/null
+		-DBRECCIA_FUZZ=ON -DBRECCIA_SANITIZE="address;undefined" \
+		-DBRECCIA_BUILD_EDITOR=OFF -DBRECCIA_BUILD_RUNTIME=OFF -DBRECCIA_BUILD_TESTS=OFF > /dev/null
 	cmake --build "$buildDir" --target "${selected[@]}"
 	if [[ "$mode" == build ]]; then
 		echo "Built ${#selected[@]} targets in $buildDir/bin"

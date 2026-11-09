@@ -1,12 +1,12 @@
 #include "BenchmarkScene.h"
 
-#include "Basalt/Asset/AssetManager.h"
-#include "Basalt/Core/JobSystem.h"
-#include "Basalt/Core/Log.h"
-#include "Basalt/Core/Timer.h"
-#include "Basalt/Renderer/GraphicsDevice.h"
-#include "Basalt/Renderer/RenderUtils.h"
-#include "Basalt/Renderer/VulkanLoader.h"
+#include "Breccia/Asset/AssetManager.h"
+#include "Breccia/Core/JobSystem.h"
+#include "Breccia/Core/Log.h"
+#include "Breccia/Core/Timer.h"
+#include "Breccia/Renderer/GraphicsDevice.h"
+#include "Breccia/Renderer/RenderUtils.h"
+#include "Breccia/Renderer/VulkanLoader.h"
 
 #include <nlohmann/json.hpp>
 
@@ -14,7 +14,7 @@
 #include <fstream>
 #include <string_view>
 
-using namespace Basalt;
+using namespace Breccia;
 
 namespace {
 	// Unwind runtime state and cached assets before releasing the device, including on a failed run.
@@ -38,10 +38,10 @@ namespace {
 
 	bool RunBenchmark(bool gpu, const std::string& path, nlohmann::json& report, std::string& error)
 	{
-		using namespace BasaltBenchmark;
+		using namespace BrecciaBenchmark;
 		auto fail = [&](const std::string& reason) {
 			error = reason;
-			BS_CORE_ERROR("Benchmark: {}", reason);
+			BR_CORE_ERROR("Benchmark: {}", reason);
 			return false;
 		};
 		BenchmarkSession session;
@@ -53,7 +53,7 @@ namespace {
 		{
 			if (!VulkanLoader::Load())
 				return fail("Vulkan loader initialization failed");
-			graphics = GraphicsDevice::CreateOffscreen(Width, Height, { .ApplicationName = "BasaltBenchmark", .EnableValidation = true, .VSync = false });
+			graphics = GraphicsDevice::CreateOffscreen(Width, Height, { .ApplicationName = "BrecciaBenchmark", .EnableValidation = true, .VSync = false });
 			if (!graphics)
 				return fail("offscreen graphics device creation failed");
 			if (!graphics->IsValidationActive())
@@ -130,11 +130,11 @@ int main(int argc, char** argv)
 	Log::SetConsoleLevel(LogLevel::Warn);
 	if (argc != 3 || (std::string_view(argv[1]) != "cpu" && std::string_view(argv[1]) != "gpu"))
 	{
-		BS_CORE_ERROR("Usage: BasaltBenchmark cpu|gpu report.json");
+		BR_CORE_ERROR("Usage: BrecciaBenchmark cpu|gpu report.json");
 		return 1;
 	}
 	nlohmann::json report = {
-		{ "version", 1 }, { "buildType", BASALT_BENCHMARK_BUILD_TYPE }, { "compiler", BASALT_BENCHMARK_COMPILER }, { "mode", argv[1] }, { "warmupFrames", BasaltBenchmark::WarmupFrames }, { "fixedStep", BasaltBenchmark::FixedStep }
+		{ "version", 1 }, { "buildType", BRECCIA_BENCHMARK_BUILD_TYPE }, { "compiler", BRECCIA_BENCHMARK_COMPILER }, { "mode", argv[1] }, { "warmupFrames", BrecciaBenchmark::WarmupFrames }, { "fixedStep", BrecciaBenchmark::FixedStep }
 	};
 	std::string error;
 	bool passed = false;
@@ -145,12 +145,12 @@ int main(int argc, char** argv)
 	catch (const std::exception& exception)
 	{
 		error = std::string("unhandled exception: ") + exception.what();
-		BS_CORE_ERROR("Benchmark: {}", error);
+		BR_CORE_ERROR("Benchmark: {}", error);
 	}
 	if (const auto errors = Log::GetHistory().GetErrorCount(); passed && errors)
 	{
 		error = fmt::format("{} engine errors were logged; successful report refused", errors);
-		BS_CORE_ERROR("Benchmark: {}", error);
+		BR_CORE_ERROR("Benchmark: {}", error);
 		passed = false;
 	}
 	report["passed"] = passed;
@@ -164,7 +164,7 @@ int main(int argc, char** argv)
 	}
 	catch (const std::exception& exception)
 	{
-		BS_CORE_ERROR("Benchmark: report serialization failed: {}", exception.what());
+		BR_CORE_ERROR("Benchmark: report serialization failed: {}", exception.what());
 		passed = false;
 		nlohmann::json failure = { { "passed", false }, { "failure", std::string("report serialization failed: ") + exception.what() } };
 		output << failure.dump(2, ' ', false, nlohmann::json::error_handler_t::replace) << '\n';
@@ -172,7 +172,7 @@ int main(int argc, char** argv)
 	output.close();
 	if (!output)
 	{
-		BS_CORE_ERROR("Benchmark: cannot write report to '{}'", argv[2]);
+		BR_CORE_ERROR("Benchmark: cannot write report to '{}'", argv[2]);
 		return 1;
 	}
 	return passed ? 0 : 1;

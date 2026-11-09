@@ -3,12 +3,12 @@
 
 #include "GPUFixture.h"
 
-#include <Basalt/Project/Project.h>
-#include <Basalt/Renderer/PostProcessStack.h>
-#include <Basalt/Renderer/PlayStatistics.h>
-#include <Basalt/Renderer/RenderUtils.h>
-#include <Basalt/Renderer/ShaderUtils.h>
-#include <Basalt/Scene/Entity.h>
+#include <Breccia/Project/Project.h>
+#include <Breccia/Renderer/PostProcessStack.h>
+#include <Breccia/Renderer/PlayStatistics.h>
+#include <Breccia/Renderer/RenderUtils.h>
+#include <Breccia/Renderer/ShaderUtils.h>
+#include <Breccia/Scene/Entity.h>
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/packing.hpp>
@@ -18,7 +18,7 @@
 #include <limits>
 #include <numeric>
 
-using namespace Basalt;
+using namespace Breccia;
 
 namespace {
 	std::vector<uint8_t> Capture(SceneRenderer& renderer, Scene& scene, const RenderCamera& camera, float dt = 1.0f / 60.0f)
@@ -66,9 +66,9 @@ TEST_CASE("Post-process effects operate in order, reset exposure and bypass diag
 	Capture(renderer, scene, camera);
 	scene.GetRendererSettings() = fallback;
 	const auto legacy = Capture(renderer, scene, camera);
-	std::filesystem::create_directories(BASALT_POSTPROCESS_OUTPUT_DIR);
+	std::filesystem::create_directories(BRECCIA_POSTPROCESS_OUTPUT_DIR);
 	std::string imageError;
-	REQUIRE(WritePng(std::filesystem::path(BASALT_POSTPROCESS_OUTPUT_DIR) / "Legacy.png", legacy, 64, 64, imageError));
+	REQUIRE(WritePng(std::filesystem::path(BRECCIA_POSTPROCESS_OUTPUT_DIR) / "Legacy.png", legacy, 64, 64, imageError));
 	auto& post = scene.CreateEntity("Post").AddComponent<PostProcessComponent>();
 	post.SSAOEnabled = false;
 	CHECK(Capture(renderer, scene, camera) == legacy);
@@ -97,7 +97,7 @@ TEST_CASE("Post-process effects operate in order, reset exposure and bypass diag
 	post.BloomEnabled = true;
 	post.BloomIntensity = 0.5f;
 	const auto bloom = Capture(renderer, scene, camera);
-	REQUIRE(WritePng(std::filesystem::path(BASALT_POSTPROCESS_OUTPUT_DIR) / "Bloom.png", bloom, 64, 64, imageError));
+	REQUIRE(WritePng(std::filesystem::path(BRECCIA_POSTPROCESS_OUTPUT_DIR) / "Bloom.png", bloom, 64, 64, imageError));
 	CHECK(Brightness(bloom) > Brightness(legacy));
 	size_t glowPixels = 0;
 	for (size_t i = 0; i < bloom.size(); i += 4)
@@ -109,7 +109,7 @@ TEST_CASE("Post-process effects operate in order, reset exposure and bypass diag
 	post.BloomEnabled = false;
 	post.FXAAEnabled = true;
 	const auto fxaa = Capture(renderer, scene, camera);
-	REQUIRE(WritePng(std::filesystem::path(BASALT_POSTPROCESS_OUTPUT_DIR) / "FXAA.png", fxaa, 64, 64, imageError));
+	REQUIRE(WritePng(std::filesystem::path(BRECCIA_POSTPROCESS_OUTPUT_DIR) / "FXAA.png", fxaa, 64, 64, imageError));
 	CHECK(fxaa != legacy);
 	size_t edgePixels = 0;
 	for (size_t i = 0; i < fxaa.size(); i += 4)

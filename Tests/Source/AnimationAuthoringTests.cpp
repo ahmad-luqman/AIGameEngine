@@ -4,23 +4,23 @@
 #include "AutomationTestUtils.h"
 #include "TestUtils.h"
 
-#include <Basalt/Animation/AnimatedModel.h>
-#include <Basalt/Animation/AnimationGraph.h>
-#include <Basalt/Animation/PropertyAnimation.h>
-#include <Basalt/Automation/AutomationSession.h>
-#include <Basalt/Automation/CommandRegistry.h>
-#include <Basalt/Scene/ComponentRegistry.h>
-#include <Basalt/Scene/Entity.h>
-#include <Basalt/Scene/SceneSerializer.h>
-#include <Basalt/Math/Math.h>
-#include <Basalt/Physics/PhysicsWorld.h>
+#include <Breccia/Animation/AnimatedModel.h>
+#include <Breccia/Animation/AnimationGraph.h>
+#include <Breccia/Animation/PropertyAnimation.h>
+#include <Breccia/Automation/AutomationSession.h>
+#include <Breccia/Automation/CommandRegistry.h>
+#include <Breccia/Scene/ComponentRegistry.h>
+#include <Breccia/Scene/Entity.h>
+#include <Breccia/Scene/SceneSerializer.h>
+#include <Breccia/Math/Math.h>
+#include <Breccia/Physics/PhysicsWorld.h>
 
 #include <algorithm>
 #include <limits>
 #include <variant>
 
-using namespace Basalt;
-using namespace BasaltTest;
+using namespace Breccia;
+using namespace BrecciaTest;
 using json = nlohmann::json;
 
 TEST_SUITE("Animation authoring")

@@ -1,14 +1,14 @@
 #include <doctest/doctest.h>
 
-#include <Basalt/Automation/AutomationSession.h>
-#include <Basalt/Automation/CommandRegistry.h>
-#include <Basalt/Core/FileSystem.h>
-#include <Basalt/Core/JsonUtils.h>
-#include <Basalt/Project/Exporter.h>
-#include <Basalt/Project/Packaging.h>
-#include <Basalt/Project/Project.h>
-#include <Basalt/Project/ProjectValidator.h>
-#include <Basalt/Scene/Scene.h>
+#include <Breccia/Automation/AutomationSession.h>
+#include <Breccia/Automation/CommandRegistry.h>
+#include <Breccia/Core/FileSystem.h>
+#include <Breccia/Core/JsonUtils.h>
+#include <Breccia/Project/Exporter.h>
+#include <Breccia/Project/Packaging.h>
+#include <Breccia/Project/Project.h>
+#include <Breccia/Project/ProjectValidator.h>
+#include <Breccia/Scene/Scene.h>
 
 #include <stb_image.h>
 
@@ -26,7 +26,7 @@
 	#include <windows.h>
 #endif
 
-using namespace Basalt;
+using namespace Breccia;
 using json = nlohmann::json;
 
 namespace {
@@ -264,7 +264,7 @@ TEST_SUITE("Packaging")
 
 	TEST_CASE("Version, company and icon round-trip through the project file")
 	{
-		BasaltTest::TempProject temp("PackagingRoundTrip");
+		BrecciaTest::TempProject temp("PackagingRoundTrip");
 		REQUIRE(temp.IsValid());
 		const Ref<Project>& project = Project::GetActive();
 		CHECK(project->GetConfig().Version == ProjectConfig::DefaultVersion);
@@ -325,25 +325,25 @@ TEST_SUITE("Packaging")
 
 	TEST_CASE("Every way of setting the name or company enforces its length")
 	{
-		BasaltTest::TempDirectory directory("PackagingTextLimits");
+		BrecciaTest::TempDirectory directory("PackagingTextLimits");
 		const std::string longText(ProjectConfig::MaxTextLength + 1, 'x');
 		// Create would otherwise write a project that Load refuses.
 		std::string error;
 		CHECK_FALSE(Project::Create(directory.GetPath() / "Direct", longText, error));
-		CHECK(BasaltTest::Contains(error, "Name must be at most 256 bytes"));
+		CHECK(BrecciaTest::Contains(error, "Name must be at most 256 bytes"));
 		CHECK_FALSE(FileSystem::Exists(directory.GetPath() / "Direct" / Project::FileName));
 		CHECK(Project::Create(directory.GetPath() / "Direct", std::string(ProjectConfig::MaxTextLength, 'x'), error));
 
 		CommandRegistry registry;
 		AutomationSession session;
-		CHECK(BasaltTest::Contains(BasaltTest::RunError(registry, session, "project.create", { { "path", FileSystem::PathToUtf8(directory.GetPath() / "Command") }, { "name", longText } }), "Name must be at most 256 bytes"));
+		CHECK(BrecciaTest::Contains(BrecciaTest::RunError(registry, session, "project.create", { { "path", FileSystem::PathToUtf8(directory.GetPath() / "Command") }, { "name", longText } }), "Name must be at most 256 bytes"));
 		Project::SetActive(nullptr);
 
 		// The package metadata (16-bit Windows resource lengths) refuses it too, whatever built the config.
 		ProjectConfig config;
 		config.Company = longText;
 		CHECK_FALSE(MakePackageInfo(config, "Game", error));
-		CHECK(BasaltTest::Contains(error, "Company must be at most 256 bytes"));
+		CHECK(BrecciaTest::Contains(error, "Company must be at most 256 bytes"));
 		config.Company = std::string(ProjectConfig::MaxTextLength, 'c');
 		config.Name = std::string(ProjectConfig::MaxTextLength, 'n');
 		const auto info = MakePackageInfo(config, "Game", error);
@@ -354,11 +354,11 @@ TEST_SUITE("Packaging")
 
 	TEST_CASE("project.set and project.info carry version, company and icon")
 	{
-		BasaltTest::TempProject temp("PackagingCommands");
+		BrecciaTest::TempProject temp("PackagingCommands");
 		CommandRegistry registry;
 		AutomationSession session;
-		using BasaltTest::Run;
-		using BasaltTest::RunError;
+		using BrecciaTest::Run;
+		using BrecciaTest::RunError;
 		WriteIcon(temp.GetDirectory() / "Assets/Textures/Icon.png", SolidIcon(512, 512));
 		temp.WriteFile("Assets/Textures/NotAnImage.png", "text");
 		temp.WriteFile("Outside.png", "text");
@@ -371,15 +371,15 @@ TEST_SUITE("Packaging")
 		CHECK(info["bundleIdentifier"] == "com.Acme.PackagingCommands");
 
 		// Every rejected value leaves the project as it was.
-		CHECK(BasaltTest::Contains(RunError(registry, session, "project.set", { { "version", "1.4" } }), "parameter 'version' must be MAJOR.MINOR.PATCH"));
-		CHECK(BasaltTest::Contains(RunError(registry, session, "project.set", { { "icon", "Outside.png" } }), "must be under Assets/"));
-		CHECK(BasaltTest::Contains(RunError(registry, session, "project.set", { { "icon", "Assets/Textures/NotAnImage.png" } }), "is not a PNG file"));
-		CHECK(BasaltTest::Contains(RunError(registry, session, "project.set", { { "icon", "Assets/Textures/Missing.png" } }), "cannot read icon"));
-		CHECK(BasaltTest::Contains(RunError(registry, session, "project.set", { { "icon", "../Icon.png" } }), "'..' is not allowed"));
-		CHECK(BasaltTest::Contains(RunError(registry, session, "project.set", { { "company", "Other" }, { "version", "x" } }), "version"));
+		CHECK(BrecciaTest::Contains(RunError(registry, session, "project.set", { { "version", "1.4" } }), "parameter 'version' must be MAJOR.MINOR.PATCH"));
+		CHECK(BrecciaTest::Contains(RunError(registry, session, "project.set", { { "icon", "Outside.png" } }), "must be under Assets/"));
+		CHECK(BrecciaTest::Contains(RunError(registry, session, "project.set", { { "icon", "Assets/Textures/NotAnImage.png" } }), "is not a PNG file"));
+		CHECK(BrecciaTest::Contains(RunError(registry, session, "project.set", { { "icon", "Assets/Textures/Missing.png" } }), "cannot read icon"));
+		CHECK(BrecciaTest::Contains(RunError(registry, session, "project.set", { { "icon", "../Icon.png" } }), "'..' is not allowed"));
+		CHECK(BrecciaTest::Contains(RunError(registry, session, "project.set", { { "company", "Other" }, { "version", "x" } }), "version"));
 		// Name and company end up in length-limited package metadata.
-		CHECK(BasaltTest::Contains(RunError(registry, session, "project.set", { { "company", std::string(ProjectConfig::MaxTextLength + 1, 'c') } }), "parameter Company must be at most 256 bytes"));
-		CHECK(BasaltTest::Contains(RunError(registry, session, "project.set", { { "name", std::string(ProjectConfig::MaxTextLength + 1, 'n') } }), "Name must be at most 256 bytes"));
+		CHECK(BrecciaTest::Contains(RunError(registry, session, "project.set", { { "company", std::string(ProjectConfig::MaxTextLength + 1, 'c') } }), "parameter Company must be at most 256 bytes"));
+		CHECK(BrecciaTest::Contains(RunError(registry, session, "project.set", { { "name", std::string(ProjectConfig::MaxTextLength + 1, 'n') } }), "Name must be at most 256 bytes"));
 		Run(registry, session, "project.set", { { "company", std::string(ProjectConfig::MaxTextLength, 'c') } });
 		Run(registry, session, "project.set", { { "company", "Acme" } });
 		info = Run(registry, session, "project.info");
@@ -425,7 +425,7 @@ TEST_SUITE("Packaging")
 		CHECK(reloaded->GetConfig().Icon == missing);
 		std::optional<IconImage> loadedIcon;
 		CHECK_FALSE(LoadProjectIcon(*reloaded, loadedIcon, error));
-		CHECK(BasaltTest::Contains(error, "the project icon is an unresolved asset UUID"));
+		CHECK(BrecciaTest::Contains(error, "the project icon is an unresolved asset UUID"));
 
 		Run(registry, session, "project.set", { { "icon", "" } });
 		CHECK(Run(registry, session, "project.info")["icon"] == "");
@@ -437,19 +437,19 @@ TEST_SUITE("Packaging")
 		Run(registry, session, "project.set", { { "icon", "Assets/Textures/Icon.png" } });
 		const json deleted = Run(registry, session, "asset.delete", { { "path", "Assets/Textures/Icon.png" } });
 		REQUIRE(deleted.contains("warnings"));
-		CHECK(BasaltTest::Contains(deleted["warnings"][0].get<std::string>(), "this was the project's icon"));
+		CHECK(BrecciaTest::Contains(deleted["warnings"][0].get<std::string>(), "this was the project's icon"));
 		CHECK_FALSE(Run(registry, session, "asset.delete", { { "path", "Assets/Textures/NotAnImage.png" } }).contains("warnings"));
 		// So does deleting the start scene; another scene is just deleted.
 		temp.WriteFile("Assets/Scenes/Other.bscene", R"({"Entities":[]})");
 		CHECK_FALSE(Run(registry, session, "asset.delete", { { "path", "Assets/Scenes/Other.bscene" } }).contains("warnings"));
 		const json startDeleted = Run(registry, session, "asset.delete", { { "path", "Assets/Scenes/Start.bscene" } });
 		REQUIRE(startDeleted.contains("warnings"));
-		CHECK(BasaltTest::Contains(startDeleted["warnings"][0].get<std::string>(), "this was the project's start scene"));
+		CHECK(BrecciaTest::Contains(startDeleted["warnings"][0].get<std::string>(), "this was the project's start scene"));
 	}
 
 	TEST_CASE("Validation checks the icon")
 	{
-		BasaltTest::TempProject temp("PackagingValidation");
+		BrecciaTest::TempProject temp("PackagingValidation");
 		const Ref<Project>& project = Project::GetActive();
 		const auto messages = [](const Project& subject, ValidationSeverity severity) {
 			std::vector<std::string> result;
@@ -461,7 +461,7 @@ TEST_SUITE("Packaging")
 			return result;
 		};
 		const auto contains = [](const std::vector<std::string>& list, const std::string& text) {
-			return std::any_of(list.begin(), list.end(), [&](const std::string& message) { return BasaltTest::Contains(message, text); });
+			return std::any_of(list.begin(), list.end(), [&](const std::string& message) { return BrecciaTest::Contains(message, text); });
 		};
 
 		WriteIcon(temp.GetDirectory() / "Assets/Textures/Small.png", SolidIcon(64, 32));
@@ -497,7 +497,7 @@ TEST_SUITE("Packaging")
 
 	TEST_CASE("Icons load from PNG only and resize onto a transparent square")
 	{
-		BasaltTest::TempDirectory directory("PackagingIcons");
+		BrecciaTest::TempDirectory directory("PackagingIcons");
 		std::string error;
 		FileSystem::WriteTextFile(directory.GetPath() / "text.png", "hello");
 		CHECK_FALSE(LoadIconImage(directory.GetPath() / "text.png", error));
@@ -581,8 +581,8 @@ TEST_SUITE("Packaging")
 	TEST_CASE("Bundle identifiers are reverse-DNS from company and name")
 	{
 		CHECK(MakeBundleIdentifier("Acme Games", "Space Rocks!") == "com.Acme-Games.Space-Rocks");
-		CHECK(MakeBundleIdentifier("", "Tetris") == "com.basalt.Tetris");
-		CHECK(MakeBundleIdentifier("  ..  ", "\xE6\x97\xA5\xE6\x9C\xAC") == "com.basalt.game");
+		CHECK(MakeBundleIdentifier("", "Tetris") == "com.breccia.Tetris");
+		CHECK(MakeBundleIdentifier("  ..  ", "\xE6\x97\xA5\xE6\x9C\xAC") == "com.breccia.game");
 		CHECK(MakeBundleIdentifier("a--b", "x_y") == "com.a-b.x-y");
 	}
 
@@ -740,7 +740,7 @@ TEST_SUITE("Packaging")
 
 	TEST_CASE("Package exports read the version and icon before writing anything")
 	{
-		BasaltTest::TempProject temp("PackagingExportChecks");
+		BrecciaTest::TempProject temp("PackagingExportChecks");
 		const Ref<Project>& project = Project::GetActive();
 		temp.WriteFile("Assets/Scenes/Main.bscene", R"({"Entities":[]})");
 		temp.WriteFile("FakeRuntime", "binary");
@@ -792,7 +792,7 @@ TEST_SUITE("Packaging")
 #if defined(__APPLE__)
 		// macOS exports also need the Vulkan libraries, which a test machine may lack; nothing else may fail.
 		if (!result.Success)
-			CHECK_MESSAGE(BasaltTest::Contains(result.Error, "libMoltenVK"), result.Error);
+			CHECK_MESSAGE(BrecciaTest::Contains(result.Error, "libMoltenVK"), result.Error);
 #else
 		CHECK_MESSAGE(result.Success, result.Error);
 		CHECK(result.PackagePath == folder);
@@ -803,7 +803,7 @@ TEST_SUITE("Packaging")
 
 	TEST_CASE("Only an earlier export of the same game may be replaced")
 	{
-		BasaltTest::TempProject temp("PackagingPrevious");
+		BrecciaTest::TempProject temp("PackagingPrevious");
 		const Ref<Project>& project = Project::GetActive();
 		temp.WriteFile("Assets/Scenes/Main.bscene", R"({"Entities":[]})");
 		temp.WriteFile("FakeRuntime", "binary");
@@ -819,7 +819,7 @@ TEST_SUITE("Packaging")
 		REQUIRE(FileSystem::WriteTextFile(output / "Other.app" / "Contents" / "Resources" / Project::FileName, "{}"));
 		REQUIRE(FileSystem::WriteTextFile(output / "Assets" / "Precious.txt", "keep"));
 		ExportResult result = Exporter::Export(*project, output, options);
-		CHECK(BasaltTest::Contains(result.Error, "not a previous export of this game"));
+		CHECK(BrecciaTest::Contains(result.Error, "not a previous export of this game"));
 		CHECK(FileSystem::Exists(output / "Assets" / "Precious.txt"));
 
 		// So is another game's folder export: a project file without this game's executable.
@@ -827,7 +827,7 @@ TEST_SUITE("Packaging")
 		REQUIRE(FileSystem::WriteTextFile(output / Project::FileName, "{}"));
 		REQUIRE(FileSystem::WriteTextFile(output / "Other", "another game"));
 		result = Exporter::Export(*project, output, options);
-		CHECK(BasaltTest::Contains(result.Error, "not a previous export of this game"));
+		CHECK(BrecciaTest::Contains(result.Error, "not a previous export of this game"));
 		CHECK(FileSystem::Exists(output / "Assets" / "Precious.txt"));
 
 #if !defined(__APPLE__)
@@ -836,8 +836,8 @@ TEST_SUITE("Packaging")
 		std::filesystem::create_directories(output / ExecutableName("PackagingPrevious"));
 		result = Exporter::Export(*project, output, options);
 		CHECK_FALSE(result.Success);
-		CHECK(BasaltTest::Contains(result.Error, "cannot copy the runtime"));
-		CHECK(BasaltTest::Contains(result.Error, "is incomplete; export again"));
+		CHECK(BrecciaTest::Contains(result.Error, "cannot copy the runtime"));
+		CHECK(BrecciaTest::Contains(result.Error, "is incomplete; export again"));
 		CHECK(result.PackagePath.empty());
 		std::filesystem::remove_all(output / ExecutableName("PackagingPrevious"));
 #endif
@@ -847,14 +847,14 @@ TEST_SUITE("Packaging")
 		std::filesystem::create_directories(output / "PackagingPrevious.AppDir");
 		REQUIRE(FileSystem::WriteTextFile(output / "PackagingPrevious.AppDir" / Project::FileName, "{}"));
 		result = Exporter::Export(*project, output, options);
-		CHECK_FALSE(BasaltTest::Contains(result.Error, "not a previous export"));
+		CHECK_FALSE(BrecciaTest::Contains(result.Error, "not a previous export"));
 		std::filesystem::remove_all(output, error);
 	}
 
 #if defined(__linux__)
 	TEST_CASE("Linux packages become AppImages through appimagetool")
 	{
-		BasaltTest::TempProject temp("AppRun");
+		BrecciaTest::TempProject temp("AppRun");
 		const Ref<Project>& project = Project::GetActive();
 		temp.WriteFile("Assets/Scenes/Main.bscene", R"({"Entities":[]})");
 		temp.WriteFile("FakeRuntime", "binary");
@@ -896,9 +896,9 @@ TEST_SUITE("Packaging")
 		// A game named AppRun is its own entry point: the executable, not a link to itself.
 		CHECK(std::filesystem::is_regular_file(std::filesystem::symlink_status(appDir / "AppRun")));
 		CHECK(std::filesystem::read_symlink(appDir / ".DirIcon") == "AppRun.png");
-		// Without a project icon the AppImage gets Basalt's, and says so.
+		// Without a project icon the AppImage gets Breccia's, and says so.
 		REQUIRE(result.Warnings.size() == 1);
-		CHECK(BasaltTest::Contains(result.Warnings[0], "uses Basalt's default icon"));
+		CHECK(BrecciaTest::Contains(result.Warnings[0], "uses Breccia's default icon"));
 		const auto png = FileSystem::ReadBinaryFile(appDir / "AppRun.png");
 		REQUIRE(png);
 		CHECK(PngSize(png->data(), png->size()) == std::pair{ 256, 256 });
@@ -909,27 +909,27 @@ TEST_SUITE("Packaging")
 		std::filesystem::permissions(tool, std::filesystem::perms::owner_all, std::filesystem::perm_options::replace);
 		result = Exporter::Export(*project, output, options);
 		CHECK_FALSE(result.Success);
-		CHECK(BasaltTest::Contains(result.Error, "appimagetool failed (exit code 3): broken runtime"));
-		CHECK(BasaltTest::Contains(result.Error, "the incomplete package"));
+		CHECK(BrecciaTest::Contains(result.Error, "appimagetool failed (exit code 3): broken runtime"));
+		CHECK(BrecciaTest::Contains(result.Error, "the incomplete package"));
 		CHECK(result.PackagePath.empty());
 
 		// Without appimagetool the AppDir is the package, and the last AppImage stays: it is still the last working one.
 		REQUIRE(FileSystem::WriteTextFile(output / "AppRun-1.9.0-x86_64.AppImage", "old"));
-		BasaltTest::ScopedEnvVar noTool("APPIMAGETOOL", std::nullopt);
-		BasaltTest::ScopedEnvVar noPath("PATH", std::string("/nonexistent"));
+		BrecciaTest::ScopedEnvVar noTool("APPIMAGETOOL", std::nullopt);
+		BrecciaTest::ScopedEnvVar noPath("PATH", std::string("/nonexistent"));
 		options.AppImageTool.clear();
 		result = Exporter::Export(*project, output, options);
 		REQUIRE_MESSAGE(result.Success, result.Error);
 		CHECK(result.PackagePath == appDir);
 		CHECK(std::filesystem::exists(output / "AppRun-1.9.0-x86_64.AppImage"));
-		CHECK(std::any_of(result.Warnings.begin(), result.Warnings.end(), [](const std::string& warning) { return BasaltTest::Contains(warning, "appimagetool was not found"); }));
+		CHECK(std::any_of(result.Warnings.begin(), result.Warnings.end(), [](const std::string& warning) { return BrecciaTest::Contains(warning, "appimagetool was not found"); }));
 		std::filesystem::remove_all(output, error);
 	}
 #endif
 
 	TEST_CASE("Exported runtimes find the project next to them or in their bundle's resources")
 	{
-		BasaltTest::TempDirectory directory("PackagingProjectLookup");
+		BrecciaTest::TempDirectory directory("PackagingProjectLookup");
 		const std::filesystem::path macOS = directory.GetPath() / "Game.app" / "Contents" / "MacOS";
 		const std::filesystem::path resources = directory.GetPath() / "Game.app" / "Contents" / "Resources";
 		std::filesystem::create_directories(macOS);
@@ -950,12 +950,12 @@ TEST_SUITE("Packaging")
 
 	TEST_CASE("Game.GetInfo returns the project's name, version and company")
 	{
-		BasaltTest::TempProject temp("PackagingLua");
+		BrecciaTest::TempProject temp("PackagingLua");
 		Project::GetActive()->GetConfig().Version = "4.5.6";
 		Project::GetActive()->GetConfig().Company = "Studio";
 		Scene scene;
 		scene.OnRuntimeStart();
-		CHECK(BasaltTest::Eval(scene, "local info = Game.GetInfo() return info.Name .. '|' .. info.Version .. '|' .. info.Company") == "PackagingLua|4.5.6|Studio");
+		CHECK(BrecciaTest::Eval(scene, "local info = Game.GetInfo() return info.Name .. '|' .. info.Version .. '|' .. info.Company") == "PackagingLua|4.5.6|Studio");
 	}
 
 	TEST_CASE("Game.GetInfo returns the defaults without a project")
@@ -963,13 +963,13 @@ TEST_SUITE("Packaging")
 		Project::SetActive(nullptr);
 		Scene scene;
 		scene.OnRuntimeStart();
-		CHECK(BasaltTest::Eval(scene, "local info = Game.GetInfo() return info.Name .. '|' .. info.Version .. '|' .. info.Company") == "Untitled|1.0.0|");
+		CHECK(BrecciaTest::Eval(scene, "local info = Game.GetInfo() return info.Name .. '|' .. info.Version .. '|' .. info.Company") == "Untitled|1.0.0|");
 	}
 
 	TEST_CASE("Windows resources are written only on Windows")
 	{
 		const PackageInfo info = TestPackageInfo();
-		BasaltTest::TempDirectory directory("PackagingWindowsResources");
+		BrecciaTest::TempDirectory directory("PackagingWindowsResources");
 		std::string error;
 #if defined(_WIN32)
 		// Any PE file takes resources; the test executable is one.
@@ -1033,7 +1033,7 @@ TEST_SUITE("Packaging")
 			const auto refused = [&](std::vector<uint8_t> candidate, const char* reason) {
 				const std::vector<uint8_t> before = candidate;
 				CHECK_FALSE(RemoveAuthenticodeSignature(candidate, error));
-				CHECK_MESSAGE(BasaltTest::Contains(error, reason), error);
+				CHECK_MESSAGE(BrecciaTest::Contains(error, reason), error);
 				CHECK(candidate == before);
 			};
 			// Anything but zeros after the table would be lost with it.
@@ -1111,30 +1111,30 @@ TEST_SUITE("Packaging")
 		std::vector<uint8_t> image = TestExecutable(true);
 		image.resize(63);
 		CHECK_FALSE(RemoveAuthenticodeSignature(image, error));
-		CHECK(BasaltTest::Contains(error, "DOS header is truncated"));
+		CHECK(BrecciaTest::Contains(error, "DOS header is truncated"));
 		image = TestExecutable(true);
 		image[PeHeader + 1] = 'X';
 		CHECK_FALSE(RemoveAuthenticodeSignature(image, error));
-		CHECK(BasaltTest::Contains(error, "no PE header"));
+		CHECK(BrecciaTest::Contains(error, "no PE header"));
 		image = TestExecutable(true);
 		Write32(image, 60, static_cast<uint32_t>(image.size()));
 		CHECK_FALSE(RemoveAuthenticodeSignature(image, error));
-		CHECK(BasaltTest::Contains(error, "no PE header"));
+		CHECK(BrecciaTest::Contains(error, "no PE header"));
 		image = TestExecutable(true);
 		image[OptionalHeader + 1] = 0x03;
 		CHECK_FALSE(RemoveAuthenticodeSignature(image, error));
-		CHECK(BasaltTest::Contains(error, "neither PE32 nor PE32+"));
+		CHECK(BrecciaTest::Contains(error, "neither PE32 nor PE32+"));
 		for (const uint16_t optionalSize : { uint16_t{ 0 }, uint16_t{ 0x4000 } })
 		{
 			image = TestExecutable(true);
 			Write16(image, OptionalSize, optionalSize);
 			CHECK_FALSE(RemoveAuthenticodeSignature(image, error));
-			CHECK(BasaltTest::Contains(error, "truncated"));
+			CHECK(BrecciaTest::Contains(error, "truncated"));
 		}
 		image = TestExecutable(true);
 		Write16(image, SectionCount, 100);
 		CHECK_FALSE(RemoveAuthenticodeSignature(image, error));
-		CHECK(BasaltTest::Contains(error, "truncated"));
+		CHECK(BrecciaTest::Contains(error, "truncated"));
 	}
 
 	TEST_CASE("Certificate tables are checked against every section and the header room")
@@ -1146,7 +1146,7 @@ TEST_SUITE("Packaging")
 			const auto refused = [&](std::vector<uint8_t> candidate, const char* reason) {
 				const std::vector<uint8_t> before = candidate;
 				CHECK_FALSE(RemoveAuthenticodeSignature(candidate, error));
-				CHECK_MESSAGE(BasaltTest::Contains(error, reason), error);
+				CHECK_MESSAGE(BrecciaTest::Contains(error, reason), error);
 				CHECK(candidate == before);
 			};
 			// (a) A header with room for four directories but declaring 16 is followed by a named section header, whose first
@@ -1203,13 +1203,13 @@ TEST_SUITE("Packaging")
 			Write16(image, SectionCount, 0);
 			image.resize(OptionalHeader + 1);
 			CHECK_FALSE(RemoveAuthenticodeSignature(image, error));
-			CHECK(BasaltTest::Contains(error, "truncated"));
+			CHECK(BrecciaTest::Contains(error, "truncated"));
 		}
 	}
 
 	TEST_CASE("A signed executable file is rewritten without its signature, an unsigned one is left alone")
 	{
-		BasaltTest::TempDirectory directory("PackagingSignature");
+		BrecciaTest::TempDirectory directory("PackagingSignature");
 		std::string error;
 		const std::vector<uint8_t> plainImage = TestExecutable(true);
 		const std::vector<uint8_t> signedImage = SignTestExecutable(plainImage, true);
@@ -1234,13 +1234,13 @@ TEST_SUITE("Packaging")
 		CHECK(std::filesystem::last_write_time(executable) == written);
 
 		CHECK_FALSE(RemoveAuthenticodeSignature(directory.GetPath() / "Missing.exe", error));
-		CHECK(BasaltTest::Contains(error, "Missing.exe"));
+		CHECK(BrecciaTest::Contains(error, "Missing.exe"));
 		std::vector<uint8_t> broken = signedImage;
 		broken.push_back(1);
 		REQUIRE(FileSystem::WriteBinaryFile(executable, broken.data(), broken.size()));
 		CHECK_FALSE(RemoveAuthenticodeSignature(executable, error));
-		CHECK(BasaltTest::Contains(error, "Game.exe"));
-		CHECK(BasaltTest::Contains(error, "data follows"));
+		CHECK(BrecciaTest::Contains(error, "Game.exe"));
+		CHECK(BrecciaTest::Contains(error, "data follows"));
 		CHECK(FileSystem::ReadBinaryFile(executable) == broken);
 #if defined(_WIN32)
 		// A real executable from the linker: unsigned, as the build leaves it.

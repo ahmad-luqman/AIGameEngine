@@ -1,25 +1,25 @@
 #include "AutomationTestUtils.h"
 #include "TestUtils.h"
 
-#include <Basalt/Animation/AnimatedModel.h>
-#include <Basalt/Animation/PropertyAnimation.h>
-#include <Basalt/Asset/AssetManager.h>
-#include <Basalt/Asset/ImageUtils.h>
-#include <Basalt/Asset/Thumbnails.h>
-#include <Basalt/Automation/AutomationSession.h>
-#include <Basalt/Automation/CommandRegistry.h>
-#include <Basalt/Automation/EditorSelection.h>
-#include <Basalt/Core/FileSystem.h>
-#include <Basalt/Core/Log.h>
-#include <Basalt/Math/Math.h>
-#include <Basalt/Physics/PhysicsWorld.h>
-#include <Basalt/Physics/RagdollRules.h>
-#include <Basalt/Project/Project.h>
-#include <Basalt/Scene/ComponentRegistry.h>
-#include <Basalt/Scene/Entity.h>
-#include <Basalt/Scene/Prefab.h>
-#include <Basalt/Scene/SceneEventListener.h>
-#include <Basalt/Scene/SceneSerializer.h>
+#include <Breccia/Animation/AnimatedModel.h>
+#include <Breccia/Animation/PropertyAnimation.h>
+#include <Breccia/Asset/AssetManager.h>
+#include <Breccia/Asset/ImageUtils.h>
+#include <Breccia/Asset/Thumbnails.h>
+#include <Breccia/Automation/AutomationSession.h>
+#include <Breccia/Automation/CommandRegistry.h>
+#include <Breccia/Automation/EditorSelection.h>
+#include <Breccia/Core/FileSystem.h>
+#include <Breccia/Core/Log.h>
+#include <Breccia/Math/Math.h>
+#include <Breccia/Physics/PhysicsWorld.h>
+#include <Breccia/Physics/RagdollRules.h>
+#include <Breccia/Project/Project.h>
+#include <Breccia/Scene/ComponentRegistry.h>
+#include <Breccia/Scene/Entity.h>
+#include <Breccia/Scene/Prefab.h>
+#include <Breccia/Scene/SceneEventListener.h>
+#include <Breccia/Scene/SceneSerializer.h>
 
 #include <doctest/doctest.h>
 
@@ -32,8 +32,8 @@
 #include <string_view>
 #include <vector>
 
-using namespace Basalt;
-using namespace BasaltTest;
+using namespace Breccia;
+using namespace BrecciaTest;
 using json = nlohmann::json;
 
 namespace {
@@ -137,7 +137,7 @@ namespace {
 			Run("prefab.save", json::object());
 			Run("prefab.close", json::object());
 		}
-		json Run(const std::string& command, const json& params) { return BasaltTest::Run(Commands, Session, command, params); }
+		json Run(const std::string& command, const json& params) { return BrecciaTest::Run(Commands, Session, command, params); }
 		Entity Instance() { return Session.GetScene()->GetEntityByUUID(UUID(InstanceId)); }
 		json Tracks() { return ComponentRegistry::Find("PropertyAnimation")->Serialize(Instance())["Tracks"]; }
 	};
@@ -680,7 +680,7 @@ TEST_SUITE("Property animation")
 		TempProject project("PropertyTargets");
 		AutomationSession session;
 		CommandRegistry commands;
-		const auto run = [&](const std::string& command, const json& params) { return BasaltTest::Run(commands, session, command, params); };
+		const auto run = [&](const std::string& command, const json& params) { return BrecciaTest::Run(commands, session, command, params); };
 		auto scene = session.GetScene();
 		Entity root = scene->CreateEntity("Root");
 		Entity lamp = scene->CreateEntity("Lamp");
@@ -733,7 +733,7 @@ TEST_SUITE("Property animation")
 		TempProject project("PropertyPrefabs");
 		AutomationSession session;
 		CommandRegistry commands;
-		const auto run = [&](const std::string& command, const json& params) { return BasaltTest::Run(commands, session, command, params); };
+		const auto run = [&](const std::string& command, const json& params) { return BrecciaTest::Run(commands, session, command, params); };
 		auto scene = session.GetScene();
 		Entity root = scene->CreateEntity("Root");
 		Entity lamp = scene->CreateEntity("Lamp");
@@ -795,7 +795,7 @@ TEST_SUITE("Property animation")
 		TempProject project("PropertyPrefabDeleted");
 		AutomationSession session;
 		CommandRegistry commands;
-		const auto run = [&](const std::string& command, const json& params) { return BasaltTest::Run(commands, session, command, params); };
+		const auto run = [&](const std::string& command, const json& params) { return BrecciaTest::Run(commands, session, command, params); };
 		auto scene = session.GetScene();
 		Entity root = scene->CreateEntity("Root");
 		Entity lamp = scene->CreateEntity("Lamp");
@@ -851,7 +851,7 @@ TEST_SUITE("Property animation")
 		TempProject project("PropertyPrefabApplyDeleted");
 		AutomationSession session;
 		CommandRegistry commands;
-		const auto run = [&](const std::string& command, const json& params) { return BasaltTest::Run(commands, session, command, params); };
+		const auto run = [&](const std::string& command, const json& params) { return BrecciaTest::Run(commands, session, command, params); };
 		auto scene = session.GetScene();
 		Entity root = scene->CreateEntity("Root");
 		Entity lamp = scene->CreateEntity("Lamp");
@@ -871,7 +871,7 @@ TEST_SUITE("Property animation")
 		TempProject project("PropertyPrefabApplyNew");
 		AutomationSession session;
 		CommandRegistry commands;
-		const auto run = [&](const std::string& command, const json& params) { return BasaltTest::Run(commands, session, command, params); };
+		const auto run = [&](const std::string& command, const json& params) { return BrecciaTest::Run(commands, session, command, params); };
 		auto scene = session.GetScene();
 		Entity root = scene->CreateEntity("Root");
 		Entity lamp = scene->CreateEntity("Lamp");
@@ -907,19 +907,19 @@ TEST_SUITE("Property animation")
 		outside.AddComponent<PointLightComponent>();
 		std::string error;
 		REQUIRE(PropertyAnimation::Key(root, "PointLight", "Intensity", 0, error, outside.GetUUID()));
-		const json created = BasaltTest::Run(commands, session, "prefab.create", { { "entity", IdOf(root) }, { "path", "Assets/Root.bprefab" } });
+		const json created = BrecciaTest::Run(commands, session, "prefab.create", { { "entity", IdOf(root) }, { "path", "Assets/Root.bprefab" } });
 		REQUIRE(created.contains("warnings"));
 		CHECK(created["warnings"].dump().find("'Root' PropertyAnimation.Tracks[0].Target references an entity that is not in the prefab") != std::string::npos);
 
 		// Applying what the file already says is no news.
-		const json applied = BasaltTest::Run(commands, session, "prefab.apply", { { "entity", IdOf(root) } });
+		const json applied = BrecciaTest::Run(commands, session, "prefab.apply", { { "entity", IdOf(root) } });
 		CHECK(applied.dump().find("stays as the prefab has it") == std::string::npos);
 
 		// Saving from an open prefab says the same.
-		BasaltTest::Run(commands, session, "prefab.open", { { "path", "Assets/Root.bprefab" } });
-		const json saved = BasaltTest::Run(commands, session, "prefab.save", json::object());
+		BrecciaTest::Run(commands, session, "prefab.open", { { "path", "Assets/Root.bprefab" } });
+		const json saved = BrecciaTest::Run(commands, session, "prefab.save", json::object());
 		CHECK(saved.dump().find("references an entity that is not in the prefab") != std::string::npos);
-		BasaltTest::Run(commands, session, "prefab.close", json::object());
+		BrecciaTest::Run(commands, session, "prefab.close", json::object());
 	}
 
 	TEST_CASE("project.validate reports a keyed track whose entity is not there")
@@ -927,7 +927,7 @@ TEST_SUITE("Property animation")
 		TempProject project("PropertyValidate");
 		AutomationSession session;
 		CommandRegistry commands;
-		const auto run = [&](const std::string& command, const json& params) { return BasaltTest::Run(commands, session, command, params); };
+		const auto run = [&](const std::string& command, const json& params) { return BrecciaTest::Run(commands, session, command, params); };
 		Entity timeline = session.GetScene()->CreateEntity("Timeline");
 		run("scene.save", { { "path", "Assets/Tracks.bscene" } });
 		const json before = run("project.validate", json::object());
@@ -965,8 +965,8 @@ TEST_SUITE("Property animation")
 		Entity timeline = session.GetScene()->CreateEntity("Timeline");
 		std::string error;
 		REQUIRE(ComponentRegistry::AddOrPatch(timeline, "PropertyAnimation", { { "Tracks", { { { "Component", "PointLight" }, { "Field", "Intensity" }, { "Target", 424242 } } } } }, error));
-		const json tracks = BasaltTest::Run(commands, session, "component.get", { { "entity", "Timeline" }, { "component", "PropertyAnimation" } })["Tracks"];
-		BasaltTest::Run(commands, session, "assert.component", { { "entity", "Timeline" }, { "component", "PropertyAnimation" }, { "fields", { { "Tracks", tracks } } } });
+		const json tracks = BrecciaTest::Run(commands, session, "component.get", { { "entity", "Timeline" }, { "component", "PropertyAnimation" } })["Tracks"];
+		BrecciaTest::Run(commands, session, "assert.component", { { "entity", "Timeline" }, { "component", "PropertyAnimation" }, { "fields", { { "Tracks", tracks } } } });
 	}
 
 	TEST_CASE("Asset tracks step through project assets and persist like any asset field")
@@ -974,7 +974,7 @@ TEST_SUITE("Property animation")
 		TempProject project("PropertyFlipbook");
 		AutomationSession session;
 		CommandRegistry commands;
-		const auto run = [&](const std::string& command, const json& params) { return BasaltTest::Run(commands, session, command, params); };
+		const auto run = [&](const std::string& command, const json& params) { return BrecciaTest::Run(commands, session, command, params); };
 		std::string writeError;
 		for (const char* name : { "Assets/FrameA.png", "Assets/FrameB.png" })
 			REQUIRE_MESSAGE(WritePng(Project::ResolvePath(name), { 255, 0, 0, 255 }, 1, 1, writeError), writeError);
@@ -1178,7 +1178,7 @@ TEST_SUITE("Property animation")
 		TempProject project("ProbeValidate");
 		AutomationSession session;
 		CommandRegistry commands;
-		const auto run = [&](const std::string& command, const json& params) { return BasaltTest::Run(commands, session, command, params); };
+		const auto run = [&](const std::string& command, const json& params) { return BrecciaTest::Run(commands, session, command, params); };
 		std::string writeError;
 		REQUIRE_MESSAGE(WritePng(Project::ResolvePath("Assets/Frame.png"), { 255, 0, 0, 255 }, 1, 1, writeError), writeError);
 		run("asset.refresh", json::object());
@@ -1401,7 +1401,7 @@ TEST_SUITE("Property animation")
 		TempProject project("ProbeLua");
 		AutomationSession session;
 		CommandRegistry commands;
-		const auto run = [&](const std::string& command, const json& params) { return BasaltTest::Run(commands, session, command, params); };
+		const auto run = [&](const std::string& command, const json& params) { return BrecciaTest::Run(commands, session, command, params); };
 		auto scene = session.GetScene();
 		Entity root = scene->CreateEntity("Root");
 		Entity lamp = scene->CreateEntityWithUUID(UUID(0x8000000000000123ull), "Lamp");
@@ -1421,7 +1421,7 @@ TEST_SUITE("Property animation")
 		TempProject project("ProbeNested");
 		AutomationSession session;
 		CommandRegistry commands;
-		const auto run = [&](const std::string& command, const json& params) { return BasaltTest::Run(commands, session, command, params); };
+		const auto run = [&](const std::string& command, const json& params) { return BrecciaTest::Run(commands, session, command, params); };
 		auto scene = session.GetScene();
 		Entity inner = scene->CreateEntity("Inner");
 		Entity lamp = scene->CreateEntity("Lamp");
@@ -1461,7 +1461,7 @@ TEST_SUITE("Property animation")
 		TempProject project("ProbeAssetPrefab");
 		AutomationSession session;
 		CommandRegistry commands;
-		const auto run = [&](const std::string& command, const json& params) { return BasaltTest::Run(commands, session, command, params); };
+		const auto run = [&](const std::string& command, const json& params) { return BrecciaTest::Run(commands, session, command, params); };
 		std::string writeError;
 		for (const char* name : { "Assets/FrameA.png", "Assets/FrameB.png" })
 			REQUIRE_MESSAGE(WritePng(Project::ResolvePath(name), { 255, 0, 0, 255 }, 1, 1, writeError), writeError);
@@ -1729,7 +1729,7 @@ TEST_SUITE("Property animation")
 		TempProject project("PropertyCaseB1");
 		AutomationSession session;
 		CommandRegistry commands;
-		const auto run = [&](const std::string& command, const json& params) { return BasaltTest::Run(commands, session, command, params); };
+		const auto run = [&](const std::string& command, const json& params) { return BrecciaTest::Run(commands, session, command, params); };
 		auto scene = session.GetScene();
 		Entity root = scene->CreateEntity("Root");
 		run("prefab.create", { { "entity", IdOf(root) }, { "path", "Assets/Plain.bprefab" } });
@@ -1753,7 +1753,7 @@ TEST_SUITE("Property animation")
 		TempProject project("PropertyCaseB2");
 		AutomationSession session;
 		CommandRegistry commands;
-		const auto run = [&](const std::string& command, const json& params) { return BasaltTest::Run(commands, session, command, params); };
+		const auto run = [&](const std::string& command, const json& params) { return BrecciaTest::Run(commands, session, command, params); };
 		std::string error;
 		REQUIRE_MESSAGE(WritePng(Project::ResolvePath("Assets/Frame.png"), { 255, 0, 0, 255 }, 1, 1, error), error);
 		run("asset.refresh", json::object());
@@ -1788,7 +1788,7 @@ TEST_SUITE("Property animation")
 		TempProject project("PropertyCaseB3");
 		AutomationSession session;
 		CommandRegistry commands;
-		const auto run = [&](const std::string& command, const json& params) { return BasaltTest::Run(commands, session, command, params); };
+		const auto run = [&](const std::string& command, const json& params) { return BrecciaTest::Run(commands, session, command, params); };
 		auto scene = session.GetScene();
 		Entity root = scene->CreateEntity("Root");
 		Entity lamp = scene->CreateEntity("Lamp");
@@ -1815,7 +1815,7 @@ TEST_SUITE("Property animation")
 		TempProject project("PropertyCaseC1");
 		AutomationSession session;
 		CommandRegistry commands;
-		const auto run = [&](const std::string& command, const json& params) { return BasaltTest::Run(commands, session, command, params); };
+		const auto run = [&](const std::string& command, const json& params) { return BrecciaTest::Run(commands, session, command, params); };
 		auto scene = session.GetScene();
 		Entity inner = scene->CreateEntity("Inner");
 		Entity lamp = scene->CreateEntity("Lamp");
@@ -1845,7 +1845,7 @@ TEST_SUITE("Property animation")
 		TempProject project("PropertyCaseC2");
 		AutomationSession session;
 		CommandRegistry commands;
-		const auto run = [&](const std::string& command, const json& params) { return BasaltTest::Run(commands, session, command, params); };
+		const auto run = [&](const std::string& command, const json& params) { return BrecciaTest::Run(commands, session, command, params); };
 		auto scene = session.GetScene();
 		Entity root = scene->CreateEntity("Root");
 		Entity child = scene->CreateEntity("Child");
@@ -1906,7 +1906,7 @@ TEST_SUITE("Property animation")
 		animation.Tracks.push_back({ "Transform", "Scale", false, { { 0, glm::vec4(1.0f) } }, UUID(987654321) });
 		entity.AddComponent<PropertyAnimationComponent>(animation);
 		json tracks = ComponentRegistry::Find("PropertyAnimation")->Serialize(entity)["Tracks"];
-		CHECK_NOTHROW(BasaltTest::Run(commands, session, "assert.component", { { "entity", "Holder" }, { "component", "PropertyAnimation" }, { "fields", { { "Tracks", tracks } } } }));
+		CHECK_NOTHROW(BrecciaTest::Run(commands, session, "assert.component", { { "entity", "Holder" }, { "component", "PropertyAnimation" }, { "fields", { { "Tracks", tracks } } } }));
 	}
 
 	TEST_CASE("entity.create checks list IDs and resolves list names")
@@ -1915,7 +1915,7 @@ TEST_SUITE("Property animation")
 		AutomationSession session;
 		Entity lamp = session.GetScene()->CreateEntity("Lamp");
 		const json track = { { "Component", "PointLight" }, { "Field", "Intensity" }, { "Target", "Lamp" } };
-		const json made = BasaltTest::Run(commands, session, "entity.create", { { "name", "Named" }, { "components", { { "PropertyAnimation", { { "Tracks", json::array({ track }) } } } } } });
+		const json made = BrecciaTest::Run(commands, session, "entity.create", { { "name", "Named" }, { "components", { { "PropertyAnimation", { { "Tracks", json::array({ track }) } } } } } });
 		Entity named = session.GetScene()->GetEntityByUUID(UUID(made["id"].get<uint64_t>()));
 		REQUIRE(named);
 		CHECK(named.GetComponent<PropertyAnimationComponent>().Tracks[0].Target == lamp.GetUUID());
@@ -1930,7 +1930,7 @@ TEST_SUITE("Property animation")
 		TempProject project("PropertyCaseE1");
 		AutomationSession session;
 		CommandRegistry commands;
-		const auto run = [&](const std::string& command, const json& params) { return BasaltTest::Run(commands, session, command, params); };
+		const auto run = [&](const std::string& command, const json& params) { return BrecciaTest::Run(commands, session, command, params); };
 		Entity timeline = session.GetScene()->CreateEntity("Timeline");
 		Entity lamp = session.GetScene()->CreateEntity("Lamp");
 		lamp.AddComponent<PointLightComponent>();
@@ -1952,7 +1952,7 @@ TEST_SUITE("Property animation")
 		TempProject project("PropertyCaseE2");
 		AutomationSession session;
 		CommandRegistry commands;
-		const auto run = [&](const std::string& command, const json& params) { return BasaltTest::Run(commands, session, command, params); };
+		const auto run = [&](const std::string& command, const json& params) { return BrecciaTest::Run(commands, session, command, params); };
 		Entity holder = session.GetScene()->CreateEntity("Holder");
 		holder.AddComponent<JointComponent>().ConnectedEntity = UUID(424242);
 		run("scene.save", { { "path", "Assets/Joint.bscene" } });
@@ -1966,7 +1966,7 @@ TEST_SUITE("Property animation")
 		TempProject project("PropertyCaseE3");
 		AutomationSession session;
 		CommandRegistry commands;
-		const auto run = [&](const std::string& command, const json& params) { return BasaltTest::Run(commands, session, command, params); };
+		const auto run = [&](const std::string& command, const json& params) { return BrecciaTest::Run(commands, session, command, params); };
 		auto scene = session.GetScene();
 		Entity root = scene->CreateEntity("Root");
 		Entity lamp = scene->CreateEntity("Lamp");
@@ -2170,7 +2170,7 @@ TEST_SUITE("Property animation")
 		TempProject project("PropertyCaseB4");
 		AutomationSession session;
 		CommandRegistry commands;
-		const auto run = [&](const std::string& command, const json& params) { return BasaltTest::Run(commands, session, command, params); };
+		const auto run = [&](const std::string& command, const json& params) { return BrecciaTest::Run(commands, session, command, params); };
 		auto scene = session.GetScene();
 		Entity root = scene->CreateEntity("Root");
 		root.AddComponent<PointLightComponent>();

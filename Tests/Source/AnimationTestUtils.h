@@ -2,14 +2,14 @@
 
 #include <doctest/doctest.h>
 
-#include <Basalt/Animation/AnimationPose.h>
-#include <Basalt/Animation/AnimationSystem.h>
-#include <Basalt/Asset/AssetManager.h>
-#include <Basalt/Asset/MeshImporter.h>
-#include <Basalt/Core/FileSystem.h>
-#include <Basalt/Math/Math.h>
-#include <Basalt/Scene/Entity.h>
-#include <Basalt/Scene/Scene.h>
+#include <Breccia/Animation/AnimationPose.h>
+#include <Breccia/Animation/AnimationSystem.h>
+#include <Breccia/Asset/AssetManager.h>
+#include <Breccia/Asset/MeshImporter.h>
+#include <Breccia/Core/FileSystem.h>
+#include <Breccia/Math/Math.h>
+#include <Breccia/Scene/Entity.h>
+#include <Breccia/Scene/Scene.h>
 
 #include <glm/gtc/epsilon.hpp>
 #include <nlohmann/json.hpp>
@@ -24,18 +24,18 @@ namespace AnimationTest {
 
 	inline std::filesystem::path BipedPath()
 	{
-		return std::filesystem::path(BASALT_TEST_DATA_DIR) / "Animation/Biped.gltf";
+		return std::filesystem::path(BRECCIA_TEST_DATA_DIR) / "Animation/Biped.gltf";
 	}
 
-	inline Basalt::Ref<Basalt::MeshSource> LoadModel(const std::filesystem::path& path)
+	inline Breccia::Ref<Breccia::MeshSource> LoadModel(const std::filesystem::path& path)
 	{
 		std::string error;
-		auto source = Basalt::MeshImporter::LoadGltf(path, path.string(), error);
+		auto source = Breccia::MeshImporter::LoadGltf(path, path.string(), error);
 		REQUIRE_MESSAGE(source, error);
 		return source;
 	}
 
-	inline Basalt::Ref<Basalt::MeshSource> LoadBiped()
+	inline Breccia::Ref<Breccia::MeshSource> LoadBiped()
 	{
 		return LoadModel(BipedPath());
 	}
@@ -43,12 +43,12 @@ namespace AnimationTest {
 	// Models loaded through Animators stay cached between tests otherwise.
 	struct ClearAssetCache
 	{
-		~ClearAssetCache() { Basalt::AssetManager::Clear(); }
+		~ClearAssetCache() { Breccia::AssetManager::Clear(); }
 	};
 
-	inline uint32_t Node(const Basalt::MeshSource& source, const std::string& name)
+	inline uint32_t Node(const Breccia::MeshSource& source, const std::string& name)
 	{
-		const int32_t node = Basalt::FindNode(source, name);
+		const int32_t node = Breccia::FindNode(source, name);
 		REQUIRE_MESSAGE(node >= 0, name);
 		return static_cast<uint32_t>(node);
 	}
@@ -67,7 +67,7 @@ namespace AnimationTest {
 	// A fixture in Tests/Data/Animation.
 	inline std::filesystem::path FixturePath(const char* name)
 	{
-		return std::filesystem::path(BASALT_TEST_DATA_DIR) / "Animation" / name;
+		return std::filesystem::path(BRECCIA_TEST_DATA_DIR) / "Animation" / name;
 	}
 
 	inline nlohmann::json ReadJson(const std::filesystem::path& path)
@@ -77,24 +77,24 @@ namespace AnimationTest {
 	}
 
 	// Writes `data` as `name` in `directory` and imports it.
-	inline Basalt::Ref<Basalt::MeshSource> LoadModified(const nlohmann::json& data, const std::filesystem::path& directory, const char* name)
+	inline Breccia::Ref<Breccia::MeshSource> LoadModified(const nlohmann::json& data, const std::filesystem::path& directory, const char* name)
 	{
 		const auto path = directory / name;
-		REQUIRE(Basalt::FileSystem::WriteTextFile(path, data.dump()));
+		REQUIRE(Breccia::FileSystem::WriteTextFile(path, data.dump()));
 		return LoadModel(path);
 	}
 
 	// A clip of an imported model by name (const char*, so no temporary outlives the returned reference).
-	inline const Basalt::AnimationClip& Clip(const Basalt::MeshSource& source, const char* name)
+	inline const Breccia::AnimationClip& Clip(const Breccia::MeshSource& source, const char* name)
 	{
-		const auto clip = std::ranges::find(source.Animations, name, &Basalt::AnimationClip::Name);
+		const auto clip = std::ranges::find(source.Animations, name, &Breccia::AnimationClip::Name);
 		REQUIRE_MESSAGE(clip != source.Animations.end(), name);
 		return *clip;
 	}
 
-	inline Basalt::AnimationClip& MutableClip(Basalt::MeshSource& source, const char* name)
+	inline Breccia::AnimationClip& MutableClip(Breccia::MeshSource& source, const char* name)
 	{
-		const auto clip = std::ranges::find(source.Animations, name, &Basalt::AnimationClip::Name);
+		const auto clip = std::ranges::find(source.Animations, name, &Breccia::AnimationClip::Name);
 		REQUIRE_MESSAGE(clip != source.Animations.end(), name);
 		return *clip;
 	}
@@ -104,7 +104,7 @@ namespace AnimationTest {
 	{
 		glm::vec3 translation, scale;
 		glm::quat rotation;
-		REQUIRE(Basalt::Math::DecomposeAffineTransform(globals[node], translation, rotation, scale));
+		REQUIRE(Breccia::Math::DecomposeAffineTransform(globals[node], translation, rotation, scale));
 		return glm::normalize(rotation);
 	}
 
@@ -131,7 +131,7 @@ namespace AnimationTest {
 	}
 
 	// A joint's world transform in the running scene's current pose.
-	inline glm::mat4 BoneWorldTransform(Basalt::Scene& scene, Basalt::Entity entity, const std::string& joint)
+	inline glm::mat4 BoneWorldTransform(Breccia::Scene& scene, Breccia::Entity entity, const std::string& joint)
 	{
 		glm::mat4 bone(1.0f);
 		std::string error;
@@ -139,13 +139,13 @@ namespace AnimationTest {
 		return scene.GetWorldTransform(entity) * bone;
 	}
 
-	inline glm::vec3 BoneWorld(Basalt::Scene& scene, Basalt::Entity entity, const std::string& joint)
+	inline glm::vec3 BoneWorld(Breccia::Scene& scene, Breccia::Entity entity, const std::string& joint)
 	{
 		return glm::vec3(BoneWorldTransform(scene, entity, joint)[3]);
 	}
 
 	// Runs the scene's animation (Update with LateUpdate) for `frames` frames of `seconds`.
-	inline void RunAnimation(Basalt::Scene& scene, int frames, float seconds = 1.0f / 60.0f)
+	inline void RunAnimation(Breccia::Scene& scene, int frames, float seconds = 1.0f / 60.0f)
 	{
 		for (int i = 0; i < frames; i++)
 			scene.GetAnimationSystem()->Update(seconds);

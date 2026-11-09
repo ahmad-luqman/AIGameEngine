@@ -155,7 +155,7 @@ locally and lavapipe in CI; golden comparisons cover the feature scene.
 Scene settings select the upscaler through the editor's Renderer settings or automation:
 
 ```sh
-basalt --project MyGame scene.settings '{"Renderer":{"FSR1Enabled":true,"FSR1Sharpness":0.2}}'
+breccia --project MyGame scene.settings '{"Renderer":{"FSR1Enabled":true,"FSR1Sharpness":0.2}}'
 ```
 
 `FSR1Enabled` defaults to false, preserving bilinear upsampling for existing scenes. When enabled,
@@ -224,7 +224,7 @@ section “Skeletal animation” defines playback and transition behavior.
 
 Vertices carry four joint indices and normalized nonnegative weights. Vertex-stage linear blend
 skinning uses `jointGlobal * inverseBind`; as glTF requires, the skinned mesh node transform does not
-move the skin a second time. The Basalt entity world transform applies after skinning. Rigid animated
+move the skin a second time. The Breccia entity world transform applies after skinning. Rigid animated
 nodes use their evaluated node transform. Normals use a scale-normalized cofactor form of the inverse transpose of the blended linear
 transform, preserving rotation even for very small rig units; tangents use its linear transform and preserve reflection handedness in the skin transform (negative entity scale retains the existing static-mesh tangent convention). Degenerate skin
 transforms have a finite normal fallback. The same palette and position operation feed PBR, depth/
@@ -380,7 +380,7 @@ barrier. `ParallelFor` divides disjoint output ranges and joins every range befo
 including after a task fails. Callers retain captured data until completion and avoid cyclic waits.
 `WaitIdle` must run outside the pool's jobs; stop producers first for a stable idle fence. Destroy
 pools on the constructing thread after producers stop. Shutdown drains accepted jobs and their children.
-Physics uses Jolt job dependencies on this pool and Basalt's own barriers (`PhysicsJobs`: a mutex and
+Physics uses Jolt job dependencies on this pool and Breccia's own barriers (`PhysicsJobs`: a mutex and
 condition variable, since Jolt's Linux barrier let a signal end a wait early). The adapter lives until
 engine shutdown, so stopping a world does not join unrelated asset jobs; queued references to completed physics jobs
 remain valid until the pool releases them. Process exit waits for all submitted pool work, including
@@ -417,7 +417,7 @@ process does not retain cache state for later calls: it waits for submitted work
 but deferred embedded-image work is never submitted without another publication or blocking call.
 Use `wait=true` for one-shot warmup and diagnostics.
 
-Configure with `-DBASALT_PROFILE=ON` to enable pinned Tracy 0.12.2 CPU zones for frames, jobs, scene,
+Configure with `-DBRECCIA_PROFILE=ON` to enable pinned Tracy 0.12.2 CPU zones for frames, jobs, scene,
 scripts, animation, physics, glTF import, texture decode and rendering. Run a matching Tracy profiler
 and connect locally; the client records on demand. Default builds do not fetch or link Tracy, and
 Dist builds compile instrumentation out. The ASan+UBSan CI job (Linux, Clang Debug) builds and tests the
@@ -440,7 +440,7 @@ loader requires `UpdateMemoryUsage()` to refresh their payload charge.
 The Game tab's **Stats** checkbox enables a passive overlay during Play (also while paused). Set it
 through `editor.game_view {"stats": true}`; it lasts for the editor session. The overlay is clipped to
 the game image and takes no pointer or keyboard input. Game captures keep the game image and game UI;
-`editor.window_screenshot` includes the diagnostics. `BasaltRuntime --stats` draws the same overlay,
+`editor.window_screenshot` includes the diagnostics. `BrecciaRuntime --stats` draws the same overlay,
 including its blit timing, and includes it in runtime screenshots. `--stats` requires a GPU.
 
 The overlay reports the last 60 host frames' mean wall-clock frame interval and FPS, Game renderer draw calls,

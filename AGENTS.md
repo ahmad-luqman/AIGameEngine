@@ -1,6 +1,6 @@
-# AGENTS.md — Basalt Engine Development Guide
+# AGENTS.md — Breccia Engine Development Guide
 
-Basalt is a desktop 3D engine built for agent-driven development (C++20, CMake, Vulkan via nvrhi) for Windows, macOS
+Breccia is a desktop 3D engine built for agent-driven development (C++20, CMake, Vulkan via nvrhi) for Windows, macOS
 and Linux. It is early alpha (0.1.0, unreleased), and its code is held to production standards: the rules below are not
 relaxed because of that. Scope and non-goals are in `ROADMAP.md` (Scope). This file is the source of truth for how to
 work in this repository. Read it fully before changing code. Task-specific procedures live in
@@ -10,17 +10,17 @@ work in this repository. Read it fully before changing code. Task-specific proce
 
 | Path | Contents |
 |------|----------|
-| `Basalt/Source/Basalt/` | Engine static library (`Basalt`). One folder per module (see below). |
-| `Basalt/Shaders/` | GLSL shaders, compiled to SPIR-V at build time and **embedded** in the binary. `Include/*.glsl` are shared headers. |
-| `Basalt-Editor/` | Editor executable (`BasaltEditor`): ImGui UI, gizmos, automation server. Never shipped. |
-| `Basalt-Runtime/` | Runtime executable (`BasaltRuntime`): plays an exported game. No editing code. |
-| `Basalt-CLI/` | Headless command-line tool (`basalt`): project/scene authoring, validation, export. |
-| `Tests/` | doctest unit tests (`BasaltTests`, headless), the feature-test project, and an optional GPU render test. |
+| `Breccia/Source/Breccia/` | Engine static library (`Breccia`). One folder per module (see below). |
+| `Breccia/Shaders/` | GLSL shaders, compiled to SPIR-V at build time and **embedded** in the binary. `Include/*.glsl` are shared headers. |
+| `Breccia-Editor/` | Editor executable (`BrecciaEditor`): ImGui UI, gizmos, automation server. Never shipped. |
+| `Breccia-Runtime/` | Runtime executable (`BrecciaRuntime`): plays an exported game. No editing code. |
+| `Breccia-CLI/` | Headless command-line tool (`breccia`): project/scene authoring, validation, export. |
+| `Tests/` | doctest unit tests (`BrecciaTests`, headless), the feature-test project, and an optional GPU render test. |
 | `Samples/` | Example games built through the automation API (e.g. `Samples/Tetris`), tested by ctest. |
 | `cmake/` | Dependency pins (`Dependencies.cmake`), warnings, shader embedding, format check. |
 | `scripts/` | `build.sh`, `test.sh`, `format.sh`; release tooling `package_release.py`, `sign-macos.sh`, `sign-windows.py`, `ci-universal-vulkan.sh` (macOS universal Vulkan libraries). |
 
-Engine modules (`Basalt/Source/Basalt/<Module>/`): `Core` (application, window, input incl. gamepads, log, file
+Engine modules (`Breccia/Source/Breccia/<Module>/`): `Core` (application, window, input incl. gamepads, log, file
 system, `.bpak` archives and file watching, command line, crash reports), `Events`, `Math`, `Renderer` (device, scene renderer, IBL, debug lines), `ImGui`, `Scene`
 (EnTT scene, components, component registry, serialization, prefab instances, overrides, nesting and variants), `Asset` (glTF, images, primitives, material
 files, asset cache), `Physics` (Jolt), `Audio` (miniaudio: buses, per-source low-pass and Doppler, reverb sends into per-bus reverbs), `Particles` (CPU particle simulation), `Animation` (glTF TRS sampling, blends, crossfades, 1D/2D blend spaces with phase sync and velocity matching, animation events, bone transforms and attachments, data-driven state machines and per-state root motion, layers with joint masks, shared mask assets, additive clips and their own state machines, two-bone/look-at/FABRIK IK with foot placement and foot locking, spring bones with angle limits, per-chain colliders and physics-body collisions, morph targets, retargeted clip libraries with shared joint maps and reference poses, per-entity playback), `UI` (game UI: UI
@@ -39,7 +39,7 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
 - **One data path.** Components are plain structs. `ComponentRegistry` gives each a strict JSON reader/
   writer that every consumer shares: scene and prefab files, Lua `GetComponent/SetComponent`, the
   automation commands and the editor inspector. Adding a component = one registry entry (see the
-  `basalt-add-component` skill).
+  `breccia-add-component` skill).
 - **Physics capacity.** `PhysicsCapacity` fixes what a world holds when it starts. Jolt reserves `MaxContactConstraints` times
   `cMaxConstraintSize` of temporary memory on every step, so the temp allocator's block is sized from it (and falls back to
   malloc: an overflow must not abort). Past a limit Jolt drops contacts; `ReportUpdateErrors` logs each kind once per world, and
@@ -245,7 +245,7 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   entry can be read in part (`PackArchive::ReadStored`, unhashed), which is how audio clips of 1 MiB or more are read from it, `AudioSource.Stream`
   or not, and MP3 and FLAC are always stored for that; `PackArchiveWriter` compresses a batch at a time on the job system and writes
   in path order, so its bytes stay deterministic.
-  Exports never keep the runtime's signature (a release's, once signed, is Basalt's publisher's): Windows exports remove
+  Exports never keep the runtime's signature (a release's, once signed, is Breccia's publisher's): Windows exports remove
   it (`RemoveAuthenticodeSignature`, a pure byte function) before resources are written, and macOS exports are signed ad
   hoc (`/usr/bin/codesign`, which also drops the hardened runtime whose library validation would refuse the bundled
   Vulkan libraries). macOS exports take the Vulkan libraries next to the runtime first (the tools archive's) and warn when
@@ -256,7 +256,7 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   universal (arm64 + x86_64, Jolt's x86-64 half at SSE4.2, with the loader and MoltenVK from
   `scripts/ci-universal-vulkan.sh`, every shipped Mach-O checked for both and the x86-64 half started under Rosetta),
   macOS signed ad hoc or with a Developer ID, Windows signed when its secrets are set. See `Docs/Shipping.md`.
-- **Editor file dialogs.** Path prompts add native pickers (`Basalt-Editor/Source/FileDialogs`, nativefiledialog-extended,
+- **Editor file dialogs.** Path prompts add native pickers (`Breccia-Editor/Source/FileDialogs`, nativefiledialog-extended,
   editor only). Linux uses the XDG portal and needs D-Bus development files at build time; without them the editor
   builds with typed paths only, and a picker that fails at runtime leaves the typed path usable.
 - **Play mode runs a copy.** `Scene::Copy` duplicates the edit scene (same UUIDs) for play/simulate;
@@ -266,7 +266,7 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   scene view keeps the editor camera in every mode.
 - **Editor caches.** Content-browser previews are cached in `<project>/Cache/Thumbnails`, outside `Assets/`
   (never exported; new projects ignore `Cache/` in git). Editor preferences (camera speed, theme, recent projects,
-  auto reload) and the window layout are per user (`Automation/EditorPreferences`, `<user data>/BasaltEditor/`).
+  auto reload) and the window layout are per user (`Automation/EditorPreferences`, `<user data>/BrecciaEditor/`).
 - **One file watcher.** `AutomationSession` owns a polling `FileWatcher` (Core) on the active project's `Assets/`;
   `ReloadAssets` drops what changed files affect from `AssetManager` (models through `MeshSource::ExternalFiles`) and,
   while the game runs, hot reloads scripts (`ScriptEngine::ReloadScripts`: instances keep their fields, then
@@ -297,7 +297,7 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
 - **Gameplay services live in the ScriptEngine.** Timers and coroutines (`ScriptTasks`) and events
   (`ScriptEvents`) belong to the script instance that created them and end with it; `Storage` save data
   (`Project/SaveData`) goes to the per-user data directory (`Platform::GetUserDataDirectory`, overridden by
-  `BASALT_USER_DATA_DIR`, which tests set so they never touch the real one). `Scene.Load` switches scenes
+  `BRECCIA_USER_DATA_DIR`, which tests set so they never touch the real one). `Scene.Load` switches scenes
   in place at the end of the frame (`Scene::RequestLoad`), so the Lua state and persistent entities
   survive.
 - **Automation first.** `CommandRegistry` (Automation/BuiltinCommands.cpp) is the API for tools and AI
@@ -307,7 +307,7 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   built-in commands); its revision counter tells editor history which commands need capture, including
   partial edits before a failure. Commands that save/replace edit state or start/restart Play declare
   `CommandPolicy::EditBoundary`; undo/redo/transaction commands declare `HistoryControl`. Hosts:
-  `basalt` CLI (headless) and the editor's TCP server (127.0.0.1:7420, adds
+  `breccia` CLI (headless) and the editor's TCP server (127.0.0.1:7420, adds
   `editor.*` commands and screenshots). Docs: Docs/AutomationCommands.md (generated), Docs/MCP.md (agent setup/protocol). CommandInfo declares
   InputSchema: validation, help and MCP tool definitions share it; editor TCP clients can use MCP too.
   `AutomationEventHub` (created by the session, shared with TCP connections, thread-safe) feeds `events.*`: the session's `SceneEventListener` on the
@@ -317,7 +317,7 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
 - **CPU jobs and streaming.** `Core/JobSystem` is the shared work-stealing pool, including Jolt physics.
   Cache APIs stay on the main thread; asset workers capture project context and publish isolated results
   through `AssetManager::PublishCompleted`. Blocking getters join requests. Interactive renderers opt into
-  streaming; captures keep blocking loads. `BASALT_PROFILE` enables Tracy outside Dist. `memory.stats`
+  streaming; captures keep blocking loads. `BRECCIA_PROFILE` enables Tracy outside Dist. `memory.stats`
   reports logical asset payload, GPU buffer and Lua heap charges (see Docs/Rendering.md).
 - **Throughput.** Opaque/masked geometry batches by shared mesh/range, texture bindings and pipeline flags.
   Draw records keep each instance's transforms, material index, pick token, skin offset/count and previous-state record index; vertex
@@ -336,10 +336,10 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
 
 | Binary | Purpose |
 |--------|---------|
-| `BasaltEditor [--project P] [--port N\|--no-server] [--gpu G]` | Editor GUI + automation server |
-| `BasaltRuntime [--project P] [--scene S] [--width W --height H] [--frames N [--screenshot out.png] [--require-validation] [--fail-on-script-errors]] [--headless \| --offscreen] [--debug-view V] [--render-scale S] [--dynamic-resolution FPS] [--min-render-scale S] [--gpu G] [--no-vsync] [--stats]` | Plays the project's start scene; exported games are this binary renamed. `--headless` runs without a GPU or window. `--frames` runs exit 1 (start/render failure), 3 (validation errors), 4 (screenshot), 5 (validation layer missing), 6 (dynamic resolution did not run) or 7 (script errors, with `--fail-on-script-errors`) |
-| `basalt [--project P] [--scene S] [--no-save] [--verbose] <command> [json] \| batch <file> \| serve \| mcp` | Headless automation CLI |
-| `BasaltTests` | Unit tests |
+| `BrecciaEditor [--project P] [--port N\|--no-server] [--gpu G]` | Editor GUI + automation server |
+| `BrecciaRuntime [--project P] [--scene S] [--width W --height H] [--frames N [--screenshot out.png] [--require-validation] [--fail-on-script-errors]] [--headless \| --offscreen] [--debug-view V] [--render-scale S] [--dynamic-resolution FPS] [--min-render-scale S] [--gpu G] [--no-vsync] [--stats]` | Plays the project's start scene; exported games are this binary renamed. `--headless` runs without a GPU or window. `--frames` runs exit 1 (start/render failure), 3 (validation errors), 4 (screenshot), 5 (validation layer missing), 6 (dynamic resolution did not run) or 7 (script errors, with `--fail-on-script-errors`) |
+| `breccia [--project P] [--scene S] [--no-save] [--verbose] <command> [json] \| batch <file> \| serve \| mcp` | Headless automation CLI |
+| `BrecciaTests` | Unit tests |
 
 ## Building and testing
 
@@ -347,26 +347,26 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
 scripts/build.sh            # Debug build into build/
 scripts/build.sh Release    # build-release/
 scripts/test.sh             # build + ctest (unit tests, format check, ...)
-./build/bin/BasaltTests     # run unit tests directly; add -tc="*name*" to filter
+./build/bin/BrecciaTests     # run unit tests directly; add -tc="*name*" to filter
 ```
 
 - Requirements: CMake ≥ 3.25, Ninja, a C++20 compiler, `glslc` (Vulkan SDK or shaderc), a Vulkan 1.3
   runtime (MoltenVK on macOS). All third-party code is fetched by CMake at pinned versions.
 - Build configurations: `Debug` (asserts, validation), `Release` (optimized, asserts on),
-  `Dist` (shipping: no asserts — defines `BS_DIST`).
-- Warnings are errors (`BASALT_WARNINGS_AS_ERRORS=ON`). Do not disable warnings to make code compile.
-- CI also runs ASan+UBSan (`-DBASALT_SANITIZE="address;undefined"`), clang-tidy (`scripts/clang_tidy.py`, three shards;
+  `Dist` (shipping: no asserts — defines `BR_DIST`).
+- Warnings are errors (`BRECCIA_WARNINGS_AS_ERRORS=ON`). Do not disable warnings to make code compile.
+- CI also runs ASan+UBSan (`-DBRECCIA_SANITIZE="address;undefined"`), clang-tidy (`scripts/clang_tidy.py`, three shards;
   checks in `.clang-tidy`), a coverage report (`scripts/coverage.sh`, on pushes to `main` and manual runs) and libFuzzer
   targets for every untrusted input (`scripts/fuzz.sh`, `Tests/Fuzz/`, `FUZZ_JOBS` targets at a time; nightly long
-  runs). Parse untrusted JSON with `ParseJson` and read floats with `JsonToFloat` (`Basalt/Core/JsonUtils.h`). Tests carry ctest labels
-  (`unit`, `integration`, `gpu`, `format`, `benchmark`) for `ctest -L/-LE`. Details: the basalt-build-test skill.
+  runs). Parse untrusted JSON with `ParseJson` and read floats with `JsonToFloat` (`Breccia/Core/JsonUtils.h`). Tests carry ctest labels
+  (`unit`, `integration`, `gpu`, `format`, `benchmark`) for `ctest -L/-LE`. Details: the breccia-build-test skill.
 - CI compiles through ccache (sccache on Windows; Debug objects then embed debug information, `/Z7`) set by the
-  `CMAKE_<LANG>_COMPILER_LAUNCHER` environment variables, and takes dependency sources from `BASALT_DEPS_SOURCE_DIR`
+  `CMAKE_<LANG>_COMPILER_LAUNCHER` environment variables, and takes dependency sources from `BRECCIA_DEPS_SOURCE_DIR`
   (`cmake/DependencySources.cmake`): a directory that `scripts/ci-fetch-deps.sh` fills and stamps with the hash of
   `cmake/Dependencies.cmake`. A directory without that stamp (another tree's `build/_deps` included) is ignored; locally,
   one fetch into a shared directory lets worktrees reuse the sources. `scripts/ci-check-caches.sh` fails a CI job whose
-  build tree does not use either cache. Every CI job that builds Basalt sets up its runner through
-  `.github/actions/setup-basalt` (packages, Windows toolchain, dependency sources); see `Docs/CI.md`.
+  build tree does not use either cache. Every CI job that builds Breccia sets up its runner through
+  `.github/actions/setup-breccia` (packages, Windows toolchain, dependency sources); see `Docs/CI.md`.
 - **macOS + Homebrew:** Homebrew's validation layer manifest names its library without a path, so non-Dist
   builds point `VK_ADD_LAYER_PATH` at a copy with the absolute path (`Renderer/ValidationLayerManifest`; prefixes
   `$HOMEBREW_PREFIX`, `/opt/homebrew`, `/usr/local`); no
@@ -393,14 +393,14 @@ Naming:
 | Static variables (class or file scope) | `s_` + PascalCase | `s_Instance` |
 | Public struct data members (plain data, specs, components) | PascalCase, no prefix | `TransformComponent::Translation` |
 | Enum values (`enum class`) | PascalCase | `LogLevel::Warn` |
-| Macros | `BS_` + UPPER_SNAKE | `BS_CORE_ASSERT` |
+| Macros | `BR_` + UPPER_SNAKE | `BR_CORE_ASSERT` |
 | Compile-time constants | PascalCase | `constexpr uint32_t MaxLights = 16;` |
 
 Other rules:
 
-- `#pragma once` in every header. Include order: own header first (in .cpp), then `Basalt/...`
+- `#pragma once` in every header. Include order: own header first (in .cpp), then `Breccia/...`
   headers, then third-party, then standard library, separated by blank lines.
-- Engine includes use the full path from `Basalt/Source`: `#include "Basalt/Core/Log.h"`.
+- Engine includes use the full path from `Breccia/Source`: `#include "Breccia/Core/Log.h"`.
 - Text is UTF-8 everywhere (asset keys, JSON, Lua, command-line arguments through `Platform::GetProcessArguments`).
   Convert text to paths only with `FileSystem::PathFromUtf8` (or `Project::ResolvePath`'s text overload) and back with
   `PathToUtf8`/`PathToGenericUtf8` (none of them throws), and use `Platform::Utf8ToWide`/`WideToUtf8` for other wide
@@ -414,15 +414,15 @@ Other rules:
   back to the file, and elsewhere a name that is not UTF-8 cannot pass through JSON. Skipping is not a failure: one odd name
   must not stop a scan, and folder exports still copy such files byte for byte. `FileSystem::DescribePath` text is for
   messages: it names no file.
-- Ownership: `Scope<T>` (unique) / `Ref<T>` (shared) from `Basalt/Core/Base.h`; raw pointers are
+- Ownership: `Scope<T>` (unique) / `Ref<T>` (shared) from `Breccia/Core/Base.h`; raw pointers are
   non-owning. GPU objects use nvrhi handles (`nvrhi::TextureHandle`, ...).
 - No exceptions across module boundaries. Fallible operations return `bool`/`std::optional`/a result
-  struct and log the reason with `BS_CORE_ERROR`. Third-party exceptions (vulkan.hpp, nlohmann::json,
+  struct and log the reason with `BR_CORE_ERROR`. Third-party exceptions (vulkan.hpp, nlohmann::json,
   sol2) are caught at the boundary that calls them.
-- Asserts (`BS_CORE_ASSERT`) are for programmer errors only and vanish in Dist. Anything that can
+- Asserts (`BR_CORE_ASSERT`) are for programmer errors only and vanish in Dist. Anything that can
   happen with bad user data (missing files, malformed scenes, script errors) must be handled and
   reported, never asserted.
-- Logging: `BS_CORE_*` inside the engine, `BS_*` in applications/game code. Every message also lands
+- Logging: `BR_CORE_*` inside the engine, `BR_*` in applications/game code. Every message also lands
   in `Log::GetHistory()` (editor console, automation API).
 - Comments explain *why*, not *what*. Every public class has a short comment stating its responsibility.
 
@@ -430,11 +430,11 @@ Other rules:
 
 - All rendering goes through nvrhi. Never call Vulkan directly outside `Renderer/GraphicsDevice.cpp`
   and `Renderer/VulkanLoader.cpp`, and never include `<vulkan/vulkan.hpp>` directly — use
-  `Basalt/Renderer/VulkanHeaders.h`.
+  `Breccia/Renderer/VulkanHeaders.h`.
 - The device requires Vulkan 1.3 (dynamic rendering, synchronization2, timeline semaphores). Stay within
   features MoltenVK supports: no geometry shaders, no tessellation, no ray tracing.
 - **Shader binding convention:** every `nvrhi::BindingLayoutDesc` sets
-  `bindingOffsets = ZeroBindingOffsets` (`Basalt/Renderer/ShaderUtils.h`), so GLSL
+  `bindingOffsets = ZeroBindingOffsets` (`Breccia/Renderer/ShaderUtils.h`), so GLSL
   `layout(set = S, binding = N)` equals nvrhi slot `N` for every resource type. Within one binding
   layout every slot number must be unique across resource types (a texture and a sampler cannot both
   use slot 0). A mismatch renders black without any validation error.
@@ -446,7 +446,7 @@ Other rules:
 - Binding layouts set `registerSpace = N` with `registerSpaceIsDescriptorSet = true`, so GLSL `set = N`
   matches. Push constants occupy a constant-buffer register in nvrhi: use `PushConstantSlot` in layouts that
   also contain constant buffers.
-- Shaders are GLSL 450 in `Basalt/Shaders`, compiled with `glslc --target-env=vulkan1.2 -Werror`, and
+- Shaders are GLSL 450 in `Breccia/Shaders`, compiled with `glslc --target-env=vulkan1.2 -Werror`, and
   looked up by file name: `CreateEmbeddedShader(device, "ImGui.vert", nvrhi::ShaderType::Vertex)`.
 - The swapchain is UNORM: the final pass writes display-referred (tonemapped, sRGB-encoded) color.
 
@@ -456,17 +456,17 @@ Other rules:
   deterministic (fixed timesteps, no wall-clock dependence, no network).
 - ctest runs tests side by side (every test one per core in `scripts/test.sh`, GPU tests included; headless tests one
   per core in CI, whose lavapipe GPU tests run two at a time), so a test writes only into a directory of its own: unit
-  tests under `BasaltTest::TempDirectory`, scripts into a fresh temporary directory or the test's build subdirectory,
-  with their own `BASALT_USER_DATA_DIR` (the test's `ENVIRONMENT` property, or set by the script) when the run saves
+  tests under `BrecciaTest::TempDirectory`, scripts into a fresh temporary directory or the test's build subdirectory,
+  with their own `BRECCIA_USER_DATA_DIR` (the test's `ENVIRONMENT` property, or set by the script) when the run saves
   user data. Copies of a test project leave out `Saved/`, where FeatureTest and SampleTetrisReplay record their replays.
   Servers take a free port (listen on port 0, or reserve one through it); a test that must run alone gets `RUN_SERIAL`,
-  and a long one a `COST` so `ctest -j` starts it first. `BasaltTests` runs as several ctest entries split by test file
-  (`BasaltTests_<Shard>`, listed in `Tests/CMakeLists.txt`; the entry `BasaltTests` runs every other file, and
-  `BasaltTestShards` checks each test case runs once): rebalance (move test files between entries, or add a shard) when
+  and a long one a `COST` so `ctest -j` starts it first. `BrecciaTests` runs as several ctest entries split by test file
+  (`BrecciaTests_<Shard>`, listed in `Tests/CMakeLists.txt`; the entry `BrecciaTests` runs every other file, and
+  `BrecciaTestShards` checks each test case runs once): rebalance (move test files between entries, or add a shard) when
   any entry clearly outlasts the rest.
 - New engine behaviour that is reachable from Lua or the automation API must also be exercised by the
   feature test (`Tests/Data/FeatureTest`: scene `Assets/Scenes/FeatureTest.bscene`, driver
-  `Assets/Scripts/FeatureTest.lua`, run by ctest through `basalt batch FeatureTest.batch.json`). Add a
+  `Assets/Scripts/FeatureTest.lua`, run by ctest through `breccia batch FeatureTest.batch.json`). Add a
   `Check(...)` for every new API function and put every new component in the scene.
 - `PhysicsDeterminism` (`Tests/Data/Determinism`) pins the state hashes of a physics-heavy scene, which
   must match on every CI platform and configuration (Debug, Release, ASan; coverage on `main`). Deliberate changes to
@@ -488,9 +488,9 @@ Other rules:
 - CI: `Docs/CI.md` (the workflows and their shared setup action, caches, what CI does not check).
 - Shipping: `Docs/Shipping.md` (project identity, export and platform packages, signing, the release pipeline).
 - Rendering: `Docs/Rendering.md` (clustered lighting, FSR 1 settings, diagnostics and GPU tests).
-- Lua API: `Docs/ScriptingAPI.md` and the LuaLS definitions `Docs/basalt.d.lua` (update both with every binding change;
+- Lua API: `Docs/ScriptingAPI.md` and the LuaLS definitions `Docs/breccia.d.lua` (update both with every binding change;
   the `LuaTypeDefinitions` test checks declared names and component fields and types; signatures are kept by hand).
-- `Docs/AutomationCommands.md`, `Docs/Components.md` and the component section of `Docs/basalt.d.lua` are
+- `Docs/AutomationCommands.md`, `Docs/Components.md` and the component section of `Docs/breccia.d.lua` are
   generated: run `python3 scripts/generate_docs.py` after changing commands or components (the `GeneratedDocs`
   ctest fails while they are stale).
 - Skills in `.claude/skills/`: build/test, code review, make-game (AI workflow), add-component,

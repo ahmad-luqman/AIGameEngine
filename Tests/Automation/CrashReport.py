@@ -1,6 +1,6 @@
 """Crashes a process on purpose and checks its crash report (ctest CrashReport).
 
-Runs `BasaltTests --basalt-child crash-report <kind>` (Tests/Source/TestMain.cpp), which installs the crash reporter,
+Runs `BrecciaTests --breccia-child crash-report <kind>` (Tests/Source/TestMain.cpp), which installs the crash reporter,
 logs a sentinel line and crashes: an invalid memory access, abort(), an uncaught C++ exception (a std::exception and an
 int), a pure virtual call, an invalid C runtime parameter (Windows), a trap, stack overflows on the installing thread, on
 a thread holding a ThreadStack and on a job worker, and invalid memory accesses on worker threads. The child installs
@@ -57,9 +57,9 @@ def fail(message):
 
 
 def run_child(tests, arguments, user_data, timeout=120, **options):
-    environment = dict(os.environ, BASALT_USER_DATA_DIR=str(user_data))
-    environment.pop("BASALT_TEST_CHILD_ACTIONS", None)
-    run = subprocess.run([str(tests), "--basalt-child", *arguments], env=environment, capture_output=True, text=True, errors="replace", timeout=timeout, **options)
+    environment = dict(os.environ, BRECCIA_USER_DATA_DIR=str(user_data))
+    environment.pop("BRECCIA_TEST_CHILD_ACTIONS", None)
+    run = subprocess.run([str(tests), "--breccia-child", *arguments], env=environment, capture_output=True, text=True, errors="replace", timeout=timeout, **options)
     if run.returncode == 77:
         print(run.stdout.strip())
         sys.exit(77)
@@ -82,7 +82,7 @@ def check_report(kind, run, folder):
     if len(reports) != 1:
         fail(f"{kind}: expected one report in {folder}, found {[str(r) for r in reports]}; stderr: {run.stderr}")
     report = reports[0].read_text(encoding="utf-8", errors="replace")
-    for expected in ("Basalt crash report\n", "Application: CrashChild\n", "Project: Crash Test 1.2.3\n", "\nStack trace:\n", "\nLast log lines (oldest first):\n", "crash-test sentinel 42"):
+    for expected in ("Breccia crash report\n", "Application: CrashChild\n", "Project: Crash Test 1.2.3\n", "\nStack trace:\n", "\nLast log lines (oldest first):\n", "crash-test sentinel 42"):
         if expected not in report:
             fail(f"{kind}: report lacks {expected!r}:\n{report}")
     reason = next((line for line in report.splitlines() if line.startswith("Reason: ")), "")
@@ -160,7 +160,7 @@ def check_dialogs(tests):
     expected_labels = {"zenity": "--ok-label", "kdialog": "--yes-label", "xmessage": "-buttons"}
     for kind, label in expected_labels.items():
         # Choosing "Open Report" opens exactly the report.
-        with tempfile.TemporaryDirectory(prefix="BasaltCrash-") as directory:
+        with tempfile.TemporaryDirectory(prefix="BrecciaCrash-") as directory:
             folder = pathlib.Path(directory)
             run, log, opened, user_data = run_dialog(tests, kind, "crash", 0, folder)
             arguments = wait_for(log, f"{kind} dialog")
@@ -174,7 +174,7 @@ def check_dialogs(tests):
                 fail(f"{kind}: text from the report's path ran as a command")
 
         # Closing the dialog opens nothing.
-        with tempfile.TemporaryDirectory(prefix="BasaltCrash-") as directory:
+        with tempfile.TemporaryDirectory(prefix="BrecciaCrash-") as directory:
             folder = pathlib.Path(directory)
             run, log, opened, _ = run_dialog(tests, kind, "crash", 1, folder)
             wait_for(log, f"closed {kind} dialog")
@@ -184,7 +184,7 @@ def check_dialogs(tests):
                 fail(f"closing the {kind} dialog opened the report")
 
         # A failed start: the plain error dialog, with no report to offer.
-        with tempfile.TemporaryDirectory(prefix="BasaltCrash-") as directory:
+        with tempfile.TemporaryDirectory(prefix="BrecciaCrash-") as directory:
             folder = pathlib.Path(directory)
             run, log, opened, _ = run_dialog(tests, kind, "error", 0, folder)
             arguments = wait_for(log, f"{kind} error dialog").splitlines()
@@ -196,7 +196,7 @@ def check_dialogs(tests):
                 fail(f"the {kind} error dialog ran something it should not")
 
     # Without an opener the dialog only shows the path.
-    with tempfile.TemporaryDirectory(prefix="BasaltCrash-") as directory:
+    with tempfile.TemporaryDirectory(prefix="BrecciaCrash-") as directory:
         folder = pathlib.Path(directory)
         run, log, opened, user_data = run_dialog(tests, "zenity", "crash", 0, folder, opener=False)
         arguments = wait_for(log, "dialog without an opener")
@@ -205,7 +205,7 @@ def check_dialogs(tests):
             fail(f"unexpected dialog without an opener: {arguments}")
 
     # An opener that cannot run: the same, rather than a button that does nothing.
-    with tempfile.TemporaryDirectory(prefix="BasaltCrash-") as directory:
+    with tempfile.TemporaryDirectory(prefix="BrecciaCrash-") as directory:
         folder = pathlib.Path(directory)
         (folder / "not-a-program").write_text("text")
         run, log, opened, _ = run_dialog(tests, "zenity", "crash", 0, folder, opener=str(folder / "not-a-program"))
@@ -214,24 +214,24 @@ def check_dialogs(tests):
             fail(f"unexpected dialog with a bad opener: {arguments}")
 
     # A dialog program refused at Install, or (a folder passes that check) that cannot start, costs nothing but the dialog.
-    with tempfile.TemporaryDirectory(prefix="BasaltCrash-") as directory:
+    with tempfile.TemporaryDirectory(prefix="BrecciaCrash-") as directory:
         folder = pathlib.Path(directory)
         run, _, _, user_data = run_dialog(tests, "zenity", "crash", 0, folder, program=str(folder / "missing"))
         check_one_report(run, user_data, "missing dialog program")
-    with tempfile.TemporaryDirectory(prefix="BasaltCrash-") as directory:
+    with tempfile.TemporaryDirectory(prefix="BrecciaCrash-") as directory:
         folder = pathlib.Path(directory)
         run, _, _, user_data = run_dialog(tests, "zenity", "crash", 0, folder, opener=False, program=directory)
         check_one_report(run, user_data, "dialog program that cannot start")
         if "could not be shown" not in run.stderr:
             fail(f"no word of the dialog that could not start: {run.stderr}")
-    with tempfile.TemporaryDirectory(prefix="BasaltCrash-") as directory:
+    with tempfile.TemporaryDirectory(prefix="BrecciaCrash-") as directory:
         run, _, _, _ = run_dialog(tests, "zenity", "error", 0, pathlib.Path(directory), opener=False, program=directory)
         if "could not start" not in run.stdout + run.stderr:
             fail(f"no word of the error dialog that could not start: {run.stdout}{run.stderr}")
 
     # The crashed process does not wait for the dialog, and leaves the test's pipes alone: subprocess.run returns while the
     # dialog is held, or the run times out.
-    with tempfile.TemporaryDirectory(prefix="BasaltCrash-") as directory:
+    with tempfile.TemporaryDirectory(prefix="BrecciaCrash-") as directory:
         folder = pathlib.Path(directory)
         run, log, _, user_data = run_dialog(tests, "zenity", "crash", 1, folder, hold=folder / "released")
         (folder / "released").touch()
@@ -239,7 +239,7 @@ def check_dialogs(tests):
         wait_for(log, "held dialog")
 
     # The macOS kind, through a stand-in: never /usr/bin/osascript, which would show it.
-    with tempfile.TemporaryDirectory(prefix="BasaltCrash-") as directory:
+    with tempfile.TemporaryDirectory(prefix="BrecciaCrash-") as directory:
         folder = pathlib.Path(directory)
         run, log, _, _ = run_dialog(tests, "osascript", "crash", 0, folder)
         arguments = wait_for(log, "osascript dialog")
@@ -247,7 +247,7 @@ def check_dialogs(tests):
             fail(f"unexpected osascript arguments:\n{arguments}")
 
     # A message too long for any buffer still gives a whole script.
-    with tempfile.TemporaryDirectory(prefix="BasaltCrash-") as directory:
+    with tempfile.TemporaryDirectory(prefix="BrecciaCrash-") as directory:
         folder = pathlib.Path(directory)
         run, log, _, _ = run_dialog(tests, "osascript", "long", 0, folder)
         script = wait_for(log, "long osascript dialog").split("-e\n", 1)[1].rstrip("\n")
@@ -257,7 +257,7 @@ def check_dialogs(tests):
             compile_apple_script(script, folder / "long.scpt")
 
     # Dialogs stay off unless the host turns them on.
-    with tempfile.TemporaryDirectory(prefix="BasaltCrash-") as directory:
+    with tempfile.TemporaryDirectory(prefix="BrecciaCrash-") as directory:
         folder = pathlib.Path(directory)
         run, log, _, _ = run_dialog(tests, "zenity", "disabled", 0, folder)
         arguments = wait_for(log, "dialog after turning dialogs on")
@@ -274,7 +274,7 @@ def check_one_report(run, user_data, what):
 
 def check_dialogs_off(tests):
     # On Windows too: a message box here would hang until this timeout, as it would hang any automated run.
-    with tempfile.TemporaryDirectory(prefix="BasaltCrash-") as directory:
+    with tempfile.TemporaryDirectory(prefix="BrecciaCrash-") as directory:
         try:
             run = run_child(tests, ["crash-dialog", "zenity", "unused", "unused", "off"], directory, timeout=60)
         except subprocess.TimeoutExpired:
@@ -292,9 +292,9 @@ def compile_apple_script(script, output):
 def check_apple_script(tests):
     if sys.platform != "darwin":
         return
-    with tempfile.TemporaryDirectory(prefix="BasaltCrash-") as directory:
+    with tempfile.TemporaryDirectory(prefix="BrecciaCrash-") as directory:
         for name, message, report in (("alert", 'Back\\slash and "quotes"', ""), ("offer", 'Back\\slash and "quotes"', '/tmp/it\'s a "quoted" \\ path.txt'), ("lines", "First line.\n\nThird line.", "/tmp/report.txt")):
-            run = subprocess.run([str(tests), "--basalt-child", "crash-script", 'App "One"', message, report], capture_output=True, text=True, timeout=60)
+            run = subprocess.run([str(tests), "--breccia-child", "crash-script", 'App "One"', message, report], capture_output=True, text=True, timeout=60)
             if run.returncode != 0 or ("Open Report" in run.stdout) != bool(report):
                 fail(f"AppleScript {name}: exit code {run.returncode}: {run.stdout}")
             compile_apple_script(run.stdout, pathlib.Path(directory, name + ".scpt"))
@@ -306,19 +306,19 @@ def main():
     for kind in REASONS:
         # Two threads crashing at once race; a few runs make their overlap likely.
         for _ in range(4 if kind == "two-thread-segv" else 1):
-            with tempfile.TemporaryDirectory(prefix="BasaltCrash-") as directory:
+            with tempfile.TemporaryDirectory(prefix="BrecciaCrash-") as directory:
                 run = crash(tests, kind, pathlib.Path(directory))
                 check_report(kind, run, pathlib.Path(directory, "CrashChild", "Crashes"))
 
     # Folders are created only when something crashes, several levels if need be (a fresh account without ~/.local, a
-    # nested BASALT_USER_DATA_DIR).
-    with tempfile.TemporaryDirectory(prefix="BasaltCrash-") as directory:
+    # nested BRECCIA_USER_DATA_DIR).
+    with tempfile.TemporaryDirectory(prefix="BrecciaCrash-") as directory:
         nested = pathlib.Path(directory, "not", "yet", "there")
         run = crash(tests, "segv", nested)
         check_report("segv", run, nested / "CrashChild" / "Crashes")
 
     # A user data directory that cannot hold folders (a file): the report goes next to the executable.
-    with tempfile.TemporaryDirectory(prefix="BasaltCrash-") as directory:
+    with tempfile.TemporaryDirectory(prefix="BrecciaCrash-") as directory:
         blocked = pathlib.Path(directory, "UserDataIsAFile")
         blocked.write_text("not a folder")
         check_fallback(tests, "fallback (user data is a file)", blocked)
@@ -326,7 +326,7 @@ def main():
     # A report folder too long for the handler's 1024-byte buffers while its parents fit: the report must not land in a
     # parent folder, but next to the executable (the user data folder itself stays short enough to create).
     if not WINDOWS:
-        with tempfile.TemporaryDirectory(prefix="BasaltCrash-") as directory:
+        with tempfile.TemporaryDirectory(prefix="BrecciaCrash-") as directory:
             target = 1010 - len(str(pathlib.Path(directory)))
             long_folder = pathlib.Path(directory)
             while target > 1:

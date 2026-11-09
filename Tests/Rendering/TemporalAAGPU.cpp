@@ -3,17 +3,17 @@
 
 #include "GPUFixture.h"
 
-#include <Basalt/Animation/AnimatedModel.h>
-#include <Basalt/Animation/AnimationSystem.h>
-#include <Basalt/Asset/AssetManager.h>
-#include <Basalt/Renderer/DebugDraw.h>
-#include <Basalt/Renderer/RenderMath.h>
-#include <Basalt/Renderer/SceneRenderer.h>
-#include <Basalt/Renderer/ShaderUtils.h>
-#include <Basalt/Renderer/TemporalAA.h>
-#include <Basalt/Renderer/TemporalHistory.h>
-#include <Basalt/Scene/Entity.h>
-#include <Basalt/Scene/Scene.h>
+#include <Breccia/Animation/AnimatedModel.h>
+#include <Breccia/Animation/AnimationSystem.h>
+#include <Breccia/Asset/AssetManager.h>
+#include <Breccia/Renderer/DebugDraw.h>
+#include <Breccia/Renderer/RenderMath.h>
+#include <Breccia/Renderer/SceneRenderer.h>
+#include <Breccia/Renderer/ShaderUtils.h>
+#include <Breccia/Renderer/TemporalAA.h>
+#include <Breccia/Renderer/TemporalHistory.h>
+#include <Breccia/Scene/Entity.h>
+#include <Breccia/Scene/Scene.h>
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/packing.hpp>
@@ -24,7 +24,7 @@
 #include <map>
 #include <tuple>
 
-using namespace Basalt;
+using namespace Breccia;
 
 namespace {
 	std::vector<glm::vec4> ReadMotion(nvrhi::IDevice* device, SceneRenderer& renderer)
@@ -222,7 +222,7 @@ TEST_CASE("TAA previous clip coordinates match CPU skinning and morphing for eve
 	Populate(scene);
 	std::vector<Entity> rigs;
 	auto rig = scene.CreateEntity("Face and Teeth");
-	rig.AddComponent<AnimatorComponent>().Mesh = (std::filesystem::path(BASALT_ANIMATION_DATA_DIR) / (sharedSkin ? "MorphSharedSkin.gltf" : "Morph.gltf")).string();
+	rig.AddComponent<AnimatorComponent>().Mesh = (std::filesystem::path(BRECCIA_ANIMATION_DATA_DIR) / (sharedSkin ? "MorphSharedSkin.gltf" : "Morph.gltf")).string();
 	rigs.push_back(rig);
 	if (twoEntities)
 	{

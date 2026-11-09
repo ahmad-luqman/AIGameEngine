@@ -1,17 +1,17 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "GPUFixture.h"
 
-#include <Basalt/Asset/AssetManager.h>
-#include <Basalt/Asset/MaterialAsset.h>
-#include <Basalt/Asset/TextureCompression.h>
-#include <Basalt/Asset/ImageUtils.h>
-#include <Basalt/Core/FileSystem.h>
-#include <Basalt/Project/Project.h>
-#include <Basalt/Renderer/DebugDraw.h>
-#include <Basalt/Renderer/PreviewRenderer.h>
-#include <Basalt/Scene/Entity.h>
-#include <Basalt/Scene/Scene.h>
-#include <Basalt/Scene/SceneSerializer.h>
+#include <Breccia/Asset/AssetManager.h>
+#include <Breccia/Asset/MaterialAsset.h>
+#include <Breccia/Asset/TextureCompression.h>
+#include <Breccia/Asset/ImageUtils.h>
+#include <Breccia/Core/FileSystem.h>
+#include <Breccia/Project/Project.h>
+#include <Breccia/Renderer/DebugDraw.h>
+#include <Breccia/Renderer/PreviewRenderer.h>
+#include <Breccia/Scene/Entity.h>
+#include <Breccia/Scene/Scene.h>
+#include <Breccia/Scene/SceneSerializer.h>
 
 #include "../Source/TestUtils.h"
 #include "../Source/MeshTestUtils.h"
@@ -23,7 +23,7 @@
 #include <string>
 #include <utility>
 
-using namespace Basalt;
+using namespace Breccia;
 
 namespace {
 
@@ -57,7 +57,7 @@ namespace {
 	void Save(const ThumbnailImage& image, const char* name)
 	{
 		std::string error;
-		CHECK_MESSAGE(WritePng(std::filesystem::path(BASALT_PREVIEW_OUTPUT_DIR) / name, image.Pixels, image.Width, image.Height, error), error);
+		CHECK_MESSAGE(WritePng(std::filesystem::path(BRECCIA_PREVIEW_OUTPUT_DIR) / name, image.Pixels, image.Width, image.Height, error), error);
 	}
 
 	// The object fills the middle of the preview and the sky shows in the corners.
@@ -82,7 +82,7 @@ TEST_CASE("Previews frame models, prefabs and materials under the studio lightin
 {
 	auto graphics = CreateTestGraphics();
 	std::string error;
-	const Ref<Project> project = Project::Load(std::filesystem::path(BASALT_TEST_DATA_DIR) / "FeatureTest", error);
+	const Ref<Project> project = Project::Load(std::filesystem::path(BRECCIA_TEST_DATA_DIR) / "FeatureTest", error);
 	REQUIRE_MESSAGE(project, error);
 	Project::SetActive(project);
 
@@ -137,8 +137,8 @@ TEST_CASE("Previews frame models, prefabs and materials under the studio lightin
 	CHECK_FALSE(error.empty());
 	CHECK_FALSE(previews.RenderPrefab("Assets/Prefabs/Missing.bprefab", error));
 	// A prefab with nothing to draw says so (an absolute path: the test data stays untouched).
-	const std::filesystem::path empty = std::filesystem::path(BASALT_PREVIEW_OUTPUT_DIR) / "Empty.bprefab";
-	REQUIRE(FileSystem::WriteTextFile(empty, R"({"Format": "BasaltPrefab", "Version": 1, "Entities": [{"ID": 1, "Name": "Root", "Parent": 0, "Components": {}}]})", error));
+	const std::filesystem::path empty = std::filesystem::path(BRECCIA_PREVIEW_OUTPUT_DIR) / "Empty.bprefab";
+	REQUIRE(FileSystem::WriteTextFile(empty, R"({"Format": "BrecciaPrefab", "Version": 1, "Entities": [{"ID": 1, "Name": "Root", "Parent": 0, "Components": {}}]})", error));
 	CHECK_FALSE(previews.RenderPrefab(FileSystem::PathToUtf8(empty), error));
 	CHECK(error == "nothing to show (no meshes)");
 
@@ -151,7 +151,7 @@ TEST_CASE("Previews frame models, prefabs and materials under the studio lightin
 TEST_CASE("BC7 mip upload and material extensions render with validation")
 {
 	auto graphics = CreateTestGraphics();
-	BasaltTest::TempDirectory temp("MaterialExtensionsGPU");
+	BrecciaTest::TempDirectory temp("MaterialExtensionsGPU");
 	std::string error;
 	TextureSource source;
 	source.Width = 16;
@@ -236,13 +236,13 @@ TEST_CASE("BC7 mip upload and material extensions render with validation")
 TEST_CASE("Imported UV1 and texture rotation preserve normal orientation and alpha-mode coverage")
 {
 	auto graphics = CreateTestGraphics();
-	BasaltTest::TempDirectory temp("ImportedMaterialsGPU");
+	BrecciaTest::TempDirectory temp("ImportedMaterialsGPU");
 	const auto& root = temp.GetPath();
 	std::string error;
 	auto plane = Primitives::CreatePlane();
 	for (auto& vertex : plane->Vertices)
 		vertex.TexCoord1 = { 0.75f, 0.5f };
-	const auto path = BasaltTest::WriteSphereGltf(root, false, plane);
+	const auto path = BrecciaTest::WriteSphereGltf(root, false, plane);
 	const auto text = FileSystem::ReadTextFile(path);
 	REQUIRE(text);
 	auto model = nlohmann::json::parse(text.value_or("{}"));
@@ -342,7 +342,7 @@ TEST_CASE("Imported UV1 and texture rotation preserve normal orientation and alp
 TEST_CASE("Material files and imported materials preview losslessly on spheres")
 {
 	auto graphics = CreateTestGraphics();
-	BasaltTest::TempProject project("MaterialPreviewsGPU");
+	BrecciaTest::TempProject project("MaterialPreviewsGPU");
 	std::string error;
 	// Left half red, right half green: a UV offset of half the texture swaps them.
 	std::vector<uint8_t> split(size_t{ 16 } * 16 * 4, 255);
@@ -354,7 +354,7 @@ TEST_CASE("Material files and imported materials preview losslessly on spheres")
 	}
 	std::filesystem::create_directories(project.GetDirectory() / "Assets" / "Models");
 	REQUIRE(WritePng(project.GetDirectory() / "Assets" / "Models" / "split.png", split, 16, 16, error));
-	BasaltTest::WriteSphereGltf(project.GetDirectory() / "Assets" / "Models");
+	BrecciaTest::WriteSphereGltf(project.GetDirectory() / "Assets" / "Models");
 	const std::string model = "Assets/Models/Sphere.gltf";
 	auto gltf = nlohmann::json::parse(FileSystem::ReadTextFile(Project::ResolvePath(model)).value_or("{}"));
 	gltf["extensionsUsed"] = { "KHR_texture_transform" };

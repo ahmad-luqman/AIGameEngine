@@ -35,7 +35,7 @@ times = accessor([0,1,2],1,min=[0],max=[2])
 rotations = accessor([0,0,0,1,0,0,math.sqrt(.5),math.sqrt(.5),0,0,0,1],4)
 translations = accessor([0,0,0,2,0,0,0,0,0],3)
 cubic = accessor([0,0,0, 0,0,0, 2,0,0, 0,0,0, 2,0,0, 0,0,0, -2,0,0, 0,0,0, 0,0,0],3)
-model = dict(asset=dict(version='2.0',generator='Basalt test fixture'),
+model = dict(asset=dict(version='2.0',generator='Breccia test fixture'),
     buffers=[dict(byteLength=len(blob),uri='data:application/octet-stream;base64,'+base64.b64encode(blob).decode())],
     bufferViews=views,accessors=accessors,
     materials=[dict(name='Orange',doubleSided=True,pbrMetallicRoughness=dict(baseColorFactor=[1,.25,.05,1],metallicFactor=0,roughnessFactor=.6))],

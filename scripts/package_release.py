@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Builds Basalt's release archives from a Dist build (the release workflow runs it on each platform).
+"""Builds Breccia's release archives from a Dist build (the release workflow runs it on each platform).
 
   package_release.py --build <dir> --output <dir> [--samples Tetris,Breakout] [--skip-engine]
                      [--sign-identity <Developer ID> [--notarize <profile>]] [--require-universal]
@@ -9,9 +9,9 @@
   package_release.py --check-tag <tag>
 
 The first form writes, for the host platform:
-  Basalt-<version>-<platform>.zip|.tar.gz   editor, runtime and CLI (bin/), Docs/, Samples/, README.md, LICENSE; on macOS
+  Breccia-<version>-<platform>.zip|.tar.gz   editor, runtime and CLI (bin/), Docs/, Samples/, README.md, LICENSE; on macOS
                                             also the Vulkan loader and MoltenVK, so the tools run without the Vulkan SDK
-  Basalt-<version>-<Sample>-<platform>.*    each sample exported with project.export {"package": true, "archive": true}
+  Breccia-<version>-<Sample>-<platform>.*    each sample exported with project.export {"package": true, "archive": true}
                                             (its Assets in one Assets.bpak) and smoke-tested:
                                             a zipped .app, a zipped folder whose executable has icon and version
                                             resources, or an AppImage (an AppDir tarball when appimagetool is missing,
@@ -51,7 +51,7 @@ EXE = ".exe" if sys.platform == "win32" else ""
 SMOKE_TEST_FRAMES = 60
 # Sample files that are not part of a sample project (editor state, and replays the sample tests record).
 IGNORED = shutil.ignore_patterns("Cache", "Saved", "imgui.ini", "*.log", ".DS_Store")
-TOOLS = ("BasaltEditor", "BasaltRuntime", "basalt")
+TOOLS = ("BrecciaEditor", "BrecciaRuntime", "breccia")
 VULKAN_LIBRARIES = ("libvulkan.1.dylib", "libMoltenVK.dylib")
 # Mach-O CPU types (mach/machine.h).
 MACH_O_CPU_TYPES = {0x01000007: "x86_64", 0x0100000C: "arm64"}
@@ -66,7 +66,7 @@ def fail(message):
 
 
 def engine_version():
-    match = re.search(r"project\(Basalt\s+VERSION\s+([0-9.]+)", (ROOT / "CMakeLists.txt").read_text())
+    match = re.search(r"project\(Breccia\s+VERSION\s+([0-9.]+)", (ROOT / "CMakeLists.txt").read_text())
     if not match:
         fail("cannot find the project version in CMakeLists.txt")
     return match.group(1)
@@ -75,7 +75,7 @@ def engine_version():
 def mach_o_architectures(path):
     """The architectures of a 64-bit Mach-O file, thin or universal, sorted and unique; () for any other file. Slices
     are told apart by CPU type only (arm64e counts as arm64, other CPUs are cpu-0x...), as MachOArchitectures in
-    Basalt/Source/Basalt/Project/Packaging.cpp reads them: enough to compare 64-bit Apple code without lipo."""
+    Breccia/Source/Breccia/Project/Packaging.cpp reads them: enough to compare 64-bit Apple code without lipo."""
     with open(path, "rb") as file:
         header = file.read(8)
         if len(header) < 8:
@@ -164,7 +164,7 @@ def run_smoke(command, what, env):
 
 
 def run_cli(cli, project, command, params, env, prefix=()):
-    """Runs one basalt command and returns its result; fails with the command's error otherwise. prefix starts the CLI
+    """Runs one breccia command and returns its result; fails with the command's error otherwise. prefix starts the CLI
     (arch -x86_64)."""
     completed = run([*prefix, str(cli), "--project", str(project), command, json.dumps(params)], f"{project.name}: {command}", env=env, timeout=1800)
     # Log lines come first; the response is the last JSON object.
@@ -218,7 +218,7 @@ def archive(source, destination, gzip_level, host=sys.platform):
 
 def find_vulkan_libraries():
     """libvulkan.1.dylib and libMoltenVK.dylib, searched where the exporter looks for them after the runtime's own
-    directory (FindVulkanLibraries in Basalt/Source/Basalt/Project/Exporter.cpp): change both together."""
+    directory (FindVulkanLibraries in Breccia/Source/Breccia/Project/Exporter.cpp): change both together."""
     directories = ([Path(os.environ["VULKAN_SDK"], "lib")] if os.environ.get("VULKAN_SDK") else []) + [Path("/opt/homebrew/lib"), Path("/usr/local/lib")]
     found = []
     for name in VULKAN_LIBRARIES:
@@ -273,8 +273,8 @@ def start_tools(folder, target, env):
     project = folder / "Samples" / target.check_sample
     for prefix in [()] + ([("arch", "-x86_64")] if target.run_x86_64 else []):
         what = f"the packaged tools{' under Rosetta' if prefix else ''}"
-        run_cli(folder / "bin" / f"basalt{EXE}", project, "project.info", {}, env, prefix)
-        run_smoke([*prefix, str(folder / "bin" / f"BasaltRuntime{EXE}"), "--project", str(project)], f"{what}: BasaltRuntime", env)
+        run_cli(folder / "bin" / f"breccia{EXE}", project, "project.info", {}, env, prefix)
+        run_smoke([*prefix, str(folder / "bin" / f"BrecciaRuntime{EXE}"), "--project", str(project)], f"{what}: BrecciaRuntime", env)
         print(f"package_release: started {what}")
 
 
@@ -416,7 +416,7 @@ def main():
     if not samples:
         fail("Samples/ holds no project to package, or to start the packaged tools on")
 
-    cli = build / "bin" / f"basalt{EXE}"
+    cli = build / "bin" / f"breccia{EXE}"
     if not cli.is_file():
         fail(f"{cli} is missing (build the Dist configuration first)")
     architectures = mach_o_architectures(cli) if sys.platform == "darwin" else ()
@@ -440,11 +440,11 @@ def main():
     target = Target(platform=platform_name(cli), architectures=architectures, run_x86_64=architectures == UNIVERSAL and not problem,
                     check_sample=samples[0].name, windows_signing=windows_signing)
 
-    prefix = f"Basalt-{version}"
-    with tempfile.TemporaryDirectory(prefix="basalt-release-") as temp:
+    prefix = f"Breccia-{version}"
+    with tempfile.TemporaryDirectory(prefix="breccia-release-") as temp:
         stage = Path(temp)
         # Smoke tests save game data; keep it out of the user's (or the runner's) real data directory.
-        env = dict(os.environ, BASALT_USER_DATA_DIR=str(stage / "UserData"))
+        env = dict(os.environ, BRECCIA_USER_DATA_DIR=str(stage / "UserData"))
         files = [] if options.skip_engine else [package_engine(build, stage, output, f"{prefix}-{target.platform}", options, target, env)]
         for sample in samples:
             files.append(package_sample(cli, sample, stage, output, prefix, options, target, env))

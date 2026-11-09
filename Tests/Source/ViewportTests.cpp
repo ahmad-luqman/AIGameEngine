@@ -1,22 +1,22 @@
 #include <doctest/doctest.h>
 
-#include <Basalt/Animation/AnimationSystem.h>
-#include <Basalt/Asset/AssetManager.h>
-#include <Basalt/Automation/CommandSchema.h>
-#include <Basalt/Automation/EditorCommandSchemas.h>
-#include <Basalt/Automation/GameView.h>
-#include <Basalt/Automation/ViewportSettings.h>
-#include <Basalt/Project/Project.h>
-#include <Basalt/Scene/Entity.h>
-#include <Basalt/Scene/Scene.h>
-#include <Basalt/Scene/VertexSnap.h>
+#include <Breccia/Animation/AnimationSystem.h>
+#include <Breccia/Asset/AssetManager.h>
+#include <Breccia/Automation/CommandSchema.h>
+#include <Breccia/Automation/EditorCommandSchemas.h>
+#include <Breccia/Automation/GameView.h>
+#include <Breccia/Automation/ViewportSettings.h>
+#include <Breccia/Project/Project.h>
+#include <Breccia/Scene/Entity.h>
+#include <Breccia/Scene/Scene.h>
+#include <Breccia/Scene/VertexSnap.h>
 
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <limits>
 #include <utility>
 
-using namespace Basalt;
+using namespace Breccia;
 
 TEST_CASE("Viewport preferences validate patches atomically and retain independent overlay switches")
 {
@@ -144,7 +144,7 @@ TEST_CASE("Vertex snapping follows the current skinned pose and skips vertices w
 {
 	Scene scene;
 	auto rig = scene.CreateEntity("Rig");
-	const std::string path = std::string(BASALT_TEST_DATA_DIR) + "/Animation/TwoJoint.gltf";
+	const std::string path = std::string(BRECCIA_TEST_DATA_DIR) + "/Animation/TwoJoint.gltf";
 	rig.AddComponent<AnimatorComponent>().Mesh = path;
 	const auto vp = glm::orthoRH_ZO(-2.0f, 2.0f, -2.0f, 2.0f, .1f, 10.0f) * glm::lookAtRH(glm::vec3(0, 1, 4), glm::vec3(0, 1, 0), glm::vec3(0, 1, 0));
 	const auto rest = FindViewportVertex(rig, vp, { 200, 200 }, { 112.5f, 50 });

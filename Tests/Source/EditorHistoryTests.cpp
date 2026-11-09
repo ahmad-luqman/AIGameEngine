@@ -1,12 +1,12 @@
 #include "EditorContext.h"
 
-#include <Basalt/Automation/AutomationSession.h>
-#include <Basalt/Automation/CommandRegistry.h>
-#include <Basalt/Automation/EditorHistory.h>
-#include <Basalt/Automation/EditorSelection.h>
-#include <Basalt/Scene/Entity.h>
-#include <Basalt/Scene/Scene.h>
-#include <Basalt/Scene/SceneSerializer.h>
+#include <Breccia/Automation/AutomationSession.h>
+#include <Breccia/Automation/CommandRegistry.h>
+#include <Breccia/Automation/EditorHistory.h>
+#include <Breccia/Automation/EditorSelection.h>
+#include <Breccia/Scene/Entity.h>
+#include <Breccia/Scene/Scene.h>
+#include <Breccia/Scene/SceneSerializer.h>
 
 #include <doctest/doctest.h>
 #include <imgui.h>
@@ -14,7 +14,7 @@
 
 #include <algorithm>
 
-using namespace Basalt;
+using namespace Breccia;
 using json = nlohmann::json;
 
 namespace {

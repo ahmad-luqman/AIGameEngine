@@ -1978,7 +1978,7 @@
 			"Parent": 12533516552199215476
 		}
 	],
-	"Format": "BasaltScene",
+	"Format": "BrecciaScene",
 	"Name": "FirstPerson",
 	"Physics": {
 		"Gravity": [

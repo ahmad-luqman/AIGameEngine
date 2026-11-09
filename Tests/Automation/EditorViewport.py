@@ -31,13 +31,13 @@ def require(value, message):
 def main():
     editor, cli, output = map(lambda value: str(Path(value).resolve()), sys.argv[1:4])
     Path(output).mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="BasaltViewport-") as temp:
+    with tempfile.TemporaryDirectory(prefix="BrecciaViewport-") as temp:
         created = subprocess.run([cli, "project.create", json.dumps({"path": temp})], capture_output=True, text=True, timeout=30)
         require(created.returncode == 0, created.stderr)
         with socket.socket() as reserve:
             reserve.bind(("127.0.0.1", 0))
             port = reserve.getsockname()[1]
-        env = dict(os.environ, BASALT_USER_DATA_DIR=str(Path(temp, "UserData")))
+        env = dict(os.environ, BRECCIA_USER_DATA_DIR=str(Path(temp, "UserData")))
         log_path = Path(output, "editor.log")
         with log_path.open("w") as log:
             process = subprocess.Popen([editor, "--project", temp, "--port", str(port)], cwd=temp, stdout=log, stderr=log, env=env)

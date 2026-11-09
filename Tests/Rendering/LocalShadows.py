@@ -2,7 +2,7 @@
 """GPU regressions for cube faces, spots, three shadow switches, PCF, masks and off-camera casters.
 Also checks atlas lifetime/budgets, invalid transforms, moving casters, bias and feature-scene coverage.
 
-Uses only Python's standard library and basalt image.compare, so the same assertions run on MoltenVK
+Uses only Python's standard library and breccia image.compare, so the same assertions run on MoltenVK
 and lavapipe. Generated projects and renders live in the build tree; no source assets are modified.
 """
 import argparse
@@ -162,7 +162,7 @@ def main():
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     (args.output / 'Project.bproject').write_text(json.dumps({
-        'Format': 'BasaltProject', 'Name': 'LocalShadows', 'StartScene': 'Scene.bscene'
+        'Format': 'BrecciaProject', 'Name': 'LocalShadows', 'StartScene': 'Scene.bscene'
     }))
 
     def render(name, scene, expected_maps=None, expected_atlas=None, project=None, frames=6, size=256):
@@ -229,7 +229,7 @@ def main():
                 'Transform': {'Translation': [-3, 2, 4]},
                 'PointLight': {'Color': [0, 0, 0], 'Intensity': 1, 'Radius': 100, 'CastShadows': True}}}
         ]
-        scene = {'Format': 'BasaltScene', 'Version': 1, 'Name': 'LocalShadows',
+        scene = {'Format': 'BrecciaScene', 'Version': 1, 'Name': 'LocalShadows',
                  'Renderer': {'AmbientColor': [0, 0, 0], 'SSAOEnabled': False, 'ShadowsEnabled': True}, 'Entities': entities}
         name = f'{kind}_{case}'
         shadow = render(name, scene, 12 if case < 6 else 7, 4096)

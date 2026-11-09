@@ -3,8 +3,8 @@
 // counts as a crash: stb asserts on input it cannot handle, so any assertion is input the check let through.
 #include "FuzzCommon.h"
 
-#include <Basalt/UI/TrueTypeValidator.h>
-#include <Basalt/UI/UIFonts.h>
+#include <Breccia/UI/TrueTypeValidator.h>
+#include <Breccia/UI/UIFonts.h>
 
 #include <imgui.h>
 
@@ -14,8 +14,8 @@
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 {
-	BasaltFuzz::Init();
-	if (size > Basalt::MaxTrueTypeFontSize)
+	BrecciaFuzz::Init();
+	if (size > Breccia::MaxTrueTypeFontSize)
 		return 0;
 
 	const std::vector<uint8_t> font(data, data + size);
@@ -26,7 +26,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 	io.IniFilename = nullptr;
 
 	std::string error;
-	if (ImFont* loaded = Basalt::UIFonts::LoadFromMemory(font, "fuzz", error))
+	if (ImFont* loaded = Breccia::UIFonts::LoadFromMemory(font, "fuzz", error))
 	{
 		// Letters, digits and punctuation, plus a few characters chosen by the input, at a size ImGui
 		// oversamples and one it does not. (More glyphs and sizes mostly repeat the same rasterizer work.)
@@ -45,7 +45,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 		const char* text = "The quick brown fox\njumps over the lazy dog";
 		loaded->CalcTextSizeA(24.0f, FLT_MAX, 120.0f, text);
 	}
-	Basalt::UIFonts::Clear();
+	Breccia::UIFonts::Clear();
 	ImGui::DestroyContext();
 	return 0;
 }

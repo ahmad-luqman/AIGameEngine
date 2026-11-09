@@ -1,6 +1,6 @@
-# Basalt Roadmap
+# Breccia Roadmap
 
-This file states what Basalt is for and lists what it does not do yet, ordered by priority, with enough detail to start
+This file states what Breccia is for and lists what it does not do yet, ordered by priority, with enough detail to start
 work on any item. It follows the maturity assessment in `Docs/MaturityAssessment.md` (7 November 2026, `main` @
 `4f823ab`) and the defect fixes that landed after it (PR #74). The scope and the order of the top tiers were settled on
 8 November 2026. Every item follows the normal workflow in AGENTS.md: unit tests, feature-test coverage for anything
@@ -14,7 +14,7 @@ single-session milestones). Run each milestone as one long autonomous session at
 
 ## Scope
 
-**Basalt is a desktop 3D engine built for agent-driven development.** This statement is the authoritative one; the
+**Breccia is a desktop 3D engine built for agent-driven development.** This statement is the authoritative one; the
 README and AGENTS.md lead with it. Its parts mean:
 
 - **Desktop:** games for Windows, macOS and Linux, authored on the same three. Desktop is where every roadmap item
@@ -35,7 +35,7 @@ What that settles:
 | 2D pipeline (sprites, tilemaps, 2D physics) | Not planned, not ruled out. 2D-style games can be made from 3D scenes today. |
 | Consoles (PlayStation, Xbox, Switch) | **Non-goal.** Platform SDKs are under NDA and cannot live in an open MIT repository, and a one-developer project cannot carry the certification work. Even Godot reaches consoles only through third parties. |
 
-**Status words.** Basalt is early alpha: version 0.1.0, no tagged release, no external users and no shipped game. The
+**Status words.** Breccia is early alpha: version 0.1.0, no tagged release, no external users and no shipped game. The
 code is held to production standards (the tests, fuzzing, sanitizers and pinned determinism in AGENTS.md); "production
 ready" is a claim for after P1.
 
@@ -68,10 +68,10 @@ Multiplayer is the first new system. Two sessions build the layer; a sample prov
   session (candidates: ENet, yojimbo, GameNetworkingSockets) by: builds on all three CI platforms without system
   packages, encryption or a path to it, and a small surface to fuzz. Every packet is untrusted input: parse with
   bounds-checked readers and add a `Tests/Fuzz` target (`FuzzNetPacket`).
-- **Model.** Client-server with an authoritative host: a listen server inside a playing game, or `BasaltRuntime
+- **Model.** Client-server with an authoritative host: a listen server inside a playing game, or `BrecciaRuntime
   --headless` as a dedicated server (it already runs the full game loop without a GPU). Connections, timeouts,
   disconnect reasons and a protocol version check.
-- **Replication.** A component (via the `basalt-add-component` skill) that marks an entity as networked, with owner and
+- **Replication.** A component (via the `breccia-add-component` skill) that marks an entity as networked, with owner and
   authority. Replicated fields are declared through `ComponentRegistry`, keeping the one data path, but sent in a compact
   binary encoding with snapshot deltas, not as JSON. Spawns and despawns of networked entities and prefabs, entity
   identity across peers (runtime UUIDs are already seeded per session), and a per-connection bandwidth budget.
@@ -81,7 +81,7 @@ Multiplayer is the first new system. Two sessions build the layer; a sample prov
 ### Networking II: gameplay API, prediction and tools — L
 - **Lua.** A `Network` API: host, connect and disconnect; connection events; reliable and unreliable messages and RPCs
   that target the server, an owner or all clients; authority queries. Update `Docs/ScriptingAPI.md` and
-  `Docs/basalt.d.lua`, and add `Check`s to the feature test.
+  `Docs/breccia.d.lua`, and add `Check`s to the feature test.
 - **Prediction and interpolation.** Client-side prediction with reconciliation for character controllers, interpolation
   of remote entities between snapshots (this also needs the fixed-step interpolation listed in P2), and lag compensation
   for raycasts.
@@ -100,7 +100,7 @@ and asserts on the outcome. It goes in `Samples/` like the others.
 ## P1 — Release and proof
 
 These close the gap between "works on the developer's machine" and an engine other people can use, and test the
-agent claim that is Basalt's reason to exist.
+agent claim that is Breccia's reason to exist.
 
 ### Release v0.1.0 — M
 - Binary downloads of the editor, runtime and CLI from the existing release pipeline (signed once its certificates are
@@ -111,7 +111,7 @@ agent claim that is Basalt's reason to exist.
   `main`.
 - Third-party notices in exported games (the licenses of the libraries an export links), so exports meet those
   licenses.
-- The name collision with the unrelated "Basalt" from The Cherno's video: decide before the release whether the name
+- The name collision with the unrelated "Breccia" from The Cherno's video: decide before the release whether the name
   stays.
 
 ### Agent sight and parity — M
@@ -123,9 +123,9 @@ agent claim that is Basalt's reason to exist.
   PR #74 closed non-JSON connections but added no authentication.
 
 ### Agent benchmark — M
-Run a CEGame-Bench-style task set (game tasks scored by automated checks) through Basalt, and the same tasks through
+Run a CEGame-Bench-style task set (game tasks scored by automated checks) through Breccia, and the same tasks through
 Godot and Unity, with the same agent. Publish the tasks, the harness and the results. This is the only way to know
-whether the agent-first design works; no agent outside this repository has used Basalt yet.
+whether the agent-first design works; no agent outside this repository has used Breccia yet.
 
 ### One real game — L (2–4 weeks)
 About 30 minutes of content with real art and characters, built mostly by an agent, exported and packaged on all three
@@ -176,7 +176,7 @@ frame and growing linearly. Fix that before adding rendering features.
 - **Lua stack traces — S.** Script errors carry file and line but no call stack; add `traceback` to the error path for
   every protected call, in the log, `events.*` and the editor console.
 - **Lua profiler — M.** Per-script and per-callback time in the stats overlay and an automation command; Tracy zones
-  when `BASALT_PROFILE` is on.
+  when `BRECCIA_PROFILE` is on.
 - **Lua debugger — L.** A Debug Adapter Protocol server in the editor (breakpoints, stepping, locals), usable from VS Code
   and by agents through the same protocol.
 - **Editor search, copy/paste, file drop, rename and move — M.** Hierarchy and content-browser search; entity copy and
@@ -189,7 +189,7 @@ frame and growing linearly. Fix that before adding rendering features.
 
 ## P4 — Rendering
 
-Basalt's core (clustered PBR, cascaded shadows, SSAO, TAA, bloom) matches its peers; everything above it is missing.
+Breccia's core (clustered PBR, cascaded shadows, SSAO, TAA, bloom) matches its peers; everything above it is missing.
 Custom shaders come first because teams cannot work around their absence.
 
 - **Custom shaders — L.** User materials with their own GLSL fragment code against a documented interface (inputs,
