@@ -93,4 +93,21 @@ namespace Basalt {
 	// Windows (false with a reason elsewhere).
 	bool WriteWindowsResources(const std::filesystem::path& executable, const PackageInfo& info, const IconImage* icon, std::string& outError);
 
+	// What RemoveAuthenticodeSignature found in a Windows executable.
+	enum class SignatureRemoval : uint8_t
+	{
+		// It had no signature, and its bytes are unchanged.
+		Unsigned,
+		// Its certificate table was cut off, and the table's directory entry and the header checksum were cleared.
+		Removed
+	};
+	// Removes the Authenticode signature of a Windows executable (PE32 or PE32+) in place. The exporter strips it from
+	// the runtime it copies: a release's runtime is signed by Basalt's publisher, while the game is its developer's to
+	// sign (scripts/sign-windows.py), and rewriting resources would leave a broken signature behind. nullopt, with the
+	// reason, when the bytes are not such an executable or its certificate table lies where no signing tool puts one
+	// (anywhere but the end of the file, past the headers, followed by nothing but zero padding).
+	std::optional<SignatureRemoval> RemoveAuthenticodeSignature(std::vector<uint8_t>& image, std::string& outError);
+	// RemoveAuthenticodeSignature on a file, which is rewritten only when it was signed.
+	std::optional<SignatureRemoval> RemoveAuthenticodeSignature(const std::filesystem::path& executable, std::string& outError);
+
 }

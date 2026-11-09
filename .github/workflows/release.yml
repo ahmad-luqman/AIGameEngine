@@ -1,10 +1,11 @@
 name: Release
 
-# A v<version> tag builds Dist on every platform, packages the tools and the samples (scripts/package_release.py) and
-# publishes them as a GitHub release. Pull requests that change the main inputs of the packages (the workflow, the shared
-# setup action and the CI scripts it and this workflow run, the packaging scripts, the Project module, the runtime, the
-# Process, Window, VulkanLoader, PackArchive and CrashReporter sources, the samples), and manual runs, do everything except
-# publishing, so the pipeline is tested before a tag needs it.
+# A v<version> tag builds Dist on every platform (universal, arm64 + x86_64, on macOS), packages the tools and the
+# samples (scripts/package_release.py), signs them when the signing secrets are set (Docs/Shipping.md) and publishes them
+# as a GitHub release. Pull requests that change the main inputs of the packages (the workflow, the shared setup action
+# and the CI scripts it and this workflow run, the packaging and signing scripts, the top-level CMakeLists.txt (the macOS
+# deployment target), the Project module, the runtime, the Process, Window, VulkanLoader, PackArchive and CrashReporter
+# sources, the samples), and manual runs, do everything except publishing, so the pipeline is tested before a tag needs it.
 on:
   push:
     tags: [ 'v*' ]
@@ -15,6 +16,8 @@ on:
       - scripts/ci-*.sh
       - scripts/package_release.py
       - scripts/sign-macos.sh
+      - scripts/sign-windows.py
+      - CMakeLists.txt
       - Basalt/Source/Basalt/Project/**
       - Basalt/Source/Basalt/Core/Process.*
       - Basalt/Source/Basalt/Core/Window.*
@@ -54,13 +57,11 @@ jobs:
         shell: bash
         run: python scripts/package_release.py --check-tag "$GITHUB_REF_NAME"
 
-      # Build tools and dependency sources; on macOS also the Vulkan loader and MoltenVK, which the exported .app and the
-      # macOS tools archive bundle.
+      # Build tools and dependency sources. The Vulkan loader and MoltenVK that macOS packages bundle are built universal
+      # after the build (Homebrew's hold one architecture).
       - name: Set up the build tools
         timeout-minutes: 30
         uses: ./.github/actions/setup-basalt
-        with:
-          brew-packages: vulkan-loader molten-vk
 
       # Pinned and checksummed. The type2 runtime is passed explicitly; appimagetool would otherwise download the
       # latest one while it builds each AppImage.
@@ -78,9 +79,14 @@ jobs:
           chmod +x "$tools/appimagetool-pinned"
           echo "APPIMAGETOOL=$tools/appimagetool-pinned" >> "$GITHUB_ENV"
 
-      # Dist: optimized, no asserts. The tests run in CI on every push; here the samples' smoke tests check the build.
+      # Dist: optimized, no asserts. The tests run in CI on every push; here the samples' smoke tests check the build. macOS
+      # builds both architectures into each binary (package_release.py --require-universal checks).
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Dist -DBASALT_BUILD_TESTS=OFF -DBASALT_CHECK_FORMAT=OFF
+        shell: bash
+        run: |
+          arguments=(-S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Dist -DBASALT_BUILD_TESTS=OFF -DBASALT_CHECK_FORMAT=OFF)
+          [[ "$RUNNER_OS" == "macOS" ]] && arguments+=("-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64")
+          cmake "${arguments[@]}"
 
       - name: Check that the build uses the caches
         shell: bash
@@ -89,8 +95,17 @@ jobs:
       - name: Build
         run: cmake --build build -- -k 0
 
-      # With a Developer ID in the repository secrets, the macOS samples are signed and notarized; otherwise they are
-      # signed ad hoc (and a tag release says so). MACOS_CERTIFICATE is a base64 .p12 of the "Developer ID
+      # After the build, so nothing in it sees VULKAN_SDK. The exporter and package_release.py take the libraries from it.
+      - name: Build universal Vulkan libraries (macOS)
+        if: runner.os == 'macOS'
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          scripts/ci-universal-vulkan.sh "$RUNNER_TEMP/vulkan"
+          echo "VULKAN_SDK=$RUNNER_TEMP/vulkan" >> "$GITHUB_ENV"
+
+      # With a Developer ID in the repository secrets, the macOS tools and samples are signed and notarized; otherwise they
+      # are signed ad hoc (and a tag release says so). MACOS_CERTIFICATE is a base64 .p12 of the "Developer ID
       # Application" certificate; the other five secrets (Docs/Shipping.md) must be set with it.
       - name: Import the signing certificate (macOS)
         if: runner.os == 'macOS'
@@ -105,9 +120,9 @@ jobs:
         run: |
           if [[ -z "$MACOS_CERTIFICATE" ]]; then
             if [[ "$GITHUB_REF" == refs/tags/* ]]; then
-              echo "::warning::No MACOS_CERTIFICATE secret: the macOS samples are signed ad hoc, and Gatekeeper blocks them on other Macs."
+              echo "::warning::No MACOS_CERTIFICATE secret: the macOS tools and samples are signed ad hoc, and Gatekeeper blocks them on other Macs."
             else
-              echo "No MACOS_CERTIFICATE secret: the samples are signed ad hoc."
+              echo "No MACOS_CERTIFICATE secret: the tools and samples are signed ad hoc."
             fi
             exit 0
           fi
@@ -130,16 +145,60 @@ jobs:
           xcrun notarytool store-credentials basalt-notary --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --keychain "$keychain"
           echo "SIGN_IDENTITY=$MACOS_SIGNING_IDENTITY" >> "$GITHUB_ENV"
 
+      # With a code signing certificate in the repository secrets, the Windows tools and samples are signed with signtool
+      # (scripts/sign-windows.py) and timestamped; otherwise they are not signed (and a tag release says so).
+      # WINDOWS_CERTIFICATE is a base64 .pfx with its private key, WINDOWS_CERTIFICATE_PASSWORD its password. It goes into
+      # the runner's certificate store, from which signtool takes it by thumbprint, so the password reaches no command line.
+      - name: Import the signing certificate (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          if (-not $env:WINDOWS_CERTIFICATE) {
+            if ($env:GITHUB_REF -like 'refs/tags/*') {
+              Write-Output "::warning::No WINDOWS_CERTIFICATE secret: the Windows tools and samples are not signed, and SmartScreen warns about them."
+            } else {
+              Write-Output "No WINDOWS_CERTIFICATE secret: the tools and samples are not signed."
+            }
+            exit 0
+          }
+          if (-not $env:WINDOWS_CERTIFICATE_PASSWORD) {
+            Write-Output "::error::WINDOWS_CERTIFICATE is set but the WINDOWS_CERTIFICATE_PASSWORD secret is not (Docs/Shipping.md)."
+            exit 1
+          }
+          $pfx = Join-Path $env:RUNNER_TEMP 'certificate.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+          try {
+            $password = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+            # A .pfx may carry its issuers too; the signing certificate is the one with the private key.
+            $certificate = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password |
+              Where-Object { $_.HasPrivateKey } | Select-Object -First 1
+          } finally {
+            Remove-Item $pfx
+          }
+          if (-not $certificate) {
+            Write-Output "::error::WINDOWS_CERTIFICATE holds no certificate with a private key."
+            exit 1
+          }
+          "WINDOWS_CERTIFICATE_THUMBPRINT=$($certificate.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
       - name: Package
         shell: bash
         run: |
           arguments=(--build build --output dist)
           [[ "$RUNNER_OS" == "Linux" ]] && arguments+=(--require-appimage)
+          [[ "$RUNNER_OS" == "macOS" ]] && arguments+=(--require-universal)
           [[ -n "${SIGN_IDENTITY:-}" ]] && arguments+=(--sign-identity "$SIGN_IDENTITY" --notarize basalt-notary)
+          [[ -n "${WINDOWS_CERTIFICATE_THUMBPRINT:-}" ]] && arguments+=(--windows-certificate "$WINDOWS_CERTIFICATE_THUMBPRINT")
           python scripts/package_release.py "${arguments[@]}"
           # The publish job adds these notes to the release.
           if [[ "$RUNNER_OS" == "macOS" && -z "${SIGN_IDENTITY:-}" ]]; then
-            echo "The macOS samples are signed ad hoc, not with a Developer ID: macOS blocks them until you allow them in System Settings > Privacy & Security." > dist/NOTES-macos.md
+            echo "The macOS tools and samples are signed ad hoc, not with a Developer ID: macOS blocks them until you allow them in System Settings > Privacy & Security." > dist/NOTES-macos.md
+          fi
+          if [[ "$RUNNER_OS" == "Windows" && -z "${WINDOWS_CERTIFICATE_THUMBPRINT:-}" ]]; then
+            echo "The Windows tools and samples are not signed: SmartScreen warns before they first run (More info > Run anyway)." > dist/NOTES-windows.md
           fi
           ls -l dist
 
@@ -170,7 +229,7 @@ jobs:
         run: |
           cat dist/SHA256SUMS-*.txt > dist/SHA256SUMS.txt
           rm dist/SHA256SUMS-*.txt
-          # Platform notes (unsigned macOS samples) come before the generated notes.
+          # Platform notes (unsigned or ad hoc signed packages) come before the generated notes.
           cat dist/NOTES-*.md > "$RUNNER_TEMP/notes.md" 2>/dev/null || true
           rm -f dist/NOTES-*.md
           gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "Basalt ${GITHUB_REF_NAME#v}" --notes-file "$RUNNER_TEMP/notes.md" --generate-notes --verify-tag

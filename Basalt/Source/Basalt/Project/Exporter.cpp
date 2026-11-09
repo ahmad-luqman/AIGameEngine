@@ -473,12 +473,15 @@ namespace Basalt {
 			std::filesystem::path MoltenVK;
 		};
 
-		// The Vulkan loader and MoltenVK to ship. scripts/package_release.py searches the same places for the tools archive.
-		bool FindVulkanLibraries(VulkanLibraries& outLibraries, std::string& outError)
+		// The Vulkan loader and MoltenVK to ship. scripts/package_release.py searches the same places for the tools archive,
+		// except the runtime's own directory: the tools archive holds both libraries next to the runtime (built for every
+		// architecture the runtime is, and signed along with it), so an export from it needs no Vulkan SDK.
+		bool FindVulkanLibraries(const std::filesystem::path& runtimeDirectory, VulkanLibraries& outLibraries, std::string& outError)
 		{
 			std::vector<std::filesystem::path> searchDirectories;
 			if (const auto sdk = Platform::GetEnvVar("VULKAN_SDK"))
 				searchDirectories.emplace_back(FileSystem::PathFromUtf8(*sdk) / "lib");
+			searchDirectories.push_back(runtimeDirectory);
 			searchDirectories.emplace_back("/opt/homebrew/lib");
 			searchDirectories.emplace_back("/usr/local/lib");
 			auto find = [&](const char* fileName) -> std::filesystem::path {
@@ -492,7 +495,7 @@ namespace Basalt {
 			outLibraries = { find(LoaderFileName), find(MoltenVKFileName) };
 			if (outLibraries.Loader.empty() || outLibraries.MoltenVK.empty())
 			{
-				outError = "cannot find libvulkan.1.dylib and libMoltenVK.dylib (install the Vulkan SDK or Homebrew vulkan-loader + molten-vk)";
+				outError = "cannot find libvulkan.1.dylib and libMoltenVK.dylib next to the runtime or in the Vulkan SDK (install it, or Homebrew vulkan-loader + molten-vk)";
 				return false;
 			}
 			return true;
@@ -533,6 +536,28 @@ namespace Basalt {
 			{
 				outError = "cannot write the MoltenVK ICD manifest: " + outError;
 				return false;
+			}
+			return true;
+		}
+
+		// Signs an export ad hoc, in the order given: nested code first, then the executable or the bundle that seals it. A
+		// release's runtime carries Basalt's Developer ID with the hardened runtime, whose library validation refuses Vulkan
+		// libraries signed by anyone else (the SDK's, Homebrew's), and which would name Basalt's publisher as the game's.
+		// An ad hoc signature names no one and checks no libraries; scripts/sign-macos.sh replaces it with the developer's.
+		bool SignAdHoc(std::initializer_list<std::filesystem::path> code, std::string& outError)
+		{
+			for (const std::filesystem::path& path : code)
+			{
+				ProcessSpec spec;
+				// Part of macOS itself, not of the developer tools.
+				spec.Executable = "/usr/bin/codesign";
+				spec.Arguments = { "--force", "--sign", "-", FileSystem::PathToUtf8(path) };
+				const ProcessResult run = RunProcess(spec);
+				if (!run.Succeeded())
+				{
+					outError = "codesign could not sign '" + FileSystem::PathToUtf8(path) + "' (" + (run.Error.empty() ? "exit code " + std::to_string(run.ExitCode) : run.Error) + "): " + run.Output;
+					return false;
+				}
 			}
 			return true;
 		}
@@ -795,7 +820,7 @@ namespace Basalt {
 		}
 #if defined(BS_PLATFORM_MACOS)
 		VulkanLibraries vulkan;
-		if (!FindVulkanLibraries(vulkan, result.Error))
+		if (!FindVulkanLibraries(runtime.parent_path(), vulkan, result.Error))
 			return result;
 #endif
 
@@ -857,13 +882,17 @@ namespace Basalt {
 #if defined(BS_PLATFORM_MACOS)
 		if (options.Package)
 		{
-			if (!BundleMoltenVK(vulkan, package / "Contents" / "Frameworks", projectDirectory, result.Error) || !FinishAppBundle(package, *info, icon, result.Error))
+			const std::filesystem::path frameworks = package / "Contents" / "Frameworks";
+			if (!BundleMoltenVK(vulkan, frameworks, projectDirectory, result.Error) || !FinishAppBundle(package, *info, icon, result.Error) || !SignAdHoc({ frameworks / LoaderFileName, frameworks / MoltenVKFileName, package }, result.Error))
 				return fail();
 			packagePath = package;
 		}
-		else if (!BundleMoltenVK(vulkan, output, output, result.Error))
+		else if (!BundleMoltenVK(vulkan, output, output, result.Error) || !SignAdHoc({ output / LoaderFileName, output / MoltenVKFileName, executable }, result.Error))
 			return fail();
 #elif defined(BS_PLATFORM_WINDOWS)
+		// Before the resources are rewritten, which would leave a broken signature (see RemoveAuthenticodeSignature).
+		if (!RemoveAuthenticodeSignature(executable, result.Error))
+			return fail();
 		if (options.Package && !WriteWindowsResources(executable, *info, icon ? &*icon : nullptr, result.Error))
 			return fail();
 #elif defined(BS_PLATFORM_LINUX)

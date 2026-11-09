@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import platform
 import plistlib
+import re
 import shutil
 import struct
 import subprocess
@@ -55,6 +56,19 @@ def check_manifest(manifest, library):
     """A MoltenVK ICD manifest whose library path, relative to the manifest, reaches the bundled library."""
     path = json.loads(Path(manifest).read_text())["ICD"]["library_path"]
     require((Path(manifest).parent / path).resolve() == Path(library).resolve(), f"{manifest} names {path}, not {library}")
+
+
+def code_signature(path):
+    """codesign's description of a file's signature (its CodeDirectory flags among it); fails when it does not verify."""
+    verified = subprocess.run(["codesign", "--verify", "--strict", str(path)], capture_output=True, text=True)
+    require(verified.returncode == 0, f"{path} is not validly signed: {verified.stderr}")
+    return subprocess.run(["codesign", "-dv", str(path)], capture_output=True, text=True).stderr
+
+
+def check_ad_hoc(path):
+    """Signed ad hoc, without the hardened runtime: what the exporter leaves for the developer to sign."""
+    signature = code_signature(path)
+    require("flags=0x2(adhoc)" in signature, f"{path} is not signed ad hoc without the hardened runtime: {signature}")
 
 
 def check_windows_resources(executable, has_icon):
@@ -118,6 +132,11 @@ def check_package(exported, output, has_icon=True):
             require((contents / relative).is_file(), f"the bundle has no Contents/{relative}")
         # The manifest must reach MoltenVK in Frameworks from Resources (VulkanLoader finds the loader in ../Frameworks).
         check_manifest(contents / "Resources" / "vulkan" / "icd.d" / "MoltenVK_icd.json", contents / "Frameworks" / "libMoltenVK.dylib")
+        # The exporter signs the bundle ad hoc, sealing its resources; its own platform minimum is stated.
+        check_ad_hoc(package)
+        verified = subprocess.run(["codesign", "--verify", "--deep", "--strict", str(package)], capture_output=True, text=True)
+        require(verified.returncode == 0, f"the exported bundle does not verify: {verified.stderr}")
+        require(re.fullmatch(r"\d+\.\d+(\.\d+)?", info.get("LSMinimumSystemVersion", "")), f"LSMinimumSystemVersion: {info}")
         if not has_icon:
             return
         if shutil.which("iconutil"):
@@ -150,6 +169,28 @@ def check_package(exported, output, has_icon=True):
         else:
             architecture = "aarch64" if platform.machine().lower() in ("aarch64", "arm64") else "x86_64"
             require(package == output / f"Smoke_Game-2.5.0.7-{architecture}.AppImage" and package.is_file(), f"no AppImage: {exported}")
+
+
+def check_hardened_runtime(cli, project, temp, env):
+    """A release's runtime carries the hardened runtime (here signed ad hoc with it, as no Developer ID is at hand), whose
+    library validation would refuse the Vulkan libraries an export bundles: the export signs its copy ad hoc again. Next to
+    a runtime that has the libraries (the tools archive's layout) and without VULKAN_SDK, the export takes those."""
+    tools = temp / "Hardened Tools"
+    tools.mkdir()
+    shutil.copy2(cli, tools / cli.name)
+    shutil.copy2(cli.parent / "BasaltRuntime", tools / "BasaltRuntime")
+    hardened = subprocess.run(["codesign", "--force", "--sign", "-", "--options", "runtime", str(tools / "BasaltRuntime")], capture_output=True, text=True)
+    require(hardened.returncode == 0 and "runtime" in code_signature(tools / "BasaltRuntime"), f"cannot give the runtime the hardened runtime: {hardened.stderr}")
+    for name in ("libvulkan.1.dylib", "libMoltenVK.dylib"):
+        (tools / name).write_text(f"{name} next to the runtime")
+    output = temp / "Hardened Export"
+    exported = subprocess.run([str(tools / cli.name), "--project", str(project), "project.export", json.dumps({"output": str(output)})],
+                              capture_output=True, text=True, timeout=300, env={key: value for key, value in env.items() if key != "VULKAN_SDK"})
+    response = json.loads(exported.stdout[exported.stdout.find("{"):])
+    require(response.get("ok"), f"export from a hardened runtime: {response}")
+    check_ad_hoc(Path(response["result"]["executable"]))
+    for name in ("libvulkan.1.dylib", "libMoltenVK.dylib"):
+        require((output / name).read_text() == f"{name} next to the runtime", f"{name} did not come from the runtime's folder")
 
 
 def main():
@@ -221,8 +262,12 @@ def main():
         (project / "Assets" / "Scripts" / "Spin.lua").write_text(HANGING_SCRIPT)
         ok("project.export", {"output": str(output)})
         if sys.platform == "darwin":
-            # A folder export's manifest reaches the MoltenVK next to the executable.
+            # A folder export's manifest reaches the MoltenVK next to the executable, and its code is signed ad hoc.
             check_manifest(output / "vulkan" / "icd.d" / "MoltenVK_icd.json", output / "libMoltenVK.dylib")
+            for code in (executable, output / "libvulkan.1.dylib", output / "libMoltenVK.dylib"):
+                code_signature(code)
+            check_ad_hoc(executable)
+            check_hardened_runtime(Path(cli), project, Path(temp), env)
         hung = ok("project.smoke_test", {"executable": str(executable), "frames": 10, "timeout": 1})
         require(not hung["passed"] and hung["outcome"] == "timedOut" and hung["exitCode"] is None and "was stopped" in hung["summary"], f"a hanging game: {hung}")
 

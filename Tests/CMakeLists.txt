@@ -159,6 +159,10 @@ if(Python3_Interpreter_FOUND)
 		endif()
 		add_test(NAME ReleasePackaging COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/Automation/ReleasePackaging.py" $<TARGET_FILE:BasaltCLI> ${releasePackagingArgs})
 		set_tests_properties(ReleasePackaging PROPERTIES LABELS integration TIMEOUT 900)
+		# scripts/sign-windows.py with a stand-in signtool; on Windows also the real one, a self-signed certificate (in the
+		# current user's store, removed afterwards) and exports from a signed runtime.
+		add_test(NAME WindowsSigning COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/Automation/WindowsSigning.py" $<TARGET_FILE:BasaltCLI>)
+		set_tests_properties(WindowsSigning PROPERTIES LABELS integration TIMEOUT 600 ENVIRONMENT "BASALT_USER_DATA_DIR=${CMAKE_CURRENT_BINARY_DIR}/WindowsSigningUserData")
 	endif()
 	# Docs/AutomationCommands.md, Docs/Components.md and basalt.d.lua's component section must match the engine.
 	add_test(NAME GeneratedDocs
