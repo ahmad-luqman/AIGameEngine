@@ -151,7 +151,7 @@ if(Python3_Interpreter_FOUND)
 		# Two runtimes over real UDP: a headless host on a port the system picks and its clients (Network/EnetTransport).
 		add_test(NAME NetworkSession
 			COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/Automation/NetworkSession.py" $<TARGET_FILE:BrecciaCLI> $<TARGET_FILE:BrecciaRuntime>)
-		set_tests_properties(NetworkSession PROPERTIES LABELS integration TIMEOUT 300 COST 30)
+		set_tests_properties(NetworkSession PROPERTIES LABELS integration TIMEOUT 300 COST 60)
 		# The feature project exported as a folder and as Assets.bpak must play the same (Core/PackArchive).
 		add_test(NAME ArchiveExport
 			COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/Automation/ArchiveExport.py" $<TARGET_FILE:BrecciaCLI> "${CMAKE_CURRENT_SOURCE_DIR}/Data/FeatureTest")

@@ -95,7 +95,8 @@ namespace Breccia {
 	{
 		Everything,
 		// Whether it exists (an addition carries the values it starts with), not its later field changes: the receiver decides
-		// those itself (the entity's owner).
+		// those itself (the entity's owner). Host to client only: client updates carry no presence, so there it sends
+		// nothing about the component. The caller keeps the ownership component (Networked) Everything.
 		PresenceOnly
 	};
 
@@ -105,7 +106,8 @@ namespace Breccia {
 	{
 		ReplicationDirection Direction = ReplicationDirection::HostToClient;
 		// Largest message the receiver accepts (NetworkSystem::MaxHostMessageBytes, or MaxClientMessageBytes for client
-		// updates); a record that cannot fit in one is never sent (logged once). More than the message header.
+		// updates); a record that cannot fit in one is not sent while it stays that large (logged once per entity). More
+		// than the message header.
 		size_t MaxMessageBytes = size_t{ 1024 } * 1024;
 		// Messages remembered until acknowledged (at least 1). An acknowledgement of a forgotten one is ignored; what it
 		// carried is sent again.
@@ -114,8 +116,8 @@ namespace Breccia {
 
 	// Builds one direction's state messages for one connection, sending only what the receiver may not have: each message
 	// carries every value that differs from the last one the receiver acknowledged, or that a message not yet acknowledged
-	// carried differently, so once the receiver applies a message (and drops anything older) it holds every value that
-	// message and the older ones carried, and only records that waited for the budget follow later. Spawns repeat until
+	// carried differently, so once the receiver applies a message (and drops anything older) it is up to date, as of that
+	// message, on everything any message up to it carried; only records that waited for the budget follow later. Spawns repeat until
 	// acknowledged, then become field updates; despawns repeat until acknowledged, even if the entity is back meanwhile
 	// (its new spawn follows). When the byte budget is short, entities that wait gain their Priority each tick and the
 	// largest totals go first. Pure bookkeeping over ReplicationWorld: no scene, no transport.
@@ -165,6 +167,9 @@ namespace Breccia {
 		{
 			Tracked Presence;
 			std::vector<Tracked> Fields;
+			// The receiver decided the fields last time (PresenceOnly): what was acknowledged before says nothing about what
+			// it holds now.
+			bool ReceiverDecided = false;
 		};
 
 		struct EntityTrack
@@ -209,7 +214,7 @@ namespace Breccia {
 		};
 
 		// The update record for a known entity (empty Components and no Parent: nothing to send).
-		NetEntityUpdate BuildUpdate(const ReplicatedEntity& entity, EntityTrack& track, const ReplicationFilter& filter, SentRecord& record) const;
+		NetEntityUpdate BuildUpdate(const ReplicatedEntity& entity, EntityTrack& track, const ReplicationFilter& filter, uint32_t sequence, SentRecord& record) const;
 		static Tracked& TrackFor(EntityTrack& track, const SentRecord::Value& value);
 		void MarkSent(EntityTrack& track, const SentRecord& record, uint32_t sequence);
 

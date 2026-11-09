@@ -105,7 +105,7 @@ namespace {
 			if (build)
 				build(*m_Host);
 			std::string error;
-			auto transport = m_Network.Listen(0, m_Settings.MaxClients + 4, error);
+			auto transport = m_Network.Listen(0, m_Settings.MaxClients + NetworkSystem::SpareTransportSlots, error);
 			REQUIRE(transport);
 			m_Port = transport->GetListenPort();
 			m_Host->StartNetwork(CreateScope<NetworkSystem>(*m_Host, NetworkRole::Host, std::move(transport), m_Settings, m_Identity));
@@ -223,7 +223,7 @@ namespace {
 		explicit FakeHost(const std::function<void(Scene&)>& build = {}, NetworkSettings settings = {})
 		{
 			std::string error;
-			m_Host = m_Link.Listen(0, 4, error);
+			m_Host = m_Link.Listen(0, 1 + NetworkSystem::SpareTransportSlots, error);
 			REQUIRE(m_Host);
 			m_Client = CreateRef<Scene>("Client");
 			if (build)
@@ -260,7 +260,12 @@ namespace {
 			m_Host->Send(m_Peer, channel, message);
 			Advance(2);
 		}
-		void Welcome() { Send(NetProtocol::EncodeWelcome({ 1, 30.0f })); }
+		void Welcome(float tickRate = 30.0f) { Send(NetProtocol::EncodeWelcome({ 1, tickRate })); }
+		void Disconnect(uint32_t code)
+		{
+			m_Host->Disconnect(m_Peer, code);
+			Advance(2);
+		}
 		void Snapshot(NetState state)
 		{
 			state.Sequence = ++m_Sequence;
@@ -351,16 +356,12 @@ TEST_SUITE("Network")
 	{
 		NetWriter writer;
 		writer.WriteU8(0xAB);
-		writer.WriteU16(0xBEEF);
 		writer.WriteU32(0xDEADBEEF);
 		writer.WriteU64(0x0123456789ABCDEFull);
 		writer.WriteVarUInt(0);
 		writer.WriteVarUInt(127);
 		writer.WriteVarUInt(128);
 		writer.WriteVarUInt(std::numeric_limits<uint64_t>::max());
-		writer.WriteVarInt(-1);
-		writer.WriteVarInt(std::numeric_limits<int64_t>::min());
-		writer.WriteVarInt(std::numeric_limits<int64_t>::max());
 		writer.WriteFloat(-2.5f);
 		writer.WriteDouble(1e300);
 		writer.WriteString("héllo");
@@ -368,24 +369,18 @@ TEST_SUITE("Network")
 
 		NetReader reader(bytes);
 		uint8_t u8 = 0;
-		uint16_t u16 = 0;
 		uint32_t u32 = 0;
 		uint64_t u64 = 0;
-		int64_t i64 = 0;
 		float f = 0;
 		double d = 0;
 		std::string text;
 		CHECK((reader.ReadU8(u8) && u8 == 0xAB));
-		CHECK((reader.ReadU16(u16) && u16 == 0xBEEF));
 		CHECK((reader.ReadU32(u32) && u32 == 0xDEADBEEF));
 		CHECK((reader.ReadU64(u64) && u64 == 0x0123456789ABCDEFull));
 		CHECK((reader.ReadVarUInt(u64) && u64 == 0));
 		CHECK((reader.ReadVarUInt(u64) && u64 == 127));
 		CHECK((reader.ReadVarUInt(u64) && u64 == 128));
 		CHECK((reader.ReadVarUInt(u64) && u64 == std::numeric_limits<uint64_t>::max()));
-		CHECK((reader.ReadVarInt(i64) && i64 == -1));
-		CHECK((reader.ReadVarInt(i64) && i64 == std::numeric_limits<int64_t>::min()));
-		CHECK((reader.ReadVarInt(i64) && i64 == std::numeric_limits<int64_t>::max()));
 		CHECK((reader.ReadFloat(f) && f == -2.5f));
 		CHECK((reader.ReadDouble(d) && d == 1e300));
 		CHECK((reader.ReadString(text, 64) && text == "héllo"));
@@ -502,6 +497,7 @@ TEST_SUITE("Network")
 		CHECK(changed([&](auto& infos) { find(infos, "PointLight").FieldTypes["Radius"].Kind = ComponentFieldKind::Integer; }));
 		CHECK(changed([&](auto& infos) { find(infos, "RigidBody").EnumOptions["Type"].push_back("Ghost"); }));
 		CHECK(changed([&](auto& infos) { find(infos, "PointLight").ReplicatedFields.pop_back(); }));
+		CHECK(changed([&](auto& infos) { find(infos, "PointLight").IsCore = true; }));
 		CHECK(changed([&](auto& infos) {
 			ComponentInfo& animator = find(infos, "Animator");
 			auto element = std::make_shared<ComponentObjectSchema>(*animator.FieldTypes["Events"].Element);
@@ -591,7 +587,7 @@ TEST_SUITE("Network")
 		CHECK_FALSE(DecodeMessage(trailing));
 		NetState clientSpawns;
 		clientSpawns.Sequence = 1;
-		clientSpawns.Spawns = state.Spawns;
+		clientSpawns.Spawns.push_back(state.Spawns.front());
 		CHECK_FALSE(DecodeMessage(NetProtocol::EncodeState(NetMessageType::ClientUpdate, clientSpawns), &error));
 		CHECK(error == "clients cannot spawn entities");
 		NetState clientDespawns;
@@ -716,6 +712,21 @@ TEST_SUITE("Network")
 		CHECK(sender.Acknowledge(again.Sequence));
 		CHECK(sender.GetKnownEntityCount() == 0);
 		CHECK(DecodeState(sender.Build(world({ TransformEntity(100, 5) }), 0, 100000)).Spawns.size() == 1);
+
+		// Despawns repeat while unacknowledged, so several are in flight. The first acknowledged ends the old entity; a
+		// later one, acknowledged after the entity came back, must not end the new one (whose spawn is in flight), nor
+		// keep a despawn sent after that from repeating.
+		ReplicationSender racing;
+		racing.Build(world({ TransformEntity(200, 0) }), 0, 100000);
+		REQUIRE(racing.Acknowledge(1));
+		const uint32_t firstDespawn = DecodeState(racing.Build(world({}), 0, 100000)).Sequence;
+		const uint32_t secondDespawn = DecodeState(racing.Build(world({}), 0, 100000)).Sequence;
+		REQUIRE(racing.Acknowledge(firstDespawn));
+		CHECK(DecodeState(racing.Build(world({ TransformEntity(200, 0) }), 0, 100000)).Spawns.size() == 1);
+		const NetState gonePending = DecodeState(racing.Build(world({}), 0, 100000));
+		CHECK(gonePending.Despawns == std::vector<UUID>{ 200 });
+		REQUIRE(racing.Acknowledge(secondDespawn));
+		CHECK(DecodeState(racing.Build(world({}), 0, 100000)).Despawns == std::vector<UUID>{ 200 });
 	}
 
 	TEST_CASE("ReplicationSender settles once a value is acknowledged, however long acknowledgements take")
@@ -1079,12 +1090,16 @@ TEST_SUITE("Network")
 		Patch(other.GetEntityByUUID(avatarId), "Transform", { { "Translation", { 99.0, 0.0, 0.0 } } });
 		session.Run(20);
 		CHECK(host.GetEntityByUUID(avatarId).GetComponent<TransformComponent>().Translation.x != 99.0f);
+		CHECK(other.GetEntityByUUID(avatarId).GetComponent<TransformComponent>().Translation.x == 99.0f);
 
-		// Handing the entity to the other client moves the say with it.
+		// Handing the entity to the other client moves the say with it, from its values as they are then: its local 99
+		// becomes the entity's (the owner decides; Docs/Networking.md).
 		Patch(host.GetEntityByUUID(avatarId), "Networked", { { "Owner", 2 } });
 		session.Run(20);
 		CHECK_FALSE(session.ClientNetwork(0).HasAuthority(owner.GetEntityByUUID(avatarId)));
 		CHECK(session.ClientNetwork(1).HasAuthority(other.GetEntityByUUID(avatarId)));
+		CHECK(host.GetEntityByUUID(avatarId).GetComponent<TransformComponent>().Translation.x == 99.0f);
+		CHECK(owner.GetEntityByUUID(avatarId).GetComponent<TransformComponent>().Translation.x == 99.0f);
 		Patch(other.GetEntityByUUID(avatarId), "Transform", { { "Translation", { 3.0, 0.0, 0.0 } } });
 		session.Run(20);
 		CHECK(host.GetEntityByUUID(avatarId).GetComponent<TransformComponent>().Translation.x == 3.0f);
@@ -1110,8 +1125,6 @@ TEST_SUITE("Network")
 		RawPeer raw(session, session.Link().Connect(session.GetPort()));
 		REQUIRE(raw.Join() == 1);
 		const uint32_t transform = ComponentIndex("Transform");
-		const uint32_t networked = ComponentIndex("Networked");
-		const uint32_t light = ComponentIndex("PointLight");
 		const uint32_t spot = ComponentIndex("SpotLight");
 		uint32_t sequence = 0;
 		const auto send = [&](NetEntityUpdate update) {
@@ -1129,19 +1142,12 @@ TEST_SUITE("Network")
 		CHECK(host.GetEntityByUUID(crateId).GetComponent<TransformComponent>().Translation.x == 0.0f);
 		CHECK(send(moveTo(otherId, 50.0)) == 2);
 		CHECK(host.GetEntityByUUID(otherId).GetComponent<TransformComponent>().Translation.x == 0.0f);
-		// On its own entity: ownership, a parent, removing or adding a component, and changing one the host's entity lacks.
-		CHECK(send({ ownedId, std::nullopt, { { networked, NetComponentChange::Changed, { { 0, 2 } } } } }) == 3);
-		CHECK(owned.GetComponent<NetworkedComponent>().Owner == 1);
-		CHECK(send({ ownedId, crateId, {} }) == 4);
-		CHECK_FALSE(owned.GetParent());
-		CHECK(send({ ownedId, std::nullopt, { { light, NetComponentChange::Removed, {} } } }) == 5);
-		CHECK(owned.HasComponent<PointLightComponent>());
-		CHECK(send({ ownedId, std::nullopt, { { spot, NetComponentChange::Added, { { 0, { 1.0, 1.0, 1.0 } }, { 1, 5.0 } } } } }) == 6);
-		CHECK_FALSE(owned.HasComponent<SpotLightComponent>());
-		CHECK(send({ ownedId, std::nullopt, { { spot, NetComponentChange::Changed, { { 1, 5.0 } } } } }) == 7);
+		// On its own entity: changing a component the host's entity lacks. (Ownership, parents and components are refused
+		// when the message is decoded: see the next test.)
+		CHECK(send({ ownedId, std::nullopt, { { spot, NetComponentChange::Changed, { { 1, 5.0 } } } } }) == 3);
 		CHECK_FALSE(owned.HasComponent<SpotLightComponent>());
 		// What it may do: change its own entity's fields.
-		CHECK(send(moveTo(ownedId, 4.0)) == 7);
+		CHECK(send(moveTo(ownedId, 4.0)) == 3);
 		CHECK(owned.GetComponent<TransformComponent>().Translation.x == 4.0f);
 		// A value the component refuses (a NaN) is refused here too, and the rest of that component's change with it.
 		NetState invalid;
@@ -1187,6 +1193,76 @@ TEST_SUITE("Network")
 		lying.Sequence = 1;
 		lying.Acknowledged = 100000;
 		CHECK(kickedFor(NetProtocol::EncodeState(NetMessageType::ClientUpdate, lying)) == NetDisconnectReason::InvalidPacket);
+		// Parents, components and ownership are the host's: a client update changing them does not decode.
+		const UUID crate = session.Host().FindEntityByName("Crate").GetUUID();
+		const auto update = [](NetEntityUpdate record) {
+			NetState state;
+			state.Sequence = 1;
+			state.Updates.push_back(std::move(record));
+			return NetProtocol::EncodeState(NetMessageType::ClientUpdate, state);
+		};
+		CHECK(kickedFor(update({ crate, UUID(5), {} })) == NetDisconnectReason::InvalidPacket);
+		CHECK(kickedFor(update({ crate, std::nullopt, { { ComponentIndex("PointLight"), NetComponentChange::Removed, {} } } })) == NetDisconnectReason::InvalidPacket);
+		CHECK(kickedFor(update({ crate, std::nullopt, { { ComponentIndex("SpotLight"), NetComponentChange::Added, { { 0, { 1.0, 1.0, 1.0 } }, { 1, 5.0 } } } } })) == NetDisconnectReason::InvalidPacket);
+		CHECK(kickedFor(update({ crate, std::nullopt, { { ComponentIndex("Networked"), NetComponentChange::Changed, { { 0, 2 } } } } })) == NetDisconnectReason::InvalidPacket);
+		CHECK(NetProtocol::CheckUpdate({ crate, UUID(5), {} }, ReplicationSchema::Get(), NetMessageType::ClientUpdate) == "clients cannot change an entity's parent");
+		CHECK(NetProtocol::CheckUpdate({ crate, UUID(5), {} }, ReplicationSchema::Get(), NetMessageType::Snapshot).empty());
+
+		// Mid-session, with history: an acknowledgement of a snapshot never sent still ends the connection.
+		RawPeer raw(session, session.Link().Connect(session.GetPort()));
+		raw.Join();
+		session.Run(10);
+		NetState late;
+		late.Sequence = 1;
+		late.Acknowledged = 1000;
+		raw.Send(NetProtocol::EncodeState(NetMessageType::ClientUpdate, late), NetChannel::Unreliable);
+		const auto event = raw.WaitFor(NetTransportEvent::Kind::Disconnected);
+		REQUIRE(event);
+		CHECK(DisconnectReasonFromCode(event->DisconnectCode) == NetDisconnectReason::InvalidPacket);
+	}
+
+	TEST_CASE("Problems a peer causes are logged once per entity, and at most a few hundred of them")
+	{
+		Session session;
+		session.StartHost();
+		RawPeer raw(session, session.Link().Connect(session.GetPort()));
+		REQUIRE(raw.Join() == 1);
+		uint64_t since = Log::GetHistory().GetTotalCount();
+		NetState state;
+		state.Sequence = 1;
+		for (uint64_t id = 1; id <= 600; id++)
+			state.Updates.push_back({ id, std::nullopt, { { ComponentIndex("Transform"), NetComponentChange::Changed, { { 0, { 1.0, 0.0, 0.0 } } } } } });
+		raw.Send(NetProtocol::EncodeState(NetMessageType::ClientUpdate, state), NetChannel::Unreliable);
+		session.Run(4);
+		const auto count = [&](const std::string& text) {
+			uint64_t next = 0;
+			const auto messages = Log::GetHistory().GetMessagesSince(since, next);
+			return std::ranges::count_if(messages, [&](const LogMessage& message) { return message.Text.find(text) != std::string::npos; });
+		};
+		// Entities that do not exist share one line: their IDs are the client's to invent.
+		CHECK(session.HostNetwork().GetStatistics().RejectedRecords == 600);
+		CHECK(count("which is not a networked entity of the host's") == 1);
+		state.Sequence = 2;
+		raw.Send(NetProtocol::EncodeState(NetMessageType::ClientUpdate, state), NetChannel::Unreliable);
+		session.Run(4);
+		CHECK(count("Network:") == 1);
+		CHECK(session.HostNetwork().GetStatistics().RejectedRecords == 1200);
+
+		// One line per entity elsewhere, but at most 256 for a peer, then one saying so.
+		FakeHost fake;
+		fake.Welcome();
+		since = Log::GetHistory().GetTotalCount();
+		NetState unknown;
+		for (uint64_t id = 1; id <= 600; id++)
+			unknown.Updates.push_back({ id, std::nullopt, { { ComponentIndex("Transform"), NetComponentChange::Changed, { { 0, { 1.0, 0.0, 0.0 } } } } } });
+		fake.Snapshot(unknown);
+		CHECK(fake.Network().GetStatistics().RejectedRecords == 600);
+		CHECK(count("which this client does not have") == 256);
+		CHECK(count("further ones are not") == 1);
+		since = Log::GetHistory().GetTotalCount();
+		fake.Snapshot(unknown);
+		CHECK(count("Network:") == 0);
+		CHECK(fake.Network().GetState() == NetConnectionState::Connected);
 	}
 
 	TEST_CASE("The host refuses clients of another protocol, build or game, past its limit, or that never say hello")
@@ -1367,9 +1443,10 @@ TEST_SUITE("Network")
 		// Records a scene file would not pass, and a spawn whose first record is another entity.
 		state.Spawns.push_back(Spawn(17, { { "Transform", { { "Scale", "big" } } } }));
 		state.Spawns.push_back({ 18, 0, nlohmann::json::array({ Record(19, nlohmann::json::object()) }) });
-		// Fine: a project file, and a sub-asset key.
+		// Fine: a project file, a sub-asset key, a built-in mesh.
 		state.Spawns.push_back(Spawn(20, { { "Mesh", { { "Mesh", "Assets/Models/Ok.gltf" } } } }));
 		state.Spawns.push_back(Spawn(21, { { "Material", { { "Material", "Assets/Models/Ok.gltf#material/0" } } } }));
+		state.Spawns.push_back(Spawn(22, { { "Mesh", { { "Mesh", "builtin://Cube" } } } }));
 		// An entity this client has already (an authored one the host made networked): it is the same entity.
 		state.Spawns.push_back(Spawn(77, { { "Transform", { { "Translation", { 0.0, 7.0, 0.0 } } } } }));
 		host.Snapshot(state);
@@ -1380,10 +1457,12 @@ TEST_SUITE("Network")
 		}
 		CHECK(host.Client().GetEntityByUUID(20));
 		CHECK(host.Client().GetEntityByUUID(21));
+		CHECK(host.Client().GetEntityByUUID(22));
 		const Entity adopted = host.Client().GetEntityByUUID(77);
 		CHECK(adopted.GetName() == "Local");
 		CHECK(adopted.GetComponent<TransformComponent>().Translation.y == 7.0f);
-		CHECK(host.Network().GetRemoteEntityCount() == 3);
+		CHECK(host.Network().GetRemoteEntityCount() == 4);
+		CHECK(host.Network().GetStatistics().EntitiesAdopted == 1);
 		CHECK(host.Network().GetStatistics().RejectedRecords == 9);
 
 		// Updates follow only for entities the host spawned (or the client took as such).
@@ -1545,6 +1624,87 @@ TEST_SUITE("Network")
 		CHECK(client.GetEntityByUUID(700).GetComponent<TransformComponent>().Translation.y == 4.0f);
 	}
 
+	TEST_CASE("A spawn adopting an authored entity creates the descendants the client lacks")
+	{
+		const auto build = [](Scene& scene) {
+			Entity door = scene.CreateEntityWithUUID(700, "Door");
+			scene.SetParent(scene.CreateEntityWithUUID(701, "Hinge"), door, false);
+		};
+		Session session;
+		Scene& host = session.StartHost(build);
+		Scene& client = session.AddClient(build);
+		REQUIRE(session.RunUntil([&] { return session.ClientNetwork(0).GetState() == NetConnectionState::Connected; }, 60));
+		// Made during play, so only the host has them, then the host networks their authored parent.
+		Entity door = host.GetEntityByUUID(700);
+		Entity handle = host.CreateChildEntity(door, "Handle");
+		const UUID handleId = handle.GetUUID();
+		const UUID knobId = host.CreateChildEntity(handle, "Knob").GetUUID();
+		door.AddComponent<NetworkedComponent>();
+		session.Run(10);
+		REQUIRE(client.GetEntityByUUID(handleId));
+		REQUIRE(client.GetEntityByUUID(knobId));
+		CHECK(client.GetEntityByUUID(handleId).GetParent() == client.GetEntityByUUID(700));
+		CHECK(client.GetEntityByUUID(knobId).GetParent() == client.GetEntityByUUID(handleId));
+		// What it had stays as it was, once.
+		CHECK(client.FindEntitiesByName("Hinge").size() == 1);
+		CHECK(client.FindEntitiesByName("Handle").size() == 1);
+		CHECK(session.ClientNetwork(0).GetStatistics().RejectedRecords == 0);
+	}
+
+	TEST_CASE("Descendant records of an adopting spawn pass the checks a new spawn's do")
+	{
+		FakeHost host([](Scene& scene) { scene.CreateEntityWithUUID(80, "Local"); });
+		host.Welcome();
+		NetState state;
+		NetEntitySpawn spawn = Spawn(80, nlohmann::json::object());
+		spawn.Entities.push_back(Record(81, nlohmann::json::object(), 80));
+		// A parent not in the spawn, a file outside the project, and a record that is not an object are refused alone.
+		spawn.Entities.push_back(Record(82, nlohmann::json::object(), 999));
+		spawn.Entities.push_back(Record(83, { { "Mesh", { { "Mesh", "../secret.gltf" } } } }, 80));
+		spawn.Entities.push_back(nlohmann::json(5));
+		spawn.Entities.push_back(Record(84, nlohmann::json::object(), 81));
+		spawn.Entities.push_back(Record(85, nlohmann::json::object(), 84));
+		state.Spawns.push_back(spawn);
+		host.Snapshot(state);
+		Scene& client = host.Client();
+		REQUIRE(client.GetEntityByUUID(81));
+		REQUIRE(client.GetEntityByUUID(84));
+		CHECK(client.GetEntityByUUID(81).GetParent() == client.GetEntityByUUID(80));
+		CHECK(client.GetEntityByUUID(84).GetParent() == client.GetEntityByUUID(81));
+		REQUIRE(client.GetEntityByUUID(85));
+		CHECK(client.GetEntityByUUID(85).GetParent() == client.GetEntityByUUID(84));
+		CHECK_FALSE(client.GetEntityByUUID(82));
+		CHECK_FALSE(client.GetEntityByUUID(83));
+		CHECK(host.Network().GetStatistics().RejectedRecords == 3);
+		CHECK(host.Network().GetStatistics().EntitiesAdopted == 1);
+	}
+
+	TEST_CASE("A child moving to a parent that has not arrived keeps waiting for it when its old parent despawns")
+	{
+		FakeHost host;
+		host.Welcome();
+		NetState first;
+		first.Spawns.push_back(Spawn(60, nlohmann::json::object()));
+		first.Spawns.push_back(Spawn(61, { { "Networked", nlohmann::json::object() } }, 60));
+		host.Snapshot(first);
+		REQUIRE(host.Client().GetEntityByUUID(61));
+		REQUIRE(host.Client().GetEntityByUUID(61).GetParent() == host.Client().GetEntityByUUID(60));
+		// In one message: the child moves under an entity whose spawn the budget delayed, and its old parent goes.
+		NetState second;
+		NetEntityUpdate moved;
+		moved.Entity = 61;
+		moved.Parent = UUID(62);
+		second.Updates.push_back(moved);
+		second.Despawns.emplace_back(60);
+		host.Snapshot(second);
+		REQUIRE(host.Client().GetEntityByUUID(61));
+		CHECK_FALSE(host.Client().GetEntityByUUID(61).GetParent());
+		NetState third;
+		third.Spawns.push_back(Spawn(62, nlohmann::json::object()));
+		host.Snapshot(third);
+		CHECK(host.Client().GetEntityByUUID(61).GetParent() == host.Client().GetEntityByUUID(62));
+	}
+
 	TEST_CASE("An owner hears of components the host adds or removes on its entity, and keeps its own values")
 	{
 		Session session;
@@ -1634,6 +1794,227 @@ TEST_SUITE("Network")
 			}
 		CHECK(crateMoved);
 		CHECK(lightAdded);
+	}
+
+	TEST_CASE("A detached networked child goes back under its parent when the parent is networked again")
+	{
+		Session session;
+		UUID vehicleId = 0;
+		UUID turretId = 0;
+		Scene& host = session.StartHost([&](Scene& scene) {
+			Entity vehicle = CreateNetworked(scene, "Vehicle");
+			scene.CreateChildEntity(vehicle, "Turret").AddComponent<NetworkedComponent>();
+			vehicleId = vehicle.GetUUID();
+			turretId = vehicle.GetChildren().front().GetUUID();
+		});
+		Scene& client = session.AddClient();
+		REQUIRE(session.RunUntil([&] { return client.GetEntityByUUID(vehicleId) && client.GetEntityByUUID(turretId); }, 60));
+		host.GetEntityByUUID(vehicleId).RemoveComponent<NetworkedComponent>();
+		REQUIRE(session.RunUntil([&] { return !client.GetEntityByUUID(vehicleId); }, 30));
+		// Waiting a while for its parent is reported once.
+		const uint64_t since = Log::GetHistory().GetTotalCount();
+		session.Run(90);
+		uint64_t next = 0;
+		const auto messages = Log::GetHistory().GetMessagesSince(since, next);
+		CHECK(std::ranges::count_if(messages, [](const LogMessage& message) { return message.Text.find("still waits for its parent") != std::string::npos; }) == 1);
+		host.GetEntityByUUID(vehicleId).AddComponent<NetworkedComponent>();
+		REQUIRE(session.RunUntil([&] { return static_cast<bool>(client.GetEntityByUUID(vehicleId)); }, 60));
+		session.Run(5);
+		CHECK(client.GetEntityByUUID(turretId).GetParent() == client.GetEntityByUUID(vehicleId));
+	}
+
+	TEST_CASE("An owner's change to a component the host just added survives the repeated addition")
+	{
+		Session session({ .Latency = 0.2f, .TimeoutSeconds = 30.0f });
+		UUID avatarId = 0;
+		Scene& host = session.StartHost([&](Scene& scene) {
+			Entity avatar = CreateNetworked(scene, "Avatar");
+			avatar.GetComponent<NetworkedComponent>() = { 1, NetworkAuthority::Owner };
+			avatarId = avatar.GetUUID();
+		});
+		Scene& owner = session.AddClient();
+		REQUIRE(session.RunUntil([&] { return session.ClientNetwork(0).GetState() == NetConnectionState::Connected && owner.GetEntityByUUID(avatarId); }, 300));
+		session.Run(60);
+		Patch(host.GetEntityByUUID(avatarId), "PointLight", { { "Intensity", 3.0 } });
+		REQUIRE(session.RunUntil([&] { return owner.GetEntityByUUID(avatarId).HasComponent<PointLightComponent>(); }, 120));
+		// Changed at once, while the host still repeats the addition (its acknowledgement is a round trip away).
+		Patch(owner.GetEntityByUUID(avatarId), "PointLight", { { "Intensity", 5.0 } });
+		session.Run(120);
+		CHECK(owner.GetEntityByUUID(avatarId).GetComponent<PointLightComponent>().Intensity == 5.0f);
+		CHECK(host.GetEntityByUUID(avatarId).GetComponent<PointLightComponent>().Intensity == 5.0f);
+	}
+
+	TEST_CASE("Traffic totals add up, and a client's remote entities shrink when a script destroys one")
+	{
+		Session session;
+		UUID crateId = 0;
+		session.StartHost([&](Scene& scene) {
+			crateId = CreateNetworked(scene, "Crate").GetUUID();
+			CreateNetworked(scene, "Lamp");
+		});
+		Scene& first = session.AddClient();
+		session.AddClient();
+		REQUIRE(session.RunUntil([&] { return session.ClientNetwork(0).GetRemoteEntityCount() == 2 && session.ClientNetwork(1).GetRemoteEntityCount() == 2; }, 60));
+		session.Run(20);
+		const NetworkStatistics& host = session.HostNetwork().GetStatistics();
+		NetTraffic sum;
+		for (const NetConnectionInfo& connection : session.HostNetwork().GetConnections())
+		{
+			sum.MessagesSent += connection.Traffic.MessagesSent;
+			sum.BytesSent += connection.Traffic.BytesSent;
+			sum.MessagesReceived += connection.Traffic.MessagesReceived;
+		}
+		CHECK(host.Traffic.MessagesSent == sum.MessagesSent);
+		CHECK(host.Traffic.BytesSent == sum.BytesSent);
+		CHECK(host.Traffic.MessagesReceived == sum.MessagesReceived);
+		CHECK(host.Traffic.MessagesSent > 0);
+		// Over a lossless link, what a client received is what the host sent it (less what is still in flight).
+		const NetConnectionInfo toFirst = session.HostNetwork().GetConnections().front();
+		const NetTraffic& received = session.ClientNetwork(0).GetStatistics().Traffic;
+		CHECK(received.MessagesReceived <= toFirst.Traffic.MessagesSent);
+		CHECK(received.MessagesReceived + 2 >= toFirst.Traffic.MessagesSent);
+		// A local script destroys what the host spawned: it stops counting.
+		first.DestroyEntity(first.GetEntityByUUID(crateId));
+		session.Run(4);
+		CHECK(session.ClientNetwork(0).GetRemoteEntityCount() == 1);
+	}
+
+	TEST_CASE("A client reports a disconnect code it does not know, and clamps a tick rate it cannot use")
+	{
+		{
+			FakeHost host;
+			const uint64_t since = Log::GetHistory().GetTotalCount();
+			host.Welcome(1000.0f);
+			CHECK(host.Network().GetState() == NetConnectionState::Connected);
+			host.Disconnect(9999);
+			CHECK(host.Network().GetState() == NetConnectionState::Disconnected);
+			CHECK(host.Network().GetDisconnectReason() == NetDisconnectReason::Unknown);
+			uint64_t next = 0;
+			const auto messages = Log::GetHistory().GetMessagesSince(since, next);
+			const auto logged = [&](const std::string& text) { return std::ranges::any_of(messages, [&](const LogMessage& message) { return message.Text.find(text) != std::string::npos; }); };
+			CHECK(logged("tick rate 1000 is outside"));
+			CHECK(logged("disconnect code 9999"));
+		}
+	}
+
+	TEST_CASE("A spawn adopting an authored entity follows its replicated components and keeps the rest")
+	{
+		FakeHost host([](Scene& scene) {
+			Entity door = scene.CreateEntityWithUUID(77, "Door");
+			door.AddComponent<PointLightComponent>();
+		});
+		host.Welcome();
+		NetState state;
+		state.Spawns.push_back(Spawn(77, { { "Transform", nlohmann::json::object() }, { "SpotLight", nlohmann::json::object() }, { "AudioListener", nlohmann::json::object() } }));
+		host.Snapshot(state);
+		const Entity door = host.Client().GetEntityByUUID(77);
+		REQUIRE(door);
+		CHECK_FALSE(door.HasComponent<PointLightComponent>());
+		CHECK(door.HasComponent<SpotLightComponent>());
+		// A component without replicated fields is not part of what an adopted entity takes (Docs/Networking.md).
+		CHECK_FALSE(door.HasComponent<AudioListenerComponent>());
+	}
+
+	TEST_CASE("When the host takes an entity back, its former owner converges on the host's values")
+	{
+		Session session;
+		UUID avatarId = 0;
+		Scene& host = session.StartHost([&](Scene& scene) {
+			avatarId = CreateNetworked(scene, "Avatar").GetUUID();
+		});
+		Scene& owner = session.AddClient();
+		REQUIRE(session.RunUntil([&] { return static_cast<bool>(owner.GetEntityByUUID(avatarId)); }, 60));
+		// A value the owner acknowledges as a field update (a spawn's values are not tracked field by field), before the
+		// host hands the entity over.
+		Patch(host.GetEntityByUUID(avatarId), "Transform", { { "Translation", { 1.0, 0.0, 0.0 } } });
+		REQUIRE(session.RunUntil([&] { return owner.GetEntityByUUID(avatarId).GetComponent<TransformComponent>().Translation.x == 1.0f; }, 30));
+		session.Run(10);
+		Patch(host.GetEntityByUUID(avatarId), "Networked", { { "Owner", 1 }, { "Authority", "Owner" } });
+		REQUIRE(session.RunUntil([&] { return session.ClientNetwork(0).HasAuthority(owner.GetEntityByUUID(avatarId)); }, 30));
+		// The host refuses nothing here, so make its own value differ from the owner's without the owner's update landing.
+		session.Link().SetLinkSettings({ .Loss = 1.0f, .TimeoutSeconds = 10.0f });
+		Patch(owner.GetEntityByUUID(avatarId), "Transform", { { "Translation", { 6.0, 0.0, 0.0 } } });
+		session.Run(10);
+		session.Link().SetLinkSettings({ .TimeoutSeconds = 10.0f });
+		// The host still holds the value the owner acknowledged before it took over, and takes the entity back.
+		Entity avatar = host.GetEntityByUUID(avatarId);
+		CHECK(avatar.GetComponent<TransformComponent>().Translation.x == 1.0f);
+		Patch(avatar, "Networked", { { "Owner", 0 }, { "Authority", "Server" } });
+		session.Run(20);
+		CHECK_FALSE(session.ClientNetwork(0).HasAuthority(owner.GetEntityByUUID(avatarId)));
+		CHECK(owner.GetEntityByUUID(avatarId).GetComponent<TransformComponent>().Translation.x == 1.0f);
+	}
+
+	TEST_CASE("Transports: an attempt abandoned before it connects is told to the host, and refused sends are not counted")
+	{
+		// Over the simulated link as over ENet: the host that accepted the attempt hears the code, without waiting for a
+		// timeout.
+		SimulatedNetwork link({ .Latency = 0.1f, .TimeoutSeconds = 30.0f });
+		std::string error;
+		Scope<NetTransport> host = link.Listen(0, 4, error);
+		Scope<NetTransport> client = link.Connect(host->GetListenPort());
+		std::vector<NetTransportEvent> hostEvents;
+		std::vector<NetTransportEvent> clientEvents;
+		link.Advance(0.15f);
+		host->Poll(hostEvents);
+		REQUIRE(hostEvents.size() == 1);
+		CHECK(hostEvents[0].Type == NetTransportEvent::Kind::Connected);
+		client->DisconnectAll(1234);
+		for (int i = 0; i < 30; i++)
+			link.Advance(0.05f);
+		host->Poll(hostEvents);
+		client->Poll(clientEvents);
+		REQUIRE(hostEvents.size() == 2);
+		CHECK(hostEvents[1].Type == NetTransportEvent::Kind::Disconnected);
+		CHECK(hostEvents[1].DisconnectCode == 1234);
+		CHECK_FALSE(hostEvents[1].TimedOut);
+		CHECK(clientEvents.empty());
+	}
+
+	TEST_CASE("A host whose Welcome cannot be sent refuses the client instead of counting it")
+	{
+		// A host transport that takes nothing to send.
+		class Refusing final : public NetTransport
+		{
+		public:
+			explicit Refusing(Scope<NetTransport> inner)
+				: m_Inner(std::move(inner))
+			{
+			}
+			bool Send(NetPeerHandle, NetChannel, std::span<const uint8_t>) override { return false; }
+			void Disconnect(NetPeerHandle peer, uint32_t code) override { m_Inner->Disconnect(peer, code); }
+			void DisconnectAll(uint32_t code) override { m_Inner->DisconnectAll(code); }
+			void Poll(std::vector<NetTransportEvent>& events) override { m_Inner->Poll(events); }
+			void Flush() override { m_Inner->Flush(); }
+			float GetRoundTripTime(NetPeerHandle peer) const override { return m_Inner->GetRoundTripTime(peer); }
+			std::string DescribePeer(NetPeerHandle peer) const override { return m_Inner->DescribePeer(peer); }
+			uint16_t GetListenPort() const override { return m_Inner->GetListenPort(); }
+
+		private:
+			Scope<NetTransport> m_Inner;
+		};
+		SimulatedNetwork link;
+		std::string error;
+		Scope<NetTransport> listening = link.Listen(0, 4, error);
+		const uint16_t port = listening->GetListenPort();
+		Scene host("Host");
+		host.StartNetwork(CreateScope<NetworkSystem>(host, NetworkRole::Host, CreateScope<Refusing>(std::move(listening)), NetworkSettings{}, TestIdentity()));
+		host.OnRuntimeStart();
+		Scene client("Client");
+		client.StartNetwork(CreateScope<NetworkSystem>(client, NetworkRole::Client, link.Connect(port), NetworkSettings{}, TestIdentity()));
+		client.OnRuntimeStart();
+		for (int i = 0; i < 30; i++)
+		{
+			host.OnUpdate(Step);
+			client.OnUpdate(Step);
+			link.Advance(Step);
+		}
+		CHECK(host.GetNetworkSystem()->GetConnections().empty());
+		CHECK(host.GetNetworkSystem()->GetStatistics().Traffic.MessagesSent == 0);
+		CHECK(client.GetNetworkSystem()->GetState() == NetConnectionState::Disconnected);
+		CHECK(client.GetNetworkSystem()->GetStatistics().Traffic.MessagesSent == 1);
+		client.OnRuntimeStop();
+		host.OnRuntimeStop();
 	}
 
 	TEST_CASE("An entity despawned and back before the client acknowledged ends up as one live copy, over a lossy link")

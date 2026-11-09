@@ -15,13 +15,10 @@ namespace Breccia {
 	{
 	public:
 		void WriteU8(uint8_t value) { m_Bytes.push_back(value); }
-		void WriteU16(uint16_t value);
 		void WriteU32(uint32_t value);
 		void WriteU64(uint64_t value);
 		// Unsigned LEB128: 1 byte below 128, at most 10 bytes.
 		void WriteVarUInt(uint64_t value);
-		// Zigzag-mapped, so small negative numbers stay short.
-		void WriteVarInt(int64_t value);
 		void WriteFloat(float value);
 		void WriteDouble(double value);
 		// A VarUInt byte count followed by the bytes (UTF-8 text is not checked here).
@@ -50,13 +47,11 @@ namespace Breccia {
 		explicit NetReader(std::vector<uint8_t>&&) = delete;
 
 		bool ReadU8(uint8_t& value);
-		bool ReadU16(uint16_t& value);
 		bool ReadU32(uint32_t& value);
 		bool ReadU64(uint64_t& value);
 		// Fails on more than 10 bytes, or on a 10th byte that would overflow 64 bits. Longer forms of a value than needed
 		// (0x80 0x00 for 0) are accepted: nothing compares encodings it received.
 		bool ReadVarUInt(uint64_t& value);
-		bool ReadVarInt(int64_t& value);
 		// A VarUInt that must not exceed `max` (counts and indices; a max beyond 32 bits means UINT32_MAX), read into 32
 		// bits.
 		bool ReadCount(uint32_t& value, uint64_t max);

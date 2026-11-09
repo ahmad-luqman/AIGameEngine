@@ -272,7 +272,8 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   system at the project's `Network.TickRate`. `NetworkedComponent` marks what replicates; `ComponentInfo::ReplicatedFields`
   (top-level, never asset fields) is what updates after the spawn, which carries the tree (non-networked descendants are
   copied once) as scene records with the host's UUIDs (`SceneSerializer::CreateEntityTreeWithIds`, asset paths kept inside
-  the project); a spawn of an entity the client has is that entity. Values travel as `NetValue` (binary registry JSON) and
+  the project); a spawn of an entity the client has is that entity (it takes the replicated fields, parent and replicated
+  components, gains the spawn's descendants it lacks, and keeps the rest). Values travel as `NetValue` (binary registry JSON) and
   land through `ComponentRegistry`. `ReplicationSender` is pure bookkeeping per connection and direction: each message
   carries what differs from the last acknowledged value or what an unacknowledged message carried differently, so once a
   message is applied only records that waited for the budget are missing; despawns repeat until acknowledged even if the

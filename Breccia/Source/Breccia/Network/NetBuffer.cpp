@@ -26,11 +26,6 @@ namespace Breccia {
 
 	}
 
-	void NetWriter::WriteU16(uint16_t value)
-	{
-		WriteLittleEndian(m_Bytes, value);
-	}
-
 	void NetWriter::WriteU32(uint32_t value)
 	{
 		WriteLittleEndian(m_Bytes, value);
@@ -49,13 +44,6 @@ namespace Breccia {
 			value >>= 7;
 		}
 		WriteU8(static_cast<uint8_t>(value));
-	}
-
-	void NetWriter::WriteVarInt(int64_t value)
-	{
-		// Zigzag: 0, -1, 1, -2, ... map to 0, 1, 2, 3, ... (an arithmetic shift spreads the sign over every bit).
-		const uint64_t bits = static_cast<uint64_t>(value);
-		WriteVarUInt((bits << 1) ^ static_cast<uint64_t>(value >> 63));
 	}
 
 	void NetWriter::WriteFloat(float value)
@@ -100,14 +88,6 @@ namespace Breccia {
 		return true;
 	}
 
-	bool NetReader::ReadU16(uint16_t& value)
-	{
-		const uint8_t* data = Take(sizeof(value));
-		if (data)
-			value = ReadLittleEndian<uint16_t>(data);
-		return data != nullptr;
-	}
-
 	bool NetReader::ReadU32(uint32_t& value)
 	{
 		const uint8_t* data = Take(sizeof(value));
@@ -141,15 +121,6 @@ namespace Breccia {
 		}
 		m_Failed = true;
 		return false;
-	}
-
-	bool NetReader::ReadVarInt(int64_t& value)
-	{
-		uint64_t bits = 0;
-		if (!ReadVarUInt(bits))
-			return false;
-		value = static_cast<int64_t>(bits >> 1) ^ -static_cast<int64_t>(bits & 1);
-		return true;
 	}
 
 	bool NetReader::ReadCount(uint32_t& value, uint64_t max)

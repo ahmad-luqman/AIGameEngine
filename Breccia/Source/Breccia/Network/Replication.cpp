@@ -88,7 +88,7 @@ namespace Breccia {
 		return component.Fields[*value.Field];
 	}
 
-	NetEntityUpdate ReplicationSender::BuildUpdate(const ReplicatedEntity& entity, EntityTrack& track, const ReplicationFilter& filter, SentRecord& record) const
+	NetEntityUpdate ReplicationSender::BuildUpdate(const ReplicatedEntity& entity, EntityTrack& track, const ReplicationFilter& filter, uint32_t sequence, SentRecord& record) const
 	{
 		const bool hostToClient = m_Options.Direction == ReplicationDirection::HostToClient;
 		NetEntityUpdate update;
@@ -114,8 +114,20 @@ namespace Breccia {
 			const bool added = hostToClient && !IsCore(component.Component) && tracked.Presence.Pending(Present);
 			// The receiver decides the values of what it owns, but hears of a component the host adds (with the values it
 			// starts with) or removes.
-			if (!added && scopeOf(component.Component) == ReplicationScope::PresenceOnly)
-				continue;
+			if (scopeOf(component.Component) == ReplicationScope::PresenceOnly)
+			{
+				tracked.ReceiverDecided = true;
+				if (!added)
+					continue;
+			}
+			else if (tracked.ReceiverDecided)
+			{
+				// The sender decides again: every field goes until a message from now on that carries it is acknowledged,
+				// whatever the receiver acknowledged while it decided.
+				tracked.ReceiverDecided = false;
+				for (Tracked& field : tracked.Fields)
+					field.StaleSequence = sequence;
+			}
 			NetComponentUpdate change;
 			change.Component = component.Component;
 			change.Change = added ? NetComponentChange::Added : NetComponentChange::Changed;
@@ -226,8 +238,8 @@ namespace Breccia {
 				candidate.Record.Parent = ParentBytes(entity.Parent);
 				for (const ReplicatedComponent& component : entity.Components)
 				{
-					// The spawn's records hold the component as it is, but nothing is assumed about one that cannot be
-					// encoded: it goes as an addition once it can.
+					// Defensive (for builders other than NetworkSystem's, whose spawn fails on the same value): nothing is
+					// assumed about a component that cannot be encoded; it goes as an addition once it can.
 					if (component.Unsendable)
 						continue;
 					if (!IsCore(component.Component))
@@ -238,10 +250,10 @@ namespace Breccia {
 			}
 			else
 			{
-				const NetEntityUpdate update = BuildUpdate(entity, track, filter, candidate.Record);
+				const NetEntityUpdate update = BuildUpdate(entity, track, filter, sequence, candidate.Record);
 				if (update.Components.empty() && !update.Parent)
 					continue;
-				BR_CORE_ASSERT(NetProtocol::CheckUpdate(update, ReplicationSchema::Get()).empty(), "the sender built an update its receiver refuses");
+				BR_CORE_ASSERT(NetProtocol::CheckUpdate(update, ReplicationSchema::Get(), hostToClient ? NetMessageType::Snapshot : NetMessageType::ClientUpdate).empty(), "the sender built an update its receiver refuses");
 				NetWriter writer;
 				// The values were encoded once already, when the world was captured.
 				if (!NetProtocol::WriteUpdate(writer, update))
@@ -334,7 +346,10 @@ namespace Breccia {
 			EntityTrack& track = it->second;
 			if (record.Type == SentRecord::Kind::Despawn)
 			{
-				m_Entities.erase(it);
+				// Despawns repeat until one is acknowledged, so later ones may still be in flight: one acknowledged after the
+				// entity came back (its track holding a newer spawn) is about the old entity and must not erase the new one.
+				if (track.SpawnSent < sequence)
+					m_Entities.erase(it);
 				continue;
 			}
 			// A record that went out before a despawn now in flight: the receiver removes the entity anyway.

@@ -7,6 +7,7 @@
 #include <enet/enet.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cerrno>
 #include <map>
 #include <mutex>
@@ -43,6 +44,8 @@ namespace Breccia {
 
 			bool Acquire(std::string& outError)
 			{
+				if (m_Held)
+					return true;
 				std::scoped_lock lock(s_LibraryMutex);
 				if (s_LibraryUsers == 0 && enet_initialize() != 0)
 				{
@@ -129,10 +132,8 @@ namespace Breccia {
 				// Once per peer: a lasting cause would otherwise log at the tick rate.
 				if (m_ReportedSendFailures.insert(handle).second)
 				{
-					if (data.size() > m_Settings.MaxMessageBytes)
-						BR_CORE_ERROR("Network: could not send a {}-byte message to {}: the limit is {} bytes", data.size(), DescribePeer(handle), m_Settings.MaxMessageBytes);
-					else
-						BR_CORE_ERROR("Network: could not send a {}-byte message to {} (out of memory, or too many fragments queued); further failures to it are not logged", data.size(), DescribePeer(handle));
+					const std::string reason = data.size() > m_Settings.MaxMessageBytes ? fmt::format("the limit is {} bytes", m_Settings.MaxMessageBytes) : "out of memory, or too many fragments queued";
+					BR_CORE_ERROR("Network: could not send a {}-byte message to {} ({}); further failures to it are not logged", data.size(), DescribePeer(handle), reason);
 				}
 				return false;
 			}
@@ -151,39 +152,20 @@ namespace Breccia {
 			{
 				// The map changes as peers go: take the handles first. A connection still being made (no reply yet) is
 				// disconnected at once, which tells a host that already accepted it.
-				std::vector<NetPeerHandle> handles;
-				handles.reserve(m_Peers.size());
-				for (const auto& [handle, peer] : m_Peers)
-					handles.push_back(handle);
-				for (NetPeerHandle handle : handles)
-					Disconnect(handle, code);
+				while (!m_Peers.empty())
+					Disconnect(m_Peers.begin()->first, code);
 			}
 
 			void Poll(std::vector<NetTransportEvent>& events) override
 			{
-				ENetEvent event;
-				for (;;)
-				{
-					const int result = enet_host_service(m_Host, &event, 0);
-					if (result < 0)
-					{
-						// The first failure of a run, then a count when the socket works again.
-						if (m_ServiceErrors++ == 0)
-							BR_CORE_ERROR("Network: the UDP socket failed ({}); this frame's messages are not sent or received", DescribeSocketError());
-						break;
-					}
-					if (m_ServiceErrors > 0)
-					{
-						BR_CORE_WARN("Network: the UDP socket works again after {} failed frame(s)", m_ServiceErrors);
-						m_ServiceErrors = 0;
-					}
-					if (result == 0)
-						break;
-					Handle(event, events);
-				}
+				Service();
+				events.insert(events.end(), std::make_move_iterator(m_Pending.begin()), std::make_move_iterator(m_Pending.end()));
+				m_Pending.clear();
 			}
 
-			void Flush() override { enet_host_flush(m_Host); }
+			// enet_host_flush drops the result of the send it does, so a failing socket would go unreported: service the host
+			// instead (which sends too), keeping what arrives for the next Poll.
+			void Flush() override { Service(); }
 
 			float GetRoundTripTime(NetPeerHandle handle) const override
 			{
@@ -216,6 +198,33 @@ namespace Breccia {
 			}
 
 			static NetPeerHandle HandleOf(const ENetPeer* peer) { return static_cast<NetPeerHandle>(reinterpret_cast<uintptr_t>(peer->data)); }
+
+			// Sends what is queued and receives into m_Pending. A send to one unreachable peer fails the whole call (ENet
+			// stops there), and may do so every frame until that peer times out: the failures are logged at most every few
+			// seconds, with their count.
+			void Service()
+			{
+				ENetEvent event;
+				for (;;)
+				{
+					const int result = enet_host_service(m_Host, &event, 0);
+					if (result < 0)
+					{
+						m_ServiceErrors++;
+						const auto now = std::chrono::steady_clock::now();
+						if (m_ServiceErrors == 1 || now - m_LastServiceErrorLog >= ServiceErrorLogInterval)
+						{
+							BR_CORE_ERROR("Network: the UDP socket failed {} time(s) since the last report ({}); messages to or from some peers are lost until they recover or time out", m_ServiceErrors, DescribeSocketError());
+							m_LastServiceErrorLog = now;
+							m_ServiceErrors = 0;
+						}
+						break;
+					}
+					if (result == 0)
+						break;
+					Handle(event, m_Pending);
+				}
+			}
 
 			void Handle(ENetEvent& event, std::vector<NetTransportEvent>& events)
 			{
@@ -267,7 +276,11 @@ namespace Breccia {
 			std::unordered_set<NetPeerHandle> m_ReportedSendFailures;
 			NetPeerHandle m_NextHandle = 1;
 			uint16_t m_ListenPort = 0;
+			static constexpr std::chrono::seconds ServiceErrorLogInterval{ 5 };
 			uint32_t m_ServiceErrors = 0;
+			std::chrono::steady_clock::time_point m_LastServiceErrorLog;
+			// Events Flush received, which the next Poll returns first.
+			std::vector<NetTransportEvent> m_Pending;
 		};
 
 	}

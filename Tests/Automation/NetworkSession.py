@@ -87,7 +87,8 @@ def main():
                 {"command": "entity.create", "params": {"name": "Ground", "components": {
                     "Transform": {"Translation": [0, -0.5, 0]}, "RigidBody": {"Type": "Static"}, "BoxCollider": {"HalfExtents": [10, 0.5, 10]}}}},
                 {"command": "entity.create", "params": {"name": "Crate", "components": {
-                    "Transform": {"Translation": [0, 4, 0]}, "RigidBody": {"Type": "Dynamic"}, "BoxCollider": {}, "Networked": {}}}},
+                    "Transform": {"Translation": [0, 4, 0]}, "Mesh": {"Mesh": "builtin://Cube"}, "RigidBody": {"Type": "Dynamic"},
+                    "BoxCollider": {}, "Networked": {}}}},
                 {"command": "entity.create", "params": {"name": "Lamp", "components": {
                     "Transform": {"Translation": [2, 1, 0]}, "PointLight": {"Intensity": 5}, "Networked": {"Priority": 2}}}},
                 {"command": "scene.save", "params": {"path": "Assets/Scenes/Main.bscene"}},
@@ -157,26 +158,35 @@ def main():
                 require(malformed.returncode != 0 and message in malformed.stdout, f"{option} {value} was accepted:\n{malformed.stdout}")
             both = run(str(runtime), "--project", str(game), "--headless", "--frames", "1", "--host", "0", "--connect", "127.0.0.1")
             require(both.returncode != 0 and "cannot be combined" in both.stdout, f"--host and --connect together were accepted:\n{both.stdout}")
+            taken = run(str(runtime), "--project", str(game), "--headless", "--frames", "1", "--host", str(port))
+            require(taken.returncode == 1 and f"cannot listen on UDP port {port}" in taken.stdout, f"a second host on a port in use did not fail (exit {taken.returncode}):\n{taken.stdout}")
             require(host.process.poll() is None, f"the host stopped early:\n{host.text()}")
-            # Nothing the clients sent was refused, and the socket never failed.
-            for problem in ("sent a value", "not shown", "UDP socket failed", "invalid message", "which it does not own"):
+            # Nothing the clients sent was refused, nothing failed to spawn or send, and the socket never failed.
+            for problem in ("sent a value", "cannot spawn", "could not send", "UDP socket failed", "invalid message", "not a networked entity"):
                 require(problem not in host.text(), f"the host logged '{problem}':\n{host.text()}")
+            for problem in ("not shown", "could not send", "UDP socket failed", "refuses"):
+                require(problem not in joined.stdout, f"the client logged '{problem}':\n{joined.stdout}")
         finally:
             host.stop()
 
-        # A host that stops on its own tells its client, which then ends unconnected. A headless host is paced: its 150
-        # frames at 60 per second take about 2.5 seconds, not a few milliseconds.
-        brief = Host(runtime, game, env, frames=150)
+        # A host that stops on its own tells its client, which then ends unconnected. A headless host is paced: its 360
+        # frames at 60 per second take about 6 seconds, not a fraction of one (timed alone, with the client running beside).
+        brief = Host(runtime, game, env, frames=360)
         try:
             match = brief.wait_for(PORT_LINE, 60)
             require(match is not None, f"the brief host never said which port it listens on:\n{brief.text()}")
-            left = client(game, f"127.0.0.1:{match.group(1)}", frames=400)
-            require(left.returncode == 8, f"a client whose host stopped should exit with 8, not {left.returncode}:\n{left.stdout}")
-            require("disconnected from the host: the host stopped" in left.stdout, f"the client was not told the host stopped:\n{left.stdout}")
-            brief.process.wait(timeout=TIMEOUT)
+            ready = time.monotonic()
+            left = Host(runtime, game, env, frames=900, role=("--connect", f"127.0.0.1:{match.group(1)}"))
+            try:
+                brief.process.wait(timeout=TIMEOUT)
+                elapsed = time.monotonic() - ready
+                left.process.wait(timeout=TIMEOUT)
+            finally:
+                left.stop()
             require(brief.process.returncode == 0, f"the brief host failed (exit {brief.process.returncode}):\n{brief.text()}")
-            elapsed = time.monotonic() - brief.started
-            require(elapsed >= 2.0, f"150 paced frames took only {elapsed:.2f} s: the headless host is not paced")
+            require(elapsed >= 4.0, f"the paced host ran its frames in {elapsed:.2f} s: the headless host is not paced")
+            require(left.process.returncode == 8, f"a client whose host stopped should exit with 8, not {left.process.returncode}:\n{left.text()}")
+            require("disconnected from the host: the host stopped" in left.text(), f"the client was not told the host stopped:\n{left.text()}")
         finally:
             brief.stop()
     print("OK")
