@@ -3,11 +3,12 @@
 Breccia is a desktop 3D engine built for agent-driven development (C++20, CMake, Vulkan via nvrhi) for Windows, macOS
 and Linux. It is early alpha (0.1.0, unreleased), and its code is held to production standards: the rules below are not
 relaxed because of that. Until #76 the engine was named Basalt: older commits, PRs and agent notes use the old names
-(`Basalt` → `Breccia`, `basalt` → `breccia`, `BASALT_` → `BRECCIA_`, the `BS_` macro prefix → `BR_`). Files and per-user
-data from before the rename are not read: their `Format` markers (`BasaltScene` and so on) are rejected, and a build
-tree configured before it stops at configure (top-level `CMakeLists.txt`). Scope and non-goals are in `ROADMAP.md`
-(Scope). This file is the source of truth for how to work in this repository. Read it fully before changing code.
-Task-specific procedures live in `.claude/skills/*/SKILL.md`.
+(`Basalt` → `Breccia`, `basalt` → `breccia`, `BASALT_` → `BRECCIA_`, the `BS_` macro prefix → `BR_`). Nothing from
+before the rename is migrated: files with an old `Format` marker (`BasaltScene` and so on) are rejected, the editor's
+per-user folder is now `BrecciaEditor` (older preferences and layouts are not found), `BASALT_*` environment variables
+are not read, and a build tree configured before the rename stops at configure (top-level `CMakeLists.txt`). Scope and
+non-goals are in `ROADMAP.md` (Scope). This file is the source of truth for how to work in this repository. Read it
+fully before changing code. Task-specific procedures live in `.claude/skills/*/SKILL.md`.
 
 ## Repository layout
 

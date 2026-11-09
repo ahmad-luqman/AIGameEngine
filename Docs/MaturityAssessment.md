@@ -1,8 +1,8 @@
 # Breccia Engine — Maturity Assessment and Gap Analysis
 
 Assessed on 2026-11-07 at `main` @ `4f823ab` (0.1.0, untagged), when the engine was still named Basalt (the names
-here were updated by the rename to Breccia in #76). This replaces the 2026-10-21 report, which was a survey
-of `abffa75` with a delta on top. Scores read `new (old)`.
+here were updated by the rename to Breccia in #76). This replaces the 2026-10-21 report, which was a survey of
+`abffa75` with a delta on top. Scores read `new (old)`.
 
 ## 1. Verdict
 

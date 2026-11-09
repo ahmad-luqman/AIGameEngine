@@ -56,7 +56,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 		return 0;
 	// What a prefab reads as, it writes as the same entities, and what it writes it can read: an ID lost here is an entity
 	// lost from every instance.
-	const nlohmann::json document = { { "Format", "BrecciaPrefab" }, { "Version", Breccia::SceneSerializer::FormatVersion }, { "Entities", std::move(file) } };
+	const nlohmann::json document = { { "Format", Breccia::SceneSerializer::PrefabFormatName }, { "Version", Breccia::SceneSerializer::FormatVersion }, { "Entities", std::move(file) } };
 	nlohmann::json reread;
 	if (!Breccia::Prefab::ReadText(document.dump(), path, reread, error) || !Breccia::Prefab::Normalize(reread, "Fuzz.bprefab", error))
 		abort();

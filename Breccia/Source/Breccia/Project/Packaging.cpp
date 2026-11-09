@@ -321,6 +321,9 @@ namespace Breccia {
 			{ { { { -0.01f, 0.08f }, { 0.31f, 0.11f }, { 0.20f, 0.35f }, { -0.05f, 0.31f } } }, 4, { 134.0f, 140.0f, 152.0f } },
 			{ { { { 0.33f, -0.05f }, { 0.39f, 0.09f }, { 0.30f, 0.07f } } }, 3, { 160.0f, 154.0f, 146.0f } },
 		} };
+		// Count says how many Points a polygon uses: at least a triangle, at most the array.
+		constexpr auto validPolygon = [](const Polygon& polygon) { return polygon.Count >= 3 && polygon.Count <= polygon.Points.size(); };
+		static_assert(validPolygon(Stone) && std::ranges::all_of(Fragments, validPolygon));
 		const auto inside = [](const Polygon& polygon, float x, float y) {
 			// Inside a convex polygon: on the same side of every edge, whichever way it winds.
 			float side = 0.0f;
@@ -356,17 +359,10 @@ namespace Breccia {
 						const float y = (static_cast<float>(py) + (static_cast<float>(sy) + 0.5f) / Samples) / static_cast<float>(size) - 0.5f;
 						if (!inside(Stone, x, y))
 							continue;
-						const std::array<float, 3>* sample = &Stone.Color;
-						for (const Polygon& fragment : Fragments)
-						{
-							if (inside(fragment, x, y))
-							{
-								sample = &fragment.Color;
-								break;
-							}
-						}
+						const auto hit = std::ranges::find_if(Fragments, [&](const Polygon& fragment) { return inside(fragment, x, y); });
+						const std::array<float, 3>& sample = hit != Fragments.end() ? hit->Color : Stone.Color;
 						for (size_t c = 0; c < 3; ++c)
-							color[c] += (*sample)[c];
+							color[c] += sample[c];
 						++covered;
 					}
 				}

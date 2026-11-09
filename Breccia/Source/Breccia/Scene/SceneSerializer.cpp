@@ -443,7 +443,7 @@ namespace Breccia {
 			return false;
 		if (format != SceneFormatName)
 		{
-			outError = "'Format' is '" + format + "', expected '" + SceneFormatName + "'";
+			outError = "'Format' is " + nlohmann::json(format).dump() + ", expected \"" + SceneFormatName + "\"";
 			return false;
 		}
 		if (version > FormatVersion)

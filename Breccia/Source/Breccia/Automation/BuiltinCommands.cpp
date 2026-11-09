@@ -2664,11 +2664,12 @@ namespace Breccia {
 				if (!text)
 					throw CommandError("cannot read '" + path + "'");
 				const json replay = ParseJson(*text);
-				if (!replay.is_object() || replay.value("Format", "") != ReplayFormatName || !replay.contains("Events") || !replay["Events"].is_array())
-				{
-					const bool otherFormat = replay.is_object() && replay.contains("Format") && replay["Format"] != ReplayFormatName;
-					throw CommandError("'" + path + "' is not a Breccia replay file" + (otherFormat ? " ('Format' is " + replay["Format"].dump() + ")" : std::string()));
-				}
+				// find() on a value that is no object finds nothing; comparing JSON never throws, whatever Format holds.
+				const auto format = replay.find("Format");
+				if (format == replay.end() || *format != ReplayFormatName)
+					throw CommandError("'" + path + "' is not a Breccia replay file" + (format == replay.end() ? std::string() : " ('Format' is " + format->dump() + ")"));
+				if (!replay.contains("Events") || !replay["Events"].is_array())
+					throw CommandError("'" + path + "' is not a Breccia replay file (no Events)");
 				// Replays from before seeds were stored ran with Random::DefaultSeed, the only seed there was.
 				const auto storedSeed = replay.find("RandomSeed");
 				uint32_t recordedSeed = Random::DefaultSeed;
