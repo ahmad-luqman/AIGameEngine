@@ -68,7 +68,7 @@ namespace Breccia {
 		// Sets the game view (GameUI viewport) to the window, before scripts run and every frame.
 		void UpdateGameView();
 		// Starts the --host or --connect session on the scene; false (logged) when its socket cannot be opened.
-		bool StartNetwork(std::string& outError);
+		bool StartNetwork(NetworkRole role, std::string& outError);
 		// Logs the session's totals and fails (through `fail`) a client that is not connected at the end of the run.
 		void CheckNetworkResults(const std::function<void(int)>& fail);
 

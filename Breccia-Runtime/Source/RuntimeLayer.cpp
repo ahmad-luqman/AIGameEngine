@@ -76,7 +76,7 @@ namespace Breccia {
 		// Before the scripts' OnCreate, which may read the view (Input.GetViewSize).
 		UpdateGameView();
 		// Before play starts, so a client's runtime IDs come from its own stream from the first OnCreate.
-		if (m_Options.Network && !StartNetwork(error))
+		if (m_Options.Network && !StartNetwork(*m_Options.Network, error))
 		{
 			fail(error);
 			return;
@@ -110,12 +110,12 @@ namespace Breccia {
 			Application::Get().Close();
 	}
 
-	bool RuntimeLayer::StartNetwork(std::string& outError)
+	bool RuntimeLayer::StartNetwork(NetworkRole role, std::string& outError)
 	{
 		const NetworkSettings& settings = Project::GetActive()->GetConfig().Network;
 		const EnetTransportSettings transportSettings{ .TimeoutSeconds = settings.TimeoutSeconds, .MaxMessageBytes = NetworkSystem::MaxHostMessageBytes };
 		Scope<NetTransport> transport;
-		if (*m_Options.Network == NetworkRole::Host)
+		if (role == NetworkRole::Host)
 		{
 			// A few spare slots: a client past MaxClients is told the host is full instead of never hearing back.
 			transport = EnetTransport::Listen(m_Options.NetworkPort, settings.MaxClients + 4, transportSettings, outError);
@@ -131,7 +131,7 @@ namespace Breccia {
 				return false;
 			BR_CORE_INFO("Network: connecting to {}:{}", m_Options.ConnectAddress, m_Options.NetworkPort);
 		}
-		m_Scene->StartNetwork(CreateScope<NetworkSystem>(*m_Scene, *m_Options.Network, std::move(transport), settings, NetworkSystem::Identity::FromActiveProject()));
+		m_Scene->StartNetwork(CreateScope<NetworkSystem>(*m_Scene, role, std::move(transport), settings, NetworkSystem::Identity::FromActiveProject()));
 		return true;
 	}
 

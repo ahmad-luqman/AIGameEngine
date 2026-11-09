@@ -25,6 +25,10 @@ description: Add a new component type to the Breccia engine end to end (data, se
    messages (`Events[2].Name ...`), which must also re-check the list sizes (C++ can grow a list past what the
    reader accepts). Elements cannot hold entity references. The inspector, `component.types` and the generated
    docs pick the list up.
+   Fields a network session should keep in sync after an entity spawns go in the `replicate(...)` list at the end of
+   `BuildRegistry` (`ComponentInfo::ReplicatedFields`: top-level fields, never asset fields). Everything else reaches
+   clients only inside the spawn (Docs/Networking.md). Changing the list changes the wire format, which peers' schema
+   hashes catch.
 3. **Runtime behaviour** — if a system consumes it (physics, audio, renderer, scripting), react to
    `on_construct/on_update/on_destroy` signals or read it each frame. Never store runtime handles in the
    component. Physics components get one `Wire<...>` line in `PhysicsWorld::Impl::WireSignals`

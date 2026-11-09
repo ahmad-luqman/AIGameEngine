@@ -53,7 +53,7 @@ ready" is a claim for after P1.
 - The assessment's five verified defects were fixed in PR #74: physics reports overflows and sizes its temporary memory
   from its capacity, the editor and CLI stop scripts that never return, the editor server closes connections that do not
   open with JSON, and `project.validate` refuses clips the engine cannot decode. Their residuals are in P1.
-- The largest gaps, by the assessment: no networking, no navigation, no occlusion culling, global illumination, fog,
+- The largest gaps, by the assessment: networking without a gameplay API or prediction yet (Networking II), no navigation, no occlusion culling, global illumination, fog,
   decals, terrain or custom shaders, no Lua debugger, a CPU cost that grows linearly with entity count, no GPU memory
   management, and no release, tutorial or real game.
 
@@ -61,22 +61,9 @@ ready" is a claim for after P1.
 
 ## P0 — Networking
 
-Multiplayer is the first new system. Two sessions build the layer; a sample proves it.
-
-### Networking I: transport, connections and replication — L
-- **Transport.** UDP with reliable and unreliable channels, pinned in `cmake/Dependencies.cmake`. Choose it in the
-  session (candidates: ENet, yojimbo, GameNetworkingSockets) by: builds on all three CI platforms without system
-  packages, encryption or a path to it, and a small surface to fuzz. Every packet is untrusted input: parse with
-  bounds-checked readers and add a `Tests/Fuzz` target (`FuzzNetPacket`).
-- **Model.** Client-server with an authoritative host: a listen server inside a playing game, or `BrecciaRuntime
-  --headless` as a dedicated server (it already runs the full game loop without a GPU). Connections, timeouts,
-  disconnect reasons and a protocol version check.
-- **Replication.** A component (via the `breccia-add-component` skill) that marks an entity as networked, with owner and
-  authority. Replicated fields are declared through `ComponentRegistry`, keeping the one data path, but sent in a compact
-  binary encoding with snapshot deltas, not as JSON. Spawns and despawns of networked entities and prefabs, entity
-  identity across peers (runtime UUIDs are already seeded per session), and a per-connection bandwidth budget.
-- **Tests.** Unit tests run several peers in one process over a simulated link with fixed latency, loss and reordering
-  driven by the fixed timestep, never the wall clock. Servers in integration tests take a free port.
+Multiplayer is the first new system. Two sessions build the layer; a sample proves it. Networking I shipped the ENet
+transport, authoritative host/client sessions, the `Networked` component with registry-declared replicated fields,
+acknowledged snapshot deltas with a bandwidth budget, and `FuzzNetPacket` (`Docs/Networking.md`).
 
 ### Networking II: gameplay API, prediction and tools — L
 - **Lua.** A `Network` API: host, connect and disconnect; connection events; reliable and unreliable messages and RPCs
@@ -86,10 +73,14 @@ Multiplayer is the first new system. Two sessions build the layer; a sample prov
   of remote entities between snapshots (this also needs the fixed-step interpolation listed in P2), and lag compensation
   for raycasts.
 - **Automation.** `net.*` commands to start a host, connect clients, inspect connections and replication state, and
-  inject latency and loss, so an agent can test a multiplayer game headless. `scene.hash` per peer to assert that peers
-  agree.
+  inject latency and loss (`SimulatedNetwork` already models them), so an agent can test a multiplayer game headless, and
+  Play in the editor as a host or client. `scene.hash` per peer to assert that peers agree.
+- **Session gaps Networking I left.** Scene loads during a session (every peer switching together; refused today),
+  reconnecting a client whose session ended, and a client-side despawn that the host respawns.
 - **Later, not in this session:** interest management for large worlds; deterministic lockstep or rollback, which needs
-  the whole simulation to be deterministic (today only physics is pinned: IK uses libm, and Lua is not checked).
+  the whole simulation to be deterministic (today only physics is pinned: IK uses libm, and Lua is not checked);
+  encryption, through ENet's per-datagram compressor hook with keys from an authenticated handshake (`Docs/Networking.md`);
+  IPv6; quantized rotations and positions in snapshots.
 
 ### Multiplayer sample — M
 A small arena or co-op game built through the automation API, with a ctest that runs a server and two clients headless

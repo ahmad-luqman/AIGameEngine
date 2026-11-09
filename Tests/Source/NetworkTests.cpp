@@ -365,10 +365,14 @@ TEST_SUITE("Network")
 	{
 		const ReplicationSchema& schema = ReplicationSchema::Get();
 		CHECK(schema.GetComponents().size() == ComponentRegistry::GetAll().size());
-		const ComponentInfo* transform = schema.FindComponent(ComponentIndex("Transform"))->Info;
-		CHECK(transform->ReplicatedFields == std::vector<std::string>{ "Translation", "Rotation", "Scale" });
-		CHECK(schema.FindComponent(ComponentIndex("Transform"))->IsCore);
-		CHECK(schema.FindComponent(ComponentIndex("Networked"))->Info->ReplicatedFields == std::vector<std::string>{ "Owner", "Authority" });
+		const ReplicationSchema::Component* transform = schema.FindComponent(ComponentIndex("Transform"));
+		const ReplicationSchema::Component* networked = schema.FindComponent(ComponentIndex("Networked"));
+		REQUIRE(transform);
+		REQUIRE(networked);
+		CHECK(transform->Info->ReplicatedFields == std::vector<std::string>{ "Translation", "Rotation", "Scale" });
+		CHECK(transform->IsCore);
+		CHECK_FALSE(networked->IsCore);
+		CHECK(networked->Info->ReplicatedFields == std::vector<std::string>{ "Owner", "Authority" });
 		CHECK_FALSE(schema.FindComponent(static_cast<uint32_t>(schema.GetComponents().size())));
 		CHECK(schema.GetHash() != 0);
 		// Only top-level fields, never asset fields (a client would load whatever path a host named).
@@ -432,7 +436,7 @@ TEST_SUITE("Network")
 		state.Spawns.push_back({ 10, 0, nlohmann::json::array({ { { "ID", 10 }, { "Name", "A" }, { "Parent", 0 }, { "Components", nlohmann::json::object() } } }) });
 		state.Updates.push_back({ 11, UUID(10), { { transform, false, false, { { 0, { 1.0, 2.0, 3.0 } } } }, { light, true, false, {} } } });
 		state.Updates.push_back({ 12, std::nullopt, { { light, false, true, { { 0, { 1.0, 1.0, 1.0 } }, { 1, 4.0 } } } } });
-		state.Despawns.push_back(13);
+		state.Despawns.emplace_back(13);
 		const std::vector<uint8_t> bytes = NetProtocol::EncodeState(NetMessageType::Snapshot, state);
 		const auto decoded = DecodeMessage(bytes, &error);
 		REQUIRE_MESSAGE(decoded, error);
@@ -480,7 +484,7 @@ TEST_SUITE("Network")
 		CHECK_FALSE(encodes(withUpdate({ 0, UUID(5), {} })));
 		// One entity twice in a message.
 		NetState twice = withUpdate({ 1, UUID(5), {} });
-		twice.Despawns.push_back(1);
+		twice.Despawns.emplace_back(1);
 		CHECK_FALSE(encodes(twice));
 		NetState zero = withUpdate({ 1, UUID(5), {} });
 		zero.Sequence = 0;
@@ -616,7 +620,7 @@ TEST_SUITE("Network")
 		std::vector<NetTransportEvent> hostEvents;
 		std::vector<NetTransportEvent> clientEvents;
 		const auto advance = [&](float seconds) {
-			for (float t = 0; t < seconds; t += 0.01f)
+			for (int step = 0; step < static_cast<int>(std::lround(seconds / 0.01f)); step++)
 			{
 				network.Advance(0.01f);
 				host->Poll(hostEvents);
