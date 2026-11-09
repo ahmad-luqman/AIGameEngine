@@ -28,12 +28,6 @@ namespace Basalt {
 
 	namespace {
 
-		// Why a process failed: what RunProcess reported, or its exit code after a normal exit (Windows exports start none).
-		[[maybe_unused]] std::string DescribeFailure(const ProcessResult& run)
-		{
-			return run.Error.empty() ? "exit code " + std::to_string(run.ExitCode) : run.Error;
-		}
-
 		std::string SanitizeFileName(const std::string& name)
 		{
 			std::string result;
@@ -550,17 +544,23 @@ namespace Basalt {
 		}
 
 		// Warns when a bundled library is Mach-O code that lacks an architecture the runtime has: the game would not start
-		// on such Macs (a universal runtime with Homebrew's single-architecture libraries). Files that are not Mach-O at
-		// all are left to the loader, which reports them when the game starts.
+		// on such Macs (a universal runtime with Homebrew's single-architecture libraries). A runtime or library that is no
+		// Mach-O code at all (a test's stand-in, a damaged file) cannot be compared: that is only logged, since the export's
+		// smoke test runs headless and never loads the libraries.
 		void CheckLibraryArchitectures(const std::filesystem::path& runtime, const VulkanLibraries& libraries, std::vector<std::string>& outWarnings)
 		{
 			const auto architectures = [](const std::filesystem::path& path) {
 				std::error_code error;
 				const std::optional<uint64_t> size = FileSystem::GetRegularFileSize(path, error);
 				const auto header = size ? FileSystem::ReadBinaryFilePrefix(path, std::min<uint64_t>(*size, MachOHeaderBytes)) : std::nullopt;
-				return header ? MachOArchitectures(*header) : std::vector<std::string>{};
+				std::vector<std::string> found = header ? MachOArchitectures(*header) : std::vector<std::string>{};
+				if (found.empty())
+					BS_CORE_WARN("Exporter: '{}' is no 64-bit Mach-O code, so its architectures cannot be checked", FileSystem::PathToUtf8(path));
+				return found;
 			};
 			const std::vector<std::string> wanted = architectures(runtime);
+			if (wanted.empty())
+				return;
 			for (const std::filesystem::path* library : { &libraries.Loader, &libraries.MoltenVK })
 			{
 				const std::vector<std::string> found = architectures(*library);
@@ -571,8 +571,8 @@ namespace Basalt {
 			}
 		}
 
-		// Signs an export ad hoc: the Vulkan libraries in libraryDirectory first, then sealingCode, the executable or the
-		// bundle that seals them. A release's runtime, once signed with Basalt's Developer ID, has the hardened runtime,
+		// Signs an export ad hoc: the Vulkan libraries BundleMoltenVK put in libraryDirectory first, then sealingCode, the
+		// executable or the bundle that seals them. A release's runtime, once signed with Basalt's Developer ID, has the hardened runtime,
 		// whose library validation refuses libraries signed by anyone else (the SDK's, Homebrew's), and would name Basalt's
 		// publisher as the game's. An ad hoc signature names no one and checks no libraries; scripts/sign-macos.sh
 		// replaces it with the developer's.
@@ -589,7 +589,7 @@ namespace Basalt {
 				const ProcessResult run = RunProcess(spec);
 				if (!run.Succeeded())
 				{
-					outError = "codesign could not sign '" + FileSystem::PathToUtf8(path) + "' (" + DescribeFailure(run) + "): " + run.Output;
+					outError = "codesign could not sign '" + FileSystem::PathToUtf8(path) + "' (" + run.DescribeFailure() + "): " + run.Output;
 					return false;
 				}
 			}
@@ -725,7 +725,7 @@ namespace Basalt {
 			const ProcessResult run = RunProcess(spec);
 			if (!run.Succeeded())
 			{
-				result.Error = "appimagetool failed (" + DescribeFailure(run) + "): " + run.Output;
+				result.Error = "appimagetool failed (" + run.DescribeFailure() + "): " + run.Output;
 				return false;
 			}
 			outPackage = appImage;
@@ -928,8 +928,13 @@ namespace Basalt {
 #elif defined(BS_PLATFORM_WINDOWS)
 		// Every export, folder or package: the game carries no signature but its developer's, and a package's resource
 		// rewrite (WriteWindowsResources, next) would break one anyway.
-		if (!RemoveAuthenticodeSignature(executable, result.Error))
+		const std::optional<SignatureRemoval> removal = RemoveAuthenticodeSignature(executable, result.Error);
+		if (!removal)
 			return fail();
+		// Not a Windows executable (a test's stand-in, or a damaged runtime): there is no signature to remove. Only the smoke
+		// test can tell whether the game starts, so say so where it does not run.
+		if (*removal == SignatureRemoval::NotExecutable)
+			BS_CORE_WARN("Exporter: the runtime '{}' is not a Windows executable: the exported game will not start", FileSystem::PathToUtf8(runtime));
 		if (options.Package && !WriteWindowsResources(executable, *info, icon ? &*icon : nullptr, result.Error))
 			return fail();
 #elif defined(BS_PLATFORM_LINUX)

@@ -60,6 +60,8 @@ namespace Basalt {
 		std::string Error;
 
 		bool Succeeded() const { return Outcome == ProcessOutcome::Exited && ExitCode == 0; }
+		// Why the child failed, for a message: Error, or "exit code N" after a normal exit.
+		std::string DescribeFailure() const { return Error.empty() ? "exit code " + std::to_string(ExitCode) : Error; }
 	};
 
 	// Runs a program to completion with a timeout, capturing its output, and blocks the calling thread until it

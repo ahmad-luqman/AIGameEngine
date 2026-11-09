@@ -4,9 +4,10 @@ cmake_minimum_required(VERSION 3.25)
 # uses it, so a call into a newer API fails to compile on every machine instead of failing at run time on an older Mac.
 # Exported Info.plists state it (LSMinimumSystemVersion), and scripts/ci-universal-vulkan.sh builds the release's Vulkan
 # loader for it, reading the value from the set() line below: keep it a literal there. 13.3 is the first with the whole
-# C++20 library Basalt uses (floating-point std::to_chars among it); MoltenVK v1.4.2's library declares 12.0. A value given
-# with -D or MACOSX_DEPLOYMENT_TARGET wins; an empty one (what CMake caches by itself) does not.
-if(NOT CMAKE_OSX_DEPLOYMENT_TARGET AND NOT DEFINED ENV{MACOSX_DEPLOYMENT_TARGET})
+# C++20 library Basalt uses (floating-point std::to_chars among it); the MoltenVK release that script pins declares an
+# older minimum (12.0 at v1.4.2). A value given with -D or MACOSX_DEPLOYMENT_TARGET wins; an empty one (what CMake caches
+# by itself, or an empty variable) does not.
+if(NOT CMAKE_OSX_DEPLOYMENT_TARGET AND "$ENV{MACOSX_DEPLOYMENT_TARGET}" STREQUAL "")
 	set(CMAKE_OSX_DEPLOYMENT_TARGET "13.3" CACHE STRING "Minimum macOS version" FORCE)
 endif()
 

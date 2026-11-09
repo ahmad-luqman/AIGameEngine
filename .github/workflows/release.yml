@@ -7,8 +7,8 @@ name: Release
 # this workflow run, the packaging and signing scripts, the top-level and engine CMakeLists.txt (the macOS deployment
 # target), cmake/Dependencies.cmake (the Vulkan-Headers tag the release's loader is built at), the Project module, the
 # runtime, the Process, Window, VulkanLoader, PackArchive and CrashReporter sources, the samples), and manual runs, do
-# everything except publishing, so the pipeline is tested before a tag needs it. Same-repository pull requests sign with
-# the real secrets too, so the signing path is tested before a tag needs it.
+# everything except publishing (same-repository ones signing with the real secrets), so the pipeline, signing included,
+# is tested before a tag needs it.
 on:
   push:
     tags: [ 'v*' ]
@@ -44,7 +44,9 @@ jobs:
   package:
     name: ${{ matrix.os }} / package
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
+    # The universal macOS build compiles everything twice, and with a Developer ID each of up to eight notarizations may
+    # wait 30 minutes for Apple (scripts/sign-macos.sh).
+    timeout-minutes: 240
     strategy:
       fail-fast: false
       matrix:
@@ -75,8 +77,9 @@ jobs:
         run: |
           tools="$RUNNER_TEMP/appimage"
           mkdir -p "$tools"
-          curl -fsSL --retry 3 -o "$tools/appimagetool" https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
-          curl -fsSL --retry 3 -o "$tools/runtime" https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64
+          # Any failure is retried (GitHub's downloads answer 504 at times).
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 -o "$tools/appimagetool" https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 -o "$tools/runtime" https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64
           echo "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  $tools/appimagetool" | sha256sum -c -
           echo "2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d  $tools/runtime" | sha256sum -c -
           chmod +x "$tools/appimagetool"
@@ -86,7 +89,7 @@ jobs:
 
       # Dist: optimized, no asserts. The tests run in CI on every push; here the samples' smoke tests check the build. macOS
       # builds both architectures into each binary (package_release.py --require-universal checks).
-      # (The default shell: Git Bash on Windows could put its own link before MSVC's.)
+      # The default shell (pwsh on Windows), not bash: Git Bash's PATH puts its own link before MSVC's link.exe.
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Dist -DBASALT_BUILD_TESTS=OFF -DBASALT_CHECK_FORMAT=OFF ${{ runner.os == 'macOS' && '"-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"' || '' }}
 
@@ -97,8 +100,8 @@ jobs:
       - name: Build
         run: cmake --build build -- -k 0
 
-      # After the build: the directory holds only lib/, and the build takes glslc hints from VULKAN_SDK (cmake/Shaders.cmake).
-      # The exporter and package_release.py take the libraries from it.
+      # After the build, so the build's glslc lookup (cmake/Shaders.cmake hints at $VULKAN_SDK/bin) never sees a VULKAN_SDK that
+      # holds only lib/. package_release.py and the exporter take the libraries from it.
       - name: Build universal Vulkan libraries (macOS)
         if: runner.os == 'macOS'
         timeout-minutes: 15
@@ -153,7 +156,8 @@ jobs:
       # WINDOWS_CERTIFICATE is a base64 .pfx with its private key, WINDOWS_CERTIFICATE_PASSWORD its (required) password. It
       # goes into the runner's certificate store, from which signtool takes it by thumbprint, so the password reaches no
       # command line. Publicly trusted certificates issued since June 2023 cannot leave their hardware as a .pfx: for one,
-      # replace this step with the signing service's own and pass package_release.py --windows-dlib (Docs/Shipping.md).
+      # replace this step with the signing service's own, which sets WINDOWS_SIGNING_DLIB and WINDOWS_SIGNING_METADATA (and
+      # WINDOWS_SIGNING_TIMESTAMP_URL) in GITHUB_ENV for the Package step (Docs/Shipping.md).
       - name: Import the signing certificate (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -182,15 +186,16 @@ jobs:
             Remove-Item $pfx
           }
           # A .pfx may carry its issuers, or an expired certificate beside a renewed one: take the one code signing
-          # certificate with a private key that is valid now.
+          # certificate with a private key that is valid now. Usages are read from the certificate's own extension.
           $now = Get-Date
+          $usages = { param($c) @($c.Extensions | Where-Object { $_ -is [Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension] } |
+            ForEach-Object { $_.EnhancedKeyUsages } | ForEach-Object { $_.Value }) }
           $certificate = @($imported | Where-Object {
-            $_.HasPrivateKey -and $_.NotBefore -le $now -and $now -lt $_.NotAfter -and
-            ($_.EnhancedKeyUsageList | Where-Object { $_.ObjectId -eq '1.3.6.1.5.5.7.3.3' })
+            $_.HasPrivateKey -and $_.NotBefore -le $now -and $now -lt $_.NotAfter -and ((& $usages $_) -contains '1.3.6.1.5.5.7.3.3')
           })
           if ($certificate.Count -ne 1) {
-            $found = ($imported | ForEach-Object { "$($_.Subject) (key: $($_.HasPrivateKey), valid $($_.NotBefore) to $($_.NotAfter))" }) -join '; '
-            Write-Output "::error::WINDOWS_CERTIFICATE must hold exactly one valid code signing certificate with its private key; it holds $($certificate.Count): $found"
+            $found = ($imported | ForEach-Object { "$($_.Subject) (private key: $($_.HasPrivateKey); valid $($_.NotBefore) to $($_.NotAfter); usages: $((& $usages $_) -join ', '))" }) -join '; '
+            Write-Output "::error::WINDOWS_CERTIFICATE must hold exactly one certificate that has its private key, is valid now and allows code signing (1.3.6.1.5.5.7.3.3); $($certificate.Count) of these do: $found"
             exit 1
           }
           $certificate = $certificate[0]
@@ -204,12 +209,15 @@ jobs:
           [[ "$RUNNER_OS" == "macOS" ]] && arguments+=(--require-universal)
           [[ -n "${SIGN_IDENTITY:-}" ]] && arguments+=(--sign-identity "$SIGN_IDENTITY" --notarize basalt-notary)
           [[ -n "${WINDOWS_CERTIFICATE_THUMBPRINT:-}" ]] && arguments+=(--windows-certificate "$WINDOWS_CERTIFICATE_THUMBPRINT")
+          # A signing service's library and metadata, which a replacement for the import step sets (Docs/Shipping.md).
+          [[ -n "${WINDOWS_SIGNING_DLIB:-}" ]] && arguments+=(--windows-dlib "$WINDOWS_SIGNING_DLIB" --windows-dlib-metadata "${WINDOWS_SIGNING_METADATA:-}")
+          [[ -n "${WINDOWS_SIGNING_TIMESTAMP_URL:-}" ]] && arguments+=(--windows-timestamp-url "$WINDOWS_SIGNING_TIMESTAMP_URL")
           python scripts/package_release.py "${arguments[@]}"
           # The publish job adds these notes to the release.
           if [[ "$RUNNER_OS" == "macOS" && -z "${SIGN_IDENTITY:-}" ]]; then
             echo "The macOS tools and samples are signed ad hoc, not with a Developer ID: macOS blocks them until you allow them in System Settings > Privacy & Security." > dist/NOTES-macos.md
           fi
-          if [[ "$RUNNER_OS" == "Windows" && -z "${WINDOWS_CERTIFICATE_THUMBPRINT:-}" ]]; then
+          if [[ "$RUNNER_OS" == "Windows" && -z "${WINDOWS_CERTIFICATE_THUMBPRINT:-}${WINDOWS_SIGNING_DLIB:-}" ]]; then
             echo "The Windows tools and samples are not signed: SmartScreen warns before they first run (More info > Run anyway)." > dist/NOTES-windows.md
           fi
           ls -l dist

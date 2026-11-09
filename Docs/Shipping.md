@@ -69,7 +69,7 @@ Each platform packages the host's runtime, so build each package on its own plat
 
 The runtime finds its project in `Contents/Resources` when none is next to the executable, and the Vulkan loader
 finds MoltenVK through the manifest there. `Info.plist` states the oldest macOS the runtime is built for
-(`LSMinimumSystemVersion`: 13.3, `CMAKE_OSX_DEPLOYMENT_TARGET`). Every export replaces the whole bundle.
+(`LSMinimumSystemVersion`: 13.3 by default, `CMAKE_OSX_DEPLOYMENT_TARGET`). Every export replaces the whole bundle.
 
 The bundle holds the architectures of the runtime and of the libraries it was given: a release's tools are universal
 (arm64 and x86-64) and carry universal libraries next to the runtime, which an export from them takes first (a build
@@ -190,9 +190,11 @@ to Apple's notary service with credentials stored once with
 waits for the result (printing Apple's log when it is rejected) and staples the ticket, so the game also opens offline. Sign again after any change to the
 bundle, and zip it with `ditto -c -k --keepParent`, which keeps the signature intact.
 
-Given a folder instead (a folder export, or the tools' `bin/`), the script signs the `.dylib` files and the executables
-(Mach-O files) directly in it, libraries first, and verifies each. Notarizing a folder submits those files; since only
-bundles, disk images and installers can hold a ticket, macOS checks each one online the first time it runs.
+Given a folder instead (a folder export, or the tools' `bin/`), the script signs the `.dylib` files and the Mach-O
+executables directly in it, libraries first, and verifies each; links and other files are left alone, and Mach-O code
+that is neither, or a file it cannot read, stops it. Notarizing a folder submits those files; since only bundles, disk
+images and installers can hold a ticket, macOS checks each one online the first time it runs. Each submission is named in
+the log before the script waits for it, at most 30 minutes.
 
 ### Signing on Windows
 
@@ -207,17 +209,21 @@ A folder stands for the `.exe` and `.dll` files directly in it; files may be nam
 never keeps a signature (see Packages). The certificate is taken from the current user's certificate store by its SHA-1
 thumbprint (`Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert` lists them), or with `--machine-store` from the
 machine's. Publicly trusted certificates issued since June 2023 keep their key on a hardware token or in a cloud HSM,
-whose key storage provider puts them in a store; a `.pfx` file (an older or a private certificate) gets there with `Import-PfxCertificate -FilePath cert.pfx -CertStoreLocation Cert:\CurrentUser\My
--Password (Read-Host -AsSecureString)`. A signing service with its own signtool library, such as Azure Trusted Signing,
-is used with `--dlib <Azure.CodeSigning.Dlib.dll> --dlib-metadata <metadata.json> --timestamp-url
-http://timestamp.acs.microsoft.com`.
+whose key storage provider puts them in a store. A `.pfx` file gets there with:
+
+```powershell
+Import-PfxCertificate -FilePath cert.pfx -CertStoreLocation Cert:\CurrentUser\My -Password (Read-Host -AsSecureString)
+```
+
+A signing service with its own signtool library, such as Azure Trusted Signing, is used with `--dlib
+<Azure.CodeSigning.Dlib.dll> --dlib-metadata <metadata.json> --timestamp-url http://timestamp.acs.microsoft.com`.
 
 The timestamp (default `http://timestamp.digicert.com`, any RFC 3161 server works with any certificate) keeps the
 signature valid after the certificate expires; a signing that fails because of the server (signtool names it, or
 reports a network error) is tried again after 5 and 15 seconds, and `--no-timestamp` leaves the timestamp out. Each
 file is then verified with `signtool verify /pa` (with `--thumbprint`, also that this certificate signed it), which
-requires a certificate that chains to a root this machine trusts; `--allow-untrusted` accepts an untrusted root and no
-other failure, for test certificates. The script exits 2 for invalid options and 1 when a file, a folder's code or
+requires a certificate that chains to a root this machine trusts; `--allow-untrusted` verifies each file on its own and
+accepts a failure only when it is an untrusted root, for test certificates. The script exits 2 for invalid options and 1 when a file, a folder's code or
 signtool is missing or signing or verifying fails. A signature names the publisher in Windows' prompts and file
 properties; SmartScreen may still warn about a new program until downloads of it build a reputation, whatever the
 certificate.
@@ -297,15 +303,14 @@ A final job publishes them as a GitHub release with generated notes. Windows and
 `linux-x64`). macOS is universal (`macos-universal`): built on Apple Silicon (`macos-15`) for both arm64 and x86-64
 (`CMAKE_OSX_ARCHITECTURES`) and the engine's minimum macOS (see Packages), with a Vulkan loader built the same way at the Vulkan-Headers pin
 and MoltenVK's universal release (`scripts/ci-universal-vulkan.sh`, which pins its version and checksum).
-`package_release.py --require-universal` fails unless the CLI holds both architectures, every Mach-O file shipped (the
-tools, their libraries, each sample's executable and libraries) must hold the same ones, and where the Mac can run x86-64
-code (Rosetta 2; the GitHub runners have it) the x86-64 half of the packaged tools and of each sample is started too.
-With `--require-universal`, a Mac that cannot run it fails the run rather than ship that half untested; otherwise it
-warns. Jolt's x86-64 half is built for SSE4.2 (`cmake/Dependencies.cmake`), which every Mac of that minimum has. A local
+Every Mach-O file shipped (the tools, their libraries, each sample's executable and libraries) must hold exactly the
+CLI's architectures. On a universal build, the x86-64 half of the packaged tools and of each sample is started through
+Rosetta 2 (the GitHub runners have it); a Mac without it only warns, unless `--require-universal` is given (as the
+release does), which also fails unless the CLI holds both arm64 and x86-64. Jolt's x86-64 half is built for SSE4.2 (`cmake/Dependencies.cmake`), which every Mac of that minimum has. A local
 run without `CMAKE_OSX_ARCHITECTURES` packages the host's architecture (`macos-arm64` on Apple Silicon).
 
-The packaged CLI (`project.info` on a sample) and runtime (headless) are then started from the tools archive's folder,
-after any signing (the editor needs a display and is not). Pull requests that change the main inputs of the packages
+Unless `--skip-engine`, the packaged CLI (`project.info` on a sample) and runtime (headless) are started from the tools
+archive's folder once it is archived, after any signing (the editor needs a display and is not). Pull requests that change the main inputs of the packages
 (the workflow, the packaging and signing scripts, the top-level and engine `CMakeLists.txt`, `cmake/Dependencies.cmake`,
 the Project module, the runtime, the Process, Window, VulkanLoader, PackArchive and CrashReporter sources, the samples),
 and manual runs (`workflow_dispatch`), run everything except publishing. Locally:
@@ -333,14 +338,20 @@ are signed with the hardened runtime and notarized as a folder, and each sample'
 | `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD` | notarytool credentials (an app-specific password) |
 
 **Windows signing in CI.** Without secrets, the Windows tools and samples are not signed, a tag release shows a warning
-and says so in its notes. With these two secrets, the one valid code signing certificate with a private key in the
-`.pfx` goes into the runner's certificate store and `package_release.py --windows-certificate <thumbprint>` signs the
-three tools and each sample's folder (timestamped by DigiCert's server); the CLI, the runtime and each sample are then
-started again. Without `WINDOWS_CERTIFICATE` the password is ignored. Only a certificate whose key may leave its hardware
-fits a `.pfx` secret, which publicly trusted certificates issued since June 2023 may not: for one of those, sign on a
-machine that holds its token, or replace the import step with a signing service's own (such as Azure Trusted Signing's)
-and pass `package_release.py --windows-dlib <dll> --windows-dlib-metadata <json>`. Pull requests from branches of this
-repository get the secrets too, so they sign with the real certificates, which tests the signing path before a tag.
+and says so in its notes. With these two secrets, the `.pfx` goes into the runner's certificate store, its one
+certificate that has its private key, is valid now and allows code signing is picked, and `package_release.py
+--windows-certificate <thumbprint>` signs the tools' `bin/` and each sample's folder (timestamped by DigiCert's server);
+each sample is then smoke-tested again. Without `WINDOWS_CERTIFICATE` the password is ignored.
+
+A `.pfx` secret fits only a certificate whose key may leave its hardware. No publicly trusted code signing certificate
+valid today does: those issued since June 2023 may not, and older ones (at most 39 months) have expired, while a private
+one fails verification on the runner, which does not trust its root. So in practice Windows signing in CI goes through a
+signing service such as Azure Trusted Signing: replace the import step with the service's own setup, which installs its
+signtool library and writes its metadata file, and have it set `WINDOWS_SIGNING_DLIB` and `WINDOWS_SIGNING_METADATA` (the
+two paths) in `GITHUB_ENV`, and `WINDOWS_SIGNING_TIMESTAMP_URL` for the service's own timestamp server
+(`http://timestamp.acs.microsoft.com` for Azure). The Package step then passes them as `--windows-dlib`,
+`--windows-dlib-metadata` and `--windows-timestamp-url`, and the release notes no longer call the packages unsigned. Pull requests from branches of this repository get the secrets too,
+so they sign with the real certificates, which tests the signing path before a tag.
 
 | Secret | Value |
 |--------|-------|

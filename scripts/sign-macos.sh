@@ -8,10 +8,10 @@
 # Apple's notary service with credentials stored once in the keychain:
 #   xcrun notarytool store-credentials <profile> --apple-id <id> --team-id <TEAMID> --password <app-specific password>
 # then staples the ticket to a bundle, so it also opens offline.
-# A folder is a folder export (the game, the Vulkan loader and MoltenVK) or the tools' bin/: the Mach-O files directly
-# in it (.dylib libraries and executables) are signed, libraries first; one that is neither, or cannot be read, stops it.
-# Only bundles, disk images and installers can hold a ticket, so a notarized folder's tools are checked online the first
-# time each one runs. Notarization waits at most an hour for Apple's verdict.
+# A folder is a folder export (the game, the Vulkan loader and MoltenVK) or the tools' bin/: the .dylib files and the
+# Mach-O executables directly in it are signed, libraries first; links and other files are left alone, and Mach-O code
+# that is neither, or a file that cannot be read, stops it. Only bundles, disk images and installers can hold a ticket, so
+# a notarized folder's tools are checked online the first time each one runs. Each submission waits 30 minutes at most.
 set -euo pipefail
 
 usage() {
@@ -53,16 +53,16 @@ options=(--force --sign "$identity")
 # no team, so library validation would only get in the way of the bundled Vulkan libraries.
 [[ "$identity" != "-" ]] && options+=(--options runtime --timestamp)
 
-# Mach-O files start with a thin 64-bit (cf fa ed fe) or a universal (ca fe ba be, ca fe ba bf) header. Prints yes or
-# no; a file that cannot be read stops the script.
+# Whether a readable file starts with a thin 64-bit (cf fa ed fe) or a universal (ca fe ba be, ca fe ba bf) Mach-O header.
+# A failed read stops the script rather than pass for "no".
 is_mach_o() {
 	local magic
-	if [[ ! -r "$1" ]]; then
+	if ! magic="$(od -An -tx1 -N4 "$1")"; then
 		echo "cannot read '$1'" >&2
 		exit 1
 	fi
-	magic="$(od -An -tx1 -N4 "$1" | tr -d ' \n')"
-	if [[ "$magic" == cffaedfe || "$magic" == cafebabe || "$magic" == cafebabf ]]; then echo yes; else echo no; fi
+	magic="${magic//[[:space:]]/}"
+	[[ "$magic" == cffaedfe || "$magic" == cafebabe || "$magic" == cafebabf ]]
 }
 
 # Inside out: nested code first, then what holds it (a bundle seals everything under Contents).
@@ -80,15 +80,19 @@ else
 	executables=()
 	for file in "$target"/*; do
 		[[ -f "$file" && ! -L "$file" ]] || continue
-		code="$(is_mach_o "$file")"
+		if [[ ! -r "$file" ]]; then
+			echo "cannot read '$file'" >&2
+			exit 1
+		fi
 		if [[ "$file" == *.dylib ]]; then
 			libraries+=("$file")
-		elif [[ "$code" == yes && -x "$file" ]]; then
+		elif is_mach_o "$file"; then
+			if [[ ! -x "$file" ]]; then
+				# Shipping it unsigned would fail on players' Macs; what it is decides how to sign it.
+				echo "'$file' is Mach-O code that is neither a .dylib nor executable: sign it yourself, or remove it" >&2
+				exit 1
+			fi
 			executables+=("$file")
-		elif [[ "$code" == yes ]]; then
-			# Shipping it unsigned would fail on players' Macs; what it is decides how to sign it.
-			echo "'$file' is Mach-O code that is neither a .dylib nor executable: sign it yourself, or remove it" >&2
-			exit 1
 		fi
 	done
 	if [[ ${#libraries[@]} -gt 0 ]]; then
@@ -118,25 +122,26 @@ if [[ -n "$profile" ]]; then
 		ditto "${signed[@]}" "$staging"
 		ditto -c -k --keepParent "$staging" "$archive"
 	fi
-	# The verdict is read from the result rather than the exit status (which does not reflect a rejection on every Xcode),
-	# and a rejection prints Apple's log, which says what to fix.
-	submitted=0
-	result="$(xcrun notarytool submit "$archive" --keychain-profile "$profile" --wait --timeout 1h --output-format plist)" || submitted=$?
+	# Submitted first and waited for after, so the log names the submission before any wait (a job timeout would cut
+	# off everything after it). The verdict is read from notarytool info rather than an exit status (which does not
+	# reflect a rejection on every Xcode), and a rejection prints Apple's log, which says what to fix.
+	submitted="$(xcrun notarytool submit "$archive" --keychain-profile "$profile" --output-format plist)"
+	submission="$(plutil -extract id raw -o - - <<< "$submitted" 2>/dev/null || true)"
+	if [[ -z "$submission" ]]; then
+		echo "cannot read the submission ID from notarytool: $submitted" >&2
+		exit 1
+	fi
+	echo "notarization submission $submission (xcrun notarytool info $submission --keychain-profile $profile)"
+	xcrun notarytool wait "$submission" --keychain-profile "$profile" --timeout 30m >&2 || true
+	result="$(xcrun notarytool info "$submission" --keychain-profile "$profile" --output-format plist || true)"
 	status="$(plutil -extract status raw -o - - <<< "$result" 2>/dev/null || true)"
-	submission="$(plutil -extract id raw -o - - <<< "$result" 2>/dev/null || true)"
 	if [[ "$status" != "Accepted" ]]; then
-		if [[ -n "$status" ]]; then
-			echo "notarization $status" >&2
-		elif [[ $submitted -eq 0 ]]; then
-			echo "cannot read notarytool's verdict" >&2
-		else
-			echo "notarization failed or timed out (notarytool exited with $submitted)" >&2
-		fi
-		echo "$result" >&2
-		if [[ -n "$submission" ]]; then
-			echo "submission $submission: xcrun notarytool info $submission --keychain-profile $profile" >&2
-			xcrun notarytool log "$submission" --keychain-profile "$profile" >&2 || true
-		fi
+		case "$status" in
+			"In Progress") echo "Apple gave no verdict on $submission within 30 minutes" >&2 ;;
+			"") echo "cannot read the verdict on $submission: $result" >&2 ;;
+			*) echo "notarization of $submission: $status" >&2 ;;
+		esac
+		xcrun notarytool log "$submission" --keychain-profile "$profile" >&2 || true
 		exit 1
 	fi
 	if ((bundle)); then

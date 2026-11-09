@@ -14,8 +14,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 	std::string error;
 	const std::vector<uint8_t> original = image;
 	const auto removal = Basalt::RemoveAuthenticodeSignature(image, error);
-	// A refusal or an unsigned executable leaves the bytes alone; a removal only shortens them.
-	if (!removal || *removal == Basalt::SignatureRemoval::Unsigned)
+	// Anything but a removal leaves the bytes alone; a removal only shortens them, leaving an unsigned executable.
+	if (!removal || *removal != Basalt::SignatureRemoval::Removed)
 	{
 		if (image != original)
 			__builtin_trap();

@@ -58,6 +58,11 @@ def check_manifest(manifest, library):
     require((Path(manifest).parent / path).resolve() == Path(library).resolve(), f"{manifest} names {path}, not {library}")
 
 
+def lipo_archs(path):
+    """The architectures lipo reports for a Mach-O file."""
+    return subprocess.run(["lipo", "-archs", str(path)], capture_output=True, text=True).stdout.split()
+
+
 def code_signature(path, deep=False):
     """codesign's description of a file's signature (its CodeDirectory flags among it); fails when it does not verify
     (with deep, nor anything nested in it)."""
@@ -177,19 +182,20 @@ def check_hardened_runtime(cli, project, temp, env):
     """A release's runtime, once signed, carries the hardened runtime (here signed ad hoc with it, as no Developer ID is at
     hand), whose library validation would refuse the Vulkan libraries an export bundles: the export signs its copy ad hoc
     again. Next to a runtime that has the libraries (the tools archive's layout), the export takes those, even with
-    VULKAN_SDK set, and warns when one lacks an architecture the runtime has."""
+    VULKAN_SDK set, and warns about one that lacks an architecture the runtime has, not one that holds more."""
     tools = temp / "Hardened Tools"
     tools.mkdir()
     shutil.copy2(cli, tools / cli.name)
     shutil.copy2(cli.parent / "BasaltRuntime", tools / "BasaltRuntime")
     hardened = subprocess.run(["codesign", "--force", "--sign", "-", "--options", "runtime", str(tools / "BasaltRuntime")], capture_output=True, text=True)
     require(hardened.returncode == 0 and "runtime" in code_signature(tools / "BasaltRuntime"), f"cannot give the runtime the hardened runtime: {hardened.stderr}")
-    (tools / "libvulkan.1.dylib").write_text("libvulkan.1.dylib next to the runtime")
-    # A MoltenVK built for another architecture than the runtime's.
-    runtime_architectures = subprocess.run(["lipo", "-archs", str(tools / "BasaltRuntime")], capture_output=True, text=True).stdout.split()
+    # A universal loader, which holds every architecture the runtime can, and a MoltenVK built for another one.
+    runtime_architectures = lipo_archs(tools / "BasaltRuntime")
     other = "x86_64" if "x86_64" not in runtime_architectures else "arm64"
-    built = subprocess.run(["xcrun", "clang", "-dynamiclib", "-arch", other, "-x", "c", "-", "-o", str(tools / "libMoltenVK.dylib")], input="", capture_output=True, text=True)
-    require(built.returncode == 0, f"cannot build a stand-in MoltenVK: {built.stderr}")
+    for name, architectures in (("libvulkan.1.dylib", ["arm64", "x86_64"]), ("libMoltenVK.dylib", [other])):
+        flags = [flag for architecture in architectures for flag in ("-arch", architecture)]
+        built = subprocess.run(["xcrun", "clang", "-dynamiclib", "-x", "c", "-", "-o", str(tools / name)] + flags, input="", capture_output=True, text=True)
+        require(built.returncode == 0, f"cannot build a stand-in {name}: {built.stderr}")
     output = temp / "Hardened Export"
     require(env.get("VULKAN_SDK"), "the libraries next to the runtime must win over VULKAN_SDK's")
     exported = subprocess.run([str(tools / cli.name), "--project", str(project), "project.export", json.dumps({"output": str(output)})],
@@ -200,13 +206,13 @@ def check_hardened_runtime(cli, project, temp, env):
     response = json.loads(exported.stdout[start:])
     require(response.get("ok"), f"export from a hardened runtime: {response}")
     check_ad_hoc(Path(response["result"]["executable"]))
-    require((output / "libvulkan.1.dylib").read_text() == "libvulkan.1.dylib next to the runtime", "the loader did not come from the runtime's folder")
-    # (The export signed its copy, so only the architecture says where it came from.)
-    exported_architectures = subprocess.run(["lipo", "-archs", str(output / "libMoltenVK.dylib")], capture_output=True, text=True).stdout.split()
+    # (The export signed its copies, so only their architectures say where they came from; VULKAN_SDK's are text.)
+    require(sorted(lipo_archs(output / "libvulkan.1.dylib")) == ["arm64", "x86_64"], "the loader did not come from the runtime's folder")
+    exported_architectures = lipo_archs(output / "libMoltenVK.dylib")
     require(exported_architectures == [other], f"MoltenVK did not come from the runtime's folder: it holds {exported_architectures}")
     warnings = response["result"].get("warnings", [])
     require(any(f"libMoltenVK.dylib' holds {other}, the runtime {', '.join(sorted(runtime_architectures))}" in warning for warning in warnings), f"no architecture warning: {warnings}")
-    require(not any("libvulkan" in warning for warning in warnings), f"a library that is no Mach-O code was warned about: {warnings}")
+    require(not any("libvulkan" in warning for warning in warnings), f"a library holding every architecture of the runtime was warned about: {warnings}")
 
 
 def main():

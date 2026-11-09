@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # Puts universal (arm64 + x86_64) builds of the Vulkan loader and MoltenVK into <dir>/lib, for the macOS release: point
-# VULKAN_SDK at <dir> and scripts/package_release.py and the exporter take them from there (Homebrew's bottles hold one
-# architecture).
+# VULKAN_SDK at <dir> and scripts/package_release.py takes them from there, as does the exporter when none sit next to
+# the runtime (Homebrew's bottles hold one architecture).
 # Usage: scripts/ci-universal-vulkan.sh <dir>
 #
 # MoltenVK comes from its pinned, checksummed GitHub release, which is universal. The loader is built from source at the
 # Vulkan-Headers tag that cmake/Dependencies.cmake pins (Khronos tags the loader with the same versions), for both
 # architectures and the macOS version the engine targets (the CMAKE_OSX_DEPLOYMENT_TARGET default in CMakeLists.txt).
-# Sources are downloaded as tag archives over HTTPS, as FetchContent takes the engine's own pinned tags.
+# Sources come as GitHub tag archives over HTTPS (no clone): the same tags, and the same trust, as FetchContent's clones of
+# the engine's pins.
 set -euo pipefail
 
 if [[ $# -ne 1 ]]; then
@@ -41,8 +42,12 @@ quietly() {
 	fi
 }
 
+# Any failure is retried (a reset connection failed a clone here once), a missing tag included, which then fails by name.
 download() {
-	curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 -o "$2" "$1"
+	if ! curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 -o "$2" "$1"; then
+		echo "cannot download $1" >&2
+		exit 1
+	fi
 }
 
 download "https://github.com/KhronosGroup/MoltenVK/releases/download/$moltenVKVersion/MoltenVK-macos.tar" "$work/MoltenVK-macos.tar"

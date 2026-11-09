@@ -69,9 +69,9 @@ namespace {
 		image[offset + 1] = static_cast<uint8_t>(value >> 8);
 	}
 
-	size_t Read16(const std::vector<uint8_t>& image, size_t offset)
+	uint16_t Read16(const std::vector<uint8_t>& image, size_t offset)
 	{
-		return image[offset] | size_t{ image[offset + 1] } << 8;
+		return static_cast<uint16_t>(image[offset] | image[offset + 1] << 8);
 	}
 
 	void Write32(std::vector<uint8_t>& image, size_t offset, uint32_t value)
@@ -84,6 +84,7 @@ namespace {
 	{
 		return OptionalHeader + (pe32Plus ? 112 : 96);
 	}
+
 	// The certificate table's directory entry (the fifth data directory).
 	size_t CertificateEntry(bool pe32Plus)
 	{
@@ -126,7 +127,7 @@ namespace {
 		const std::vector<uint8_t> certificate = { 40, 0, 0, 0, 0x00, 0x02, 0x02, 0x00 };
 		image.insert(image.end(), certificate.begin(), certificate.end());
 		image.insert(image.end(), 32, 0xA5);
-		// Only when the header has room for the entry (TestExecutable with fewer than five directories has none).
+		// Only when the header has room for the entry (a TestExecutable with room for fewer than five directories has none).
 		if (CertificateEntry(pe32Plus) + 8 <= Read16(image, OptionalSize) + OptionalHeader)
 		{
 			Write32(image, CertificateEntry(pe32Plus), offset);
@@ -1100,11 +1101,11 @@ TEST_SUITE("Packaging")
 			}
 		}
 
-		// Bytes that are no executable hold no signature; ones that start like one must read as one.
+		// Bytes that are no executable say so, unchanged; ones that start like one must read as one.
 		for (const std::vector<uint8_t>& text : { std::vector<uint8_t>{}, std::vector<uint8_t>{ 'M' }, std::vector<uint8_t>{ 'M', 'X', 0, 0 }, std::vector<uint8_t>(100, 'Z') })
 		{
 			std::vector<uint8_t> image = text;
-			CHECK(RemoveAuthenticodeSignature(image, error) == SignatureRemoval::Unsigned);
+			CHECK(RemoveAuthenticodeSignature(image, error) == SignatureRemoval::NotExecutable);
 			CHECK(image == text);
 		}
 		std::vector<uint8_t> image = TestExecutable(true);
@@ -1136,6 +1137,76 @@ TEST_SUITE("Packaging")
 		CHECK(BasaltTest::Contains(error, "truncated"));
 	}
 
+	TEST_CASE("Certificate tables are checked against every section and the header room")
+	{
+		std::string error;
+		for (const bool pe32Plus : { false, true })
+		{
+			CAPTURE(pe32Plus);
+			const auto refused = [&](std::vector<uint8_t> candidate, const char* reason) {
+				const std::vector<uint8_t> before = candidate;
+				CHECK_FALSE(RemoveAuthenticodeSignature(candidate, error));
+				CHECK_MESSAGE(BasaltTest::Contains(error, reason), error);
+				CHECK(candidate == before);
+			};
+			// (a) A header with room for four directories but declaring 16 is followed by a named section header, whose first
+			// bytes must not be read as the certificate entry.
+			{
+				std::vector<uint8_t> image = SignTestExecutable(TestExecutable(pe32Plus, 4, 16), pe32Plus);
+				const size_t sectionTable = OptionalHeader + Read16(image, OptionalSize);
+				std::memcpy(image.data() + sectionTable, ".text\0\0\0", 8);
+				const std::vector<uint8_t> before = image;
+				CHECK(RemoveAuthenticodeSignature(image, error) == SignatureRemoval::Unsigned);
+				CHECK(image == before);
+			}
+			// (b) Two sections: a table inside the second one's data is refused.
+			{
+				std::vector<uint8_t> image = TestExecutable(pe32Plus);
+				const size_t sectionTable = OptionalHeader + Read16(image, OptionalSize);
+				const size_t headersEnd = sectionTable + 80;
+				Write16(image, SectionCount, 2);
+				Write32(image, sectionTable + 16, 8);
+				Write32(image, sectionTable + 20, static_cast<uint32_t>(headersEnd));
+				std::fill_n(image.begin() + static_cast<std::ptrdiff_t>(sectionTable + 40), 40, uint8_t{ 0 });
+				Write32(image, sectionTable + 40 + 16, 400);
+				Write32(image, sectionTable + 40 + 20, static_cast<uint32_t>(headersEnd + 8));
+				std::vector<uint8_t> signedImage = SignTestExecutable(image, pe32Plus);
+				const auto inside = static_cast<uint32_t>(headersEnd + 200);
+				Write32(signedImage, CertificateEntry(pe32Plus), inside);
+				Write32(signedImage, CertificateEntry(pe32Plus) + 4, static_cast<uint32_t>(signedImage.size() - inside));
+				refused(signedImage, "among its headers or sections");
+			}
+			// (c) A section without file data (.bss): a table among the section headers is still refused.
+			{
+				std::vector<uint8_t> image = TestExecutable(pe32Plus, 16, 16, 0);
+				const size_t sectionTable = OptionalHeader + Read16(image, OptionalSize);
+				Write32(image, sectionTable + 16, 0);
+				Write32(image, sectionTable + 20, 0);
+				std::vector<uint8_t> signedImage = SignTestExecutable(image, pe32Plus);
+				const auto amongHeaders = static_cast<uint32_t>(sectionTable + 8);
+				Write32(signedImage, CertificateEntry(pe32Plus), amongHeaders);
+				Write32(signedImage, CertificateEntry(pe32Plus) + 4, static_cast<uint32_t>(signedImage.size() - amongHeaders));
+				refused(signedImage, "among its headers or sections");
+			}
+			// (d) A table of exactly one WIN_CERTIFICATE header is a table.
+			{
+				std::vector<uint8_t> image = SignTestExecutable(TestExecutable(pe32Plus), pe32Plus);
+				image.resize(image.size() - 32);
+				Write32(image, CertificateEntry(pe32Plus) + 4, 8);
+				CHECK(RemoveAuthenticodeSignature(image, error) == SignatureRemoval::Removed);
+			}
+		}
+		// (e) A one-byte optional header at the end of the file.
+		{
+			std::vector<uint8_t> image = TestExecutable(true);
+			Write16(image, OptionalSize, 1);
+			Write16(image, SectionCount, 0);
+			image.resize(OptionalHeader + 1);
+			CHECK_FALSE(RemoveAuthenticodeSignature(image, error));
+			CHECK(BasaltTest::Contains(error, "truncated"));
+		}
+	}
+
 	TEST_CASE("A signed executable file is rewritten without its signature, an unsigned one is left alone")
 	{
 		BasaltTest::TempDirectory directory("PackagingSignature");
@@ -1155,6 +1226,11 @@ TEST_SUITE("Packaging")
 		const auto written = std::filesystem::last_write_time(executable) - std::chrono::hours(1);
 		std::filesystem::last_write_time(executable, written);
 		CHECK(RemoveAuthenticodeSignature(executable, error) == SignatureRemoval::Unsigned);
+		CHECK(std::filesystem::last_write_time(executable) == written);
+		// Nor is a file that is no executable (a stand-in runtime).
+		REQUIRE(FileSystem::WriteTextFile(executable, "binary"));
+		std::filesystem::last_write_time(executable, written);
+		CHECK(RemoveAuthenticodeSignature(executable, error) == SignatureRemoval::NotExecutable);
 		CHECK(std::filesystem::last_write_time(executable) == written);
 
 		CHECK_FALSE(RemoveAuthenticodeSignature(directory.GetPath() / "Missing.exe", error));
@@ -1210,8 +1286,8 @@ TEST_SUITE("Packaging")
 		const std::vector<uint8_t> sixteen = universal(std::vector<uint32_t>(16, 0x01000007), true);
 		CHECK(MachOArchitectures(sixteen) == Names{ "x86_64" });
 		CHECK(MachOHeaderBytes >= sixteen.size());
-		// Seventeen slices is a Java class file's version, as are no slices; truncated tables, text and nothing are no
-		// Mach-O either.
+		// More than sixteen slices, or none, is no universal header (a Java class file's version, read as the count, is 45
+		// or more); truncated tables, text and nothing are no Mach-O either.
 		CHECK(MachOArchitectures(universal(std::vector<uint32_t>(17, 0x0100000C), false)).empty());
 		CHECK(MachOArchitectures(universal({}, false)).empty());
 		std::vector<uint8_t> truncated = universal({ 0x01000007, 0x0100000C }, true);

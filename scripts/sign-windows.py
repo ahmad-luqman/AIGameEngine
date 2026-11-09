@@ -20,7 +20,8 @@ Signatures use SHA-256 and an RFC 3161 timestamp (default http://timestamp.digic
 the certificate expires. A signing that fails because of the timestamp server (signtool names it, or reports a network
 error) is tried again twice, after 5 and 15 seconds; --no-timestamp signs without one. Every file is then checked with
 `signtool verify /pa` (and, with --thumbprint, that this certificate signed it), which requires a certificate that
-chains to a root this machine trusts; --allow-untrusted accepts an untrusted root and nothing else, for test certificates.
+chains to a root this machine trusts; --allow-untrusted verifies each file on its own and accepts a failure only when it
+is an untrusted root, for test certificates.
 
 signtool comes from --signtool, the SIGNTOOL environment variable, PATH, or the newest Windows 10/11 SDK. It exits 2 for
 invalid options, and 1 when a file, a folder's code or signtool is missing, or signing or verifying fails.
@@ -37,9 +38,10 @@ import time
 DEFAULT_TIMESTAMP_URL = "http://timestamp.digicert.com"
 # Seconds before each retry of a signing that failed for its timestamp (servers drop requests under load).
 TIMESTAMP_RETRY_DELAYS = (5, 15)
-# WinHTTP errors that signtool reports for a timestamp server it cannot reach, without naming the server: timeout, name
+# How signtool names a failed timestamp ("The specified timestamp server either could not be reached...", or the
+# SignerTimeStamp call), and the WinHTTP errors it reports for a server it cannot reach without naming it: timeout, name
 # not resolved, connection refused or reset, and a TLS failure.
-TIMESTAMP_NETWORK_ERRORS = ("0x80072ee2", "0x80072ee7", "0x80072efd", "0x80072eff", "0x80072f8f")
+TIMESTAMP_FAILURES = ("timestamp server", "signertimestamp", "0x80072ee2", "0x80072ee7", "0x80072efd", "0x80072eff", "0x80072f8f")
 # What `signtool verify /pa` says about a certificate that chains to an untrusted root (CERT_E_UNTRUSTEDROOT).
 UNTRUSTED_ROOT = ("0x800b0109", "terminated in a root certificate which is not trusted")
 SIGNTOOL_TIMEOUT = 600
@@ -106,13 +108,14 @@ def run(arguments):
     except OSError as error:
         fail(f"cannot run '{arguments[0]}': {error}")
     except subprocess.TimeoutExpired as error:
-        fail(f"signtool did not finish within {SIGNTOOL_TIMEOUT} s: {error.stdout or ''}{error.stderr or ''}")
+        # The partial output comes as bytes, whatever text=True asked for.
+        partial = b"".join(part if isinstance(part, bytes) else part.encode() for part in (error.stdout or b"", error.stderr or b""))
+        fail(f"signtool did not finish within {SIGNTOOL_TIMEOUT} s: {partial.decode(errors='replace')}")
     return completed, (completed.stdout + completed.stderr).strip()
 
 
 def is_timestamp_failure(output):
-    lowered = output.lower()
-    return "timestamp" in lowered or any(code in lowered for code in TIMESTAMP_NETWORK_ERRORS)
+    return any(text in output.lower() for text in TIMESTAMP_FAILURES)
 
 
 def main():
@@ -138,9 +141,11 @@ def main():
     files = collect(options.paths)
     names = [str(file) for file in files]
     signtool = find_signtool(options.signtool)
-    store = ["/sm"] if options.machine_store else []
     sign = [signtool, "sign", "/fd", "SHA256"]
-    sign += store + ["/sha1", options.thumbprint] if options.thumbprint else ["/dlib", options.dlib, "/dmdf", options.dlib_metadata]
+    if options.thumbprint:
+        sign += (["/sm"] if options.machine_store else []) + ["/sha1", options.thumbprint]
+    else:
+        sign += ["/dlib", options.dlib, "/dmdf", options.dlib_metadata]
     if not options.no_timestamp:
         sign += ["/tr", options.timestamp_url or DEFAULT_TIMESTAMP_URL, "/td", "SHA256"]
     if options.description:
@@ -156,11 +161,16 @@ def main():
         print(f"sign-windows: the timestamp server failed, trying again in {delay} s: {output}")
         time.sleep(delay)
 
-    # /sha1 here checks that the certificate asked for signed each file, not merely some trusted one.
-    verified, output = run([signtool, "verify", "/pa"] + (["/sha1", options.thumbprint] if options.thumbprint else []) + names)
-    untrusted = verified.returncode != 0 and options.allow_untrusted and any(text in output.lower() for text in UNTRUSTED_ROOT)
-    if verified.returncode != 0 and not untrusted:
-        fail(f"signtool verify exited with code {verified.returncode} (is the certificate trusted on this machine?): {output}")
+    # /sha1 here checks that the certificate asked for signed each file, not merely some trusted one. With
+    # --allow-untrusted each file is verified alone, so one file's untrusted root cannot cover another's other failure.
+    verify = [signtool, "verify", "/pa"] + (["/sha1", options.thumbprint] if options.thumbprint else [])
+    untrusted = False
+    for batch in ([[name] for name in names] if options.allow_untrusted else [names]):
+        verified, output = run(verify + batch)
+        if verified.returncode != 0 and options.allow_untrusted and any(text in output.lower() for text in UNTRUSTED_ROOT):
+            untrusted = True
+        elif verified.returncode != 0:
+            fail(f"signtool verify exited with code {verified.returncode} (is the certificate trusted on this machine?): {output}")
     print(f"sign-windows: signed {', '.join(file.name for file in files)}{'' if options.no_timestamp else ' (timestamped)'}"
           f"{', by a certificate this machine does not trust' if untrusted else ''}")
 
