@@ -221,9 +221,11 @@ A signing service with its own signtool library, such as Azure Trusted Signing, 
 The timestamp (default `http://timestamp.digicert.com`, any RFC 3161 server works with any certificate) keeps the
 signature valid after the certificate expires; a signing that fails because of the server (signtool names it, or
 reports a network error) is tried again after 5 and 15 seconds, and `--no-timestamp` leaves the timestamp out. Each
-file is then verified with `signtool verify /pa` (with `--thumbprint`, also that this certificate signed it), which
-requires a certificate that chains to a root this machine trusts; `--allow-untrusted` verifies each file on its own and
-accepts a failure only when it is an untrusted root, for test certificates. The script exits 2 for invalid options and 1 when a file, a folder's code or
+file is then verified with `signtool verify /pa /v`, which requires a certificate that chains to a root this machine
+trusts, and with `--thumbprint` the script also requires that certificate in each file's chain (the verbose output lists
+each certificate's SHA-1 hash), so a second code signing certificate in the store cannot stand in for it.
+`--allow-untrusted` verifies each file on its own and accepts a failure only when it is an untrusted root, for test
+certificates. The script exits 2 for invalid options and 1 when a file, a folder's code or
 signtool is missing or signing or verifying fails. A signature names the publisher in Windows' prompts and file
 properties; SmartScreen may still warn about a new program until downloads of it build a reputation, whatever the
 certificate.

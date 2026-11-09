@@ -44,7 +44,7 @@ quietly() {
 
 # Any failure is retried (a reset connection failed a clone here once), a missing tag included, which then fails by name.
 download() {
-	if ! curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 -o "$2" "$1"; then
+	if ! curl -fsSL --retry 10 --retry-all-errors --retry-delay 10 -o "$2" "$1"; then
 		echo "cannot download $1" >&2
 		exit 1
 	fi
