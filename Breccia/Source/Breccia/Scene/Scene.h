@@ -171,6 +171,8 @@ namespace Breccia {
 		bool IsPaused() const { return m_Paused; }
 		// While paused, advance this many frames on the next updates.
 		void Step(uint32_t frames = 1) { m_StepFrames += frames; }
+		// Whether the next OnUpdate runs a frame: not paused, or a Step is waiting.
+		bool WillRunNextUpdate() const { return IsRunning() && (!m_Paused || m_StepFrames > 0); }
 		// Total simulated time since OnRuntimeStart/OnSimulationStart.
 		float GetTime() const { return m_Time; }
 		// Number of OnUpdate calls that advanced the simulation since the runtime started.

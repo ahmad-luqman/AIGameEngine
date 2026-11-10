@@ -1633,6 +1633,8 @@ namespace Breccia {
 		if (character.First <= prediction.Input)
 			character.First = prediction.Input + 1;
 		const std::optional<CharacterState> before = physics->GetCharacterState(entity);
+		const bool measured = before.has_value();
+		const glm::vec3 from = measured ? before->Position : glm::vec3(0.0f);
 		// Replaying turns the character as each input did; the rotation a script gave it since stays.
 		const glm::quat rotation = entity.GetComponent<TransformComponent>().Rotation;
 		bool replayed = physics->SetCharacterState(entity, prediction.State);
@@ -1641,13 +1643,7 @@ namespace Breccia {
 		entity.GetComponent<TransformComponent>().Rotation = rotation;
 		if (!replayed && !std::exchange(character.ReportedReplay, true))
 			BR_CORE_WARN("Network: '{}' could not be put at the host's state and its inputs replayed (a degenerate transform?); it shows its own prediction until it can", entity.GetName());
-		const std::optional<CharacterState> after = physics->GetCharacterState(entity);
-		if (!before.has_value())
-			return;
-		if (!after.has_value())
-			return;
-		const glm::vec3 moved = after->Position - before->Position;
-		if (glm::length(moved) > PredictionTolerance)
+		if (const std::optional<CharacterState> after = physics->GetCharacterState(entity); measured && after && glm::length(after->Position - from) > PredictionTolerance)
 			m_Statistics.Corrections++;
 	}
 
