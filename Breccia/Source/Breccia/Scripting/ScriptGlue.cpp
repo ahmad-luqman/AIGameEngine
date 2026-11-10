@@ -4,6 +4,7 @@
 #include "Breccia/Animation/PropertyAnimation.h"
 #include "Breccia/Audio/AudioRules.h"
 #include "Breccia/Audio/AudioSystem.h"
+#include "Breccia/Core/Application.h"
 #include "Breccia/Core/Assert.h"
 #include "Breccia/Core/EnumNames.h"
 #include "Breccia/Core/Input.h"
@@ -1312,6 +1313,9 @@ namespace Breccia {
 				sol::state_view view(state);
 				return view.create_table_with("Name", config.Name, "Version", config.Version, "Company", config.Company);
 			};
+			// No window and no GPU: the runtime's --headless (a dedicated server), the breccia CLI and tests, where nobody sits
+			// in front of the game. The editor and windowed or offscreen runtimes are not headless.
+			game["IsHeadless"] = []() { return !Application::HasInstance() || Application::Get().IsHeadless(); };
 		}
 
 		ScriptHost& RequireHost(ScriptContext& context)

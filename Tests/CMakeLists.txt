@@ -152,6 +152,11 @@ if(Python3_Interpreter_FOUND)
 		add_test(NAME NetworkSession
 			COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/Automation/NetworkSession.py" $<TARGET_FILE:BrecciaCLI> $<TARGET_FILE:BrecciaRuntime>)
 		set_tests_properties(NetworkSession PROPERTIES LABELS integration TIMEOUT 300 COST 60)
+		# The arena sample over real UDP: a headless host and two clients play a round with Match.Autoplay, in a copy of the
+		# sample, and must agree on the scores and positions (Samples/Arena/README.md).
+		add_test(NAME SampleArenaNetwork
+			COMMAND "${Python3_EXECUTABLE}" -B "${PROJECT_SOURCE_DIR}/Samples/Arena/test_network.py" $<TARGET_FILE:BrecciaCLI> $<TARGET_FILE:BrecciaRuntime>)
+		set_tests_properties(SampleArenaNetwork PROPERTIES LABELS integration TIMEOUT 300 COST 60)
 		# The feature project exported as a folder and as Assets.bpak must play the same (Core/PackArchive).
 		add_test(NAME ArchiveExport
 			COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/Automation/ArchiveExport.py" $<TARGET_FILE:BrecciaCLI> "${CMAKE_CURRENT_SOURCE_DIR}/Data/FeatureTest")
@@ -440,6 +445,10 @@ add_test(NAME SampleMovementDemo
 # moving platform; see Samples/Platformer/README.md.
 add_test(NAME SamplePlatformer
 	COMMAND BrecciaCLI --project "${PROJECT_SOURCE_DIR}/Samples/Platformer" batch "${PROJECT_SOURCE_DIR}/Samples/Platformer/test_game.json")
+# A multiplayer arena: a host and in-process clients over the simulated network (net.*), with prediction, lag-compensated
+# tags and scores sent by RPC; see Samples/Arena/README.md.
+add_test(NAME SampleArena
+	COMMAND BrecciaCLI --project "${PROJECT_SOURCE_DIR}/Samples/Arena" batch "${PROJECT_SOURCE_DIR}/Samples/Arena/test_game.json")
 # Determinism: a recorded session must replay to the identical state (same machine), and the committed
 # replay must end on the same board on every platform (Samples/Tetris/test_replay.json).
 add_test(NAME SampleTetrisReplay
@@ -452,7 +461,7 @@ add_test(NAME PhysicsDeterminism
 
 # Labels let CI jobs pick test groups (ctest -L gpu, ctest -LE "gpu|format").
 set_tests_properties(${brecciaUnitTests} PROPERTIES LABELS unit)
-set(brecciaIntegrationTests FeatureTest SampleTetris SampleTetrisReplay SampleJoints SampleMarbleRun SampleBreakout SampleFirstPerson SampleMovementDemo SamplePlatformer PhysicsDeterminism)
+set(brecciaIntegrationTests FeatureTest SampleTetris SampleTetrisReplay SampleJoints SampleMarbleRun SampleBreakout SampleFirstPerson SampleMovementDemo SamplePlatformer SampleArena PhysicsDeterminism)
 set_tests_properties(${brecciaIntegrationTests} PROPERTIES LABELS integration)
 if(TEST CodeFormat)
 	set_tests_properties(CodeFormat CheckFormatBatches CheckFormatVersion PROPERTIES LABELS format)
