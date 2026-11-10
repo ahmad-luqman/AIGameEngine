@@ -53,7 +53,7 @@ ready" is a claim for after P1.
 - The assessment's five verified defects were fixed in PR #74: physics reports overflows and sizes its temporary memory
   from its capacity, the editor and CLI stop scripts that never return, the editor server closes connections that do not
   open with JSON, and `project.validate` refuses clips the engine cannot decode. Their residuals are in P1.
-- The largest gaps, by the assessment: networking without a gameplay API or prediction yet (Networking II), no navigation, no occlusion culling, global illumination, fog,
+- The largest gaps, by the assessment: networking without scene switching or a multiplayer sample yet, no navigation, no occlusion culling, global illumination, fog,
   decals, terrain or custom shaders, no Lua debugger, a CPU cost that grows linearly with entity count, no GPU memory
   management, and no release, tutorial or real game.
 
@@ -63,24 +63,23 @@ ready" is a claim for after P1.
 
 Multiplayer is the first new system. Two sessions build the layer; a sample proves it. Networking I shipped the ENet
 transport, authoritative host/client sessions, the `Networked` component with registry-declared replicated fields,
-acknowledged snapshot deltas with a bandwidth budget, and `FuzzNetPacket` (`Docs/Networking.md`).
+acknowledged snapshot deltas with a bandwidth budget, and `FuzzNetPacket`. Networking II shipped the Lua `Network` API
+(sessions, connection events, reliable and unreliable messages, RPCs with declared permissions, authority queries),
+snapshot interpolation, client-side prediction with reconciliation for character controllers, lag-compensated raycasts,
+driven remote characters, and the `net.*` commands with in-process clients, simulated latency and loss, per-peer
+`scene.hash` and editor Play as host or client (`Docs/Networking.md`).
 
-### Networking II: gameplay API, prediction and tools — L
-- **Lua.** A `Network` API: host, connect and disconnect; connection events; reliable and unreliable messages and RPCs
-  that target the server, an owner or all clients; authority queries. Update `Docs/ScriptingAPI.md` and
-  `Docs/breccia.d.lua`, and add `Check`s to the feature test.
-- **Prediction and interpolation.** Client-side prediction with reconciliation for character controllers, interpolation
-  of remote entities between snapshots (this also needs the fixed-step interpolation listed in P2), and lag compensation
-  for raycasts.
-- **Automation.** `net.*` commands to start a host, connect clients, inspect connections and replication state, and
-  inject latency and loss (`SimulatedNetwork` already models them), so an agent can test a multiplayer game headless, and
-  Play in the editor as a host or client. `scene.hash` per peer to assert that peers agree.
-- **Session gaps Networking I left.** Scene loads during a session (every peer switching together; refused today),
-  reconnecting a client whose session ended, and a client-side despawn that the host respawns.
-- **Later, not in this session:** interest management for large worlds; deterministic lockstep or rollback, which needs
-  the whole simulation to be deterministic (today only physics is pinned: IK uses libm, and Lua is not checked);
-  encryption, through ENet's per-datagram compressor hook with keys from an authenticated handshake (`Docs/Networking.md`);
-  IPv6; quantized rotations and positions in snapshots.
+### Networking session gaps — M
+- Scene loads during a session (every peer switching together; refused today).
+- Reconnecting as the same peer: a token from the Welcome that gives a returning client its old peer ID, and so what it
+  owned (today it rejoins as a new peer).
+- A client-side despawn that the host respawns (today it stays gone until the host despawns it).
+- Smoothing of prediction corrections (today a corrected character snaps), and interpolation of physics steps for predicted
+  characters (needs Scale I's fixed-step interpolation).
+- **Later:** interest management for large worlds; deterministic lockstep or rollback, which needs the whole simulation to
+  be deterministic (today only physics is pinned: IK uses libm, and Lua is not checked); encryption, through ENet's
+  per-datagram compressor hook with keys from an authenticated handshake (`Docs/Networking.md`); IPv6; quantized rotations
+  and positions in snapshots; byte-level flood protection on the host.
 
 ### Multiplayer sample — M
 A small arena or co-op game built through the automation API, with a ctest that runs a server and two clients headless

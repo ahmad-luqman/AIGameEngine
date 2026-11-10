@@ -166,6 +166,7 @@ namespace BrecciaTest {
 		{
 			Breccia::GameUI::SetHostState({});
 			Breccia::Input::SetCursorMode(Breccia::CursorMode::Normal);
+			Breccia::Input::SetGameMuted(false);
 			Breccia::Input::Reset();
 			Breccia::Input::ForgetInjectedGamepads();
 			Breccia::Input::EndFrame();

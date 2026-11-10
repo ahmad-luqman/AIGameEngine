@@ -725,7 +725,7 @@ TEST_SUITE("Automation")
 		CommandRegistry registry;
 		AutomationSession session;
 		// A misspelled check must fail instead of passing without checking anything.
-		CHECK(RunError(registry, session, "scene.hash", { { "expecthash", "0000000000000000" } }) == "unknown parameter 'expecthash' for scene.hash (expected: expectHash)");
+		CHECK(RunError(registry, session, "scene.hash", { { "expecthash", "0000000000000000" } }) == "unknown parameter 'expecthash' for scene.hash (expected: client, expectHash)");
 		CHECK(RunError(registry, session, "scene.new", { { "name", "A" }, { "size", 3 } }).find("unknown parameter 'size' for scene.new") != std::string::npos);
 		CHECK(RunError(registry, session, "editor.nothing", {}).find("unknown command") != std::string::npos);
 	}

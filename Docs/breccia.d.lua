@@ -1346,6 +1346,140 @@ function Events.Once(name, fn) end
 ---@return integer
 function Events.Emit(name, ...) end
 
+---A target of Network.Send and Network.Rpc: "Server" (from a client), "Clients" (from the host), "Owner" (RPCs from the host) or a client's peer ID.
+---@alias NetworkTarget "Server"|"Clients"|"Owner"|integer
+
+---The network session: sessions, queries, messages, RPCs and lag-compensated raycasts (Docs/ScriptingAPI.md, Networking).
+---@class Network
+Network = {}
+
+---Whether a session is attached.
+---@return boolean
+function Network.IsActive() end
+
+---"Host", "Client", or nil without a session.
+---@return "Host"|"Client"|nil
+function Network.GetRole() end
+
+---@return boolean
+function Network.IsHost() end
+
+---@return boolean
+function Network.IsClient() end
+
+---"Connecting", "Connected", "Disconnected", or nil without a session.
+---@return "Connecting"|"Connected"|"Disconnected"|nil
+function Network.GetState() end
+
+---Why a client's connection ended ("ClientQuit", "ServerShutdown", "Timeout", ...), or nil.
+---@return string|nil
+function Network.GetDisconnectReason() end
+
+---0 on the host, a client's peer ID once accepted, nil without a session.
+---@return integer|nil
+function Network.GetPeerId() end
+
+---A host's connected clients; a client's { 0 } once connected.
+---@return integer[]
+function Network.GetPeers() end
+
+---The port a host listens on, or nil.
+---@return integer|nil
+function Network.GetPort() end
+
+---Seconds of round trip to a peer (a client's host by default); 0 when unknown.
+---@param peer? integer
+---@return number
+function Network.GetRoundTripTime(peer) end
+
+---The session clock (a client's estimate of the host's).
+---@return number
+function Network.GetTime() end
+
+---The host time a client shows remote entities at; a host's GetTime.
+---@return number
+function Network.GetViewTime() end
+
+---Whether this peer decides the entity's replicated fields.
+---@param entity Entity
+---@return boolean
+function Network.HasAuthority(entity) end
+
+---Whether the entity's Networked.Owner names this peer.
+---@param entity Entity
+---@return boolean
+function Network.IsOwner(entity) end
+
+---Whether this client predicts the entity (a character it owns with Predicted authority).
+---@param entity Entity
+---@return boolean
+function Network.IsPredicted(entity) end
+
+---Hosts a session from the end of the frame; false and the reason when the port cannot be used.
+---@param port? integer 0 picks a free port; default the project's Network.Port
+---@return boolean ok
+---@return string? error
+function Network.Host(port) end
+
+---Joins a host from the end of the frame; false and the reason when the address cannot be used.
+---@param address string
+---@param port? integer default the project's Network.Port
+---@return boolean ok
+---@return string? error
+function Network.Connect(address, port) end
+
+---Ends the session at the end of the frame.
+function Network.Disconnect() end
+
+---Sends a reliable message; false and the reason when nothing went.
+---@param target NetworkTarget
+---@param name string
+---@param ... any
+---@return boolean ok
+---@return string? error
+function Network.Send(target, name, ...) end
+
+---Sends a message that may be lost; false and the reason when nothing went.
+---@param target NetworkTarget
+---@param name string
+---@param ... any
+---@return boolean ok
+---@return string? error
+function Network.SendUnreliable(target, name, ...) end
+
+---Calls a method the entity's script declares in Rpcs on the target peers, reliably.
+---@param entity Entity
+---@param method string
+---@param target NetworkTarget
+---@param ... any
+---@return boolean ok
+---@return string? error
+function Network.Rpc(entity, method, target, ...) end
+
+---Network.Rpc that may be lost.
+---@param entity Entity
+---@param method string
+---@param target NetworkTarget
+---@param ... any
+---@return boolean ok
+---@return string? error
+function Network.RpcUnreliable(entity, method, target, ...) end
+
+---Subscribes to a message, or to "Connected", "Disconnected", "PeerConnected" or "PeerDisconnected".
+---@param name string
+---@param fn fun(...: any)
+---@return EventHandle
+function Network.On(name, fn) end
+
+---A raycast on the host as networked bodies stood at `time` (a client's GetViewTime); elsewhere a plain raycast.
+---@param origin Vec3
+---@param direction Vec3
+---@param maxDistance number
+---@param time number
+---@param options? Entity|PhysicsQueryOptions
+---@return RaycastHit|nil
+function Network.Raycast(origin, direction, maxDistance, time, options) end
+
 ---Key-value save data that persists between sessions (JSON values).
 ---@class Storage
 Storage = {}
@@ -1963,7 +2097,7 @@ function BrecciaScript:StopAllCoroutines() end
 ---Networked data as Entity:GetComponent returns it and SetComponent/AddComponent accept it.
 ---@class NetworkedComponent
 ---@field Owner integer
----@field Authority "Server"|"Owner"
+---@field Authority "Server"|"Owner"|"Predicted"
 ---@field Priority number
 
 ---An element of a component list field.

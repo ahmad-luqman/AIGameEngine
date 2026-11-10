@@ -1041,4 +1041,125 @@ TEST_SUITE("Physics")
 		CHECK(info->Serialize(entity)["Layer"] == "Player");
 		CHECK_FALSE(info->Deserialize(entity, { { "Slope", 30 } }, error));
 	}
+
+	TEST_CASE("Character prediction: inputs record each step, replay identically and restore state")
+	{
+		Scene scene;
+		CreateGround(scene);
+		CreateStaticBox(scene, "Wall", { 3.0f, 1.0f, 0.0f }, { 0.5f, 2.0f, 5.0f });
+		Entity character = CreateCharacter(scene, { 0.0f, StandingHeight, 0.0f });
+		scene.OnRuntimeStart();
+		PhysicsWorld& physics = *scene.GetPhysicsWorld();
+		Simulate(scene, 0.5f);
+		REQUIRE(physics.IsCharacterGrounded(character));
+
+		// Nothing is recorded until asked, and a driven character records nothing.
+		physics.MoveCharacter(character, { 2.0f, 0.0f, 0.0f });
+		Simulate(scene, 0.1f);
+		CHECK(physics.TakeCharacterInputs(character).empty());
+
+		physics.SetCharacterInputRecording(character, true);
+		const std::optional<CharacterState> start = physics.GetCharacterState(character);
+		REQUIRE(start);
+		const glm::quat startRotation = character.GetTransform().Rotation;
+		// Walk into the wall and jump: steps, collisions and air time all go through the replay.
+		std::vector<CharacterInput> recorded;
+		for (int frame = 0; frame < 120; frame++)
+		{
+			physics.MoveCharacter(character, frame == 30 ? glm::vec3(2.0f, 5.0f, 0.0f) : glm::vec3(2.0f, 0.0f, 0.5f));
+			scene.OnUpdate(Step);
+			for (const CharacterInput& input : physics.TakeCharacterInputs(character))
+				recorded.push_back(input);
+		}
+		CHECK(recorded.size() == 120);
+		CHECK(recorded[30].Velocity.y == doctest::Approx(5.0f));
+		const std::optional<CharacterState> end = physics.GetCharacterState(character);
+		REQUIRE(end);
+		CHECK(end->Position.x < 2.6f);
+		CHECK(end->Position.x > 1.5f);
+
+		// Back to the start, then the same inputs: the same place, step for step.
+		REQUIRE(physics.SetCharacterState(character, *start));
+		character.GetTransform().Rotation = startRotation;
+		CHECK(character.GetTransform().Translation.x == doctest::Approx(start->Position.x));
+		for (const CharacterInput& input : recorded)
+			REQUIRE(physics.StepCharacter(character, input));
+		const std::optional<CharacterState> replayed = physics.GetCharacterState(character);
+		REQUIRE(replayed);
+		CHECK(glm::length(replayed->Position - end->Position) < 1e-4f);
+		CHECK(glm::length(replayed->Velocity - end->Velocity) < 1e-4f);
+		CHECK(replayed->Jumped == end->Jumped);
+		// Replays are not recorded as new steps.
+		CHECK(physics.TakeCharacterInputs(character).empty());
+
+		// Turning recording off drops what waits.
+		scene.OnUpdate(Step);
+		physics.SetCharacterInputRecording(character, false);
+		CHECK(physics.TakeCharacterInputs(character).empty());
+
+		// The state's time in the air is capped and finite, and invalid input is refused.
+		CHECK(std::isfinite(physics.GetCharacterState(character)->SinceGrounded));
+		CHECK_FALSE(physics.StepCharacter(character, { { NAN, 0.0f, 0.0f }, glm::quat(1, 0, 0, 0) }));
+		CHECK_FALSE(physics.StepCharacter(character, { { 0.0f, 0.0f, 0.0f }, glm::quat(0, 0, 0, 0) }));
+		CharacterState invalid = *start;
+		invalid.Position.x = INFINITY;
+		CHECK_FALSE(physics.SetCharacterState(character, invalid));
+		Entity plain = scene.CreateEntity("Plain");
+		CHECK_FALSE(physics.StepCharacter(plain, {}));
+		CHECK_FALSE(physics.GetCharacterState(plain));
+		CHECK_FALSE(physics.SetCharacterState(plain, *start));
+	}
+
+	TEST_CASE("Character prediction: a jump's air time survives a state round trip")
+	{
+		Scene scene;
+		CreateGround(scene);
+		Entity character = CreateCharacter(scene, { 0.0f, StandingHeight, 0.0f });
+		SetController(character, [](CharacterControllerComponent& controller) { controller.JumpGrace = 0.2f; });
+		scene.OnRuntimeStart();
+		PhysicsWorld& physics = *scene.GetPhysicsWorld();
+		Simulate(scene, 0.5f);
+		physics.MoveCharacter(character, { 0.0f, 4.0f, 0.0f });
+		Simulate(scene, 0.1f);
+		physics.MoveCharacter(character, { 0.0f, 0.0f, 0.0f });
+		const std::optional<CharacterState> airborne = physics.GetCharacterState(character);
+		REQUIRE(airborne);
+		CHECK(airborne->Jumped);
+		CHECK(airborne->SinceGrounded > 0.0f);
+		CHECK(airborne->Velocity.y > 0.0f);
+		// A restored airborne character keeps falling with that speed and cannot jump again in mid-air.
+		Simulate(scene, 0.2f);
+		REQUIRE(physics.SetCharacterState(character, *airborne));
+		CHECK(physics.StepCharacter(character, { { 0.0f, 6.0f, 0.0f }, glm::quat(1, 0, 0, 0) }));
+		CHECK(physics.GetCharacterState(character)->Velocity.y < airborne->Velocity.y);
+	}
+
+	TEST_CASE("A driven character follows its transform and moves only through StepCharacter")
+	{
+		Scene scene;
+		CreateGround(scene);
+		Entity character = CreateCharacter(scene, { 0.0f, 3.0f, 0.0f });
+		scene.OnRuntimeStart();
+		PhysicsWorld& physics = *scene.GetPhysicsWorld();
+		physics.SetDrivenExternally(character, true);
+		CHECK(physics.IsDrivenExternally(character));
+		// No gravity and no Move: it stays where its transform puts it.
+		physics.MoveCharacter(character, { 3.0f, 0.0f, 0.0f });
+		Simulate(scene, 0.5f);
+		CHECK(character.GetTransform().Translation == glm::vec3(0.0f, 3.0f, 0.0f));
+		// It follows a new transform, and queries see it there.
+		character.GetTransform().Translation = { 5.0f, 3.0f, 0.0f };
+		Simulate(scene, 0.05f);
+		const std::optional<RaycastHit> hit = physics.Raycast({ 5.0f, 10.0f, 0.0f }, { 0.0f, -1.0f, 0.0f }, 20.0f);
+		REQUIRE(hit);
+		CHECK(hit->EntityID == character.GetUUID());
+		// StepCharacter still moves it (a host applying a client's input).
+		REQUIRE(physics.StepCharacter(character, { { 0.0f, 0.0f, 6.0f }, glm::quat(1, 0, 0, 0) }));
+		CHECK(character.GetTransform().Translation.z > 0.05f);
+		// Turned off, it simulates again: it falls to the ground.
+		physics.SetDrivenExternally(character, false);
+		physics.MoveCharacter(character, { 0.0f, 0.0f, 0.0f });
+		Simulate(scene, 1.5f);
+		CHECK(character.GetTransform().Translation.y == doctest::Approx(StandingHeight).epsilon(0.05));
+	}
 }

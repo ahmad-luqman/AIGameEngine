@@ -1,7 +1,8 @@
 // Network messages: every datagram a host or client receives comes from the network, so it is untrusted input. The first
 // byte picks what the rest is: a message to decode (and re-encode, which must read back the same), then (bit 0) a snapshot
-// a connected client applies to its scene, or (bit 1) a client update a host applies to its own. Whatever decodes must
-// never end the session or crash the receiver.
+// or script message a connected client applies to its scene, or (bit 1) a client update or script message a host applies
+// to its own (whose entity 5 is a character the client predicts, so inputs move it). Whatever decodes must never end the
+// session or crash the receiver.
 #include "FuzzCommon.h"
 
 #include <Breccia/Network/NetProtocol.h>
@@ -35,6 +36,8 @@ namespace {
 			case NetMessageType::Snapshot:
 			case NetMessageType::ClientUpdate:
 				return NetProtocol::EncodeState(message.Type, std::get<NetState>(message.Body));
+			case NetMessageType::Script:
+				return NetProtocol::EncodeScript(std::get<NetScriptMessage>(message.Body));
 		}
 		__builtin_trap();
 	}
@@ -86,6 +89,15 @@ namespace {
 			m_Applied++;
 		}
 
+		void Apply(const NetScriptMessage& message)
+		{
+			m_Host->Send(m_Peer, NetChannel::Reliable, NetProtocol::EncodeScript(message));
+			Update();
+			if (m_Scene->GetNetworkSystem()->GetState() != NetConnectionState::Connected)
+				__builtin_trap();
+			m_Applied++;
+		}
+
 		size_t GetApplied() const { return m_Applied; }
 
 	private:
@@ -123,6 +135,10 @@ namespace {
 			m_Scene->GetEntityByUUID(2).AddComponent<PointLightComponent>();
 			m_Scene->GetEntityByUUID(3).GetComponent<NetworkedComponent>() = { 2, NetworkAuthority::Owner };
 			m_Scene->SetParent(m_Scene->GetEntityByUUID(4), m_Scene->GetEntityByUUID(1), false);
+			Entity character = m_Scene->CreateEntityWithUUID(5, "Character");
+			character.AddComponent<NetworkedComponent>() = { 1, NetworkAuthority::Predicted };
+			character.AddComponent<CapsuleColliderComponent>();
+			character.AddComponent<CharacterControllerComponent>();
 			m_Scene->StartNetwork(CreateScope<NetworkSystem>(*m_Scene, NetworkRole::Host, std::move(listening), NetworkSettings{}, NetworkSystem::Identity{}));
 			m_Scene->OnRuntimeStart();
 			m_Client = m_Network.Connect(port);
@@ -152,6 +168,15 @@ namespace {
 			state.Sequence = ++m_Sequence;
 			state.Acknowledged = 0;
 			m_Client->Send(m_Peer, NetChannel::Unreliable, NetProtocol::EncodeState(NetMessageType::ClientUpdate, state));
+			Update();
+			if (m_Scene->GetNetworkSystem()->GetConnections().size() != 1)
+				__builtin_trap();
+			m_Applied++;
+		}
+
+		void Apply(const NetScriptMessage& message)
+		{
+			m_Client->Send(m_Peer, NetChannel::Reliable, NetProtocol::EncodeScript(message));
 			Update();
 			if (m_Scene->GetNetworkSystem()->GetConnections().size() != 1)
 				__builtin_trap();
@@ -209,7 +234,8 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 	if (!partialHello && Reencode(*again) != encoded)
 		__builtin_trap();
 
-	if (applyOnHost && message->Type == NetMessageType::ClientUpdate)
+	const bool script = message->Type == NetMessageType::Script;
+	if (applyOnHost && (message->Type == NetMessageType::ClientUpdate || script))
 	{
 		static Host* s_Host = nullptr;
 		if (!s_Host || s_Host->GetApplied() >= 256)
@@ -217,9 +243,12 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 			delete s_Host;
 			s_Host = new Host();
 		}
-		s_Host->Apply(std::get<NetState>(message->Body));
+		if (script)
+			s_Host->Apply(std::get<NetScriptMessage>(message->Body));
+		else
+			s_Host->Apply(std::get<NetState>(message->Body));
 	}
-	if (applyOnClient && message->Type == NetMessageType::Snapshot)
+	if (applyOnClient && (message->Type == NetMessageType::Snapshot || script))
 	{
 		// Never destroyed at exit: sol2's static strings, which its Lua state's teardown reads, may already be gone.
 		static Client* s_Client = nullptr;
@@ -228,7 +257,10 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
 			delete s_Client;
 			s_Client = new Client();
 		}
-		s_Client->Apply(std::get<NetState>(message->Body));
+		if (script)
+			s_Client->Apply(std::get<NetScriptMessage>(message->Body));
+		else
+			s_Client->Apply(std::get<NetState>(message->Body));
 	}
 	return 0;
 }

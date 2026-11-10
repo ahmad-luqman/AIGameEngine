@@ -2,9 +2,9 @@
 
 Breccia's multiplayer is client-server with an authoritative host. The host owns the shared state: it runs the game,
 admits clients, and sends each of them the entities marked `Networked` as snapshots. Clients show that state and send
-back only what they have authority over. This page covers the transport, sessions and replication (Networking I). The
-Lua `Network` API, client prediction, snapshot interpolation and `net.*` automation commands come next (Networking II,
-`ROADMAP.md`).
+back only what they have authority over, the inputs of the characters they predict, and script messages. This page covers
+the transport, sessions and replication, interpolation, prediction and lag compensation, and the `net.*` automation
+commands. The Lua `Network` API is in `Docs/ScriptingAPI.md` (Networking).
 
 ## Running a session
 
@@ -19,7 +19,9 @@ BrecciaRuntime --project MyGame --headless --host 7777
 BrecciaRuntime --project MyGame --connect 192.168.1.20:7777
 ```
 
-`--host 0` lets the system pick a free port; the log says which (`Network: hosting on UDP port N`). Headless runs with a
+Scripts start sessions too (`Network.Host`, `Network.Connect`, `Network.Disconnect`), and the editor's Play can host or
+join over UDP (the toolbar's Network button), so the editor and runtimes play together. `--host 0` lets the system pick a
+free port; the log says which (`Network: hosting on UDP port N`). Headless runs with a
 network session sleep out the rest of each frame instead of spinning a core. With `--frames`, a client that is not
 connected when the run ends exits with code 8, so a test cannot pass without a session. A windowed client whose connection
 ends shows the reason in a dialog.
@@ -33,6 +35,8 @@ The project file's `Network` object (also `project.set {"network": {...}}`) hold
 | `TickRate` | 30 | Snapshots per second to each client, and updates per second back, at most one per frame. A client takes the host's. |
 | `MaxBytesPerSecond` | 65536 | Each connection's budget per direction. What does not fit waits. |
 | `TimeoutSeconds` | 10 | A connection that hears nothing for this long ends (`Timeout`); a handshake not finished by then ends with `HandshakeTimeout`. |
+| `InterpolationDelay` | 0.1 | Seconds (0 to 1) a client shows the entities it does not decide behind the newest snapshot, moving them smoothly between snapshots; 0 shows each snapshot as it arrives. A client uses its own project's. |
+| `MaxMessagesPerSecond` | 120 | Script messages and RPCs each connection may send per second and direction; a host hands a client's to scripts at this rate and disconnects a client that keeps sending faster. |
 
 ## Connections
 
@@ -54,7 +58,9 @@ fields, which is what spawns and updates depend on), and the game (the project's
 | `ConnectionFailed` | The host never answered. |
 | `ClientQuit`, `ServerShutdown` | The client left, or the host stopped. |
 
-Peer IDs start at 1 and are never reused in a session; the host is 0.
+Peer IDs start at 1 and are never reused in a session; the host is 0. Scripts hear of connections through `Network.On`:
+`PeerConnected` and `PeerDisconnected` (with the reason) on the host, `Connected` and `Disconnected` on a client. A client
+whose session ended may connect again (it joins as a new peer, so entities its old peer ID owned are not its own).
 
 ## Replication
 
@@ -81,6 +87,9 @@ replicates separately, under its parent).
 - **Despawns.** Destroying the entity on the host destroys its descendants there too, so they all despawn. Removing its
   `Networked` component removes it, with its non-networked descendants, from clients; descendants with a `Networked`
   component of their own stay, moved to the root until the parent is networked again.
+
+A client shows the transforms of entities it does not decide `InterpolationDelay` behind the host (see Interpolation),
+and every other value as it arrives.
 
 Values are sent as a compact binary form of the registry's JSON (`Network/NetValue`). Changes are found by comparing
 those encodings, and each client receives them through `ComponentRegistry`, so a value a component rejects is refused
@@ -114,13 +123,16 @@ stays that large (logged once per entity).
 - `Server` (the default): the host.
 - `Owner`: the client whose peer ID is `Owner` sends them, and the host checks that the sender owns the entity before
   applying them and passing them on. While that client is not connected, or `Owner` is 0, the host decides.
+- `Predicted`: the host decides, from the inputs of the client named by `Owner`, which predicts the entity's character
+  controller (see Prediction). On an entity without a character controller, or while that client is not connected, this
+  is `Server`.
 
 Ownership, parents and components are the host's alone: clients cannot change them (the host refuses and logs it), and an
 owner still hears of components the host adds (with their starting values) or removes. A peer drives the dynamic bodies of
 entities it has no authority over kinematically (`PhysicsWorld::SetDrivenExternally`), so they follow the replicated
-transform instead of simulating against it. The component keeps its `Type`. Character controllers and ragdolls are not
-driven this way yet: on a peer without authority they keep simulating between snapshots (Networking II brings prediction
-for characters).
+transform instead of simulating against it. The component keeps its `Type`. Character controllers it neither decides nor
+predicts are driven too: they follow the replicated transform without gravity or `Move`, and other characters still meet
+them. Ragdolls are not driven this way: on a peer without authority they keep simulating between snapshots.
 
 `Owner` is a peer ID assigned at runtime: clients get 1, 2, ... in the order they join, so a saved `Owner` hands the
 entity to whichever client joins in that place. Usually the host's scripts set it during play.
@@ -130,8 +142,9 @@ entity to whichever client joins in that place. Usually the host's scripts set i
 A client loads the same scene as the host, keeps everything that is not networked (level geometry, cameras, UI), and
 removes its own copies of networked entities when the host accepts it, with their descendants: the host spawns the real
 ones, descendants included. Scripts run on
-every peer, so a script on a networked entity runs on clients too. A Lua API for telling roles apart comes in
-Networking II. A client's runtime entity UUIDs come from a stream of their own (the session seed mixed with a constant):
+every peer, so a script on a networked entity runs on clients too: `Network.IsHost`, `Network.IsOwner` and
+`Network.HasAuthority` tell it which peer it is on and what it decides. Its `Network.On` handlers end with the local copy
+the client removes, so a script that must hear `Connected` belongs on an entity that is not networked. A client's runtime entity UUIDs come from a stream of their own (the session seed mixed with a constant):
 two independent 64-bit streams practically never meet, and a spawn whose ID a client's own runtime entity happens to hold
 takes that entity over.
 
@@ -143,13 +156,84 @@ and the summary a `--frames` run logs) count rejected values and records separat
 Current limits, each planned for a later session:
 
 - Scene loads are refused during a session (`Scene.Load` fails with an error); every peer would have to switch together.
-- Interpolation and prediction are not done yet: a client shows each snapshot as it arrives.
 - A client should not destroy networked entities: one a client destroys stays gone until the host despawns and spawns it
   again (an acknowledged spawn is never resent).
-- Clients cannot reconnect; a session that ended stays ended.
+- A client that reconnects is a new peer: there is no way yet to take back the old peer ID and what it owned.
 - No protection against connection floods: connections that never finish the handshake hold transport slots until
   `TimeoutSeconds`.
 - IPv4 only.
+
+## Scripts: messages and RPCs
+
+Scripts send named messages (`Network.Send`) and call methods of other peers' scripts (`Network.Rpc`), reliably or not
+(`Docs/ScriptingAPI.md`). They travel as their own `Script` messages, apart from snapshots: a client's go to the host only,
+which knows the sender from the connection, never from the message. An RPC names a method the entity's script lists in
+its `Rpcs` table with who may call it (`Host`, `Owner` or `Any`); anything else is dropped. Limits: a name of 1 to 64 bytes,
+32 arguments, 32 KiB in all. Each connection sends at most `MaxMessagesPerSecond` a second, and they share its
+`MaxBytesPerSecond` with snapshots (one message may run the budget into debt, as a record may). A host keeps a client's
+messages in a queue and hands them to scripts at that rate, so a burst waits and a client cannot make the host's scripts run
+more often than that; more than 1,024 waiting disconnect it (`InvalidPacket`). An RPC that reaches a client before the
+entity's spawn waits for it for two seconds; the host drops one for an entity it does not have. Messages and connection
+events reach scripts before `OnUpdate`, never in the middle of the network session's own work.
+
+## Interpolation
+
+Snapshots arrive a few times a second, and some are lost. A client shows the entities it does not decide (or predict) as
+they were `InterpolationDelay` seconds before the newest snapshot, moving each smoothly between the two snapshots around that
+moment (positions and scale linearly, rotations by slerp). Snapshots carry the host's clock; the client follows it,
+smoothing the jitter of their arrival, and `Network.GetViewTime()` is the moment it shows. Delta compression leaves out what
+did not change, so an entity at rest starts moving from where it rested as of the snapshot before its change. A new parent
+makes it jump, as does a client's own change to the transform, which stops the interpolation until the host's next update.
+`InterpolationDelay` 0 turns interpolation off. Physics steps are not interpolated yet (Scale I in `ROADMAP.md`), so a
+predicted character moves at the fixed step rate.
+
+## Prediction
+
+A character controller with `Predicted` authority moves on the client that owns it as soon as its scripts call `Move`
+(only the owner should: `Network.IsOwner`). Every fixed step the client records what the character walked with (its `Move`
+velocity, mixed with root motion, and its rotation) and numbers it; each update to the host carries the newest steps the
+host has not acknowledged (up to 32, so a few lost updates lose nothing). The host moves the character by exactly those
+steps (`PhysicsWorld::StepCharacter`, the same code a physics step runs), never by its own physics steps or `Move` calls,
+and at most as fast as its own fixed steps (with a quarter of a second of lead), so a client sending inputs faster than real
+time moves no faster. A velocity above 1,000 m/s is refused as invalid. Each snapshot to the owner carries the character's
+state after the newest input the host applied; the client puts the character there and replays the inputs since, which
+leaves it where it already was when nothing disagreed. Where something did (a door the host closed, a respawn), the character
+snaps to the corrected place; `NetworkStatistics::Corrections` counts those of more than a centimetre. The host's other
+clients see the character like any remote entity.
+
+## Lag compensation
+
+A client acts on what it sees, which is `InterpolationDelay` and half a round trip old by the time the host hears of it. A
+host records where every networked body that moves (a dynamic or kinematic rigid body, or a character) was at each tick, for
+the last second. `Network.Raycast(origin, direction, maxDistance, time)` (`NetworkSystem::RaycastAt`) casts against those
+bodies where they were at `time`, interpolated between ticks, with their current shapes; bodies that did not exist then are
+not hit, and everything else (level geometry, bodies that are not networked) is tested where it is. The time comes from the
+client (its `Network.GetViewTime()` in the RPC that fires), clamped to the last second, so a client can at most aim a second
+into the past.
+
+## Automation and testing
+
+The `net.*` commands play a multiplayer game headless, in one process (`Docs/AutomationCommands.md`):
+
+```json
+{ "command": "play.start" }
+{ "command": "net.host" }
+{ "command": "net.connect" }
+{ "command": "net.link", "params": { "latency": 0.05, "jitter": 0.01, "loss": 0.05 } }
+{ "command": "play.step", "params": { "frames": 120 } }
+{ "command": "net.status" }
+{ "command": "scene.hash", "params": { "client": 1 } }
+```
+
+`net.host` makes the playing scene the host, on the session's in-process network (`SimulatedNetwork`) or with `udp` on a
+real port. `net.connect` without an address adds an in-process client: another copy of the edit scene playing as a client,
+stepped with the host by `play.step` (the network advances one frame at a time, so a run replays exactly); with an address
+the playing scene joins a UDP host. `net.link` sets latency, jitter and loss, `net.focus` picks which peer injected input
+reaches (the others' games read none), `net.status` reports connections and statistics, `net.command` runs a read command
+or `lua.exec` on a client's scene, and `net.disconnect` ends a client or the session. `scene.hash` with `client` hashes a
+client's scene: peers agree once the networked entities are at rest, as a client shows moving ones behind the host. Under
+the CLI, scripts' `Network.Host` and `Network.Connect` use the same in-process network, so `net.connect` can join a game
+that hosts itself.
 
 ## Transport
 
@@ -167,14 +251,18 @@ seal every datagram without changing the protocol above it.
 Every message is untrusted input. `Network/NetBuffer` bounds-checks every read. `Network/NetValue` limits its counts by the
 bytes that remain before allocating, limits nesting, and refuses non-UTF-8 text and duplicate keys. `NetProtocol::Decode`
 caps record, component and field counts (4,096, 256, 256) before allocating and checks every record
-(`NetProtocol::CheckUpdate`, `CheckSpawn`; senders check too: `CheckSpawn` always, `CheckUpdate` as an assert). The
-`FuzzNetPacket` target fuzzes the decoder, its re-encoding, a live client applying whatever snapshot decodes and a live
-host applying whatever client update decodes (`Tests/Fuzz`).
+(`NetProtocol::CheckUpdate`, `CheckSpawn`, `CheckScript`; senders check too: `CheckSpawn` and `CheckScript` always,
+`CheckUpdate` as an assert). Snapshot times, predicted states and inputs must be finite (inputs at most 1,000 m/s, with
+unit rotations, numbered without wrapping), and each character appears at most once. The `FuzzNetPacket` target fuzzes the
+decoder, its re-encoding, a live client applying whatever snapshot or script message decodes and a live host applying
+whatever client update or script message decodes, inputs to a predicted character included (`Tests/Fuzz`). The protocol is
+version 2 (`NetProtocol::Version`): Networking I's peers are refused with `ProtocolMismatch`.
 
 ## Testing
 
 `SimulatedNetwork` is an in-process transport with latency, jitter, loss and timeouts, driven by `Advance` rather than
 the wall clock and seeded, so a fixed-timestep test replays exactly. `Tests/Source/NetworkTests.cpp` runs a host and
 several clients in one process over it, covering spawns, updates, despawns, ownership, refusals, timeouts, a lossy
-reordering link, the bandwidth budget and kinematic driving. The `NetworkSession` ctest runs two `BrecciaRuntime`
+reordering link, the bandwidth budget and kinematic driving; `NetworkGameplayTests.cpp` covers script messages and RPCs,
+connection events, interpolation, prediction, lag compensation, the Lua API and the `net.*` commands. The `NetworkSession` ctest runs two `BrecciaRuntime`
 processes over real UDP on a port the system picks.
