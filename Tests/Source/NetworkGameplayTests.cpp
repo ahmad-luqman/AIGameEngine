@@ -1012,6 +1012,19 @@ TEST_SUITE("Network")
 		const std::string hash = Run(registry, session, "scene.hash")["hash"];
 		CHECK(Run(registry, session, "scene.hash", { { "client", 1 } })["hash"] == hash);
 		CHECK(Run(registry, session, "scene.hash", { { "client", 2 }, { "expectHash", hash } })["hash"] == hash);
+		// Paused, the play scene runs no frame and neither do its clients; a Step advances them together.
+		session.SetPaused(true);
+		const uint64_t hostFrame = session.GetScene()->GetFrameCount();
+		const uint64_t clientFrame = session.GetNetworkClient(1)->GetFrameCount();
+		Run(registry, session, "play.step", { { "frames", 30 } });
+		CHECK(session.GetScene()->GetFrameCount() == hostFrame);
+		CHECK(session.GetNetworkClient(1)->GetFrameCount() == clientFrame);
+		session.GetScene()->Step(1);
+		Run(registry, session, "play.step", { { "frames", 3 } });
+		CHECK(session.GetScene()->GetFrameCount() == hostFrame + 1);
+		CHECK(session.GetNetworkClient(1)->GetFrameCount() == clientFrame + 1);
+		session.SetPaused(false);
+		CHECK(Run(registry, session, "net.status", { { "client", 1 } })["state"] == "Connected");
 		// net.command reads (or changes) a client's scene.
 		const json crate = Run(registry, session, "net.command", { { "client", 2 }, { "command", "entity.transform" }, { "params", { { "entity", "Crate" } } } });
 		CHECK(crate["local"]["Translation"][0].get<double>() == doctest::Approx(3.0));

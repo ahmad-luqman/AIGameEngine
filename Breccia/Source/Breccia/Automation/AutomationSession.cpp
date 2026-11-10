@@ -699,7 +699,9 @@ namespace Breccia {
 
 	void AutomationSession::UpdatePlayScene(float frameTime)
 	{
-		if (!IsPlaying())
+		// Paused (with no Step waiting), the play scene runs no frame: neither do the link and the clients, which would
+		// otherwise play on and time out from a frozen host. A Step advances them together.
+		if (!IsPlaying() || !m_Scene->WillRunNextUpdate())
 			return;
 		if (m_Network)
 			m_Network->Advance(frameTime);
