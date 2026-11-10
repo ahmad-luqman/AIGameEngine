@@ -1114,7 +1114,7 @@ TEST_SUITE("Network")
 	TEST_CASE("A client drives the host's spawn of an authored networked body it had its own copy of")
 	{
 		// Both peers load the same scene: the client removes its own copies when the host accepts it, and the host's spawns
-		// take the same UUIDs. Its copies were driven while it connected; the spawns must be too.
+		// take the same UUIDs. Its copies were driven while it was connecting; the spawns must be too.
 		const auto build = [](Scene& scene) {
 			AddGround(scene);
 			Entity crate = CreateNetworked(scene, "Crate", UUID(101), { 0.0f, 4.0f, 0.0f });
@@ -1125,15 +1125,24 @@ TEST_SUITE("Network")
 			bot.AddComponent<CharacterControllerComponent>();
 		};
 		// A snapshot every frame: the host's first one arrives with its Welcome, so the client removes its copy and creates
-		// the spawn in one frame.
+		// the spawn in one frame, and the UUID never leaves the set of what it drives (the case UpdateDrivenBodies missed).
 		NetworkSettings settings;
 		settings.TickRate = 60;
 		Session session({ .Latency = 0.05f }, settings);
 		Scene& host = session.StartHost(build);
 		Scene& client = session.AddClient(build);
 		session.Run(2);
+		const entt::entity copy = client.GetEntityByUUID(UUID(102));
 		CHECK(client.GetPhysicsWorld()->IsDrivenExternally(client.GetEntityByUUID(UUID(102))));
-		REQUIRE(session.RunUntil([&] { return session.ClientNetwork(0).GetRemoteEntityCount() == 2; }, 120));
+		bool everAbsent = false;
+		REQUIRE(session.RunUntil([&] {
+			const Entity now = client.GetEntityByUUID(UUID(102));
+			everAbsent = everAbsent || !now;
+			return now && static_cast<entt::entity>(now) != copy;
+		},
+								 120));
+		CHECK_FALSE(everAbsent);
+		REQUIRE(session.ClientNetwork(0).GetRemoteEntityCount() == 2);
 		session.Run(2);
 		for (const UUID id : { UUID(101), UUID(102) })
 		{

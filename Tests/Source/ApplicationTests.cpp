@@ -1,6 +1,10 @@
 #include <doctest/doctest.h>
 
 #include <Breccia/Core/Application.h>
+#include <Breccia/Project/Project.h>
+#include <Breccia/Scene/Scene.h>
+
+#include "TestUtils.h"
 
 #include <thread>
 
@@ -116,5 +120,24 @@ TEST_SUITE("Application")
 			CHECK(&Application::Get() == &application);
 		}
 		CHECK_FALSE(Application::HasInstance());
+	}
+
+	TEST_CASE("Game.IsHeadless is true without an application and in a headless one")
+	{
+		// What a script sees: a fresh playing scene's Game.IsHeadless.
+		const auto headless = [] {
+			Scene scene;
+			scene.OnRuntimeStart();
+			return BrecciaTest::Eval(scene, "return tostring(Game.IsHeadless())");
+		};
+		// The CLI and tests: no Application at all.
+		REQUIRE_FALSE(Application::HasInstance());
+		Project::SetActive(nullptr);
+		CHECK(headless() == "true");
+		// The runtime's --headless (a dedicated server or a headless client). A windowed or offscreen one, where it is
+		// false, needs a display or a GPU, which unit tests do not have.
+		Application application(MakeHeadlessSpecification());
+		REQUIRE(application.IsInitialized());
+		CHECK(headless() == "true");
 	}
 }

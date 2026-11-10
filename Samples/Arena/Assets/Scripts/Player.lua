@@ -4,171 +4,130 @@
 --
 -- Space (or the pad's A or right bumper) tags: the owner asks the host to cast a ray along where it faces, at the
 -- moment the owner saw (Network.GetViewTime), and the host casts it against the bodies where they stood then
--- (Network.Raycast, lag compensation). The host decides every hit, so a modified client cannot tag what it did not aim
--- at, nor tag faster than the cooldown.
+-- (Network.Raycast, lag compensation). The host decides every hit from where it has the shooter, no more often than the
+-- cooldown, and only as far back as the shooter's view can lag. A modified client still chooses the direction.
+local Arena = require("Assets.Scripts.Lib.Arena")
+
 local Player = {}
 
 Player.Properties = {
 	Speed = 5.0,
-	-- Seconds between tags (the host allows a little less, for the jitter of the owner's frames).
+	-- Seconds between tags (the host allows 80% of it, for jitter in the owner's frames and in when its RPCs arrive).
 	Cooldown = 0.5,
 	-- How far a tag reaches, in meters.
 	Range = 25.0
 }
 
--- Tells a player's script apart from a bot's (Bot.IsBot) when a tag hits it.
+-- Tells a player's script apart from a bot's (Bot.IsBot).
 Player.IsPlayer = true
 
 -- Which peers may call which methods: the owner (or the host) tags; only the host shows a tag on clients.
 Player.Rpcs = { Tag = "Owner", ShowTag = "Host" }
 
--- The height a tag leaves from and where its ray starts ahead of the player (outside its own capsule).
+-- The height a tag leaves from, and how far in front of the player the beam starts (the cast ignores the player's own
+-- capsule either way).
 local ChestHeight = 1.0
 local MuzzleOffset = 0.5
-
--- A vector a peer sent (an array of three numbers), or nil when it is anything else. Vectors arrive as arrays, and
--- what a client sends is untrusted: a bad value must not raise an error in the host's script.
-local function ReadVec3(value)
-	if type(value) ~= "table" then return nil end
-	local x, y, z = value[1], value[2], value[3]
-	for _, number in ipairs({ x, y, z }) do
-		if type(number) ~= "number" or number ~= number or math.abs(number) > 1e6 then return nil end
-	end
-	return Vec3(x, y, z)
-end
-
-local function FindMatch()
-	local match = Scene.FindEntityByName("Match")
-	return match and match:GetScript()
-end
-
-local function FindScoreboard()
-	local board = Scene.FindEntityByName("Scoreboard")
-	return board and board:GetScript()
-end
+-- How far behind the host a client's view may be beyond its round trip: its InterpolationDelay (0.1 s in this
+-- project), the interval between snapshots and some jitter. Older times are clamped to this, as Network.Raycast would
+-- otherwise look up to a second back, at places the client never saw.
+local MaxViewLag = 0.25
 
 function Player:OnCreate()
-	self.NextTag = 0
-	self.LastTagTime = -math.huge
+	-- Seconds until the owner may ask for another tag, and until the host accepts one (each counts down by frame time,
+	-- which a session starting or ending does not reset, as Network.GetTime does).
+	self.OwnerCooldown = 0
+	self.HostCooldown = 0
 	-- Read by the gameplay test: the tags this player asked for, those the host accepted, and those it refused as
-	-- malformed (a tag within the cooldown, or during the break between rounds, is ignored without counting).
+	-- malformed (one within the cooldown or during the break between rounds is ignored without counting).
 	self.TagsRequested = 0
 	self.TagsAccepted = 0
 	self.TagsRefused = 0
 end
 
--- Whether the round is over (the scoreboard shows the winner): players stand still until the next one.
-local function RoundOver()
-	local board = FindScoreboard()
-	return board ~= nil and board.Over == true
+-- This frame's input: the player's own, or the computer's when the scene has an Autoplay entity (the network test).
+function Player:ReadInput()
+	local autoplay = Arena.FindScript("Autoplay")
+	if autoplay then return autoplay:InputFor(self.Entity) end
+	return Vec3(Input.GetAction("MoveX"), 0, -Input.GetAction("MoveY")), Input.IsActionPressed("Fire"), nil
 end
 
 function Player:OnUpdate(dt)
+	self.HostCooldown = math.max(self.HostCooldown - dt, 0)
+	self.OwnerCooldown = math.max(self.OwnerCooldown - dt, 0)
 	if not Network.IsOwner(self.Entity) then return end
-	local move, fire
-	local match = FindMatch()
-	if match and match.Autoplay then
-		move, fire = self:Autoplay()
-	else
-		move = Vec3(Input.GetAction("MoveX"), 0, -Input.GetAction("MoveY"))
-		fire = Input.IsActionPressed("Fire")
-	end
-	if RoundOver() then
-		move, fire = Vec3(0, 0, 0), false
+	local move, fire, aim = self:ReadInput()
+	if Arena.RoundOver() then
+		move, fire, aim = Vec3(0, 0, 0), false, nil
 	end
 	if move:Length() > 1 then move = move:Normalized() end
 	self.Entity:Move(move * self.Speed)
-	if move:Length() > 0.1 then self.Entity.Rotation = Quat.LookRotation(move:Normalized()) end
-	self.NextTag = math.max(self.NextTag - dt, 0)
-	if fire and self.NextTag <= 0 then
-		self.NextTag = self.Cooldown
+	aim = aim or (move:Length() > 0.1 and move) or nil
+	if aim then self.Entity.Rotation = Quat.LookRotation(aim:Normalized()) end
+	if fire and self.OwnerCooldown <= 0 then
+		self.OwnerCooldown = self.Cooldown
 		self.TagsRequested = self.TagsRequested + 1
 		local direction = self.Entity:GetForward()
 		if Network.IsClient() then
-			Network.Rpc(self.Entity, "Tag", "Server", direction, Network.GetViewTime())
+			local sent, reason = Network.Rpc(self.Entity, "Tag", "Server", direction, Network.GetViewTime())
+			if not sent then Log.Warn("Arena: could not send a tag to the host: " .. tostring(reason)) end
 		else
 			-- The host's own player (or a game with no session) tags directly.
-			self:Tag(0, { direction.x, direction.y, direction.z }, Network.GetViewTime())
+			self:Tag(0, Arena.ToArray(direction), Network.GetViewTime())
 		end
 	end
 end
 
+-- A tag the host turns away as malformed: counted, and logged once per player (a client could send a hundred a
+-- second).
+function Player:Refuse(why)
+	self.TagsRefused = self.TagsRefused + 1
+	if self.TagsRefused == 1 then Log.Warn("Arena: " .. self.Entity.Name .. " sent a tag that " .. why .. " (refused; not logged again)") end
+end
+
 -- Runs on the deciding peer: the host (from the owner's RPC, or its own player) or a game with no session.
-function Player:Tag(sender, rawDirection, time)
+function Player:Tag(sender, rawDirection, rawTime)
 	if Network.IsClient() then return end
-	local direction = ReadVec3(rawDirection)
-	if not direction or type(time) ~= "number" or time ~= time then
-		self.TagsRefused = self.TagsRefused + 1
-		Log.Warn("Arena: " .. self.Entity.Name .. " sent a tag that is not a direction and a time")
-		return
-	end
+	local direction, time = Arena.ReadVec3(rawDirection), Arena.ReadNumber(rawTime)
+	if not direction or not time then return self:Refuse("is not a direction and a time") end
 	-- Shots stay level: the arena is flat, and a shot aimed up or down would pass over or under everyone.
 	direction = Vec3(direction.x, 0, direction.z)
-	if direction:Length() < 0.01 then return end
+	if direction:Length() < 0.01 then return self:Refuse("has no direction across the floor") end
 	direction = direction:Normalized()
+	if self.HostCooldown > 0 or Arena.RoundOver() then return end
 	local now = Network.GetTime()
-	if now - self.LastTagTime < self.Cooldown * 0.8 then return end
-	if RoundOver() then return end
-	self.LastTagTime = now
-	self.TagsAccepted = self.TagsAccepted + 1
+	-- Network.Raycast treats a time from the future as now.
+	time = math.max(time, now - (Network.GetRoundTripTime(sender) or 0) - MaxViewLag)
 	-- From where the host has the player now, not where the owner says it is.
 	local position = self.Entity.WorldPosition
 	local origin = Vec3(position.x, position.y + ChestHeight, position.z) + direction * MuzzleOffset
 	local hit = Network.Raycast(origin, direction, self.Range, time, { Ignore = self.Entity })
+	self.HostCooldown = self.Cooldown * 0.8
+	self.TagsAccepted = self.TagsAccepted + 1
 	local stop = hit and hit.Point or (origin + direction * self.Range)
-	self:ShowTag(0, { origin.x, origin.y, origin.z }, { stop.x, stop.y, stop.z })
+	self:ShowTag(0, Arena.ToArray(origin), Arena.ToArray(stop))
 	if Network.IsHost() then
-		Network.Rpc(self.Entity, "ShowTag", "Clients", { origin.x, origin.y, origin.z }, { stop.x, stop.y, stop.z })
+		local sent, reason = Network.Rpc(self.Entity, "ShowTag", "Clients", Arena.ToArray(origin), Arena.ToArray(stop))
+		if not sent then Log.Warn("Arena: could not show a tag on every client: " .. tostring(reason)) end
 	end
-	local target = hit and hit.Entity
-	local script = target and target:GetScript()
-	if script and (script.IsBot or script.IsPlayer) then
-		local match = FindMatch()
-		if match then match:OnTag(self.Entity, target) end
-	end
+	if hit then Arena.RequireScript("Match"):OnTag(self.Entity, hit.Entity) end
 end
 
 -- Draws the tag's beam for a moment on every peer (`from` and `to` arrive as arrays).
 function Player:ShowTag(sender, rawFrom, rawTo)
-	local from, to = ReadVec3(rawFrom), ReadVec3(rawTo)
+	local from, to = Arena.ReadVec3(rawFrom), Arena.ReadVec3(rawTo)
 	if not from or not to then return end
 	local length = (to - from):Length()
 	if length < 0.01 then return end
+	local body = self.Entity:FindChild("PlayerBody")
+	local color = body and body:GetComponent("Material").AlbedoColor or { 1, 1, 1, 1 }
 	local beam = Scene.CreateEntity("TagBeam")
 	beam.Translation = (from + to) * 0.5
 	beam.Rotation = Quat.LookRotation((to - from):Normalized())
 	beam.Scale = Vec3(0.08, 0.08, length)
-	local color = self.Entity:FindChild("PlayerBody"):GetComponent("Material").AlbedoColor
 	beam:AddComponent("Mesh", { Mesh = "builtin://Cube" })
 	beam:AddComponent("Material", { AlbedoColor = color, EmissiveColor = { color[1], color[2], color[3] }, EmissiveIntensity = 4 })
 	beam:AddComponent("Script", { Script = "Assets/Scripts/Fade.lua" })
-end
-
--- Autoplay: the computer's input for this player (see Match.Autoplay). Player 1 walks to a spot on the near side and
--- tags along it every cooldown; player 2 walks to the far end of that side and stands there, and walks back along the
--- right-hand side after every tag (which puts it in the far corner), so player 1 wins the round however the peers'
--- timing goes. Others stand still.
-function Player:Autoplay()
-	local peer = self.Entity:GetComponent("Networked").Owner
-	local spot, aim
-	if peer == 1 then
-		spot, aim = Vec3(-6, 0, -8), Vec3(1, 0, 0)
-	elseif peer == 2 then
-		spot = Vec3(8, 0, -8)
-	else
-		return Vec3(0, 0, 0), false
-	end
-	local position = self.Entity.WorldPosition
-	local offset = Vec3(spot.x - position.x, 0, spot.z - position.z)
-	local distance = offset:Length()
-	local move = Vec3(0, 0, 0)
-	if distance > 0.05 then
-		-- Slow down on arrival rather than overshoot (a step at full speed covers 8 cm).
-		move = offset:Normalized() * math.min(1, distance * 2)
-	elseif aim then
-		self.Entity.Rotation = Quat.LookRotation(aim)
-	end
-	return move, aim ~= nil and distance <= 0.05
 end
 
 return Player

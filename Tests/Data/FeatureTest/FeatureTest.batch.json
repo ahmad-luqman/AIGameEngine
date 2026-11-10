@@ -35,6 +35,7 @@
 	{ "id": "animator-match-joints", "command": "animator.match_joints", "params": { "source": "Assets/Models/MixamoRig.gltf", "target": "Assets/Models/UnrealRig.gltf", "jointMap": "Assets/Animations/Humanoid.bjointmap" } },
 	{ "id": "joint-map-invalid", "command": "asset.write", "params": { "path": "Assets/Animations/Broken.bjointmap", "content": "{ \"Joints\": [ { \"Source\": \"Hips\" } ] }" }, "expectError": "invalid animation joint map: Joints[0].Target must be a nonempty string" },
 	{ "id": "play", "command": "play.start" },
+	{ "id": "cli-is-headless", "command": "lua.exec", "params": { "code": "assert(Game.IsHeadless() == true, 'the CLI has no window') return 'headless'" } },
 	{ "id": "press-frame", "command": "play.step", "params": { "frames": 1, "assertNoErrors": true } },
 	{ "id": "key-up", "command": "input.key", "params": { "key": "Space", "down": false } },
 	{ "id": "mouse-up", "command": "input.mouse", "params": { "position": [330, 250], "button": "Left", "down": false } },

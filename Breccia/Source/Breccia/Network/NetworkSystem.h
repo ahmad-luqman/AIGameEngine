@@ -511,7 +511,8 @@ namespace Breccia {
 		std::unordered_set<UUID> m_RemoteEntities;
 		std::map<UUID, PendingParent> m_PendingParents;
 
-		// Entities whose body this peer drives kinematically, in ID order (physics rebuilds follow it).
+		// What the last UpdateDrivenBodies asked physics to drive, in ID order (physics rebuilds follow it), so that this system
+		// can release them; physics holds what is driven now.
 		std::set<UUID> m_DrivenBodies;
 
 		// Script events waiting for TakeEvents.

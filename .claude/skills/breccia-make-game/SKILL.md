@@ -86,11 +86,14 @@ broken version leaves the old one running). Typical patterns:
   keeps it, and its `Network.On("Connected")` handler, when the host's entities replace its own), and let it spawn a
   player prefab per peer on the host (`Network.GetPeers()`, `Networked.Owner` set before the next tick; none for the host
   when `Game.IsHeadless()`). Give players `Networked.Authority = "Predicted"` and a `MaxInputSpeed` a little above their
-  speed, move them only where `Network.IsOwner`, and send actions to the host as RPCs the script's `Rpcs` table declares
-  (check every argument there: vectors arrive as arrays). Hits use `Network.Raycast` at the sender's `GetViewTime()`.
-  Send shared state (scores) from the host as a whole table through an RPC on a networked entity, so late joiners get
-  it. Test with `net.host`, `net.connect` (in-process clients), `net.focus` (whose input), `net.link` (latency) and
-  `net.command` (asserts on a client's scene).
+  speed, move them only where `Network.IsOwner`, and send actions to the host as RPCs the script's `Rpcs` table declares.
+  Check every argument on the host before using it: vectors arrive as arrays, so read each component by index (an
+  `ipairs` loop stops at the first missing one) and refuse non-numbers, NaN and infinities, since an error in an RPC
+  stops that entity's script on the host. Hits use `Network.Raycast` at the sender's `GetViewTime()`, clamped to no more
+  than its round trip plus the interpolation delay back. Send shared state (scores) from the host as a whole table
+  through an RPC on a networked entity, whenever it changes and to every peer that joins (RPCs are not replayed to late
+  joiners), and send again when `Network.Rpc` returns false. Test with `net.host`, `net.connect` (in-process clients),
+  `net.focus` (whose input), `net.link` (latency) and `net.command` (asserts on a client's scene).
 - Random numbers repeat every play session (the project's `RandomSeed`); `Math.Seed(n)` picks another sequence, `Debug.Draw*` to visualise logic, `Game.Quit()` to exit.
 - HUDs and menus: put `UIRect` + `UIImage`/`UIText` entities in the scene (anchored, nine-slice panels,
   `.ttf` fonts; see "Screen UI" in Docs/ScriptingAPI.md) and update their text with `SetComponent`; check
