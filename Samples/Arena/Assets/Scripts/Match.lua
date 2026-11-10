@@ -223,6 +223,7 @@ function Match:OnUpdate(dt)
 		-- A session started or ended: a new match. (A client's practice player goes when the host accepts it, as it is
 		-- networked; SyncPlayers forgets it when this peer decides again.)
 		self.Role = role
+		if role ~= nil then self.LeftReason = nil end
 		self:ResetRound()
 		self:Publish()
 	end
