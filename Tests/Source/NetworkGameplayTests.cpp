@@ -3,6 +3,7 @@
 #include <Breccia/Automation/AutomationSession.h>
 #include <Breccia/Automation/CommandRegistry.h>
 #include <Breccia/Core/FileSystem.h>
+#include <Breccia/Math/Random.h>
 #include <Breccia/Network/NetBuffer.h>
 #include <Breccia/Network/NetProtocol.h>
 #include <Breccia/Network/NetworkSettings.h>
@@ -374,6 +375,18 @@ TEST_SUITE("Network")
 		REQUIRE(ended);
 		CHECK(DisconnectReasonFromCode(ended->DisconnectCode) == NetDisconnectReason::InvalidPacket);
 		CHECK(host.GetPeers().empty());
+
+		// Far fewer, but large ones past MaxInboxBytes: that ends it too.
+		RawPeer heavy(session, session.Link().Connect(session.GetPort()));
+		REQUIRE(heavy.Join() == 2);
+		const std::string payload(30 * 1024, 'h');
+		const size_t count = NetworkSystem::MaxInboxBytes / payload.size() + 70;
+		REQUIRE(count < NetworkSystem::MaxInboxMessages / 2);
+		for (size_t i = 0; i < count; i++)
+			heavy.Send(ScriptBytes(NetScriptKind::Message, 0, "Heavy", { payload }));
+		const auto heavyEnded = heavy.WaitFor(NetTransportEvent::Kind::Disconnected, 30);
+		REQUIRE(heavyEnded);
+		CHECK(DisconnectReasonFromCode(heavyEnded->DisconnectCode) == NetDisconnectReason::InvalidPacket);
 	}
 
 	TEST_CASE("An RPC that arrives before its entity waits for the spawn, and one that never arrives is dropped")
@@ -1251,14 +1264,29 @@ TEST_SUITE("Network")
 		Entity hostPlayer = host.GetEntityByUUID(playerId);
 		Entity clientPlayer = client.GetEntityByUUID(playerId);
 		const float startX = hostPlayer.GetTransform().Translation.x;
-		// Twice the protocol's limit: the client clamps below it rather than sending what the host refuses.
-		client.GetPhysicsWorld()->MoveCharacter(clientPlayer, { 2.0f * NetProtocol::MaxInputSpeed, 0.0f, 0.0f });
+		// Faster than the protocol's limit, in a direction where scaling to exactly the limit rounds above it: the client
+		// clamps below rather than sending what the host refuses (which would end its session).
+		glm::vec3 fast(0.0f);
+		Random random(7);
+		for (int attempt = 0; attempt < 10000; attempt++)
+		{
+			const glm::vec3 candidate(random.Range(0.5f, 1.0f), random.Range(-0.3f, 0.3f), random.Range(-1.0f, 1.0f));
+			const glm::vec3 velocity = candidate * (2.0f * NetProtocol::MaxInputSpeed / glm::length(candidate));
+			// What scaling it to exactly the limit gives, as a naive clamp would.
+			if (glm::length(velocity * (NetProtocol::MaxInputSpeed / glm::length(velocity))) > NetProtocol::MaxInputSpeed)
+			{
+				fast = velocity;
+				break;
+			}
+		}
+		REQUIRE(glm::length(fast) > 0.0f);
+		client.GetPhysicsWorld()->MoveCharacter(clientPlayer, fast);
 		session.Run(30);
 		client.GetPhysicsWorld()->MoveCharacter(clientPlayer, glm::vec3(0.0f));
 		session.Run(30);
 		CHECK(session.ClientNetwork(0).GetState() == NetConnectionState::Connected);
 		// The host moved it at its own limit: 4 m/s for half a second.
-		CHECK(hostPlayer.GetTransform().Translation.x - startX == doctest::Approx(2.0f).epsilon(0.05));
+		CHECK(glm::length(hostPlayer.GetTransform().Translation - glm::vec3(startX, hostPlayer.GetTransform().Translation.y, 0.0f)) == doctest::Approx(2.0f).epsilon(0.05));
 		CHECK(clientPlayer.GetTransform().Translation.x == doctest::Approx(hostPlayer.GetTransform().Translation.x).epsilon(1e-3));
 	}
 
@@ -1277,6 +1305,32 @@ TEST_SUITE("Network")
 		// It fell from 6 m to the ground.
 		CHECK(host.GetEntityByUUID(playerId).GetTransform().Translation.y < 2.0f);
 		CHECK(host.GetPhysicsWorld()->IsDrivenExternally(host.GetEntityByUUID(playerId)));
+		// The owner speaks again, an input per step: the host takes no more steps of its own.
+		uint32_t sequence = 1;
+		for (int frame = 0; frame < 30; frame++)
+		{
+			NetState update;
+			update.Sequence = sequence;
+			update.Extras.Inputs.push_back({ playerId, sequence, { { glm::vec3(1.0f, 0.0f, 0.0f), glm::quat(1, 0, 0, 0) } } });
+			raw.Send(NetProtocol::EncodeState(NetMessageType::ClientUpdate, update), NetChannel::Unreliable);
+			sequence++;
+			session.Run(1);
+		}
+		// Then in bursts (four steps every fourth frame, as a client sending at 15 updates per second does): still none.
+		const uint64_t idle = session.HostNetwork().GetStatistics().IdleSteps;
+		for (int frame = 0; frame < 60; frame++)
+		{
+			if (frame % 4 == 3)
+			{
+				NetState update;
+				update.Sequence = sequence;
+				update.Extras.Inputs.push_back({ playerId, sequence, std::vector<CharacterInput>(4, { glm::vec3(1.0f, 0.0f, 0.0f), glm::quat(1, 0, 0, 0) }) });
+				raw.Send(NetProtocol::EncodeState(NetMessageType::ClientUpdate, update), NetChannel::Unreliable);
+				sequence += 4;
+			}
+			session.Run(1);
+		}
+		CHECK(session.HostNetwork().GetStatistics().IdleSteps == idle);
 	}
 
 	TEST_CASE("A Predicted entity without a character controller replicates like Server to its owner")
@@ -1290,6 +1344,8 @@ TEST_SUITE("Network")
 		});
 		Scene& client = session.AddClient();
 		REQUIRE(session.RunUntil([&] { return static_cast<bool>(client.GetEntityByUUID(boxId)); }, 60));
+		// Acknowledged: a change now travels as a field update, not inside a repeated spawn.
+		session.Run(30);
 		CHECK_FALSE(session.ClientNetwork(0).IsPredicted(client.GetEntityByUUID(boxId)));
 		host.GetEntityByUUID(boxId).GetTransform().Translation.x = 5.0f;
 		session.Run(10);
@@ -1367,5 +1423,47 @@ TEST_SUITE("Network")
 		CHECK(host->GetScriptEngine()->GetErrors().empty());
 		host->OnRuntimeStop();
 		client->OnRuntimeStop();
+	}
+
+	TEST_CASE("A client's view of the host clock never runs back, whatever times a host sends")
+	{
+		FakeHost host;
+		host.Welcome();
+		NetState state;
+		state.Extras.Time = 10.0;
+		host.Snapshot(state);
+		const double first = host.Network().GetTime();
+		REQUIRE(first >= 10.0);
+		state.Extras.Time = 2.0;
+		host.Snapshot(state);
+		CHECK(host.Network().GetTime() >= first);
+	}
+
+	TEST_CASE("Lag compensation knows where bodies were before the first client joined")
+	{
+		Session session({}, WithDelay(0.0f));
+		UUID targetId = 0;
+		Scene& host = session.StartHost([&](Scene& scene) {
+			Entity target = CreateNetworked(scene, "Target", 0, { 0.0f, 1.0f, 0.0f });
+			target.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Kinematic;
+			target.AddComponent<BoxColliderComponent>().HalfExtents = { 0.5f, 0.5f, 0.5f };
+			targetId = target.GetUUID();
+		});
+		Entity target = host.GetEntityByUUID(targetId);
+		session.Run(10);
+		const double then = session.HostNetwork().GetTime();
+		// It moves away; then a client joins, which acted on what it saw before it arrived.
+		for (int frame = 0; frame < 20; frame++)
+		{
+			target.GetTransform().Translation.x += 0.2f;
+			session.Run(1);
+		}
+		session.AddClient();
+		REQUIRE(session.RunUntil([&] { return session.ClientNetwork(0).GetState() == NetConnectionState::Connected; }, 60));
+		REQUIRE(session.HostNetwork().GetTime() - then < NetworkSystem::MaxRewindSeconds);
+		const std::optional<RaycastHit> hit = session.HostNetwork().RaycastAt(then, { 0.0f, 5.0f, 0.0f }, { 0.0f, -1.0f, 0.0f }, 10.0f);
+		REQUIRE(hit);
+		CHECK(hit->EntityID == targetId);
+		CHECK_FALSE(session.HostNetwork().RaycastAt(session.HostNetwork().GetTime(), { 0.0f, 5.0f, 0.0f }, { 0.0f, -1.0f, 0.0f }, 10.0f));
 	}
 }

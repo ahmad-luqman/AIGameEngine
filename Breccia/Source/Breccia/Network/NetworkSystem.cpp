@@ -1285,12 +1285,16 @@ namespace Breccia {
 		}
 		// A client that spent its budget skips the tick: what it would send waits, and the host never receives more than
 		// MaxBytesPerSecond from it (one message of debt at most).
-		else if (const size_t budget = m_State == NetConnectionState::Connected && m_HostHandle ? refill(m_ClientTokens) : 0; budget > 0)
+		else if (m_State == NetConnectionState::Connected && m_HostHandle)
 		{
-			const NetStateExtras extras{ .Inputs = std::move(inputs) };
-			const std::vector<uint8_t> message = m_ClientSender.Build(CaptureWorld(), m_LastSnapshot, budget, {}, extras);
-			if (Transmit(*m_HostHandle, NetChannel::Unreliable, message, m_HostTraffic))
-				m_ClientTokens -= static_cast<double>(message.size());
+			const NetPeerHandle host = *m_HostHandle;
+			if (const size_t budget = refill(m_ClientTokens); budget > 0)
+			{
+				const NetStateExtras extras{ .Inputs = std::move(inputs) };
+				const std::vector<uint8_t> message = m_ClientSender.Build(CaptureWorld(), m_LastSnapshot, budget, {}, extras);
+				if (Transmit(host, NetChannel::Unreliable, message, m_HostTraffic))
+					m_ClientTokens -= static_cast<double>(message.size());
+			}
 		}
 		// Now rather than at the next frame's Receive: a paced headless host would otherwise add a frame of latency.
 		m_Transport->Flush();
@@ -1561,7 +1565,10 @@ namespace Breccia {
 		if (!replayed && !std::exchange(character.ReportedReplay, true))
 			BR_CORE_WARN("Network: '{}' could not be put at the host's state and its inputs replayed (a degenerate transform?); it shows its own prediction until it can", entity.GetName());
 		const std::optional<CharacterState> after = physics->GetCharacterState(entity);
-		if (before.has_value() && after.has_value() && glm::length(after->Position - before->Position) > PredictionTolerance)
+		if (!before || !after)
+			return;
+		const glm::vec3 moved = after->Position - before->Position;
+		if (glm::length(moved) > PredictionTolerance)
 			m_Statistics.Corrections++;
 	}
 

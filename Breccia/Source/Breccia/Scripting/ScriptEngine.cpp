@@ -1168,7 +1168,7 @@ namespace Breccia {
 		constexpr size_t MaxReportedNetworkProblems = 256;
 
 		// The sender's peer ID, then the values sent: what a message handler or an RPC method receives.
-		std::vector<sol::object> PeerAndArguments(sol::state_view lua, const NetworkEvent& event)
+		std::vector<sol::object> PeerAndArguments(const sol::state_view& lua, const NetworkEvent& event)
 		{
 			std::vector<sol::object> args;
 			args.push_back(sol::make_object(lua, event.Peer));
