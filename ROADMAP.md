@@ -78,6 +78,8 @@ driven remote characters, and the `net.*` commands with in-process clients, simu
   characters (needs the fixed-step interpolation in P2).
 - The owner's own step of a predicted character clamped to `Networked.MaxInputSpeed` like its inputs (today a faster `Move`
   runs ahead for a step and is corrected).
+- Scale changes of a client-predicted character after its spawn reaching its owner (today the host withholds the owner's
+  whole Transform, and corrections carry no scale, so the owner keeps the spawn's scale).
 - **Later:** interest management for large worlds; deterministic lockstep or rollback, which needs the whole simulation to
   be deterministic (today only physics is pinned: IK uses libm, and Lua is not checked); encryption, through ENet's
   per-datagram compressor hook with keys from an authenticated handshake (`Docs/Networking.md`); IPv6; quantized rotations
