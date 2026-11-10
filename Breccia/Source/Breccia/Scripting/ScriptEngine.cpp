@@ -6,6 +6,7 @@
 #include "Breccia/Core/Log.h"
 #include "Breccia/Core/MemoryTracker.h"
 #include "Breccia/Core/Profiler.h"
+#include "Breccia/Network/NetworkSystem.h"
 #include "Breccia/Project/Project.h"
 #include "Breccia/Project/SaveData.h"
 #include "Breccia/Scene/Entity.h"
@@ -386,6 +387,7 @@ namespace Breccia {
 		void FailOwner(UUID owner, const std::string& message, const std::string& where) override;
 		ScriptTasks& GetTasks() override { return Tasks; }
 		ScriptEvents& GetEvents() override { return Events; }
+		ScriptEvents& GetNetworkEvents() override { return NetworkEvents; }
 		SaveData& GetStorage() override;
 		bool LoadStorage(std::string& outError) override;
 
@@ -419,6 +421,7 @@ namespace Breccia {
 		// Declared after Lua: they hold Lua references, which must be released before the state closes.
 		ScriptTasks Tasks{ Lua, Context, *this };
 		ScriptEvents Events{ Lua, Context, *this };
+		ScriptEvents NetworkEvents{ Lua, Context, *this };
 		// Loaded on the first Storage call, so sessions that never use it never touch the disk.
 		std::optional<SaveData> Storage;
 		std::unordered_map<std::string, ScriptClass> Classes;
@@ -494,6 +497,7 @@ namespace Breccia {
 		{
 			engine.m_Impl->Tasks.CancelOwnedBy(id);
 			engine.m_Impl->Events.RemoveOwnedBy(id);
+			engine.m_Impl->NetworkEvents.RemoveOwnedBy(id);
 		}
 
 		// Disables a live instance after an error: no more callbacks, and nothing it owns runs again.
@@ -955,6 +959,7 @@ namespace Breccia {
 		m_Impl->Context.Host = nullptr;
 		m_Impl->Tasks.Clear();
 		m_Impl->Events.Clear();
+		m_Impl->NetworkEvents.Clear();
 		m_Impl->Instances.clear();
 		m_Impl->Classes.clear();
 		m_Impl->ForgottenModules.clear();
@@ -1111,7 +1116,7 @@ namespace Breccia {
 		EnsureInstances(m_Scene->GetAllEntitiesOrdered());
 	}
 
-	void ScriptEngine::Update(Timestep ts, std::span<const UIWidgetEvent> uiEvents)
+	void ScriptEngine::Update(Timestep ts, std::span<const UIWidgetEvent> uiEvents, std::span<const NetworkEvent> networkEvents)
 	{
 		BR_PROFILE_SCOPE("Scripts");
 		Impl& impl = *m_Impl;
@@ -1131,6 +1136,8 @@ namespace Breccia {
 		DispatchGamepadConnections();
 		for (const UIWidgetEvent& event : uiEvents)
 			DispatchUIEvent(event);
+		for (const NetworkEvent& event : networkEvents)
+			DispatchNetworkEvent(event);
 
 		ScriptEngineAccess::CallOnEveryInstance(*this, "OnUpdate", ts.GetSeconds());
 
@@ -1152,6 +1159,124 @@ namespace Breccia {
 				ScriptEngineAccess::CallOnEveryInstance(*this, "OnGamepadDisconnected", static_cast<int>(index));
 			if (connection != 0)
 				ScriptEngineAccess::CallOnEveryInstance(*this, "OnGamepadConnected", static_cast<int>(index));
+		}
+	}
+
+	void ScriptEngine::DispatchNetworkEvent(const NetworkEvent& event)
+	{
+		// The handler's budget ran out: what follows this frame would fail with it (as Events.Emit stops).
+		if (m_Impl->Context.Budget.IsSpent())
+			return;
+		sol::state_view lua(m_Impl->Lua);
+		std::vector<sol::object> args;
+		std::string name;
+		switch (event.Type)
+		{
+			case NetworkEvent::Kind::Connected:
+				name = "Connected";
+				args.push_back(sol::make_object(lua, event.Peer));
+				break;
+			case NetworkEvent::Kind::Disconnected:
+				name = "Disconnected";
+				args.push_back(sol::make_object(lua, std::string(NetDisconnectReasonName(event.Reason))));
+				break;
+			case NetworkEvent::Kind::PeerConnected:
+				name = "PeerConnected";
+				args.push_back(sol::make_object(lua, event.Peer));
+				break;
+			case NetworkEvent::Kind::PeerDisconnected:
+				name = "PeerDisconnected";
+				args.push_back(sol::make_object(lua, event.Peer));
+				args.push_back(sol::make_object(lua, std::string(NetDisconnectReasonName(event.Reason))));
+				break;
+			case NetworkEvent::Kind::Message:
+				name = event.Name;
+				args.push_back(sol::make_object(lua, event.Peer));
+				for (const nlohmann::json& argument : event.Arguments)
+					args.push_back(JsonToLua(lua, argument));
+				break;
+			case NetworkEvent::Kind::Rpc:
+				DispatchRpc(event);
+				return;
+		}
+		m_Impl->NetworkEvents.EmitValues(name, args);
+	}
+
+	void ScriptEngine::DispatchRpc(const NetworkEvent& event)
+	{
+		// Each entity, method and problem once: a peer chooses the names, so the keys are capped.
+		constexpr size_t MaxReportedRpcProblems = 256;
+		Entity entity = m_Scene->GetEntityByUUID(event.Entity);
+		const auto report = [&](const char* kind, const std::string& problem) {
+			if (m_ReportedRpcs.size() >= MaxReportedRpcProblems)
+				return;
+			if (m_ReportedRpcs.insert(fmt::format("{}/{}/{}", static_cast<uint64_t>(event.Entity), event.Name, kind)).second)
+				BR_CORE_WARN("Network: {} called {} on '{}': {} (not logged again)", event.Peer == 0 ? std::string("the host") : fmt::format("client {}", event.Peer), event.Name, entity ? entity.GetName() : std::to_string(static_cast<uint64_t>(event.Entity)), problem);
+		};
+		if (!entity || m_Scene->IsEntityPendingDestruction(entity))
+			return;
+		auto it = m_Impl->Instances.find(event.Entity);
+		if (it == m_Impl->Instances.end() || it->second.Failed || !it->second.Created)
+		{
+			report("script", "the entity has no running script");
+			return;
+		}
+		const sol::table self = it->second.Self;
+		std::optional<sol::object> declarations;
+		std::string lookupError;
+		{
+			ScriptOwnerScope scope(m_Impl->Context, event.Entity, "finding Rpcs");
+			declarations = scope.Index(self, "Rpcs", lookupError);
+		}
+		if (!declarations)
+		{
+			report("lookup", "finding its script's Rpcs failed: " + lookupError);
+			return;
+		}
+		// Raw reads: the table is the script's, and its metamethods must not run unprotected.
+		const sol::object permission = declarations->get_type() == sol::type::table ? declarations->as<sol::table>().raw_get<sol::object>(event.Name) : sol::object(sol::lua_nil);
+		const std::string who = permission.get_type() == sol::type::string ? permission.as<std::string>() : std::string();
+		if (who != "Host" && who != "Owner" && who != "Any")
+		{
+			report("declared", "its script does not declare it in Rpcs (Rpcs = { " + event.Name + " = \"Host\" | \"Owner\" | \"Any\" })");
+			return;
+		}
+		// The host may call every declared method; a client only those for any client, or for the entity's owner.
+		if (event.Peer != 0)
+		{
+			const auto* networked = entity.TryGetComponent<NetworkedComponent>();
+			const bool owner = networked && networked->Owner == event.Peer;
+			if (who == "Host" || (who == "Owner" && !owner))
+			{
+				report("permission", who == "Host" ? "only the host may call it" : "only the entity's owner may call it");
+				return;
+			}
+		}
+		sol::state_view lua(m_Impl->Lua);
+		std::vector<sol::object> args;
+		args.push_back(sol::make_object(lua, event.Peer));
+		for (const nlohmann::json& argument : event.Arguments)
+			args.push_back(JsonToLua(lua, argument));
+		ScriptOwnerScope scope(m_Impl->Context, event.Entity, "an RPC");
+		std::string error;
+		const std::optional<sol::object> method = scope.Index(self, event.Name, error);
+		if (!method)
+		{
+			ReportError(error + " (finding " + event.Name + ")");
+			ScriptEngineAccess::Fail(*this, event.Entity);
+			return;
+		}
+		if (method->get_type() != sol::type::function)
+		{
+			report("method", "its script has no method " + event.Name);
+			return;
+		}
+		sol::protected_function function = method->as<sol::protected_function>();
+		const sol::protected_function_result result = function(self, sol::as_args(args));
+		if (scope.Failed(result, error))
+		{
+			ReportError(error + " (in RPC " + event.Name + ")");
+			ScriptEngineAccess::Fail(*this, event.Entity);
 		}
 	}
 
@@ -1228,6 +1353,7 @@ namespace Breccia {
 		// What is left belongs to the session (console or lua.exec timers and handlers): it ends with play.
 		impl.Tasks.Clear();
 		impl.Events.Clear();
+		impl.NetworkEvents.Clear();
 		impl.Started = false;
 	}
 

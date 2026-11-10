@@ -133,6 +133,8 @@ namespace Breccia {
 		uint32_t s_NextGamepadConnection = 1;
 		bool s_GameFocus = true;
 		bool s_GamePointer = true;
+		// Input::SetGameMuted: every GameInput read is empty, with no other effect.
+		bool s_GameMuted = false;
 		CursorMode s_CursorMode = CursorMode::Normal;
 
 		constexpr std::string_view CursorModeNames[CursorModeCount] = { "Normal", "Hidden", "Locked" };
@@ -370,6 +372,18 @@ namespace Breccia {
 		s_GameTextInput.clear();
 	}
 
+	void Input::SetGameMuted(bool muted)
+	{
+		std::scoped_lock lock(s_Mutex);
+		s_GameMuted = muted;
+	}
+
+	bool Input::IsGameMuted()
+	{
+		std::scoped_lock lock(s_Mutex);
+		return s_GameMuted;
+	}
+
 	bool Input::HasGameFocus()
 	{
 		std::scoped_lock lock(s_Mutex);
@@ -457,6 +471,8 @@ namespace Breccia {
 	std::string GameInput::GetTextInput()
 	{
 		std::scoped_lock lock(s_Mutex);
+		if (s_GameMuted)
+			return {};
 		return s_GameFocus ? s_GameTextInput : std::string();
 	}
 
@@ -671,6 +687,8 @@ namespace Breccia {
 	bool GameInput::IsKeyDown(KeyCode key, InputFrame frame)
 	{
 		std::scoped_lock lock(s_Mutex);
+		if (s_GameMuted)
+			return false;
 		const size_t index = KeyIndex(key);
 		if (index >= MaxKeys)
 			return false;
@@ -680,6 +698,8 @@ namespace Breccia {
 	bool GameInput::IsKeyPressed(KeyCode key)
 	{
 		std::scoped_lock lock(s_Mutex);
+		if (s_GameMuted)
+			return false;
 		const size_t index = KeyIndex(key);
 		return index < MaxKeys && GameKeyDown(index) && !s_State.GameKeysLastFrame[index];
 	}
@@ -687,6 +707,8 @@ namespace Breccia {
 	bool GameInput::IsKeyReleased(KeyCode key)
 	{
 		std::scoped_lock lock(s_Mutex);
+		if (s_GameMuted)
+			return false;
 		const size_t index = KeyIndex(key);
 		return index < MaxKeys && !GameKeyDown(index) && s_State.GameKeysLastFrame[index];
 	}
@@ -694,6 +716,8 @@ namespace Breccia {
 	bool GameInput::IsMouseButtonDown(MouseCode button, InputFrame frame)
 	{
 		std::scoped_lock lock(s_Mutex);
+		if (s_GameMuted)
+			return false;
 		const size_t index = ButtonIndex(button);
 		if (index >= MouseButtonCount)
 			return false;
@@ -703,6 +727,8 @@ namespace Breccia {
 	bool GameInput::IsMouseButtonPressed(MouseCode button)
 	{
 		std::scoped_lock lock(s_Mutex);
+		if (s_GameMuted)
+			return false;
 		const size_t index = ButtonIndex(button);
 		return index < MouseButtonCount && GameButtonDown(index) && !s_State.GameButtonsLastFrame[index];
 	}
@@ -710,6 +736,8 @@ namespace Breccia {
 	bool GameInput::IsMouseButtonReleased(MouseCode button)
 	{
 		std::scoped_lock lock(s_Mutex);
+		if (s_GameMuted)
+			return false;
 		const size_t index = ButtonIndex(button);
 		return index < MouseButtonCount && !GameButtonDown(index) && s_State.GameButtonsLastFrame[index];
 	}
@@ -717,18 +745,24 @@ namespace Breccia {
 	glm::vec2 GameInput::GetMouseDelta()
 	{
 		std::scoped_lock lock(s_Mutex);
+		if (s_GameMuted)
+			return glm::vec2(0.0f);
 		return s_GamePointer ? s_State.MousePosition - s_State.MousePositionLastFrame : glm::vec2(0.0f);
 	}
 
 	glm::vec2 GameInput::GetMouseScroll()
 	{
 		std::scoped_lock lock(s_Mutex);
+		if (s_GameMuted)
+			return glm::vec2(0.0f);
 		return s_GamePointer ? s_State.Scroll : glm::vec2(0.0f);
 	}
 
 	bool GameInput::IsGamepadButtonDown(uint32_t index, GamepadButton button, InputFrame frame)
 	{
 		std::scoped_lock lock(s_Mutex);
+		if (s_GameMuted)
+			return false;
 		const auto b = static_cast<size_t>(button);
 		if (b >= GamepadButtonCount)
 			return false;
@@ -741,6 +775,8 @@ namespace Breccia {
 	bool GameInput::IsGamepadButtonPressed(uint32_t index, GamepadButton button)
 	{
 		std::scoped_lock lock(s_Mutex);
+		if (s_GameMuted)
+			return false;
 		const GamepadSlot* gamepad = ConnectedGamepad(index);
 		const auto b = static_cast<size_t>(button);
 		return gamepad && b < GamepadButtonCount && GameGamepadButtonDown(*gamepad, b) && !gamepad->GameButtonsLastFrame[b];
@@ -749,6 +785,8 @@ namespace Breccia {
 	bool GameInput::IsGamepadButtonReleased(uint32_t index, GamepadButton button)
 	{
 		std::scoped_lock lock(s_Mutex);
+		if (s_GameMuted)
+			return false;
 		// Like Input's: a gamepad disconnected while a button was held reports the release on that frame.
 		const auto b = static_cast<size_t>(button);
 		if (index >= Input::MaxGamepads || b >= GamepadButtonCount)
@@ -760,6 +798,8 @@ namespace Breccia {
 	float GameInput::GetGamepadAxis(uint32_t index, GamepadAxis axis, InputFrame frame)
 	{
 		std::scoped_lock lock(s_Mutex);
+		if (s_GameMuted)
+			return 0.0f;
 		const auto a = static_cast<size_t>(axis);
 		if (a >= GamepadAxisCount)
 			return 0.0f;

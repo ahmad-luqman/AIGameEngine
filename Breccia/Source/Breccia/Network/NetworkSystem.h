@@ -6,9 +6,15 @@
 #include "Breccia/Network/NetTransport.h"
 #include "Breccia/Network/NetworkSettings.h"
 #include "Breccia/Network/Replication.h"
+#include "Breccia/Physics/PhysicsWorld.h"
+
+#include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
+#include <nlohmann/json.hpp>
 
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <map>
 #include <optional>
 #include <set>
@@ -71,6 +77,34 @@ namespace Breccia {
 		NetTraffic Traffic;
 	};
 
+	// Something a session tells the scene's scripts (Lua Network.On), taken by Scene::OnUpdate after Receive and dispatched by
+	// the ScriptEngine before OnUpdate, so scripts never run inside the network session.
+	struct NetworkEvent
+	{
+		enum class Kind : uint8_t
+		{
+			// A client: the host accepted it (Peer: its own peer ID).
+			Connected,
+			// A client: its connection ended (Reason).
+			Disconnected,
+			// A host: a client joined (Peer).
+			PeerConnected,
+			// A host: a client left (Peer, Reason).
+			PeerDisconnected,
+			// A script message (Name, Arguments) from Peer (0: the host).
+			Message,
+			// An RPC: Name is the method of Entity's script to call with Arguments, from Peer (0: the host).
+			Rpc
+		};
+
+		Kind Type = Kind::Message;
+		uint32_t Peer = 0;
+		NetDisconnectReason Reason = NetDisconnectReason::None;
+		UUID Entity = 0;
+		std::string Name;
+		nlohmann::json Arguments = nlohmann::json::array();
+	};
+
 	// Totals since the session started.
 	struct NetworkStatistics
 	{
@@ -87,6 +121,15 @@ namespace Breccia {
 		// Records not applied: spawns refused (invalid records, files outside the project), updates naming an entity the
 		// receiver does not have or the sender may not change, and structure changes from clients.
 		uint64_t RejectedRecords = 0;
+		// Script messages and RPCs sent and handed to scripts, and those dropped: an RPC for an entity that never arrived,
+		// events past the queue's limit.
+		uint64_t ScriptMessagesSent = 0;
+		uint64_t ScriptMessagesReceived = 0;
+		uint64_t ScriptMessagesDropped = 0;
+		// Prediction: inputs a host applied, and corrections a client made (each snapshot replays its unacknowledged inputs
+		// from the host's state; a correction is one that moved the character more than PredictionTolerance).
+		uint64_t InputsApplied = 0;
+		uint64_t Corrections = 0;
 	};
 
 	// A playing scene's network session (owned by Scene, Scene::StartNetwork). The host is authoritative: it sends each
@@ -114,6 +157,24 @@ namespace Breccia {
 		static constexpr uint32_t SpareTransportSlots = 4;
 		// A child waiting this long for a parent that has not arrived is reported.
 		static constexpr float PendingParentWarningSeconds = 1.0f;
+		// Events waiting for the scripts at most (more are dropped and logged).
+		static constexpr size_t MaxQueuedEvents = 4096;
+		// A client keeps an RPC for an entity it does not have yet (its spawn may still be on its way) this long, and at
+		// most this many of them.
+		static constexpr float PendingRpcSeconds = 2.0f;
+		static constexpr size_t MaxPendingRpcs = 256;
+		// A host keeps this many of one client's script messages waiting for its MaxMessagesPerSecond; a client that sends
+		// more is disconnected (InvalidPacket).
+		static constexpr size_t MaxInboxMessages = 1024;
+		// How far back lag compensation rewinds (RaycastAt clamps older times).
+		static constexpr double MaxRewindSeconds = 1.0;
+		// A host applies a client's inputs up to this much ahead of its own fixed steps (seconds of steps), so a client that
+		// sends them faster than real time cannot move faster than one that does not.
+		static constexpr float MaxInputLeadSeconds = 0.25f;
+		// A client remembers this many unacknowledged inputs of each character it predicts (older ones are forgotten).
+		static constexpr size_t MaxUnacknowledgedInputs = 256;
+		// A correction moving a predicted character less than this (meters) is not counted in NetworkStatistics.
+		static constexpr float PredictionTolerance = 0.01f;
 
 		// What a client must match to join: the game and its version (the project's Name and Version).
 		struct Identity
@@ -145,6 +206,35 @@ namespace Breccia {
 		// Whether this peer decides the entity: everything not networked; on a host, every networked entity except those
 		// a connected client owns with Owner authority; on a connected client, only those it owns with Owner authority.
 		bool HasAuthority(Entity entity) const;
+		// Whether the entity's Owner names this peer: on a host Owner 0 or a client that is not connected, on a connected
+		// client its peer ID. True for entities that are not networked. Scripts move what they own from local input.
+		bool IsOwner(Entity entity) const;
+		// Whether this client predicts the entity: a character controller it owns with Predicted authority. It moves the
+		// character from its own Move calls at once, sends the inputs to the host and corrects it from the host's state.
+		bool IsPredicted(Entity entity) const;
+
+		// What scripts should hear of since the last call, oldest first (Scene::OnUpdate passes them to the ScriptEngine).
+		std::vector<NetworkEvent> TakeEvents();
+		// Sends a script message or RPC to `peer`: from a client only to the host (0), from a host to an admitted client.
+		// Reliable messages arrive once and in order with the session's other reliable messages. False, with the reason,
+		// when it was not sent: an invalid message (NetProtocol::CheckScript) or one too large, no such peer, not connected,
+		// or this connection's MaxMessagesPerSecond or bandwidth budget spent.
+		bool SendScript(uint32_t peer, const NetScriptMessage& message, bool reliable, std::string& outError);
+		// A host's admitted client peer IDs, in join order; a client's host (0) once connected.
+		std::vector<uint32_t> GetPeers() const;
+		// The round trip to a peer in seconds (0 when unknown).
+		float GetRoundTripTime(uint32_t peer) const;
+
+		// The session's clock: a host's seconds since its session started; a client's estimate of the host's, from the
+		// snapshots it receives (0 before the first).
+		double GetTime() const;
+		// The host time a client shows the entities it does not decide at (GetTime minus the InterpolationDelay); a host's
+		// GetTime. Lag compensation rewinds to it (RaycastAt).
+		double GetViewTime() const;
+		// A host's raycast as a client saw the world at `time` (its GetViewTime when it acted, clamped to the last
+		// MaxRewindSeconds): the networked bodies the host recorded stand where they were then, those that did not exist then
+		// are not there, and everything else is where it is now. Elsewhere, or for the present, a plain raycast.
+		std::optional<RaycastHit> RaycastAt(double time, const glm::vec3& origin, const glm::vec3& direction, float maxDistance, const PhysicsQueryFilter& filter = {}) const;
 
 		NetworkRole GetRole() const { return m_Role; }
 		NetConnectionState GetState() const { return m_State; }
@@ -160,6 +250,13 @@ namespace Breccia {
 		size_t GetRemoteEntityCount() const { return m_RemoteEntities.size(); }
 
 	private:
+		// Script messages a host received from a client and has not handed to scripts yet, released at MaxMessagesPerSecond.
+		struct Inbox
+		{
+			std::deque<NetScriptMessage> Messages;
+			double Credit = 0.0;
+		};
+
 		struct Connection
 		{
 			NetPeerHandle Handle = 0;
@@ -167,7 +264,7 @@ namespace Breccia {
 			std::string Address;
 			// 0 until its Hello is accepted.
 			uint32_t PeerId = 0;
-			float ConnectedAt = 0.0f;
+			double ConnectedAt = 0.0;
 			ReplicationSender Sender = ReplicationSender(ReplicationSenderOptions{ .Direction = ReplicationDirection::HostToClient, .MaxMessageBytes = MaxHostMessageBytes });
 			// The newest ClientUpdate applied, which snapshots acknowledge.
 			uint32_t LastApplied = 0;
@@ -176,6 +273,9 @@ namespace Breccia {
 			NetTraffic Traffic;
 			// Problems already logged for this client.
 			std::unordered_set<std::string> Reported;
+			// Script messages this connection may still send this second (MaxMessagesPerSecond), and those it sent that wait.
+			double MessageCredit = 0.0;
+			Inbox Received;
 
 			bool IsAdmitted() const { return PeerId != 0; }
 		};
@@ -184,11 +284,84 @@ namespace Breccia {
 		struct PendingParent
 		{
 			UUID Parent = 0;
-			float Since = 0.0f;
+			double Since = 0.0;
 			bool Reported = false;
 		};
 
+		// A character a client predicts: its next input's sequence number, and the inputs the host has not acknowledged.
+		struct PredictedCharacter
+		{
+			uint32_t NextInput = 1;
+			std::deque<std::pair<uint32_t, CharacterInput>> Unacknowledged;
+		};
+
+		// A character a host moves from a client's inputs.
+		struct RemoteCharacter
+		{
+			uint32_t Peer = 0;
+			// The newest input applied (0: none).
+			uint32_t LastInput = 0;
+			// Inputs it may still apply (MaxInputLeadSeconds of fixed steps at most), refilled by the host's own steps.
+			float Credit = 0.0f;
+		};
+
+		// A client's transforms of an entity it shows behind the host (InterpolationDelay): host time and value, oldest
+		// first.
+		struct TransformSample
+		{
+			double Time = 0.0;
+			glm::vec3 Translation = glm::vec3(0.0f);
+			glm::quat Rotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+			glm::vec3 Scale = glm::vec3(1.0f);
+		};
+
+		// An entity a client shows behind the host: its received transforms, and what Interpolate last wrote (a transform
+		// that differs from it was changed locally, which stops the interpolation until the next update).
+		struct InterpolationTrack
+		{
+			std::deque<TransformSample> Samples;
+			std::optional<TransformSample> Written;
+		};
+
+		// A host's record of where a networked body was at each tick, for lag compensation.
+		struct PoseSample
+		{
+			double Time = 0.0;
+			PhysicsBodyPose Pose;
+		};
+
+		// An RPC a client received for an entity it does not have yet.
+		struct PendingRpc
+		{
+			NetworkEvent Event;
+			double Since = 0.0;
+		};
+
 		void HandleEvent(const NetTransportEvent& event);
+		void PushEvent(NetworkEvent event);
+		void HandleScriptMessage(uint32_t sender, NetScriptMessage message);
+		// Hands a host's queued client messages to scripts, as each connection's MaxMessagesPerSecond allows.
+		void ReleaseInboxes(float deltaTime);
+		void ReleasePendingRpcs();
+		// The connection a peer ID names (admitted), or null.
+		Connection* FindPeer(uint32_t peer);
+		const Connection* FindPeer(uint32_t peer) const;
+		// Prediction: a client keeps m_Predicted in step with what it owns; a host keeps m_RemoteCharacters.
+		void SyncPredictedCharacters();
+		void SyncRemoteCharacters();
+		void ApplyInputs(Connection& connection, const NetInputs& inputs);
+		void Reconcile(const NetPrediction& prediction);
+		std::vector<NetPrediction> BuildPredictions(uint32_t peer);
+		std::vector<NetInputs> CollectInputs();
+		// Interpolation (a client): whether the entity's transform is shown behind the host, recording a received one, and
+		// placing every tracked entity at the view time.
+		bool IsInterpolated(Entity entity) const;
+		void RecordTransform(Entity entity, double previousSnapshot, const std::optional<TransformSample>& before);
+		void Interpolate();
+		// Forgets the tracks of entities whose transform something else changed since Interpolate wrote it.
+		void DropEditedTracks();
+		// Lag compensation (a host): records where networked bodies are at this tick.
+		void RecordPoses();
 		void HandleHostMessage(Connection& connection, const std::vector<uint8_t>& data);
 		void HandleClientMessage(const std::vector<uint8_t>& data);
 		// Ends a host's connection with a reason (logged).
@@ -233,7 +406,7 @@ namespace Breccia {
 		NetConnectionState m_State = NetConnectionState::Connecting;
 		NetDisconnectReason m_DisconnectReason = NetDisconnectReason::None;
 		uint32_t m_LocalPeerId = 0;
-		float m_Clock = 0.0f;
+		double m_Clock = 0.0;
 		// The project's TickRate; a client's becomes the host's when it is accepted.
 		float m_TickRate = 0.0f;
 		float m_TickAccumulator = 0.0f;
@@ -250,7 +423,7 @@ namespace Breccia {
 		// what goes back, and what the host spawned here.
 		std::optional<NetPeerHandle> m_HostHandle;
 		std::string m_HostAddress;
-		float m_HelloSentAt = 0.0f;
+		double m_HelloSentAt = 0.0;
 		uint32_t m_LastSnapshot = 0;
 		ReplicationSender m_ClientSender;
 		double m_ClientTokens = 0.0;
@@ -260,6 +433,24 @@ namespace Breccia {
 
 		// Entities whose body this peer drives kinematically, in ID order (physics rebuilds follow it).
 		std::set<UUID> m_DrivenBodies;
+
+		// Script events waiting for TakeEvents.
+		std::vector<NetworkEvent> m_Events;
+		bool m_ReportedEventOverflow = false;
+		// Client: RPCs waiting for their entity, the script messages it may still send this second, the server clock
+		// estimate, the host time of the newest snapshot applied, the characters it predicts, and the transforms it shows
+		// behind the host.
+		std::deque<PendingRpc> m_PendingRpcs;
+		double m_ClientMessageCredit = 0.0;
+		std::optional<double> m_ServerClock;
+		double m_LastSnapshotTime = 0.0;
+		std::map<UUID, PredictedCharacter> m_Predicted;
+		std::map<UUID, InterpolationTrack> m_Interpolation;
+		// Host: characters moved by clients' inputs, the physics step count they were last credited at, and where networked
+		// bodies were at each recent tick.
+		std::map<UUID, RemoteCharacter> m_RemoteCharacters;
+		uint64_t m_CreditedSteps = 0;
+		std::map<UUID, std::deque<PoseSample>> m_PoseHistory;
 	};
 
 }

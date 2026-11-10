@@ -19,6 +19,8 @@ namespace Breccia {
 		static constexpr uint32_t MaxBytesPerSecondLimit = 100u * 1024u * 1024u;
 		static constexpr float MinTimeout = 1.0f;
 		static constexpr float MaxTimeout = 600.0f;
+		static constexpr float MaxInterpolationDelay = 1.0f;
+		static constexpr uint32_t MaxMessagesPerSecondLimit = 10000;
 
 		// The port a client connects to when --connect names none. A host listens on the port --host gives.
 		uint16_t Port = DefaultPort;
@@ -33,6 +35,14 @@ namespace Breccia {
 		// A connection that hears nothing for this long ends (Timeout); a handshake not finished by then ends with
 		// HandshakeTimeout.
 		float TimeoutSeconds = 10.0f;
+		// How far behind the newest snapshot (seconds) a client shows the entities it does not decide, moving them smoothly
+		// between the snapshots around that time; 0 shows each snapshot as it arrives. Two or three snapshot intervals hide
+		// a lost snapshot. A client takes its own project's value.
+		float InterpolationDelay = 0.1f;
+		// Script messages and RPCs each connection may send per second, per direction (Lua Network.Send, Network.Rpc): a
+		// sender refuses more, and a host handles at most this many of a client's per second, ending the connection of one
+		// that keeps sending faster.
+		uint32_t MaxMessagesPerSecond = 120;
 
 		bool operator==(const NetworkSettings&) const = default;
 

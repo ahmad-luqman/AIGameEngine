@@ -22,6 +22,8 @@
 #include "Breccia/Core/Log.h"
 #include "Breccia/Core/MemoryTracker.h"
 #include "Breccia/Core/PackArchive.h"
+#include "Breccia/Network/NetworkSystem.h"
+#include "Breccia/Network/SimulatedNetwork.h"
 #include "Breccia/Physics/PhysicsWorld.h"
 #include "Breccia/Project/Exporter.h"
 #include "Breccia/Project/Packaging.h"
@@ -44,7 +46,9 @@
 #include <spdlog/fmt/ranges.h>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <limits>
@@ -883,7 +887,7 @@ namespace Breccia {
 												   { "TargetFrameRate", Schema::Number("target FPS", MinTargetFrameRate, MaxTargetFrameRate) },
 												   { "MinRenderScale", Schema::Number("minimum scale", MinRenderScale, MaxRenderScale) } });
 			graphicsSchema["description"] = "Project graphics defaults; applies to the next Play session. Do not repeat a setting through its top-level alias.";
-			Add(registry, "project.set", "Changes project settings and saves the project file.", Schema::Object({ { "graphics", Schema::Nullable(graphicsSchema) }, { "name", Schema::Nullable(Schema::String(fmt::format("string of at most {} bytes", ProjectConfig::MaxTextLength))) }, { "version", Schema::Nullable(Schema::String("string, MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH.BUILD (each 0-65535, no leading zeros): the version packaged exports carry")) }, { "company", Schema::Nullable(Schema::String(fmt::format("string of at most {} bytes, the publisher: Windows version resource, macOS copyright and bundle identifier", ProjectConfig::MaxTextLength))) }, { "icon", Schema::Nullable(Schema::String("string, project-relative PNG under Assets/ (at most 4096 px; 512 px or more recommended), the window and package icon; \"\" removes it")) }, { "startScene", Schema::Nullable(Schema::String("string, project-relative scene")) }, { "windowWidth", Schema::Nullable(Schema::Integer("integer", ProjectConfig::MinWindowSize, ProjectConfig::MaxWindowSize)) }, { "windowHeight", Schema::Nullable(Schema::Integer("integer", ProjectConfig::MinWindowSize, ProjectConfig::MaxWindowSize)) }, { "fullscreen", Schema::Nullable(Schema::Boolean("bool")) }, { "renderScale", Schema::Nullable(Schema::Number(fmt::format("number in [{}, {}], fraction of the window resolution the scene renders at (the highest scale with dynamic resolution)", MinRenderScale, MaxRenderScale), MinRenderScale, MaxRenderScale)) }, { "dynamicResolution", Schema::Nullable(Schema::Boolean("bool, lower the render scale when the GPU cannot hold targetFrameRate (needs GPU timer queries)")) }, { "targetFrameRate", Schema::Nullable(Schema::Number(fmt::format("number in [{}, {}]; dynamic resolution keeps the scene's GPU time within this frame rate's frame time", MinTargetFrameRate, MaxTargetFrameRate), MinTargetFrameRate, MaxTargetFrameRate)) }, { "minRenderScale", Schema::Nullable(Schema::Number(fmt::format("number in [{}, {}], lowest scale dynamic resolution uses; it must be below renderScale, or dynamic resolution is inactive (a warning)", MinRenderScale, MaxRenderScale), MinRenderScale, MaxRenderScale)) }, { "physicsLayers", json{ { "type", "object" }, { "description", "object {Names: [\"Default\", ...], IgnoredPairs: [[a, b], ...]}, replaces all layers; applies from the next play" } } }, { "randomSeed", Schema::Nullable(Schema::Integer("integer in [0, 4294967295], seeds Lua's random numbers, particle emitters and runtime entity UUIDs; applies from the next play", 0, UINT32_MAX)) }, { "scriptInstructionLimit", Schema::Nullable(Schema::Integer("integer in [0, 4294967295], how many VM instructions one call into Lua may run, and how many more bytes it may keep on the Lua heap (64 MiB at least), before it fails with an error, in the editor and the CLI (never in the runtime); 0 removes the limit, and the overhead of checking it; applies from the next play", 0, UINT32_MAX)) }, { "fixedTimestep", Schema::Nullable(json{ { "type", "number" }, { "description", fmt::format("number of seconds in (0, {}], the physics step of every scene that does not override it (scene.settings Physics.FixedTimestep); applies from the next play", MaxFixedTimestep) }, { "exclusiveMinimum", 0.0 }, { "maximum", MaxFixedTimestep } }) }, { "inputActions", json{ { "type", "object" }, { "description", "object {Actions: [{Name, Type: \"Button\" | \"Axis\", Bindings: [{Key | MouseButton | GamepadButton | GamepadAxis: name, Scale?, DeadZone?, Gamepad?}]}]}, replaces every input action and saves Input.binput (written only when the actions change); applies from the next play" } } }, { "network", json{ { "type", "object" }, { "description", fmt::format("object {{Port: 1-65535, MaxClients: 1-{}, TickRate: {}-{} snapshots per second, MaxBytesPerSecond: {}-{} per connection and direction, TimeoutSeconds: {}-{}}}, replaces the network session settings (keys left out take their defaults); applies to the next session", NetworkSettings::MaxClientLimit, NetworkSettings::MinTickRate, NetworkSettings::MaxTickRate, NetworkSettings::MinBytesPerSecond, NetworkSettings::MaxBytesPerSecondLimit, NetworkSettings::MinTimeout, NetworkSettings::MaxTimeout) } } } }), [](AutomationSession& session, const json& params) {
+			Add(registry, "project.set", "Changes project settings and saves the project file.", Schema::Object({ { "graphics", Schema::Nullable(graphicsSchema) }, { "name", Schema::Nullable(Schema::String(fmt::format("string of at most {} bytes", ProjectConfig::MaxTextLength))) }, { "version", Schema::Nullable(Schema::String("string, MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH.BUILD (each 0-65535, no leading zeros): the version packaged exports carry")) }, { "company", Schema::Nullable(Schema::String(fmt::format("string of at most {} bytes, the publisher: Windows version resource, macOS copyright and bundle identifier", ProjectConfig::MaxTextLength))) }, { "icon", Schema::Nullable(Schema::String("string, project-relative PNG under Assets/ (at most 4096 px; 512 px or more recommended), the window and package icon; \"\" removes it")) }, { "startScene", Schema::Nullable(Schema::String("string, project-relative scene")) }, { "windowWidth", Schema::Nullable(Schema::Integer("integer", ProjectConfig::MinWindowSize, ProjectConfig::MaxWindowSize)) }, { "windowHeight", Schema::Nullable(Schema::Integer("integer", ProjectConfig::MinWindowSize, ProjectConfig::MaxWindowSize)) }, { "fullscreen", Schema::Nullable(Schema::Boolean("bool")) }, { "renderScale", Schema::Nullable(Schema::Number(fmt::format("number in [{}, {}], fraction of the window resolution the scene renders at (the highest scale with dynamic resolution)", MinRenderScale, MaxRenderScale), MinRenderScale, MaxRenderScale)) }, { "dynamicResolution", Schema::Nullable(Schema::Boolean("bool, lower the render scale when the GPU cannot hold targetFrameRate (needs GPU timer queries)")) }, { "targetFrameRate", Schema::Nullable(Schema::Number(fmt::format("number in [{}, {}]; dynamic resolution keeps the scene's GPU time within this frame rate's frame time", MinTargetFrameRate, MaxTargetFrameRate), MinTargetFrameRate, MaxTargetFrameRate)) }, { "minRenderScale", Schema::Nullable(Schema::Number(fmt::format("number in [{}, {}], lowest scale dynamic resolution uses; it must be below renderScale, or dynamic resolution is inactive (a warning)", MinRenderScale, MaxRenderScale), MinRenderScale, MaxRenderScale)) }, { "physicsLayers", json{ { "type", "object" }, { "description", "object {Names: [\"Default\", ...], IgnoredPairs: [[a, b], ...]}, replaces all layers; applies from the next play" } } }, { "randomSeed", Schema::Nullable(Schema::Integer("integer in [0, 4294967295], seeds Lua's random numbers, particle emitters and runtime entity UUIDs; applies from the next play", 0, UINT32_MAX)) }, { "scriptInstructionLimit", Schema::Nullable(Schema::Integer("integer in [0, 4294967295], how many VM instructions one call into Lua may run, and how many more bytes it may keep on the Lua heap (64 MiB at least), before it fails with an error, in the editor and the CLI (never in the runtime); 0 removes the limit, and the overhead of checking it; applies from the next play", 0, UINT32_MAX)) }, { "fixedTimestep", Schema::Nullable(json{ { "type", "number" }, { "description", fmt::format("number of seconds in (0, {}], the physics step of every scene that does not override it (scene.settings Physics.FixedTimestep); applies from the next play", MaxFixedTimestep) }, { "exclusiveMinimum", 0.0 }, { "maximum", MaxFixedTimestep } }) }, { "inputActions", json{ { "type", "object" }, { "description", "object {Actions: [{Name, Type: \"Button\" | \"Axis\", Bindings: [{Key | MouseButton | GamepadButton | GamepadAxis: name, Scale?, DeadZone?, Gamepad?}]}]}, replaces every input action and saves Input.binput (written only when the actions change); applies from the next play" } } }, { "network", json{ { "type", "object" }, { "description", fmt::format("object {{Port: 1-65535, MaxClients: 1-{}, TickRate: {}-{} snapshots per second, MaxBytesPerSecond: {}-{} per connection and direction, TimeoutSeconds: {}-{}, InterpolationDelay: 0-{} seconds a client shows remote entities behind the newest snapshot (0: as they arrive), MaxMessagesPerSecond: 1-{} script messages and RPCs per connection and direction}}, replaces the network session settings (keys left out take their defaults); applies to the next session", NetworkSettings::MaxClientLimit, NetworkSettings::MinTickRate, NetworkSettings::MaxTickRate, NetworkSettings::MinBytesPerSecond, NetworkSettings::MaxBytesPerSecondLimit, NetworkSettings::MinTimeout, NetworkSettings::MaxTimeout, NetworkSettings::MaxInterpolationDelay, NetworkSettings::MaxMessagesPerSecondLimit) } } } }), [](AutomationSession& session, const json& params) {
 				Ref<Project> project = RequireProject();
 				// Every value is read and validated before any is assigned, so a bad parameter leaves the
 				// project untouched.
@@ -1151,8 +1155,15 @@ namespace Breccia {
 				session.ClearDirty();
 				return json{ { "path", path } }; }, CommandPolicy::EditBoundary);
 
-			Add(registry, "scene.hash", "Hash of the current scene state (the play copy while playing); equal states give equal hashes, whatever the entity UUIDs.", Schema::Object({ { "expectHash", Schema::String("string: fail unless the hash equals this one (16 lowercase hex digits)", true) } }), [](AutomationSession& session, const json& params) {
-				const std::string hash = SceneSerializer::ComputeStateHash(RequireScene(session));
+			Add(registry, "scene.hash", "Hash of the current scene state (the play copy while playing), or of an in-process network client's (client, from net.connect); equal states give equal hashes, whatever the entity UUIDs. Peers agree once the networked entities are at rest: a client shows moving ones InterpolationDelay behind the host.", Schema::Object({ { "expectHash", Schema::String("string: fail unless the hash equals this one (16 lowercase hex digits)", true) }, { "client", Schema::Integer("integer, an in-process network client's index (net.connect)", 1, AutomationSession::MaxNetworkClients * 1024) } }), [](AutomationSession& session, const json& params) {
+				Ref<Scene> client;
+				if (params.contains("client"))
+				{
+					client = session.GetNetworkClient(static_cast<size_t>(OptionalInteger(params, "client", 0, 1, AutomationSession::MaxNetworkClients * 1024)));
+					if (!client)
+						throw CommandError("no such in-process network client (net.connect adds one)");
+				}
+				const std::string hash = SceneSerializer::ComputeStateHash(client ? *client : RequireScene(session));
 				CheckExpectedHash(params, hash);
 				return json{ { "hash", hash } };
 			});
@@ -3301,6 +3312,182 @@ namespace Breccia {
 			});
 		}
 
+		// Commands net.command may run on an in-process client: they read a scene or change the playing one, never edit state
+		// or play itself (stepping one peer alone would leave the others behind).
+		constexpr std::array<const char*, 14> ClientCommands = { "scene.hash", "scene.get", "scene.info", "scene.snapshot", "scene.diff", "entity.get", "entity.list", "entity.transform", "component.get", "component.set", "assert.entity_exists", "assert.component", "lua.exec", "input.actions" };
+
+		json NetTrafficJson(const NetTraffic& traffic)
+		{
+			return { { "messagesSent", traffic.MessagesSent }, { "messagesReceived", traffic.MessagesReceived }, { "bytesSent", traffic.BytesSent }, { "bytesReceived", traffic.BytesReceived } };
+		}
+
+		json NetworkStatusJson(const Scene& scene)
+		{
+			const NetworkSystem* network = scene.GetNetworkSystem();
+			if (!network)
+				return { { "role", nullptr } };
+			const NetworkStatistics& statistics = network->GetStatistics();
+			json connections = json::array();
+			for (const NetConnectionInfo& connection : network->GetConnections())
+				connections.push_back({ { "peer", connection.PeerId }, { "address", connection.Address }, { "roundTripTime", connection.RoundTripTime }, { "knownEntities", connection.KnownEntities }, { "traffic", NetTrafficJson(connection.Traffic) } });
+			const char* state = network->GetState() == NetConnectionState::Connecting ? "Connecting" : network->GetState() == NetConnectionState::Connected ? "Connected"
+																																							: "Disconnected";
+			return {
+				{ "role", network->GetRole() == NetworkRole::Host ? "Host" : "Client" },
+				{ "state", state },
+				{ "peerId", network->GetLocalPeerId() },
+				{ "disconnectReason", network->GetDisconnectReason() == NetDisconnectReason::None ? json(nullptr) : json(NetDisconnectReasonName(network->GetDisconnectReason())) },
+				{ "port", network->GetRole() == NetworkRole::Host ? json(network->GetListenPort()) : json(nullptr) },
+				{ "time", network->GetTime() },
+				{ "viewTime", network->GetViewTime() },
+				{ "remoteEntities", network->GetRemoteEntityCount() },
+				{ "connections", std::move(connections) },
+				{ "statistics",
+				  { { "traffic", NetTrafficJson(statistics.Traffic) },
+					{ "staleMessages", statistics.StaleMessages },
+					{ "spawnsApplied", statistics.SpawnsApplied },
+					{ "despawnsApplied", statistics.DespawnsApplied },
+					{ "updatesApplied", statistics.UpdatesApplied },
+					{ "entitiesAdopted", statistics.EntitiesAdopted },
+					{ "rejectedValues", statistics.RejectedValues },
+					{ "rejectedRecords", statistics.RejectedRecords },
+					{ "scriptMessagesSent", statistics.ScriptMessagesSent },
+					{ "scriptMessagesReceived", statistics.ScriptMessagesReceived },
+					{ "scriptMessagesDropped", statistics.ScriptMessagesDropped },
+					{ "inputsApplied", statistics.InputsApplied },
+					{ "corrections", statistics.Corrections } } }
+			};
+		}
+
+		Ref<Scene> RequireNetworkClient(AutomationSession& session, const json& params)
+		{
+			const size_t index = static_cast<size_t>(OptionalInteger(params, "client", 0, 1, AutomationSession::MaxNetworkClients * 1024));
+			Ref<Scene> client = session.GetNetworkClient(index);
+			if (!client)
+				throw CommandError(fmt::format("no in-process client {} (net.connect adds one; net.status lists them)", index));
+			return client;
+		}
+
+		void RequireNetworkPlay(AutomationSession& session)
+		{
+			if (!session.IsPlaying() || session.IsSimulating())
+				throw CommandError("not playing (use play.start)");
+		}
+
+		void RegisterNetwork(CommandRegistry& registry)
+		{
+			const json clientSchema = Schema::Integer("integer, an in-process client's index (from net.connect)", 1, AutomationSession::MaxNetworkClients * 1024);
+
+			Add(registry, "net.host", "Makes the playing scene the host of a network session. Without udp it listens on the session's in-process network, where net.connect adds clients that play copies of the scene in this process (stepped by play.step, with net.link's latency and loss); with udp, on a real UDP port that BrecciaRuntime --connect, another editor or Lua Network.Connect can join. port 0 picks a free one. Returns {transport, port}.", Schema::Object({ { "udp", Schema::Nullable(Schema::Boolean("bool (default false): a real UDP port instead of the in-process network")) }, { "port", Schema::Nullable(Schema::Integer("integer in [0, 65535] (default 0: a free port)", 0, 65535)) } }), [](AutomationSession& session, const json& params) {
+				RequireNetworkPlay(session);
+				const bool udp = OptionalBool(params, "udp", false);
+				std::string error;
+				if (!session.HostNetwork(udp, static_cast<uint16_t>(OptionalInteger(params, "port", 0, 0, 65535)), error))
+					throw CommandError(error);
+				return json{ { "transport", udp ? "udp" : "simulated" }, { "port", session.GetScene()->GetNetworkSystem()->GetListenPort() } };
+			});
+
+			Add(registry, "net.connect", fmt::format("Without address: adds an in-process client to the playing scene's in-process host (net.host): a copy of the edit scene, playing as a client, stepped with the host by play.step (at most {}; a client's Game.Quit ends it). Returns {{client}}, its index for net.status, net.disconnect, net.focus, net.command and scene.hash. With address (host or host:port, the port defaulting to the project's Network.Port): the playing scene joins that UDP host as a client. Returns {{address, port}}. Follow the connection with net.status (state Connecting, then Connected or Disconnected with a reason).", AutomationSession::MaxNetworkClients), Schema::Object({ { "address", Schema::String("string: a UDP host to join, as host or host:port") } }), [](AutomationSession& session, const json& params) {
+				RequireNetworkPlay(session);
+				std::string error;
+				if (params.contains("address"))
+				{
+					std::string address = RequireString(params, "address");
+					uint16_t port = Project::GetActive() ? Project::GetActive()->GetConfig().Network.Port : NetworkSettings::DefaultPort;
+					if (const size_t colon = address.rfind(':'); colon != std::string::npos)
+					{
+						const std::string text = address.substr(colon + 1);
+						address.resize(colon);
+						uint32_t value = 0;
+						const auto [end, problem] = std::from_chars(text.data(), text.data() + text.size(), value);
+						if (problem != std::errc() || end != text.data() + text.size() || value == 0 || value > 65535)
+							throw CommandError("address: the port after ':' must be an integer in [1, 65535]");
+						port = static_cast<uint16_t>(value);
+					}
+					if (address.empty())
+						throw CommandError("address: the host is empty");
+					if (!session.JoinNetwork(address, port, error))
+						throw CommandError(error);
+					return json{ { "address", address }, { "port", port } };
+				}
+				const std::optional<size_t> client = session.AddNetworkClient(error);
+				if (!client)
+					throw CommandError(error);
+				return json{ { "client", *client } };
+			});
+
+			Add(registry, "net.disconnect", "Ends an in-process client (client), or the playing scene's network session (without client). Peers are told (ClientQuit from a client, ServerShutdown from a host).", Schema::Object({ { "client", clientSchema } }), [](AutomationSession& session, const json& params) {
+				RequireNetworkPlay(session);
+				if (params.contains("client"))
+				{
+					std::string error;
+					if (!session.RemoveNetworkClient(static_cast<size_t>(OptionalInteger(params, "client", 0, 1, AutomationSession::MaxNetworkClients * 1024)), error))
+						throw CommandError(error);
+					return json{ { "disconnected", true } };
+				}
+				if (!session.GetScene()->GetNetworkSystem())
+					throw CommandError("the playing scene is in no network session");
+				session.LeaveNetwork();
+				return json{ { "disconnected", true } };
+			});
+
+			Add(registry, "net.status", "Describes the network session of the playing scene, or of an in-process client: role (Host, Client or null without a session), state (Connecting, Connected, Disconnected), peerId, disconnectReason, port (a host's), time and viewTime (the host clock, and the time a client shows other entities at), remoteEntities (a client's entities from the host), connections ({peer, address, roundTripTime, knownEntities, traffic}), and statistics (traffic, spawns, updates, despawns, rejected values and records, script messages sent, received and dropped, inputs applied, corrections). Without client it also lists the in-process clients ({client, role, state, peerId}), the simulated link and which peer receives injected input (inputPeer).", Schema::Object({ { "client", clientSchema } }), [](AutomationSession& session, const json& params) {
+				if (params.contains("client"))
+					return NetworkStatusJson(*RequireNetworkClient(session, params));
+				json result = NetworkStatusJson(RequireScene(session));
+				json clients = json::array();
+				const std::vector<Ref<Scene>>& peers = session.GetNetworkClients();
+				for (size_t i = 0; i < peers.size(); i++)
+				{
+					if (!peers[i])
+						continue;
+					json status = NetworkStatusJson(*peers[i]);
+					clients.push_back({ { "client", i + 1 }, { "role", status["role"] }, { "state", status.value("state", json(nullptr)) }, { "peerId", status.value("peerId", json(nullptr)) } });
+				}
+				result["clients"] = std::move(clients);
+				result["inputPeer"] = session.GetInputPeer();
+				if (session.HasSimulatedNetwork())
+				{
+					const SimulatedLinkSettings& link = session.GetSimulatedNetwork().GetLinkSettings();
+					result["link"] = { { "latency", link.Latency }, { "jitter", link.Jitter }, { "loss", link.Loss }, { "timeoutSeconds", link.TimeoutSeconds }, { "lost", session.GetSimulatedNetwork().GetLostCount() } };
+				}
+				return result;
+			});
+
+			Add(registry, "net.link", "Sets the in-process network's link, both ways, for messages sent from now on: latency (one-way seconds), jitter (extra seconds up to this, per unreliable message, which reorders them), loss (chance in [0, 1] that a message is lost; a lost reliable one is sent again a round trip later) and timeoutSeconds (silence that ends a connection). Fields left out keep their values. Lasts until play stops. Returns the link.", Schema::Object({ { "latency", Schema::Nullable(Schema::Number("number of seconds in [0, 10]", 0.0, 10.0)) }, { "jitter", Schema::Nullable(Schema::Number("number of seconds in [0, 10]", 0.0, 10.0)) }, { "loss", Schema::Nullable(Schema::Number("number in [0, 1]", 0.0, 1.0)) }, { "timeoutSeconds", Schema::Nullable(Schema::Number("number of seconds in [1, 600]", 1.0, 600.0)) } }), [](AutomationSession& session, const json& params) {
+				RequireNetworkPlay(session);
+				SimulatedNetwork& network = session.GetSimulatedNetwork();
+				SimulatedLinkSettings link = network.GetLinkSettings();
+				link.Latency = static_cast<float>(OptionalNumber(params, "latency", link.Latency, 0.0, 10.0));
+				link.Jitter = static_cast<float>(OptionalNumber(params, "jitter", link.Jitter, 0.0, 10.0));
+				link.Loss = static_cast<float>(OptionalNumber(params, "loss", link.Loss, 0.0, 1.0));
+				link.TimeoutSeconds = static_cast<float>(OptionalNumber(params, "timeoutSeconds", link.TimeoutSeconds, 1.0, 600.0));
+				if (!SimulatedNetwork::IsValidLink(link))
+					throw CommandError("the link settings are out of range");
+				network.SetLinkSettings(link);
+				return json{ { "latency", link.Latency }, { "jitter", link.Jitter }, { "loss", link.Loss }, { "timeoutSeconds", link.TimeoutSeconds } };
+			});
+
+			Add(registry, "net.focus", "Chooses which peer injected input (input.key, input.mouse, input.gamepad) reaches while play.step runs: client 0 is the playing scene, N an in-process client. The others' scripts see no keys, buttons or gamepads. Resets to 0 when play stops or that client ends.", Schema::Object({ { "client", Schema::Integer("integer: 0 for the playing scene, or an in-process client's index", 0, AutomationSession::MaxNetworkClients * 1024) } }, { "client" }), [](AutomationSession& session, const json& params) {
+				RequireNetworkPlay(session);
+				const size_t client = static_cast<size_t>(OptionalInteger(params, "client", 0, 0, AutomationSession::MaxNetworkClients * 1024));
+				if (client != 0)
+					RequireNetworkClient(session, params);
+				session.SetInputPeer(client);
+				return json{ { "client", client } };
+			});
+
+			Add(registry, "net.command", fmt::format("Runs a command against an in-process client's scene instead of the playing scene, and returns its result: {}.", fmt::join(ClientCommands, ", ")), Schema::Object({ { "client", clientSchema }, { "command", Schema::String("string, the command to run", true) }, { "params", json{ { "type", "object" }, { "description", "object, the command's parameters" } } } }, { "client", "command" }), [&registry](AutomationSession& session, const json& params) {
+				const Ref<Scene> client = RequireNetworkClient(session, params);
+				const std::string command = RequireString(params, "command");
+				if (std::ranges::none_of(ClientCommands, [&command](const char* allowed) { return command == allowed; }))
+					throw CommandError(fmt::format("'{}' cannot run on a client (allowed: {})", command, fmt::join(ClientCommands, ", ")));
+				const json commandParams = params.value("params", json::object());
+				const AutomationSession::SceneOverride scope(session, client);
+				return registry.Execute(session, command, commandParams);
+			});
+		}
+
 	}
 
 	void RegisterBuiltinCommands(CommandRegistry& registry)
@@ -3314,6 +3501,7 @@ namespace Breccia {
 		RegisterMaterials(registry);
 		RegisterAnimationAuthoring(registry);
 		RegisterPlay(registry);
+		RegisterNetwork(registry);
 		RegisterAssertions(registry);
 		RegisterEvents(registry);
 	}

@@ -3,12 +3,14 @@
 #include "Breccia/Core/Base.h"
 #include "Breccia/Core/Timestep.h"
 #include "Breccia/Core/UUID.h"
+#include "Breccia/Physics/CharacterState.h"
 #include "Breccia/Physics/PhysicsLayers.h"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 
 #include <functional>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -47,6 +49,13 @@ namespace Breccia {
 		glm::vec3 Point = { 0.0f, 0.0f, 0.0f };
 		glm::vec3 Normal = { 0.0f, 0.0f, 0.0f };
 		float Distance = 0.0f;
+	};
+
+	// Where a body's shape is: its center of mass and rotation in world space (lag compensation keeps these per tick).
+	struct PhysicsBodyPose
+	{
+		glm::vec3 Position = glm::vec3(0.0f);
+		glm::quat Rotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
 	};
 
 	// Which bodies a query sees. LayerMask has one bit per physics layer (see PhysicsLayers::MaskFromNames);
@@ -213,8 +222,10 @@ namespace Breccia {
 		void RecreateBody(Entity entity);
 		// Whether another system decides where the entity's body is (a network peer without authority over it): a Dynamic
 		// body is then built as Kinematic, following the entity's transform instead of simulating, and goes back to Dynamic
-		// when this is turned off. The component keeps its Type; nothing changes for static or kinematic bodies, character
-		// controllers or ragdolls. One caller decides it (NetworkSystem): a second would undo the first's setting.
+		// when this is turned off. The component keeps its Type; nothing changes for static or kinematic bodies or ragdolls.
+		// A character controller is no longer moved by Step (neither Move, gravity nor root motion): it follows the entity's
+		// transform, and only StepCharacter moves it. One caller decides it (NetworkSystem): a second would undo the first's
+		// setting.
 		void SetDrivenExternally(Entity entity, bool driven);
 		bool IsDrivenExternally(Entity entity) const;
 
@@ -271,6 +282,21 @@ namespace Breccia {
 		// character.
 		std::optional<glm::vec3> GetCharacterGroundNormal(Entity entity) const;
 		uint32_t GetCharacterCount() const;
+		// Network prediction. While recording, every fixed step a character takes in Step appends what it walked with
+		// (CharacterInput) until TakeCharacterInputs drains them; a driven character records nothing. Turning it off drops
+		// what was not taken.
+		void SetCharacterInputRecording(Entity entity, bool recording);
+		std::vector<CharacterInput> TakeCharacterInputs(Entity entity);
+		// Moves the character one fixed step now, as Step would with that Move velocity and no root motion, turned to the
+		// input's rotation, and writes its pose: the host applying a client's inputs, a client replaying its own after a
+		// correction. Works on driven characters too. False without a character (or with a non-finite input, which does
+		// nothing).
+		bool StepCharacter(Entity entity, const CharacterInput& input);
+		// The character's state, nullopt without one.
+		std::optional<CharacterState> GetCharacterState(Entity entity) const;
+		// Puts the character at the state (finding its contacts there), keeping its rotation, and writes its pose. False
+		// without a character or for a state with a non-finite value.
+		bool SetCharacterState(Entity entity, const CharacterState& state);
 
 		// Enables skeleton physics, inheriting body linear/angular and tangential motion (controller: linear), and
 		// distributing a total world impulse over the parts it can move (not a KinematicRoot). Returns false with a diagnostic for invalid rigs/settings,
@@ -320,6 +346,11 @@ namespace Breccia {
 		// PhysicsShapeSnapshot::MinRadius), seen through `filter` and, when given, `accept` (by entity UUID; called with no
 		// body locked, so it may query this world). Non-finite or inverted bounds, or a radius that is not finite and
 		// nonnegative, gather nothing, as other queries return nothing for invalid input.
+		// Lag compensation. The pose of the entity's body (a rigid body, or a character's inner body), nullopt without one.
+		std::optional<PhysicsBodyPose> GetBodyPose(Entity entity) const;
+		// Raycast as if the bodies of the entities `poses` lists stood at those poses (their shapes as they are now), and
+		// those listed without a pose were not there; every other body is where it is. Filtered like Raycast.
+		std::optional<RaycastHit> RaycastWithPoses(const glm::vec3& origin, const glm::vec3& direction, float maxDistance, const std::map<UUID, std::optional<PhysicsBodyPose>>& poses, const PhysicsQueryFilter& filter = {}) const;
 		PhysicsShapeSnapshot CollectShapes(const glm::vec3& min, const glm::vec3& max, float radius, const PhysicsQueryFilter& filter = {}, const std::function<bool(UUID)>& accept = {}) const;
 
 		// The layers this world filters with (resolved when it was built).

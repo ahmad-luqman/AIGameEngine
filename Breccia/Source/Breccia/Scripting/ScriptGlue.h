@@ -56,6 +56,8 @@ namespace Breccia {
 
 		virtual ScriptTasks& GetTasks() = 0;
 		virtual ScriptEvents& GetEvents() = 0;
+		// Network.On handlers: connection events and script messages, apart from Events so Events.Emit cannot fake them.
+		virtual ScriptEvents& GetNetworkEvents() = 0;
 		// The session's save data (Lua Storage), loaded on first use: a problem with that load is reported as a
 		// script error. Throws std::runtime_error when it cannot be located (no active project, no user data
 		// directory).

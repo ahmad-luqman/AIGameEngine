@@ -9,6 +9,7 @@
 #include "Breccia/Core/Input.h"
 #include "Breccia/Core/InputActions.h"
 #include "Breccia/Core/Log.h"
+#include "Breccia/Network/NetworkSystem.h"
 #include "Breccia/Particles/ParticleSystem.h"
 #include "Breccia/Physics/PhysicsWorld.h"
 #include "Breccia/Project/Project.h"
@@ -31,6 +32,7 @@
 #include <spdlog/fmt/ranges.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <optional>
@@ -1641,6 +1643,284 @@ namespace Breccia {
 				return StorageResult("Storage.Load", loaded, error);
 			};
 		}
+
+		// The built-in events Network.On delivers; script messages may not take these names.
+		constexpr std::array<const char*, 4> NetworkEventNames = { "Connected", "Disconnected", "PeerConnected", "PeerDisconnected" };
+
+		bool IsNetworkEventName(const std::string& name)
+		{
+			return std::ranges::any_of(NetworkEventNames, [&name](const char* event) { return name == event; });
+		}
+
+		const char* NetworkRoleName(NetworkRole role)
+		{
+			return role == NetworkRole::Host ? "Host" : "Client";
+		}
+
+		const char* NetworkStateName(NetConnectionState state)
+		{
+			switch (state)
+			{
+				case NetConnectionState::Connecting:
+					return "Connecting";
+				case NetConnectionState::Connected:
+					return "Connected";
+				case NetConnectionState::Disconnected:
+					break;
+			}
+			return "Disconnected";
+		}
+
+		// The session Network.* acts on, or null (no session, or one ending at the end of this frame).
+		NetworkSystem* FindNetwork(Scene& scene)
+		{
+			return scene.HasPendingNetworkChange() ? nullptr : scene.GetNetworkSystem();
+		}
+
+		NetworkSystem* FindNetwork(ScriptContext& context)
+		{
+			return FindNetwork(RequireScene(context));
+		}
+
+		// A message's arguments after its name: JSON, as Storage keeps data (entities travel as their IDs).
+		nlohmann::json NetworkArguments(const sol::variadic_args& args, size_t skip, const std::string& function)
+		{
+			nlohmann::json arguments = nlohmann::json::array();
+			size_t index = 0;
+			for (const sol::stack_proxy argument : args)
+			{
+				if (index++ < skip)
+					continue;
+				try
+				{
+					arguments.push_back(LuaToJson(argument.get<sol::object>()));
+				}
+				catch (const std::runtime_error& e)
+				{
+					throw std::runtime_error(fmt::format("{}: argument {}: {}", function, index - skip, e.what()));
+				}
+			}
+			if (arguments.size() > NetProtocol::MaxScriptArguments)
+				throw std::runtime_error(fmt::format("{}: at most {} arguments", function, NetProtocol::MaxScriptArguments));
+			return arguments;
+		}
+
+		// Sends a script message or RPC to a target: "Server" (from a client), "Clients" (from the host: each client),
+		// "Owner" (from the host: the entity's owner; RPCs only) or a client's peer ID (from the host). Returns true, or
+		// false and the reason when it was not sent (to every client, for "Clients").
+		std::tuple<bool, sol::object> SendNetwork(sol::this_state state, ScriptContext& context, const sol::object& target, const NetScriptMessage& message, bool reliable, const std::string& function)
+		{
+			sol::state_view lua(state);
+			const auto fail = [&lua](const std::string& reason) { return std::make_tuple(false, sol::make_object(lua, reason)); };
+			NetworkSystem* network = FindNetwork(context);
+			if (!network)
+				return fail("no network session");
+			const bool host = network->GetRole() == NetworkRole::Host;
+			std::vector<uint32_t> peers;
+			if (target.get_type() == sol::type::string)
+			{
+				const std::string name = target.as<std::string>();
+				if (name == "Server")
+				{
+					if (host)
+						throw std::runtime_error(function + ": the host is the server; send to \"Clients\", \"Owner\" or a peer ID");
+					peers.push_back(0);
+				}
+				else if (name == "Clients")
+				{
+					if (!host)
+						throw std::runtime_error(function + ": only the host sends to clients (a client sends to the \"Server\", whose handler can pass it on)");
+					peers = network->GetPeers();
+				}
+				else if (name == "Owner")
+				{
+					if (message.Kind != NetScriptKind::Rpc)
+						throw std::runtime_error(function + ": \"Owner\" names an entity's owner, so it applies to RPCs only");
+					if (!host)
+						throw std::runtime_error(function + ": only the host sends to an entity's owner (a client sends to the \"Server\")");
+					Entity entity = RequireScene(context).GetEntityByUUID(message.Entity);
+					const auto* networked = entity ? entity.TryGetComponent<NetworkedComponent>() : nullptr;
+					if (!networked)
+						throw std::runtime_error(function + ": the entity is not networked, so it has no owner");
+					// The host owns it: there is no client to send to.
+					const std::vector<uint32_t> connected = network->GetPeers();
+					if (networked->Owner == 0 || std::ranges::find(connected, networked->Owner) == connected.end())
+						return fail(fmt::format("the entity's owner (peer {}) is not a connected client", networked->Owner));
+					peers.push_back(networked->Owner);
+				}
+				else
+					throw std::runtime_error(function + ": unknown target '" + name + "' (valid: \"Server\", \"Clients\", \"Owner\" or a peer ID)");
+			}
+			else if (target.get_type() == sol::type::number)
+				peers.push_back(static_cast<uint32_t>(RequireInteger(target, function.c_str(), "the peer ID", 0, UINT32_MAX)));
+			else
+				throw std::runtime_error(function + ": the target must be \"Server\", \"Clients\", \"Owner\" or a peer ID, got " + TypeName(target));
+
+			std::string failures;
+			for (uint32_t peer : peers)
+			{
+				std::string error;
+				if (!network->SendScript(peer, message, reliable, error))
+					failures += (failures.empty() ? "" : "; ") + (host ? fmt::format("client {}: ", peer) : std::string()) + error;
+			}
+			if (!failures.empty())
+				return fail(failures);
+			return std::make_tuple(true, sol::make_object(lua, sol::lua_nil));
+		}
+
+		void RegisterNetwork(sol::state& lua, ScriptContext& context)
+		{
+			sol::table network = lua.create_named_table("Network");
+			network["IsActive"] = [&context]() { return FindNetwork(context) != nullptr; };
+			network["GetRole"] = [&context]() -> sol::optional<std::string> {
+				const NetworkSystem* system = FindNetwork(context);
+				return system ? sol::optional<std::string>(NetworkRoleName(system->GetRole())) : sol::nullopt;
+			};
+			network["IsHost"] = [&context]() {
+				const NetworkSystem* system = FindNetwork(context);
+				return system && system->GetRole() == NetworkRole::Host;
+			};
+			network["IsClient"] = [&context]() {
+				const NetworkSystem* system = FindNetwork(context);
+				return system && system->GetRole() == NetworkRole::Client;
+			};
+			network["GetState"] = [&context]() -> sol::optional<std::string> {
+				const NetworkSystem* system = FindNetwork(context);
+				return system ? sol::optional<std::string>(NetworkStateName(system->GetState())) : sol::nullopt;
+			};
+			network["GetDisconnectReason"] = [&context]() -> sol::optional<std::string> {
+				const NetworkSystem* system = FindNetwork(context);
+				if (!system || system->GetDisconnectReason() == NetDisconnectReason::None)
+					return sol::nullopt;
+				return std::string(NetDisconnectReasonName(system->GetDisconnectReason()));
+			};
+			network["GetPeerId"] = [&context]() -> sol::optional<uint32_t> {
+				const NetworkSystem* system = FindNetwork(context);
+				return system ? sol::optional<uint32_t>(system->GetLocalPeerId()) : sol::nullopt;
+			};
+			network["GetPeers"] = [&context](sol::this_state state) {
+				sol::state_view view(state);
+				sol::table peers = view.create_table();
+				if (const NetworkSystem* system = FindNetwork(context))
+					for (uint32_t peer : system->GetPeers())
+						peers.add(peer);
+				return peers;
+			};
+			network["GetPort"] = [&context]() -> sol::optional<uint16_t> {
+				const NetworkSystem* system = FindNetwork(context);
+				if (!system || system->GetRole() != NetworkRole::Host)
+					return sol::nullopt;
+				return system->GetListenPort();
+			};
+			network["GetRoundTripTime"] = [&context](const sol::object& peer) {
+				const NetworkSystem* system = FindNetwork(context);
+				if (!system)
+					return 0.0f;
+				const uint32_t id = IsNil(peer) ? 0u : static_cast<uint32_t>(RequireInteger(peer, "Network.GetRoundTripTime", "the peer ID", 0, UINT32_MAX));
+				return system->GetRoundTripTime(id);
+			};
+			network["GetTime"] = [&context]() {
+				Scene& scene = RequireScene(context);
+				const NetworkSystem* system = FindNetwork(scene);
+				return system ? system->GetTime() : static_cast<double>(scene.GetTime());
+			};
+			network["GetViewTime"] = [&context]() {
+				Scene& scene = RequireScene(context);
+				const NetworkSystem* system = FindNetwork(scene);
+				return system ? system->GetViewTime() : static_cast<double>(scene.GetTime());
+			};
+			network["HasAuthority"] = [&context](const ScriptEntity& entity) {
+				const NetworkSystem* system = FindNetwork(context);
+				return !system || system->HasAuthority(entity.ResolveOrThrow());
+			};
+			network["IsOwner"] = [&context](const ScriptEntity& entity) {
+				const NetworkSystem* system = FindNetwork(context);
+				return !system || system->IsOwner(entity.ResolveOrThrow());
+			};
+			network["IsPredicted"] = [&context](const ScriptEntity& entity) {
+				const NetworkSystem* system = FindNetwork(context);
+				return system && system->IsPredicted(entity.ResolveOrThrow());
+			};
+
+			// Sessions change at the end of the frame; the transport is made now, so a port in use or an address that does not
+			// resolve is reported here.
+			const auto start = [&context](sol::this_state state, NetworkRole role, const std::string& address, const sol::object& port, const char* function) {
+				sol::state_view view(state);
+				Scene& scene = RequireScene(context);
+				const Ref<Project>& project = Project::GetActive();
+				const NetworkSettings settings = project ? project->GetConfig().Network : NetworkSettings{};
+				const uint16_t chosen = IsNil(port) ? settings.Port : static_cast<uint16_t>(RequireInteger(port, function, "the port", role == NetworkRole::Host ? 0 : 1, 65535));
+				const auto fail = [&view](const std::string& reason) { return std::make_tuple(false, sol::make_object(view, reason)); };
+				if (NetworkSystem* current = scene.HasPendingNetworkChange() ? nullptr : scene.GetNetworkSystem(); current && !(current->GetRole() == NetworkRole::Client && current->GetState() == NetConnectionState::Disconnected))
+					return fail("a network session is active (Network.Disconnect ends it)");
+				std::string error;
+				const Ref<NetTransportFactory>& transports = scene.GetNetworkTransports();
+				Scope<NetTransport> transport = role == NetworkRole::Host ? transports->Listen(chosen, settings.MaxClients + NetworkSystem::SpareTransportSlots, settings.TimeoutSeconds, error) : transports->Connect(address, chosen, settings.TimeoutSeconds, error);
+				if (!transport)
+					return fail(error);
+				if (role == NetworkRole::Host)
+					BR_CORE_INFO("Network: hosting on {} port {} (up to {} clients)", transports->GetName(), transport->GetListenPort(), settings.MaxClients);
+				else
+					BR_CORE_INFO("Network: connecting to {}:{} ({})", address, chosen, transports->GetName());
+				scene.RequestNetworkChange(CreateScope<NetworkSystem>(scene, role, std::move(transport), settings, NetworkSystem::Identity::FromActiveProject()));
+				return std::make_tuple(true, sol::make_object(view, sol::lua_nil));
+			};
+			network["Host"] = [start](sol::this_state state, const sol::object& port) { return start(state, NetworkRole::Host, {}, port, "Network.Host"); };
+			network["Connect"] = [start](sol::this_state state, const sol::object& address, const sol::object& port) {
+				return start(state, NetworkRole::Client, RequireName(address, "Network.Connect", "the address"), port, "Network.Connect");
+			};
+			network["Disconnect"] = [&context]() {
+				Scene& scene = RequireScene(context);
+				if (scene.GetNetworkSystem() || scene.HasPendingNetworkChange())
+					scene.RequestNetworkChange(nullptr);
+			};
+
+			const auto send = [&context](sol::this_state state, const sol::object& target, const sol::object& name, sol::variadic_args args, bool reliable, const char* function) {
+				NetScriptMessage message;
+				message.Name = RequireName(name, function, "the message name");
+				if (IsNetworkEventName(message.Name))
+					throw std::runtime_error(std::string(function) + ": '" + message.Name + "' is a built-in Network.On event, not a message name");
+				if (message.Name.size() > NetProtocol::MaxScriptNameLength)
+					throw std::runtime_error(fmt::format("{}: the message name is longer than {} bytes", function, NetProtocol::MaxScriptNameLength));
+				message.Arguments = NetworkArguments(args, 0, function);
+				return SendNetwork(state, context, target, message, reliable, function);
+			};
+			network["Send"] = [send](sol::this_state state, const sol::object& target, const sol::object& name, sol::variadic_args args) { return send(state, target, name, args, true, "Network.Send"); };
+			network["SendUnreliable"] = [send](sol::this_state state, const sol::object& target, const sol::object& name, sol::variadic_args args) { return send(state, target, name, args, false, "Network.SendUnreliable"); };
+			const auto rpc = [&context](sol::this_state state, const sol::object& entity, const sol::object& method, const sol::object& target, sol::variadic_args args, bool reliable, const char* function) {
+				if (!entity.is<ScriptEntity>())
+					throw std::runtime_error(std::string(function) + ": expected an Entity, got " + TypeName(entity));
+				NetScriptMessage message;
+				message.Kind = NetScriptKind::Rpc;
+				message.Entity = entity.as<ScriptEntity>().ResolveOrThrow().GetUUID();
+				message.Name = RequireName(method, function, "the method name");
+				if (message.Name.size() > NetProtocol::MaxScriptNameLength)
+					throw std::runtime_error(fmt::format("{}: the method name is longer than {} bytes", function, NetProtocol::MaxScriptNameLength));
+				message.Arguments = NetworkArguments(args, 0, function);
+				return SendNetwork(state, context, target, message, reliable, function);
+			};
+			network["Rpc"] = [rpc](sol::this_state state, const sol::object& entity, const sol::object& method, const sol::object& target, sol::variadic_args args) { return rpc(state, entity, method, target, args, true, "Network.Rpc"); };
+			network["RpcUnreliable"] = [rpc](sol::this_state state, const sol::object& entity, const sol::object& method, const sol::object& target, sol::variadic_args args) { return rpc(state, entity, method, target, args, false, "Network.RpcUnreliable"); };
+
+			network["On"] = [&context](const sol::object& name, const sol::object& handler) {
+				ScriptEvents& bus = RequireHost(context).GetNetworkEvents();
+				const std::string eventName = RequireName(name, "Network.On", "the event or message name");
+				const sol::protected_function callback = RequireFunction(handler, "Network.On");
+				return ScriptEventHandle{ bus.Subscribe(RequireActiveOwner(context, "Network.On"), eventName, callback, false) };
+			};
+
+			network["Raycast"] = [&context](sol::this_state state, const glm::vec3& origin, const glm::vec3& direction, float maxDistance, const sol::object& time, const sol::object& options) -> sol::object {
+				const PhysicsWorld& world = RequirePhysics(context);
+				RequireCast("Network.Raycast", origin, direction, maxDistance);
+				if (time.get_type() != sol::type::number || !std::isfinite(time.as<double>()))
+					throw std::runtime_error("Network.Raycast: the time must be a finite number (Network.GetViewTime on the client that acted)");
+				const QueryOptions query = ParseQueryOptions(world, options, false);
+				const NetworkSystem* system = FindNetwork(context);
+				const std::optional<RaycastHit> hit = system ? system->RaycastAt(time.as<double>(), origin, direction, maxDistance, query.Filter) : world.Raycast(origin, direction, maxDistance, query.Filter);
+				return hit ? MakeHit(state, context, *hit) : sol::make_object(state, sol::lua_nil);
+			};
+		}
+
 	}
 
 	void RegisterScriptBindings(sol::state& lua, ScriptContext& context)
@@ -1651,6 +1931,7 @@ namespace Breccia {
 		RegisterGraphics(lua, context);
 		RegisterSystems(lua, context);
 		RegisterGameplay(lua, context);
+		RegisterNetwork(lua, context);
 	}
 
 	std::optional<sol::table> MakeInstanceMetatable(const sol::state_view& lua, const sol::table& scriptClass, std::string& outError)

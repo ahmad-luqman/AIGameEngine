@@ -5,8 +5,10 @@
 #include <sol/sol.hpp>
 
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <string>
+#include <vector>
 
 namespace Breccia {
 
@@ -49,6 +51,9 @@ namespace Breccia {
 		// nested deeper than MaxEmitDepth, or when a handler of the emitting instance itself failed, which disabled
 		// it (its callback must not continue as if nothing happened). A handler that destroys the emitter is fine.
 		int Emit(lua_State* caller, const std::string& name, const sol::variadic_args& args);
+		// Emit for C++ (the network session's events, outside any script): handler(args...) on the main thread, without the
+		// depth limit's error or the emitter's (there is no emitter). Returns how many handlers were called.
+		int EmitValues(const std::string& name, const std::vector<sol::object>& args);
 
 	private:
 		struct Subscription
@@ -58,6 +63,9 @@ namespace Breccia {
 			sol::protected_function Handler;
 			bool Once = false;
 		};
+
+		// The handlers of name, called through `call`; sets emitterFailed when one of the current owner's failed.
+		int Dispatch(lua_State* caller, const std::string& name, const std::function<sol::protected_function_result(const sol::protected_function&)>& call, bool& emitterFailed);
 
 	private:
 		lua_State* m_MainState = nullptr;

@@ -30,6 +30,8 @@ namespace Breccia {
 		// with the reason, when the address does not resolve; otherwise the attempt reports Connected or a timed-out
 		// Disconnected through Poll.
 		Scope<NetTransport> Connect(const std::string& host, uint16_t port, const EnetTransportSettings& settings, std::string& outError);
+		// Listen and Connect for a scene's scripts, with messages up to NetworkSystem::MaxHostMessageBytes.
+		Ref<NetTransportFactory> CreateFactory();
 
 	}
 

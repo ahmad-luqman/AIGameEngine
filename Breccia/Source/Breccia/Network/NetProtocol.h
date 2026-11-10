@@ -2,6 +2,7 @@
 
 #include "Breccia/Core/UUID.h"
 #include "Breccia/Network/NetBuffer.h"
+#include "Breccia/Physics/CharacterState.h"
 
 #include <nlohmann/json.hpp>
 
@@ -49,6 +50,8 @@ namespace Breccia {
 
 	// "the client left", "the connection timed out", ...
 	const char* DescribeDisconnectReason(NetDisconnectReason reason);
+	// The enumerator's name: "ClientQuit", "Timeout", ... (Lua, automation).
+	const char* NetDisconnectReasonName(NetDisconnectReason reason);
 	// Reads a transport disconnect code: 0 is None, codes this build does not know are Unknown.
 	NetDisconnectReason DisconnectReasonFromCode(uint32_t code);
 
@@ -60,8 +63,11 @@ namespace Breccia {
 		Welcome,
 		// Host to client, unreliable: entity state.
 		Snapshot,
-		// Client to host, unreliable: acknowledgements and the state of entities it has authority over.
-		ClientUpdate
+		// Client to host, unreliable: acknowledgements, the state of entities it has authority over, and the inputs of the
+		// characters it predicts.
+		ClientUpdate,
+		// Either way, reliable or not: a script's message or RPC (Lua Network.Send, Network.Rpc).
+		Script
 	};
 
 	struct NetHello
@@ -123,8 +129,38 @@ namespace Breccia {
 		nlohmann::json Entities;
 	};
 
+	// The host's state of a character the receiving client predicts: after the newest of its inputs the host applied.
+	struct NetPrediction
+	{
+		UUID Entity = 0;
+		// The client's input sequence number (0: none applied yet).
+		uint32_t Input = 0;
+		CharacterState State;
+	};
+
+	// Fixed steps of a character a client predicts, numbered from First (consecutive), oldest first.
+	struct NetInputs
+	{
+		UUID Entity = 0;
+		uint32_t First = 0;
+		std::vector<CharacterInput> Steps;
+	};
+
+	// What a state message carries besides entity records, sent whole in every message (never tracked as deltas).
+	struct NetStateExtras
+	{
+		// Snapshot: the host's clock, in seconds since its session started, when it was sent (interpolation and lag
+		// compensation run on it). Not sent in a ClientUpdate.
+		double Time = 0.0;
+		// Snapshot: the receiving client's predicted characters. Empty in a ClientUpdate.
+		std::vector<NetPrediction> Predictions;
+		// ClientUpdate: the inputs of the characters the client predicts that the host may not have yet. Empty in a
+		// Snapshot.
+		std::vector<NetInputs> Inputs;
+	};
+
 	// A Snapshot (host to client) or a ClientUpdate (client to host, which never holds spawns or despawns). Each entity
-	// appears at most once across the three lists.
+	// appears at most once across the three record lists, and at most once in each extras list.
 	struct NetState
 	{
 		uint32_t Sequence = 0;
@@ -133,12 +169,33 @@ namespace Breccia {
 		std::vector<NetEntitySpawn> Spawns;
 		std::vector<NetEntityUpdate> Updates;
 		std::vector<UUID> Despawns;
+		NetStateExtras Extras;
+	};
+
+	enum class NetScriptKind : uint8_t
+	{
+		// A named message for the receiver's Network.On handlers.
+		Message = 0,
+		// A call of a method an entity's script declares in its Rpcs table.
+		Rpc
+	};
+
+	// A script message or RPC. A client's go to the host only; the host knows who sent it from the connection.
+	struct NetScriptMessage
+	{
+		NetScriptKind Kind = NetScriptKind::Message;
+		// The entity whose script the RPC calls; 0 for a message.
+		UUID Entity = 0;
+		// The message name, or the method an RPC calls: 1 to MaxScriptNameLength bytes of UTF-8.
+		std::string Name;
+		// The handler's arguments after the sender: a JSON array (Lua values: nil, booleans, numbers, strings, tables).
+		nlohmann::json Arguments = nlohmann::json::array();
 	};
 
 	struct NetMessage
 	{
 		NetMessageType Type = NetMessageType::Hello;
-		std::variant<NetHello, NetWelcome, NetState> Body;
+		std::variant<NetHello, NetWelcome, NetState, NetScriptMessage> Body;
 	};
 
 	// The wire format of every message: a type byte, then the body. Decoders treat their input as hostile (NetReader),
@@ -149,13 +206,22 @@ namespace Breccia {
 		// "BRNT", first in a Hello: anything else is not a Breccia client.
 		inline constexpr uint32_t Magic = 0x544E5242u;
 		// Bump with every change to the format below.
-		inline constexpr uint32_t Version = 1;
+		inline constexpr uint32_t Version = 2;
 		// Longest game name or version in a Hello (ProjectConfig::MaxTextLength, checked where both are known).
 		inline constexpr size_t MaxTextLength = 256;
 		inline constexpr uint32_t MaxRecords = 4096;
 		inline constexpr uint32_t MaxComponentsPerEntity = 256;
 		inline constexpr uint32_t MaxFieldsPerComponent = 256;
 		inline constexpr uint32_t MaxSpawnEntities = 4096;
+		// Characters one client may predict, and steps of each one ClientUpdate carries (the newest ones not acknowledged).
+		inline constexpr uint32_t MaxPredictedCharacters = 64;
+		inline constexpr uint32_t MaxInputsPerCharacter = 32;
+		// The fastest a predicted character may be asked to move (m/s): faster inputs are refused as invalid.
+		inline constexpr float MaxInputSpeed = 1000.0f;
+		// A script message's name, its arguments and its whole encoding at most.
+		inline constexpr size_t MaxScriptNameLength = 64;
+		inline constexpr uint32_t MaxScriptArguments = 32;
+		inline constexpr size_t MaxScriptMessageBytes = size_t{ 32 } * 1024;
 
 		std::vector<uint8_t> EncodeHello(const NetHello& hello);
 		std::vector<uint8_t> EncodeWelcome(const NetWelcome& welcome);
@@ -163,7 +229,12 @@ namespace Breccia {
 		bool WriteSpawn(NetWriter& writer, const NetEntitySpawn& spawn);
 		bool WriteUpdate(NetWriter& writer, const NetEntityUpdate& update);
 		// A Snapshot or ClientUpdate from records WriteSpawn and WriteUpdate wrote.
-		std::vector<uint8_t> AssembleState(NetMessageType type, uint32_t sequence, uint32_t acknowledged, std::span<const std::vector<uint8_t>> spawns, std::span<const std::vector<uint8_t>> updates, std::span<const UUID> despawns);
+		std::vector<uint8_t> AssembleState(NetMessageType type, uint32_t sequence, uint32_t acknowledged, std::span<const std::vector<uint8_t>> spawns, std::span<const std::vector<uint8_t>> updates, std::span<const UUID> despawns, const NetStateExtras& extras = {});
+		// Empty when the arguments cannot be encoded (NetValue::Encode) or the message would exceed MaxScriptMessageBytes.
+		std::vector<uint8_t> EncodeScript(const NetScriptMessage& message);
+		// What is wrong with a script message, or an empty string: a name that is empty, too long or not UTF-8, arguments
+		// that are not an array or too many, an RPC without an entity or a message with one.
+		std::string CheckScript(const NetScriptMessage& message);
 		// Empty when a value cannot be encoded.
 		std::vector<uint8_t> EncodeState(NetMessageType type, const NetState& state);
 

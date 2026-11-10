@@ -8,6 +8,7 @@
 #include "Breccia/Core/Input.h"
 #include "Breccia/Core/Log.h"
 #include "Breccia/Core/Profiler.h"
+#include "Breccia/Network/EnetTransport.h"
 #include "Breccia/Network/NetworkSystem.h"
 #include "Breccia/Particles/ParticleSystem.h"
 #include "Breccia/Physics/PhysicsWorld.h"
@@ -98,6 +99,7 @@ namespace Breccia {
 		scene->m_Path = other->m_Path;
 		scene->m_ViewportWidth = other->m_ViewportWidth;
 		scene->m_ViewportHeight = other->m_ViewportHeight;
+		scene->m_NetworkTransports = other->m_NetworkTransports;
 
 		auto idView = other->m_Registry.view<IDComponent>();
 		for (entt::entity entity : idView)
@@ -193,6 +195,18 @@ namespace Breccia {
 	void Scene::StopNetwork()
 	{
 		m_NetworkSystem.reset();
+	}
+
+	void Scene::RequestNetworkChange(Scope<NetworkSystem> next)
+	{
+		m_PendingNetwork = std::move(next);
+	}
+
+	const Ref<NetTransportFactory>& Scene::GetNetworkTransports()
+	{
+		if (!m_NetworkTransports)
+			m_NetworkTransports = EnetTransport::CreateFactory();
+		return m_NetworkTransports;
 	}
 
 	UUID Scene::SessionIdentity::Next(const Scene& scene)
@@ -718,6 +732,7 @@ namespace Breccia {
 
 		GameUI::BeginFrame();
 		// Peers learn first, before scripts and systems wind down.
+		m_PendingNetwork.reset();
 		m_NetworkSystem.reset();
 		// OnDestroy callbacks may destroy entities; apply those once every system is shut down.
 		m_DeferDestruction++;
@@ -799,8 +814,12 @@ namespace Breccia {
 
 		// Before the deferral below: a client replaces its networked entities with the host's when it is accepted, and a
 		// spawn in the same batch must not find the old entity still waiting to be destroyed.
+		std::vector<NetworkEvent> networkEvents;
 		if (m_NetworkSystem && m_State == SceneState::Play)
+		{
 			m_NetworkSystem->Receive(ts.GetSeconds());
+			networkEvents = m_NetworkSystem->TakeEvents();
+		}
 
 		m_DeferDestruction++;
 		if (m_State == SceneState::Play)
@@ -808,7 +827,7 @@ namespace Breccia {
 			// Before the scripts: widget callbacks run before OnUpdate, and immediate-mode widgets drawn in
 			// OnUpdate read this frame's input.
 			m_UIInteraction->Update(*this, ts.GetSeconds());
-			m_ScriptEngine->Update(ts, m_UIInteraction->TakeEvents());
+			m_ScriptEngine->Update(ts, m_UIInteraction->TakeEvents(), networkEvents);
 		}
 		// Property tracks can write Transform, BoneAttachment and Animator playback fields such as Speed.
 		// Sample after scripts and before skeletal animation consumes those fields.
@@ -831,6 +850,15 @@ namespace Breccia {
 		// After every system and destruction, so the snapshot is this frame's final state.
 		if (m_NetworkSystem && m_State == SceneState::Play)
 			m_NetworkSystem->Send(ts.GetSeconds());
+		if (m_PendingNetwork && m_State == SceneState::Play)
+		{
+			// The old session's peers hear of its end before the new one starts.
+			Scope<NetworkSystem> next = std::move(*m_PendingNetwork);
+			m_PendingNetwork.reset();
+			m_NetworkSystem.reset();
+			if (next)
+				StartNetwork(std::move(next));
+		}
 		m_Time += ts.GetSeconds();
 		m_FrameCount++;
 

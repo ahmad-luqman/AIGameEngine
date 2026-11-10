@@ -35,6 +35,7 @@ namespace Breccia {
 	class UIInteraction;
 	class SceneEventListener;
 	class NetworkSystem;
+	class NetTransportFactory;
 
 	// Intermediate images the renderer can display instead of the final image (diagnostics).
 	enum class RendererDebugView
@@ -221,6 +222,15 @@ namespace Breccia {
 		// Ends the session (peers are told: ServerShutdown from a host, ClientQuit from a client).
 		void StopNetwork();
 		NetworkSystem* GetNetworkSystem() const { return m_NetworkSystem.get(); }
+		// Scripts' session changes (Lua Network.Host, Network.Connect, Network.Disconnect): the session to attach (null:
+		// end the current one), applied at the end of this frame in Play, after its Send, so a session never ends inside
+		// its own Receive (where a despawn runs OnDestroy) or a script's handler. A later request this frame replaces it.
+		void RequestNetworkChange(Scope<NetworkSystem> next);
+		bool HasPendingNetworkChange() const { return m_PendingNetwork.has_value(); }
+		// What scripts start sessions with: the factory set here, else real UDP (EnetTransport::CreateFactory). Play copies
+		// keep their source's.
+		void SetNetworkTransports(Ref<NetTransportFactory> transports) { m_NetworkTransports = std::move(transports); }
+		const Ref<NetTransportFactory>& GetNetworkTransports();
 
 		// Set by gameplay code (Lua Game.Quit) to ask the host application to stop the game.
 		void RequestQuit() { m_QuitRequested = true; }
@@ -385,6 +395,9 @@ namespace Breccia {
 		Scope<PropertyAnimationSystem> m_PropertyAnimationSystem;
 		Scope<UIInteraction> m_UIInteraction;
 		Scope<NetworkSystem> m_NetworkSystem;
+		// RequestNetworkChange's session (a null Scope ends the current one), until the end of the frame.
+		std::optional<Scope<NetworkSystem>> m_PendingNetwork;
+		Ref<NetTransportFactory> m_NetworkTransports;
 		// The seed of the runtime UUID stream: a client's differs from the host's (StartNetwork).
 		uint32_t IdentitySeed() const;
 

@@ -18,6 +18,7 @@
 #include <cmath>
 #include <optional>
 #include <tuple>
+#include <unordered_set>
 #include <vector>
 
 namespace Breccia {
@@ -69,23 +70,26 @@ namespace Breccia {
 		class QueryBodyFilter final : public JPH::BodyFilter
 		{
 		public:
-			explicit QueryBodyFilter(const PhysicsQueryFilter& filter)
+			// excluded: entities whose bodies are left out too (RaycastWithPoses tests them at other poses).
+			explicit QueryBodyFilter(const PhysicsQueryFilter& filter, const std::unordered_set<uint64_t>* excluded = nullptr)
 				: m_Ignore(static_cast<uint64_t>(filter.IgnoreEntity))
 				, m_IncludeTriggers(filter.IncludeTriggers)
+				, m_Excluded(excluded)
 			{
 			}
 
 			bool ShouldCollideLocked(const JPH::Body& body) const override
 			{
-				return (m_IncludeTriggers || !body.IsSensor()) && (m_Ignore == 0 || body.GetUserData() != m_Ignore);
+				return (m_IncludeTriggers || !body.IsSensor()) && (m_Ignore == 0 || body.GetUserData() != m_Ignore) && !(m_Excluded && m_Excluded->contains(body.GetUserData()));
 			}
 
 		private:
 			uint64_t m_Ignore = 0;
 			bool m_IncludeTriggers = false;
+			const std::unordered_set<uint64_t>* m_Excluded = nullptr;
 		};
 
-		std::vector<RaycastHit> CastRay(const JPH::PhysicsSystem& system, const glm::vec3& origin, const glm::vec3& direction, float maxDistance, const PhysicsQueryFilter& filter, bool all)
+		std::vector<RaycastHit> CastRay(const JPH::PhysicsSystem& system, const glm::vec3& origin, const glm::vec3& direction, float maxDistance, const PhysicsQueryFilter& filter, bool all, const std::unordered_set<uint64_t>* excluded = nullptr)
 		{
 			const auto unitDirection = CastDirection(direction, maxDistance);
 			if (!unitDirection || !IsFiniteVec(origin))
@@ -93,7 +97,7 @@ namespace Breccia {
 
 			const JPH::RRayCast ray(ToJolt(origin), ToJolt(*unitDirection * maxDistance));
 			const QueryObjectLayerFilter layerFilter(filter.LayerMask);
-			const QueryBodyFilter bodyFilter(filter);
+			const QueryBodyFilter bodyFilter(filter, excluded);
 			std::vector<JPH::RayCastResult> results;
 			if (all)
 			{
@@ -229,6 +233,75 @@ namespace Breccia {
 	std::optional<RaycastHit> PhysicsWorld::Raycast(const glm::vec3& origin, const glm::vec3& direction, float maxDistance, const PhysicsQueryFilter& filter) const
 	{
 		return ClosestHit(CastRay(*m_Impl->System, origin, direction, maxDistance, filter, false));
+	}
+
+	JPH::BodyID PhysicsWorld::Impl::QueryBodyOf(Entity entity) const
+	{
+		if (!Owns(entity))
+			return {};
+		if (const BodyRecord* record = FindBody(entity))
+			return record->ID;
+		if (const auto character = Characters.find(entity.GetUUID()); character != Characters.end())
+			return character->second.Character->GetInnerBodyID();
+		return {};
+	}
+
+	std::optional<PhysicsBodyPose> PhysicsWorld::GetBodyPose(Entity entity) const
+	{
+		const JPH::BodyID id = m_Impl->QueryBodyOf(entity);
+		if (id.IsInvalid())
+			return std::nullopt;
+		const JPH::BodyLockRead lock(m_Impl->System->GetBodyLockInterface(), id);
+		if (!lock.Succeeded())
+			return std::nullopt;
+		const JPH::Body& body = lock.GetBody();
+		return PhysicsBodyPose{ FromJolt(JPH::Vec3(body.GetCenterOfMassPosition())), glm::normalize(FromJolt(body.GetRotation())) };
+	}
+
+	std::optional<RaycastHit> PhysicsWorld::RaycastWithPoses(const glm::vec3& origin, const glm::vec3& direction, float maxDistance, const std::map<UUID, std::optional<PhysicsBodyPose>>& poses, const PhysicsQueryFilter& filter) const
+	{
+		const auto unitDirection = CastDirection(direction, maxDistance);
+		if (!unitDirection || !IsFiniteVec(origin))
+			return std::nullopt;
+		std::unordered_set<uint64_t> excluded;
+		for (const auto& [uuid, pose] : poses)
+			excluded.insert(static_cast<uint64_t>(uuid));
+		std::optional<RaycastHit> closest = ClosestHit(CastRay(*m_Impl->System, origin, direction, maxDistance, filter, false, &excluded));
+
+		const JPH::RRayCast ray(ToJolt(origin), ToJolt(*unitDirection * maxDistance));
+		const QueryObjectLayerFilter layerFilter(filter.LayerMask);
+		// In UUID order (the map's), so equal distances resolve the same way on every run.
+		for (const auto& [uuid, pose] : poses)
+		{
+			if (!pose || uuid == filter.IgnoreEntity || !IsFiniteVec(pose->Position))
+				continue;
+			const float rotationLength = glm::length(pose->Rotation);
+			if (!std::isfinite(rotationLength) || rotationLength < 1e-3f)
+				continue;
+			const JPH::BodyID id = m_Impl->QueryBodyOf(m_Impl->ScenePtr->GetEntityByUUID(uuid));
+			if (id.IsInvalid())
+				continue;
+			const JPH::BodyLockRead lock(m_Impl->System->GetBodyLockInterface(), id);
+			if (!lock.Succeeded())
+				continue;
+			const JPH::Body& body = lock.GetBody();
+			if (!layerFilter.ShouldCollide(body.GetObjectLayer()) || (!filter.IncludeTriggers && body.IsSensor()))
+				continue;
+			const JPH::TransformedShape shape(ToJolt(pose->Position), ToJolt(pose->Rotation / rotationLength), body.GetShape(), id);
+			JPH::RayCastResult result;
+			if (!shape.CastRay(ray, result))
+				continue;
+			const float distance = result.mFraction * maxDistance;
+			if (closest && (closest->Distance < distance || (closest->Distance == distance && closest->EntityID < uuid)))
+				continue;
+			RaycastHit hit;
+			hit.EntityID = uuid;
+			hit.Distance = distance;
+			hit.Point = origin + *unitDirection * distance;
+			hit.Normal = FromJolt(shape.GetWorldSpaceSurfaceNormal(result.mSubShapeID2, ToJolt(hit.Point)));
+			closest = hit;
+		}
+		return closest;
 	}
 
 	std::vector<RaycastHit> PhysicsWorld::RaycastAll(const glm::vec3& origin, const glm::vec3& direction, float maxDistance, const PhysicsQueryFilter& filter) const

@@ -508,7 +508,7 @@ namespace Breccia {
 		constexpr const char* s_BlendSpaceTypeNames[] = { "1D", "2D" };
 		constexpr const char* s_LayerBlendNames[] = { "Override", "Additive" };
 		constexpr const char* s_IKChainTypeNames[] = { "TwoBone", "LookAt", "Fabrik" };
-		constexpr const char* s_NetworkAuthorityNames[] = { "Server", "Owner" };
+		constexpr const char* s_NetworkAuthorityNames[] = { "Server", "Owner", "Predicted" };
 		// Names are indexed by enum value; a new enum value needs a name here.
 		static_assert(std::size(s_RigidBodyTypeNames) == static_cast<size_t>(RigidBodyType::Kinematic) + 1);
 		static_assert(std::size(s_ProjectionTypeNames) == static_cast<size_t>(SceneCamera::ProjectionType::Orthographic) + 1);
@@ -523,7 +523,7 @@ namespace Breccia {
 		static_assert(std::size(s_BlendSpaceTypeNames) == AnimationBlendSpaceTypeCount);
 		static_assert(std::size(s_LayerBlendNames) == AnimationLayerBlendCount);
 		static_assert(std::size(s_IKChainTypeNames) == IKChainTypeCount);
-		static_assert(std::size(s_NetworkAuthorityNames) == static_cast<size_t>(NetworkAuthority::Owner) + 1);
+		static_assert(std::size(s_NetworkAuthorityNames) == static_cast<size_t>(NetworkAuthority::Predicted) + 1);
 
 		// The name of an enum value. C++ code can store a value outside the enum (the registry never does);
 		// writing it as the first name keeps saving from reading past the table.

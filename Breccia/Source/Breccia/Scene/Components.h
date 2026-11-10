@@ -1449,7 +1449,11 @@ namespace Breccia {
 		Server = 0,
 		// The peer named by Owner sends its state, which the host checks, applies and passes on to the other clients. While
 		// that peer is not connected (or Owner is 0) the host decides, as for Server.
-		Owner
+		Owner,
+		// The host decides, from the inputs of the client named by Owner: that client moves its character controller at once
+		// (client-side prediction), sends what it walked with each fixed step, and corrects the character from the host's
+		// state. On an entity without a character controller, or while Owner names no connected client, this is Server.
+		Predicted
 	};
 
 	// Marks an entity as part of a network session's shared state (Network/NetworkSystem). The host spawns it on every

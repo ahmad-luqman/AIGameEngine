@@ -129,7 +129,8 @@ namespace Breccia {
 		// The next message (a Snapshot, or a ClientUpdate for ClientToHost). acknowledged is the newest message of the other
 		// direction this side applied. budget is the bytes the message may use: records beyond it wait, except that the
 		// first one goes when budget is positive (a large spawn must go some time; the caller's budget runs into debt).
-		std::vector<uint8_t> Build(const ReplicationWorld& world, uint32_t acknowledged, size_t budget, const ReplicationFilter& filter = {});
+		// extras go into the message as they are (the time, predicted characters' states, inputs), outside the budget.
+		std::vector<uint8_t> Build(const ReplicationWorld& world, uint32_t acknowledged, size_t budget, const ReplicationFilter& filter = {}, const NetStateExtras& extras = {});
 		// The receiver applied message `sequence` (and drops anything older it receives later). False, changing nothing, for
 		// a sequence this sender never built: the peer is broken or lying.
 		bool Acknowledge(uint32_t sequence);

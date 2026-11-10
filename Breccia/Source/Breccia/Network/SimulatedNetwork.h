@@ -46,11 +46,20 @@ namespace Breccia {
 		// Disconnected when none does (no host there, or the host is full).
 		Scope<NetTransport> Connect(uint16_t port);
 
+		// Listen and Connect for a scene's scripts (any address names this network; the timeout is the link's). The factory
+		// shares the network's state, so it may outlive it (its transports then go silent).
+		Ref<NetTransportFactory> CreateFactory();
+
+		// Whether a host transport listens on the virtual port.
+		bool IsListening(uint16_t port) const;
 		// Moves simulated time forward and delivers what has arrived by then.
 		void Advance(float seconds);
 		float GetTime() const;
 		// Applies to messages sent from now on.
 		void SetLinkSettings(const SimulatedLinkSettings& settings);
+		const SimulatedLinkSettings& GetLinkSettings() const;
+		// Whether the settings are valid (finite, non-negative, Loss in [0, 1], TimeoutSeconds positive).
+		static bool IsValidLink(const SimulatedLinkSettings& settings);
 		// Messages lost so far, for tests that check the link did what they meant.
 		uint64_t GetLostCount() const;
 

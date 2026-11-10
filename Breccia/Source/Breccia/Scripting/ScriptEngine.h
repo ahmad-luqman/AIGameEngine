@@ -19,6 +19,7 @@ namespace Breccia {
 
 	class Entity;
 	class Scene;
+	struct NetworkEvent;
 
 	// Runs Lua behaviours (ScriptComponent) for one playing scene. A script file returns a class table:
 	//
@@ -68,8 +69,9 @@ namespace Breccia {
 		// Creates the instances of scripts added since the last frame, calls OnGamepadConnected/Disconnected for the
 		// gamepads whose connection changed since the last Update (the first one announces those already connected;
 		// a gamepad replaced at its index is a disconnect and a connect), the widget callbacks of `uiEvents`
-		// (UIInteraction) and OnUpdate, then runs the due timers and coroutines.
-		void Update(Timestep ts, std::span<const UIWidgetEvent> uiEvents);
+		// (UIInteraction), the network session's events (Network.On handlers and RPCs, NetworkSystem::TakeEvents) and
+		// OnUpdate, then runs the due timers and coroutines.
+		void Update(Timestep ts, std::span<const UIWidgetEvent> uiEvents, std::span<const NetworkEvent> networkEvents = {});
 		void LateUpdate(Timestep ts);
 		// Calls OnDestroy on every live instance, then ends the session's timers, coroutines and event handlers.
 		void Stop();
@@ -139,6 +141,10 @@ namespace Breccia {
 		// no such method) is a script error, reported once per widget, method and problem; a widget or target that an
 		// earlier callback this frame destroyed is skipped.
 		void DispatchUIEvent(const UIWidgetEvent& event);
+		// Calls the Network.On handlers of a connection event or message, or the method an RPC names (when its script
+		// declares it in Rpcs and the sender may call it).
+		void DispatchNetworkEvent(const NetworkEvent& event);
+		void DispatchRpc(const NetworkEvent& event);
 
 	private:
 		struct Impl;
@@ -146,6 +152,8 @@ namespace Breccia {
 		Scene* m_Scene = nullptr;
 		std::vector<std::string> m_Errors;
 		std::unordered_set<std::string> m_ReportedUICallbacks;
+		// RPC problems already reported, by entity, method and kind (at most MaxReportedRpcProblems).
+		std::unordered_set<std::string> m_ReportedRpcs;
 
 		friend struct ScriptEngineAccess;
 		friend struct ScriptClassLoader;

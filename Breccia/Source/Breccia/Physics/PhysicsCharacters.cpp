@@ -8,6 +8,7 @@
 #include <cfloat>
 #include <cmath>
 #include <optional>
+#include <utility>
 
 namespace Breccia {
 
@@ -20,6 +21,7 @@ namespace Breccia {
 		// would touch it and shove dynamic bodies regardless of MaxStrength.
 		constexpr float InnerShapeFraction = 0.9f;
 		constexpr const char* IgnoredRigidBodyWarning = "its RigidBody is ignored (the character controller replaces it)";
+		static_assert(CharacterState::MaxSinceGrounded > CharacterControllerComponent::MaxJumpGrace, "a capped time in the air must be past every jump grace");
 
 	}
 
@@ -319,7 +321,6 @@ namespace Breccia {
 		if (Characters.empty())
 			return;
 		BR_CORE_ASSERT(CharacterCollision.mCharacters.size() == Characters.size(), "CharacterCollision is out of sync with the characters");
-		const JPH::Vec3 sceneGravity = System->GetGravity();
 		// Registry order, not hash order: characters push bodies, so the order shows in replays.
 		for (entt::entity handle : ScenePtr->GetAllEntitiesWith<CharacterControllerComponent>())
 		{
@@ -328,125 +329,163 @@ namespace Breccia {
 			if (it == Characters.end())
 				continue;
 			Impl::CharacterRecord& record = it->second;
-			JPH::CharacterVirtual& character = *record.Character;
-
-			glm::vec3 position;
-			glm::quat rotation;
-			glm::vec3 scale;
-			if (!Math::DecomposeTransform(ScenePtr->GetWorldTransform(entity), position, rotation, scale))
+			if (ExternallyDriven.contains(entity.GetUUID()))
 			{
-				if (!record.Degenerate)
-				{
-					std::vector<std::string> warnings = record.BuildWarnings;
-					warnings.emplace_back("degenerate transform (e.g. a zero scale); the character does not move");
-					CharacterWarnings.Report(entity, warnings);
-				}
-				record.Degenerate = true;
+				FollowCharacterTransform(entity, record);
 				continue;
 			}
-			if (record.Degenerate)
-			{
-				record.Degenerate = false;
-				CharacterWarnings.Report(entity, record.BuildWarnings);
-			}
-			const JPH::ObjectLayer layer = MakeObjectLayer(true, record.Layer);
-			const JPH::DefaultBroadPhaseLayerFilter broadPhaseFilter(ObjectVsBroadPhaseLayerFilter, layer);
-			const JPH::DefaultObjectLayerFilter objectLayerFilter(ObjectLayerPairFilter, layer);
-			// Other characters are met through CharacterCollision, not their inner bodies, and this one's rig not at all.
-			const NonCharacterBodyFilter bodyFilter(*this, entity.GetUUID());
-			const JPH::ShapeFilter shapeFilter;
+			const std::optional<CharacterInput> walked = StepCharacter(entity, record, fixedStep, nullptr);
+			if (walked && record.RecordInputs)
+				record.Inputs.push_back(*walked);
+		}
+	}
 
-			// A script that moved the transform teleports the character (whose old ground no longer holds it);
-			// its rotation always follows the entity.
-			if (glm::any(glm::greaterThan(glm::abs(position - record.LastPosition), glm::vec3(1e-5f))))
-			{
-				character.SetPosition(ToJolt(position));
-				character.RefreshContacts(broadPhaseFilter, objectLayerFilter, bodyFilter, shapeFilter, *TempAllocator);
-			}
-			if (glm::abs(glm::dot(rotation, record.LastRotation)) < 1.0f - 1e-6f)
-				character.SetRotation(ToJolt(rotation));
+	void PhysicsWorld::Impl::FollowCharacterTransform(Entity entity, CharacterRecord& record)
+	{
+		glm::vec3 position;
+		glm::quat rotation;
+		glm::vec3 scale;
+		if (!Math::DecomposeTransform(ScenePtr->GetWorldTransform(entity), position, rotation, scale))
+			return;
+		JPH::CharacterVirtual& character = *record.Character;
+		if (glm::any(glm::greaterThan(glm::abs(position - record.LastPosition), glm::vec3(1e-5f))))
+		{
+			character.SetPosition(ToJolt(position));
+			RefreshCharacterContacts(entity);
+		}
+		if (glm::abs(glm::dot(rotation, record.LastRotation)) < 1.0f - 1e-6f)
+			character.SetRotation(ToJolt(rotation));
+		// SetPosition and SetRotation take the inner body along, so other bodies and queries see it there.
+		record.ActualVelocity = glm::vec3(0.0f);
+		record.LastPosition = position;
+		record.LastRotation = rotation;
+	}
 
-			// Standing characters move with their ground and may jump off it; airborne ones keep their vertical
-			// speed under gravity and steer sideways (Jolt's CharacterVirtual sample). Unlike the sample, gravity
-			// is left out on walkable ground so an idle character does not creep down slopes; walking down them
-			// relies on the StepHeight stick-to-floor.
-			// Up is against the scene gravity, which scripts may turn.
-			if (!sceneGravity.IsNearZero())
-				character.SetUp(-sceneGravity.Normalized());
-			Impl::UpdateSupportingVolume(record);
-			const JPH::Vec3 up = character.GetUp();
-			const JPH::Vec3 gravity = sceneGravity * record.GravityFactor;
-			glm::vec3 requested = record.MoveVelocity;
-			if (record.RootMotion)
+	std::optional<CharacterInput> PhysicsWorld::Impl::StepCharacter(Entity entity, CharacterRecord& record, float fixedStep, const CharacterInput* input)
+	{
+		const JPH::Vec3 sceneGravity = System->GetGravity();
+		JPH::CharacterVirtual& character = *record.Character;
+
+		glm::vec3 position;
+		glm::quat rotation;
+		glm::vec3 scale;
+		if (!Math::DecomposeTransform(ScenePtr->GetWorldTransform(entity), position, rotation, scale))
+		{
+			if (!record.Degenerate)
 			{
-				const glm::vec3 worldUp = FromJolt(up);
-				const glm::vec3 rootVelocity = record.RootMotion->Velocity;
-				const glm::vec3 tangent = rootVelocity - worldUp * glm::dot(rootVelocity, worldUp);
-				const glm::vec3 vertical = worldUp * glm::dot(requested, worldUp);
-				// While root motion fades in or out, gameplay movement keeps the rest of the horizontal velocity.
-				requested = vertical + tangent + (1.0f - record.RootMotion->Share) * (requested - vertical);
+				std::vector<std::string> warnings = record.BuildWarnings;
+				warnings.emplace_back("degenerate transform (e.g. a zero scale); the character does not move");
+				CharacterWarnings.Report(entity, warnings);
 			}
-			const JPH::Vec3 move = ToJolt(requested);
-			const JPH::Vec3 moveVertical = up * move.Dot(up);
-			const JPH::Vec3 current = character.GetLinearVelocity();
-			const JPH::Vec3 groundVelocity = character.GetGroundVelocity();
-			const bool onGround = character.GetGroundState() == JPH::CharacterVirtual::EGroundState::OnGround;
-			JPH::Vec3 velocity;
-			if (gravity.IsNearZero())
+			record.Degenerate = true;
+			return std::nullopt;
+		}
+		if (record.Degenerate)
+		{
+			record.Degenerate = false;
+			CharacterWarnings.Report(entity, record.BuildWarnings);
+		}
+		// An input brings the rotation the character had when it took that step.
+		if (input)
+			rotation = glm::normalize(input->Rotation);
+		const JPH::ObjectLayer layer = MakeObjectLayer(true, record.Layer);
+		const JPH::DefaultBroadPhaseLayerFilter broadPhaseFilter(ObjectVsBroadPhaseLayerFilter, layer);
+		const JPH::DefaultObjectLayerFilter objectLayerFilter(ObjectLayerPairFilter, layer);
+		// Other characters are met through CharacterCollision, not their inner bodies, and this one's rig not at all.
+		const NonCharacterBodyFilter bodyFilter(*this, entity.GetUUID());
+		const JPH::ShapeFilter shapeFilter;
+
+		// A script that moved the transform teleports the character (whose old ground no longer holds it);
+		// its rotation always follows the entity.
+		if (glm::any(glm::greaterThan(glm::abs(position - record.LastPosition), glm::vec3(1e-5f))))
+		{
+			character.SetPosition(ToJolt(position));
+			character.RefreshContacts(broadPhaseFilter, objectLayerFilter, bodyFilter, shapeFilter, *TempAllocator);
+		}
+		if (glm::abs(glm::dot(rotation, record.LastRotation)) < 1.0f - 1e-6f)
+			character.SetRotation(ToJolt(rotation));
+
+		// Standing characters move with their ground and may jump off it; airborne ones keep their vertical
+		// speed under gravity and steer sideways (Jolt's CharacterVirtual sample). Unlike the sample, gravity
+		// is left out on walkable ground so an idle character does not creep down slopes; walking down them
+		// relies on the StepHeight stick-to-floor.
+		// Up is against the scene gravity, which scripts may turn.
+		if (!sceneGravity.IsNearZero())
+			character.SetUp(-sceneGravity.Normalized());
+		Impl::UpdateSupportingVolume(record);
+		const JPH::Vec3 up = character.GetUp();
+		const JPH::Vec3 gravity = sceneGravity * record.GravityFactor;
+		glm::vec3 requested = input ? input->Velocity : record.MoveVelocity;
+		if (record.RootMotion && !input)
+		{
+			const glm::vec3 worldUp = FromJolt(up);
+			const glm::vec3 rootVelocity = record.RootMotion->Velocity;
+			const glm::vec3 tangent = rootVelocity - worldUp * glm::dot(rootVelocity, worldUp);
+			const glm::vec3 vertical = worldUp * glm::dot(requested, worldUp);
+			// While root motion fades in or out, gameplay movement keeps the rest of the horizontal velocity.
+			requested = vertical + tangent + (1.0f - record.RootMotion->Share) * (requested - vertical);
+		}
+		const JPH::Vec3 move = ToJolt(requested);
+		const JPH::Vec3 moveVertical = up * move.Dot(up);
+		const JPH::Vec3 current = character.GetLinearVelocity();
+		const JPH::Vec3 groundVelocity = character.GetGroundVelocity();
+		const bool onGround = character.GetGroundState() == JPH::CharacterVirtual::EGroundState::OnGround;
+		JPH::Vec3 velocity;
+		if (gravity.IsNearZero())
+		{
+			velocity = move + (onGround ? groundVelocity : JPH::Vec3::sZero());
+			// Flying or on a ladder there is no ground to leave: gravity coming back does not bring a coyote jump.
+			record.Air = { .Jumped = true };
+		}
+		else
+		{
+			// Moving away from the ground (just jumped) counts as airborne, or the jump would be undone.
+			const bool standing = onGround && (current - groundVelocity).Dot(up) < 0.1f;
+			// A request too small to lift off is no jump, and does not spend the grace.
+			const bool jumping = moveVertical.Dot(up) > 1e-3f;
+			auto& air = record.Air;
+			air.SinceGrounded = standing ? 0.0f : air.SinceGrounded + fixedStep;
+			if (standing)
 			{
-				velocity = move + (onGround ? groundVelocity : JPH::Vec3::sZero());
-				// Flying or on a ladder there is no ground to leave: gravity coming back does not bring a coyote jump.
-				record.Air = { .Jumped = true };
+				velocity = groundVelocity + moveVertical;
+				air.Jumped = jumping;
+			}
+			// Coyote time: shortly after leaving the ground without jumping, an upward request still jumps, once. It
+			// replaces the vertical speed (falling or a platform's it left) with the requested one.
+			else if (jumping && !air.Jumped && air.SinceGrounded <= record.JumpGrace)
+			{
+				velocity = moveVertical;
+				air.Jumped = true;
 			}
 			else
-			{
-				// Moving away from the ground (just jumped) counts as airborne, or the jump would be undone.
-				const bool standing = onGround && (current - groundVelocity).Dot(up) < 0.1f;
-				// A request too small to lift off is no jump, and does not spend the grace.
-				const bool jumping = moveVertical.Dot(up) > 1e-3f;
-				auto& air = record.Air;
-				air.SinceGrounded = standing ? 0.0f : air.SinceGrounded + fixedStep;
-				if (standing)
-				{
-					velocity = groundVelocity + moveVertical;
-					air.Jumped = jumping;
-				}
-				// Coyote time: shortly after leaving the ground without jumping, an upward request still jumps, once. It
-				// replaces the vertical speed (falling or a platform's it left) with the requested one.
-				else if (jumping && !air.Jumped && air.SinceGrounded <= record.JumpGrace)
-				{
-					velocity = moveVertical;
-					air.Jumped = true;
-				}
-				else
-					velocity = up * current.Dot(up) + gravity * fixedStep;
-				velocity += move - moveVertical;
-			}
-			character.SetLinearVelocity(velocity);
-
-			JPH::CharacterVirtual::ExtendedUpdateSettings update;
-			update.mStickToFloorStepDown = -up * record.StepHeight;
-			update.mWalkStairsStepUp = up * record.StepHeight;
-			const JPH::RVec3 before = character.GetPosition();
-			character.ExtendedUpdate(fixedStep, gravity, update, broadPhaseFilter, objectLayerFilter, bodyFilter, shapeFilter, *TempAllocator);
-			const JPH::Vec3 moved = JPH::Vec3(character.GetPosition() - before);
-			record.ActualVelocity = FromJolt(moved / fixedStep);
-
-			// Jolt does not stop a rising character at a ceiling; without this it would stick there until
-			// gravity ate the jump speed.
-			const float wantedRise = character.GetLinearVelocity().Dot(up);
-			const float actualRise = moved.Dot(up) / fixedStep;
-			if (wantedRise > 0.0f && actualRise < wantedRise)
-			{
-				const JPH::Vec3 corrected = character.GetLinearVelocity() + up * (std::max(actualRise, 0.0f) - wantedRise);
-				character.SetLinearVelocity(corrected);
-			}
-
-			record.LastPosition = FromJolt(JPH::Vec3(character.GetPosition()));
-			record.LastRotation = rotation;
-			// The transform decomposed above, so this cannot fail.
-			Impl::WritePose(entity, record.LastPosition, rotation);
+				velocity = up * current.Dot(up) + gravity * fixedStep;
+			velocity += move - moveVertical;
 		}
+		character.SetLinearVelocity(velocity);
+
+		JPH::CharacterVirtual::ExtendedUpdateSettings update;
+		update.mStickToFloorStepDown = -up * record.StepHeight;
+		update.mWalkStairsStepUp = up * record.StepHeight;
+		const JPH::RVec3 before = character.GetPosition();
+		character.ExtendedUpdate(fixedStep, gravity, update, broadPhaseFilter, objectLayerFilter, bodyFilter, shapeFilter, *TempAllocator);
+		const JPH::Vec3 moved = JPH::Vec3(character.GetPosition() - before);
+		record.ActualVelocity = FromJolt(moved / fixedStep);
+
+		// Jolt does not stop a rising character at a ceiling; without this it would stick there until
+		// gravity ate the jump speed.
+		const float wantedRise = character.GetLinearVelocity().Dot(up);
+		const float actualRise = moved.Dot(up) / fixedStep;
+		if (wantedRise > 0.0f && actualRise < wantedRise)
+		{
+			const JPH::Vec3 corrected = character.GetLinearVelocity() + up * (std::max(actualRise, 0.0f) - wantedRise);
+			character.SetLinearVelocity(corrected);
+		}
+
+		record.LastPosition = FromJolt(JPH::Vec3(character.GetPosition()));
+		record.LastRotation = rotation;
+		// The transform decomposed above, so this cannot fail.
+		Impl::WritePose(entity, record.LastPosition, rotation);
+		return CharacterInput{ requested, rotation };
 	}
 
 	bool PhysicsWorld::HasCharacter(Entity entity) const
@@ -515,6 +554,83 @@ namespace Breccia {
 	uint32_t PhysicsWorld::GetCharacterCount() const
 	{
 		return static_cast<uint32_t>(m_Impl->Characters.size());
+	}
+
+	void PhysicsWorld::SetCharacterInputRecording(Entity entity, bool recording)
+	{
+		if (!m_Impl->Owns(entity))
+			return;
+		auto it = m_Impl->Characters.find(entity.GetUUID());
+		if (it == m_Impl->Characters.end())
+			return;
+		it->second.RecordInputs = recording;
+		if (!recording)
+			it->second.Inputs.clear();
+	}
+
+	std::vector<CharacterInput> PhysicsWorld::TakeCharacterInputs(Entity entity)
+	{
+		if (!m_Impl->Owns(entity))
+			return {};
+		auto it = m_Impl->Characters.find(entity.GetUUID());
+		return it != m_Impl->Characters.end() ? std::exchange(it->second.Inputs, {}) : std::vector<CharacterInput>{};
+	}
+
+	bool PhysicsWorld::StepCharacter(Entity entity, const CharacterInput& input)
+	{
+		if (!m_Impl->Owns(entity))
+			return false;
+		auto it = m_Impl->Characters.find(entity.GetUUID());
+		if (it == m_Impl->Characters.end())
+			return false;
+		const float length = glm::length(input.Rotation);
+		if (!IsFiniteVec(input.Velocity) || !std::isfinite(length) || length < 1e-3f)
+			return false;
+		// What changed since the last step (a new collider, settings) applies first, as at the start of a Step.
+		m_Impl->ApplyPendingChanges();
+		it = m_Impl->Characters.find(entity.GetUUID());
+		if (it == m_Impl->Characters.end())
+			return false;
+		return m_Impl->StepCharacter(entity, it->second, m_Impl->ScenePtr->GetFixedTimestep(), &input).has_value();
+	}
+
+	std::optional<CharacterState> PhysicsWorld::GetCharacterState(Entity entity) const
+	{
+		if (!m_Impl->Owns(entity))
+			return std::nullopt;
+		auto it = m_Impl->Characters.find(entity.GetUUID());
+		if (it == m_Impl->Characters.end())
+			return std::nullopt;
+		const Impl::CharacterRecord& record = it->second;
+		const JPH::CharacterVirtual& character = *record.Character;
+		return CharacterState{ .Position = FromJolt(JPH::Vec3(character.GetPosition())),
+							   .Velocity = FromJolt(character.GetLinearVelocity()),
+							   .SinceGrounded = std::min(record.Air.SinceGrounded, CharacterState::MaxSinceGrounded),
+							   .Jumped = record.Air.Jumped };
+	}
+
+	bool PhysicsWorld::SetCharacterState(Entity entity, const CharacterState& state)
+	{
+		if (!m_Impl->Owns(entity) || !IsFiniteVec(state.Position) || !IsFiniteVec(state.Velocity) || !std::isfinite(state.SinceGrounded))
+			return false;
+		auto it = m_Impl->Characters.find(entity.GetUUID());
+		if (it == m_Impl->Characters.end())
+			return false;
+		Impl::CharacterRecord& record = it->second;
+		JPH::CharacterVirtual& character = *record.Character;
+		character.SetPosition(ToJolt(state.Position));
+		character.SetLinearVelocity(ToJolt(state.Velocity));
+		m_Impl->RefreshCharacterContacts(entity);
+		record.Air = { .SinceGrounded = std::clamp(state.SinceGrounded, 0.0f, CharacterState::MaxSinceGrounded), .Jumped = state.Jumped };
+		glm::vec3 position;
+		glm::quat rotation;
+		glm::vec3 scale;
+		if (!Math::DecomposeTransform(m_Impl->ScenePtr->GetWorldTransform(entity), position, rotation, scale))
+			return true;
+		record.LastPosition = state.Position;
+		record.LastRotation = rotation;
+		Impl::WritePose(entity, state.Position, rotation);
+		return true;
 	}
 
 }

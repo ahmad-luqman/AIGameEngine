@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Breccia/Core/Base.h"
+
 #include <cstdint>
 #include <span>
 #include <string>
@@ -68,6 +70,22 @@ namespace Breccia {
 		virtual std::string DescribePeer(NetPeerHandle peer) const = 0;
 		// The port a host transport listens on (the one the system picked when asked for 0); 0 for a client.
 		virtual uint16_t GetListenPort() const = 0;
+	};
+
+	// Makes the transports a scene's scripts start sessions with (Lua Network.Host, Network.Connect): real UDP
+	// (EnetTransport::CreateFactory, what a scene uses unless told otherwise), or an automation session's in-process network
+	// (SimulatedNetwork::CreateFactory).
+	class NetTransportFactory
+	{
+	public:
+		virtual ~NetTransportFactory() = default;
+		// A host transport admitting up to maxPeers connections on port (0: one the system picks). Null, with the reason,
+		// when the port cannot be taken.
+		virtual Scope<NetTransport> Listen(uint16_t port, uint32_t maxPeers, float timeoutSeconds, std::string& outError) = 0;
+		// A client transport connecting to address:port. Null, with the reason, when the address cannot be used.
+		virtual Scope<NetTransport> Connect(const std::string& address, uint16_t port, float timeoutSeconds, std::string& outError) = 0;
+		// "udp" or "simulated", for messages.
+		virtual const char* GetName() const = 0;
 	};
 
 }

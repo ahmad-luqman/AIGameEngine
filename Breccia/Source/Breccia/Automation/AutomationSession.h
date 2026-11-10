@@ -24,6 +24,7 @@ namespace Breccia {
 
 	class Project;
 	class Scene;
+	class SimulatedNetwork;
 	struct CommandInfo;
 
 	// Whether changed scripts were hot reloaded.
@@ -143,6 +144,53 @@ namespace Breccia {
 		void Step(uint32_t frames, float frameTime);
 		// Pauses or resumes the play scene (the editor's Pause button); no-op when not playing or unchanged.
 		void SetPaused(bool paused);
+
+		// --- Network sessions (net.*) -----------------------------------------------------------------
+		// The play scene's scripts start sessions (Lua Network.Host, Network.Connect) over the session's in-process network
+		// (SimulatedNetwork, seeded and advanced with every frame), unless ScriptsUseUdp is set (the editor, so a game in
+		// Play can host runtimes or join one). In-process clients are further playing copies of the edit scene, each joined
+		// to the play scene's simulated host and stepped with it (Step, UpdateNetworkClients); they end with Play.
+		static constexpr size_t MaxNetworkClients = 16;
+		// The play scene hosts: over the in-process network (in-process clients can join), or real UDP (runtimes can).
+		bool HostNetwork(bool udp, uint16_t port, std::string& outError);
+		// The play scene joins a real UDP host.
+		bool JoinNetwork(const std::string& address, uint16_t port, std::string& outError);
+		// Ends the play scene's session at once (peers are told).
+		void LeaveNetwork();
+		// A new in-process client of the play scene's simulated host; its index (1 for the first) or nullopt with the reason.
+		std::optional<size_t> AddNetworkClient(std::string& outError);
+		// Ends an in-process client (index from AddNetworkClient) and discards its scene; false for no such client.
+		bool RemoveNetworkClient(size_t index, std::string& outError);
+		// In-process clients by index - 1; a removed one leaves a null entry, so indices stay.
+		const std::vector<Ref<Scene>>& GetNetworkClients() const { return m_NetworkClients; }
+		// The scene of client `index`, or null.
+		Ref<Scene> GetNetworkClient(size_t index) const;
+		// The in-process network, created on first use (link settings apply to messages sent from then on).
+		SimulatedNetwork& GetSimulatedNetwork();
+		bool HasSimulatedNetwork() const { return m_Network != nullptr; }
+		// Which peer injected input reaches while stepping: 0 the play scene, N in-process client N. Others get no game
+		// keyboard, mouse or gamepads.
+		void SetInputPeer(size_t peer) { m_InputPeer = peer; }
+		size_t GetInputPeer() const { return m_InputPeer; }
+		// Steps every in-process client by one frame and advances the in-process network: hosts call it every frame before
+		// updating the play scene (Step does), so the play scene's game UI and debug lines are the ones left drawn.
+		void UpdateNetworkClients(float frameTime);
+		// Whether the play scene's scripts use UDP instead of the in-process network (set by the editor at startup).
+		bool ScriptsUseUdp = false;
+		// Makes an in-process client's scene the current one for its lifetime, so a command reads or changes that peer
+		// (net.command). Only for commands that neither replace nor save edit state.
+		class [[nodiscard]] SceneOverride
+		{
+		public:
+			SceneOverride(AutomationSession& session, Ref<Scene> scene);
+			~SceneOverride();
+			SceneOverride(const SceneOverride&) = delete;
+			SceneOverride& operator=(const SceneOverride&) = delete;
+
+		private:
+			AutomationSession& m_Session;
+			Ref<Scene> m_Previous;
+		};
 
 		// --- Asset changes (hot reload) ---------------------------------------------------------------
 		// The session watches the active project's Assets/ folder with a FileWatcher. Hosts poll it through the
@@ -309,6 +357,11 @@ namespace Breccia {
 		// The project m_FileWatcher watches. weak_ptr, not a raw pointer: a new project allocated where a freed one was
 		// must not look like the watched one (an expired pointer locks to null).
 		std::weak_ptr<Project> m_WatchedProject;
+		Scope<SimulatedNetwork> m_Network;
+		std::vector<Ref<Scene>> m_NetworkClients;
+		size_t m_InputPeer = 0;
+		// Ends every in-process client and forgets the in-process network (StopPlay).
+		void StopNetworkClients();
 	};
 
 }
