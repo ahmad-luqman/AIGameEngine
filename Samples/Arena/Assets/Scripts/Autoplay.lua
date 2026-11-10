@@ -1,7 +1,8 @@
 -- The computer plays one round, then every peer reports what it sees and quits: what the SampleArenaNetwork test runs
 -- (see README.md). It is not in the scene: the test adds an entity named Autoplay with this script to its copy of the
--- sample, on every peer (an entity that is not networked, so each peer keeps its own). Players read their input from it
--- while it is there (Player:ReadInput).
+-- sample, on every peer (an entity that is not networked, so each peer keeps its own), and sets Match's WinScore and a
+-- RoundBreak long enough for everyone to report. Players read their input from it while it is there
+-- (Player:ReadInput).
 --
 -- Player 1 walks to a spot on the north side (-6, -8) and tags east along it every cooldown. Player 2 walks to the east
 -- end of that side (8, -8) and stands there; each tag sends it to the south-east corner (8, 8), the spawn point farthest
@@ -12,8 +13,6 @@ local Arena = require("Assets.Scripts.Lib.Arena")
 local Autoplay = {}
 
 Autoplay.Properties = {
-	-- Tags that win the round.
-	WinScore = 3,
 	-- Seconds the host waits after the win before everyone reports: clients show the others Network.InterpolationDelay
 	-- (0.1 s in this project) behind the host, plus the latency, and the last of the players' moves must arrive.
 	ResultDelay = 1.5
@@ -23,23 +22,21 @@ Autoplay.Properties = {
 local Arrived = 0.05
 
 function Autoplay:OnCreate()
-	local match = Arena.RequireScript("Match")
-	match.WinScore = self.WinScore
-	-- One round: the result is taken during its break, which must last until everyone has reported.
-	match.RoundBreak = math.huge
 	self.OverFor = 0
 	self.Reported = false
+	self.SendFailing = false
+	-- From the host only: on the host a client's "Result" would otherwise end the game.
 	Network.On("Result", function(sender)
-		if sender == 0 then
-			self:Report()
-			Game.Quit()
-		end
+		if sender ~= 0 then return end
+		self:Report()
+		self:Quit()
 	end)
-	-- The test waits for this line, so a renamed property or script fails at once rather than at the frame limit.
-	Log.Info("Arena: autoplay to " .. self.WinScore)
+	-- The test waits for this line (with the WinScore it set), so a missing Autoplay, or a WinScore that did not reach
+	-- Match, fails as such rather than as a missing result.
+	Log.Info("Arena: autoplay to " .. tostring(Arena.RequireScript("Match").WinScore))
 end
 
--- The move, whether to tag, and where to face for `player` this frame.
+-- The move, whether to tag, and where to face for `player` this frame (Player:ReadInput's contract).
 function Autoplay:InputFor(player)
 	local peer = player:GetComponent("Networked").Owner
 	local spot, aim
@@ -62,19 +59,26 @@ end
 -- On the host: once someone has won and everyone had time to come to rest, report and tell the clients to; quit when
 -- they have all left (they leave once they have reported).
 function Autoplay:OnUpdate(dt)
-	if not Network.IsHost() or Arena.RequireScript("Match").Winner == nil then return end
+	if not Network.IsHost() or not Arena.RoundOver() then return end
 	self.OverFor = self.OverFor + dt
 	if not self.Reported and self.OverFor >= self.ResultDelay then
 		local sent, reason = Network.Send("Clients", "Result")
 		if sent then
 			self.Reported = true
 			self:Report()
-		elseif not self.SendFailed then
-			self.SendFailed = true
+			if self.SendFailing then Log.Info("Arena: the clients were asked for their results") end
+		elseif not self.SendFailing then
 			Log.Warn("Arena: could not ask the clients for their results (trying again each frame): " .. tostring(reason))
 		end
+		self.SendFailing = not sent
 	end
-	if self.Reported and #Network.GetPeers() == 0 then Game.Quit() end
+	if self.Reported and #Network.GetPeers() == 0 then self:Quit() end
+end
+
+-- Ends the game, saying so first: the test tells a peer that finished from one that ran out of frames by this line.
+function Autoplay:Quit()
+	Log.Info("Arena: quitting")
+	Game.Quit()
 end
 
 -- One line the network test compares across peers: the scores and where this peer sees every character.

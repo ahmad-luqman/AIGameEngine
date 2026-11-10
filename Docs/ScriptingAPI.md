@@ -1335,8 +1335,9 @@ end
 - `Game.Quit()` — ends the game (the runtime exits, the editor leaves play mode)
 - `Game.GetInfo()` — `{Name, Version, Company}` from the project settings (`project.set name/version/company`),
   for title screens and credits
-- `Game.IsHeadless()` — `true` with no window, so nobody plays at this machine: the runtime's `--headless` (a dedicated
-  server or a headless client) and the `breccia` CLI; `false` in the editor and windowed or `--offscreen` runtimes. With
+- `Game.IsHeadless()` — `true` when the game renders nothing and has no window, so nobody plays at this machine: the
+  runtime's `--headless` (a dedicated server or a headless client) and the `breccia` CLI; `false` whenever it renders:
+  the editor, a windowed runtime and an `--offscreen` one (no window, but it renders, as the GPU tests do). With
   `Network.IsHost()` it tells a dedicated server, where a game usually spawns no player for the host
 
 ## Property animation

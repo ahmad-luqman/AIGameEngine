@@ -2,15 +2,29 @@
 -- other. `require("Assets.Scripts.Lib.Arena")` returns this table.
 local Arena = {}
 
+-- The child of a player that carries its mesh and color.
+Arena.BodyName = "PlayerBody"
+
+-- How far behind the host a client's view may be beyond its round trip: its InterpolationDelay (the project's
+-- Network.InterpolationDelay, 0.1 s here: raise this with it), the interval between snapshots and some jitter. The host
+-- clamps tag times to it, and gives players this long, plus their round trip, to hear that a round ended.
+Arena.MaxViewLag = 0.25
+
 -- The name a peer goes by on the scoreboard (the game alone, with no session, is "You").
 function Arena.PeerName(peer)
 	if peer ~= 0 then return "Player " .. peer end
 	return Network.IsActive() and "Host" or "You"
 end
 
--- A number a peer sent, or nil unless it is finite and within a million of zero. What a client sends is untrusted, and
--- a value the engine refuses (an infinite time, a NaN) must be turned away here rather than raise an error in the
--- host's script: an error in an RPC stops that entity's script on the host.
+-- A time a peer sent, or nil unless it is a finite number. What a client sends is untrusted, and a value the engine
+-- refuses (an infinite time, a NaN) must be turned away here rather than raise an error in the host's script: an error
+-- in an RPC stops that entity's script on the host.
+function Arena.ReadTime(value)
+	if type(value) ~= "number" or value ~= value or value == math.huge or value == -math.huge then return nil end
+	return value
+end
+
+-- A coordinate a peer sent: a finite number within a million of zero (the arena is 20 m across), or nil.
 function Arena.ReadNumber(value)
 	if type(value) ~= "number" or value ~= value or math.abs(value) > 1e6 then return nil end
 	return value
@@ -25,7 +39,8 @@ function Arena.ReadVec3(value)
 	return Vec3(x, y, z)
 end
 
--- A vector as an array, the form it arrives in from another peer.
+-- A vector as an array, the form it arrives in from another peer (Network.Rpc converts by itself; a script calling a
+-- handler directly passes this).
 function Arena.ToArray(v)
 	return { v.x, v.y, v.z }
 end
@@ -35,23 +50,16 @@ function Arena.FlatOffset(from, to)
 	return Vec3(to.x - from.x, 0, to.z - from.z)
 end
 
--- The keys of a table, sorted, so every run visits peers in the same order.
-function Arena.SortedKeys(t)
-	local keys = {}
-	for key in pairs(t) do keys[#keys + 1] = key end
-	table.sort(keys)
-	return keys
-end
-
 -- The script of the entity named `name`, or nil while there is none. A client replaces its own networked entities (the
--- scoreboard, the bots) with the host's when it is accepted, and spawns arrive in any order, so a script must not keep
--- another networked entity's script from its OnCreate: it looks it up when it needs it.
+-- scoreboard, the bots) with the host's when it is accepted, and spawns arrive in any order. Entity handles follow the
+-- entity's ID, so a script may keep one; it must not keep another entity's script table, which the replacement ends:
+-- it looks the script up when it needs it.
 function Arena.FindScript(name)
 	local entity = Scene.FindEntityByName(name)
 	return entity and entity:GetScript()
 end
 
--- Like FindScript, for an entity the scene must have (Match is not networked, so every peer has it from the start).
+-- Like FindScript, for an entity that must exist when called (Match always, as it is not networked).
 function Arena.RequireScript(name)
 	local script = Arena.FindScript(name)
 	if not script then error("Arena: the scene has no entity named '" .. name .. "' with a running script", 2) end
@@ -59,13 +67,15 @@ function Arena.RequireScript(name)
 end
 
 -- Whether the round is over (someone won and the break runs): players and bots stand still. The peer that decides the
--- match knows it from Match; a client from the scoreboard the host sends it.
+-- match knows it from Match; a client from the scoreboard the host sends it. Neither raises when the script is missing
+-- or failed (its own error said why), so one broken script does not stop every player and bot.
 function Arena.RoundOver()
 	if Network.IsClient() then
 		local board = Arena.FindScript("Scoreboard")
-		return board ~= nil and board.Over
+		return board ~= nil and board.Winner ~= false
 	end
-	return Arena.RequireScript("Match").Winner ~= nil
+	local match = Arena.FindScript("Match")
+	return match ~= nil and match.Break ~= nil
 end
 
 return Arena

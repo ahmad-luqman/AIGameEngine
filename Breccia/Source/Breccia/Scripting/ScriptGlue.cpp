@@ -1313,8 +1313,9 @@ namespace Breccia {
 				sol::state_view view(state);
 				return view.create_table_with("Name", config.Name, "Version", config.Version, "Company", config.Company);
 			};
-			// No window, so nobody plays at this machine: the runtime's --headless (a dedicated server or a headless client), the
-			// breccia CLI and unit tests. The editor and windowed or offscreen runtimes are not headless.
+			// Nothing rendered and no window, so nobody plays at this machine: the runtime's --headless (a dedicated server or a
+			// headless client), the breccia CLI and unit tests. The editor and windowed runtimes are not headless, nor are
+			// offscreen ones, which render without a window.
 			game["IsHeadless"] = []() { return !Application::HasInstance() || Application::Get().IsHeadless(); };
 		}
 

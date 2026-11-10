@@ -1125,22 +1125,22 @@ TEST_SUITE("Network")
 			bot.AddComponent<CharacterControllerComponent>();
 		};
 		// A snapshot every frame: the host's first one arrives with its Welcome, so the client removes its copy and creates
-		// the spawn in one frame, and the UUID never leaves the set of what it drives (the case UpdateDrivenBodies missed).
+		// the spawn in one frame, and the UUID never leaves m_DrivenBodies (UpdateDrivenBodies once marked only UUIDs new to it).
 		NetworkSettings settings;
 		settings.TickRate = 60;
 		Session session({ .Latency = 0.05f }, settings);
 		Scene& host = session.StartHost(build);
 		Scene& client = session.AddClient(build);
 		session.Run(2);
-		const entt::entity copy = client.GetEntityByUUID(UUID(102));
-		CHECK(client.GetPhysicsWorld()->IsDrivenExternally(client.GetEntityByUUID(UUID(102))));
+		const Entity copy = client.GetEntityByUUID(UUID(102));
+		CHECK(client.GetPhysicsWorld()->IsDrivenExternally(copy));
 		bool everAbsent = false;
-		REQUIRE(session.RunUntil([&] {
+		const auto replaced = [&] {
 			const Entity now = client.GetEntityByUUID(UUID(102));
 			everAbsent = everAbsent || !now;
-			return now && static_cast<entt::entity>(now) != copy;
-		},
-								 120));
+			return now && now != copy;
+		};
+		REQUIRE(session.RunUntil(replaced, 120));
 		CHECK_FALSE(everAbsent);
 		REQUIRE(session.ClientNetwork(0).GetRemoteEntityCount() == 2);
 		session.Run(2);
