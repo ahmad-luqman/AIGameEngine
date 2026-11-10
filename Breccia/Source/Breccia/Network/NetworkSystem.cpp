@@ -753,9 +753,13 @@ namespace Breccia {
 				Report(m_Reported, "unknown-" + IdText(update.Entity), "the host updated entity " + IdText(update.Entity) + ", which this client does not have (a spawn it refused, or one a script destroyed); its updates are ignored");
 				continue;
 			}
-			// A new parent changes what the local transform means: the entity jumps there instead of sliding.
-			if (update.Parent)
-				m_Interpolation.erase(update.Entity);
+			// A new parent changes what the local transform means: the entity jumps there instead of sliding. It takes its
+			// newest values first, which an update that leaves its fields out (they did not change) never resends.
+			if (const auto track = m_Interpolation.find(update.Entity); update.Parent && track != m_Interpolation.end())
+			{
+				track->second.Samples.back().ApplyTo(entity.GetComponent<TransformComponent>());
+				m_Interpolation.erase(track);
+			}
 			const bool moves = !update.Parent && std::ranges::any_of(update.Components, [transformIndex](const NetComponentUpdate& change) { return change.Component == transformIndex; });
 			const bool interpolate = moves && IsInterpolated(entity);
 			// The fields this update leaves out keep their newest values, not the ones shown now. Without a track the entity
@@ -1574,9 +1578,16 @@ namespace Breccia {
 			Entity entity = m_Scene.GetEntityByUUID(uuid);
 			if (!entity)
 				continue;
+			// A script removed Networked this frame: the next Receive ends the prediction; its inputs go nowhere.
+			const auto* networked = entity.TryGetComponent<NetworkedComponent>();
+			if (!networked)
+			{
+				physics->TakeCharacterInputs(entity);
+				continue;
+			}
 			// The host clamps to the character's Networked.MaxInputSpeed (this client's copy, from the spawn: it is not
 			// replicated), so the prediction does too, a little below it so float rounding cannot cross it.
-			const float allowed = std::min(entity.GetComponent<NetworkedComponent>().MaxInputSpeed, NetProtocol::MaxInputSpeed);
+			const float allowed = std::min(networked->MaxInputSpeed, NetProtocol::MaxInputSpeed);
 			const float limit = allowed * 0.999f;
 			for (CharacterInput input : physics->TakeCharacterInputs(entity))
 			{

@@ -2088,5 +2088,41 @@ TEST_SUITE("Network")
 		}
 		REQUIRE(clientMover.GetParent());
 		CHECK(clientMover.GetParent().GetUUID() == anchorId);
+
+		// A new parent while the client still shows an earlier move, with the local values unchanged (so not resent): the
+		// client takes the newest values under the new parent, not the ones it was showing.
+		for (int frame = 0; frame < 20; frame++)
+		{
+			hostMover.GetTransform().Translation.x += 3.0f * Step;
+			session.Run(1);
+		}
+		session.Run(4);
+		host.SetParent(hostMover, Entity{}, false);
+		session.Run(60);
+		CHECK_FALSE(clientMover.GetParent());
+		CHECK(clientMover.GetTransform().Translation.x == hostMover.GetTransform().Translation.x);
+	}
+
+	TEST_CASE("A client whose predicted character loses Networked mid-frame ends its prediction safely")
+	{
+		Session session({}, WithDelay(0.0f));
+		UUID playerId = 0;
+		session.StartHost([&](Scene& scene) {
+			AddGround(scene);
+			playerId = CreatePredictedCharacter(scene, 1).GetUUID();
+		});
+		Scene& client = session.AddClient([](Scene& scene) { AddGround(scene); });
+		const auto predicted = [&] { return client.GetEntityByUUID(playerId) && session.ClientNetwork(0).IsPredicted(client.GetEntityByUUID(playerId)); };
+		REQUIRE(session.RunUntil(predicted, 120));
+		session.Run(10);
+		Entity clientPlayer = client.GetEntityByUUID(playerId);
+		client.GetPhysicsWorld()->MoveCharacter(clientPlayer, { 1.0f, 0.0f, 0.0f });
+		session.Run(2);
+		// As a script would between the session's receive and its send.
+		clientPlayer.RemoveComponent<NetworkedComponent>();
+		session.ClientNetwork(0).Send(Step);
+		session.Run(5);
+		CHECK_FALSE(session.ClientNetwork(0).IsPredicted(clientPlayer));
+		CHECK(session.ClientNetwork(0).GetState() == NetConnectionState::Connected);
 	}
 }
