@@ -3,6 +3,7 @@
 #include "Breccia/Core/FileSystem.h"
 #include "Breccia/Core/Log.h"
 #include "Breccia/Core/Platform.h"
+#include "Breccia/Network/NetworkSystem.h"
 
 #include <enet/enet.h>
 
@@ -349,6 +350,30 @@ namespace Breccia {
 			}
 			transport->Track(peer);
 			return transport;
+		}
+
+		Ref<NetTransportFactory> CreateFactory()
+		{
+			class Factory final : public NetTransportFactory
+			{
+			public:
+				Scope<NetTransport> Listen(uint16_t port, uint32_t maxPeers, float timeoutSeconds, std::string& outError) override
+				{
+					return EnetTransport::Listen(port, maxPeers, Settings(timeoutSeconds), outError);
+				}
+				Scope<NetTransport> Connect(const std::string& address, uint16_t port, float timeoutSeconds, std::string& outError) override
+				{
+					return EnetTransport::Connect(address, port, Settings(timeoutSeconds), outError);
+				}
+				const char* GetName() const override { return "udp"; }
+
+			private:
+				static EnetTransportSettings Settings(float timeoutSeconds)
+				{
+					return { .TimeoutSeconds = timeoutSeconds, .MaxMessageBytes = NetworkSystem::MaxHostMessageBytes };
+				}
+			};
+			return CreateRef<Factory>();
 		}
 
 	}

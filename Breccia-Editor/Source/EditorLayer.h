@@ -272,6 +272,19 @@ namespace Breccia {
 		std::vector<UUID> m_GizmoSelection;
 		std::optional<glm::vec2> m_BoxStart;
 		bool m_Paused = false;
+		// What Play does about networking (the toolbar's Network popup): stay offline, host on a UDP port, or join a host.
+		enum class PlayNetwork : uint8_t
+		{
+			Offline,
+			Host,
+			Client
+		};
+		PlayNetwork m_PlayNetwork = PlayNetwork::Offline;
+		int m_PlayNetworkPort = 7777;
+		std::string m_PlayNetworkAddress = "127.0.0.1";
+		// Starts the toolbar's network session on the play scene that just started.
+		void StartPlayNetwork();
+		void DrawNetworkStatus();
 		RendererDebugView m_DebugView = RendererDebugView::None;
 
 		enum class PromptKind

@@ -22,6 +22,7 @@
 #include "Breccia/Core/Window.h"
 #include "Breccia/ImGui/ImGuiLayer.h"
 #include "Breccia/ImGui/StatisticsOverlay.h"
+#include "Breccia/Network/NetworkSystem.h"
 #include "Breccia/Project/Project.h"
 #include "Breccia/Physics/PhysicsWorld.h"
 #include "Breccia/Renderer/DebugDraw.h"
@@ -345,6 +346,8 @@ namespace Breccia {
 		ApplyPreferences();
 
 		m_Session.HostName = "editor";
+		// A game in Play hosts real runtimes, or joins one, when its scripts start a session.
+		m_Session.ScriptsUseUdp = true;
 		m_Session.OnAssetsReloaded = [this](const AssetReloadReport& report) {
 			if (m_Thumbnails)
 				m_Thumbnails->OnFilesChanged(report.Changed);
@@ -1091,6 +1094,44 @@ namespace Breccia {
 		}
 		m_Paused = false;
 		m_Context.SetStatus(simulate ? "Simulating (physics only)" : "Playing", false);
+		if (!simulate)
+			StartPlayNetwork();
+	}
+
+	void EditorLayer::StartPlayNetwork()
+	{
+		std::optional<nlohmann::json> result;
+		switch (m_PlayNetwork)
+		{
+			case PlayNetwork::Offline:
+				return;
+			case PlayNetwork::Host:
+				result = m_Context.Execute("net.host", { { "udp", true }, { "port", m_PlayNetworkPort } });
+				if (result)
+					m_Context.SetStatus(fmt::format("Playing as the host on UDP port {}", (*result)["port"].get<int>()), false);
+				return;
+			case PlayNetwork::Client:
+				result = m_Context.Execute("net.connect", { { "address", fmt::format("{}:{}", m_PlayNetworkAddress, m_PlayNetworkPort) } });
+				if (result)
+					m_Context.SetStatus(fmt::format("Playing as a client of {}:{}", m_PlayNetworkAddress, m_PlayNetworkPort), false);
+				return;
+		}
+	}
+
+	void EditorLayer::DrawNetworkStatus()
+	{
+		const NetworkSystem* network = m_Session.IsPlaying() ? m_Session.GetScene()->GetNetworkSystem() : nullptr;
+		if (!network)
+			return;
+		ImGui::SameLine();
+		if (network->GetRole() == NetworkRole::Host)
+			ImGui::TextDisabled("Host :%u, %zu client(s)", static_cast<unsigned>(network->GetListenPort()), network->GetConnections().size());
+		else if (network->GetState() == NetConnectionState::Connected)
+			ImGui::TextDisabled("Client %u", network->GetLocalPeerId());
+		else if (network->GetState() == NetConnectionState::Connecting)
+			ImGui::TextDisabled("Connecting...");
+		else
+			ImGui::TextColored(ImVec4(0.9f, 0.4f, 0.3f, 1.0f), "Disconnected: %s", DescribeDisconnectReason(network->GetDisconnectReason()));
 	}
 
 	void EditorLayer::Stop()
@@ -1293,7 +1334,11 @@ namespace Breccia {
 			Scene& scene = *m_Session.GetScene();
 			m_Session.RecordViewChange();
 			if (!m_Paused || scene.IsPaused())
+			{
+				// In-process network clients (net.connect) first, so the game UI left drawn is the play scene's.
+				m_Session.UpdateNetworkClients(ts);
 				scene.OnUpdate(ts);
+			}
 			if (scene.IsQuitRequested())
 			{
 				Stop();
@@ -1933,6 +1978,22 @@ namespace Breccia {
 			if (ImGui::Button("Simulate", ImVec2(buttonWidth, 0.0f)))
 				Play(true);
 			ImGui::EndDisabled();
+			ImGui::SameLine();
+			const char* modes[] = { "Offline", "Host", "Client" };
+			if (ImGui::Button(m_PlayNetwork == PlayNetwork::Offline ? "Network" : modes[static_cast<int>(m_PlayNetwork)]))
+				ImGui::OpenPopup("PlayNetwork");
+			if (ImGui::BeginPopup("PlayNetwork"))
+			{
+				ImGui::TextDisabled("Play's network session (UDP)");
+				int mode = static_cast<int>(m_PlayNetwork);
+				if (ImGui::Combo("Mode", &mode, modes, IM_ARRAYSIZE(modes)))
+					m_PlayNetwork = static_cast<PlayNetwork>(mode);
+				if (m_PlayNetwork == PlayNetwork::Client)
+					ImGui::InputText("Address", &m_PlayNetworkAddress);
+				if (m_PlayNetwork != PlayNetwork::Offline && ImGui::InputInt("Port", &m_PlayNetworkPort))
+					m_PlayNetworkPort = std::clamp(m_PlayNetworkPort, m_PlayNetwork == PlayNetwork::Host ? 0 : 1, 65535);
+				ImGui::EndPopup();
+			}
 		}
 		else
 		{
@@ -1949,6 +2010,7 @@ namespace Breccia {
 			if (ImGui::Button("Step", ImVec2(buttonWidth, 0.0f)))
 				m_Session.GetScene()->Step(1);
 			ImGui::EndDisabled();
+			DrawNetworkStatus();
 		}
 	}
 

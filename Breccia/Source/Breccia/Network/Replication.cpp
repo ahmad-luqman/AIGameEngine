@@ -180,7 +180,7 @@ namespace Breccia {
 			TrackFor(track, value).MarkSent(value.Bytes, sequence);
 	}
 
-	std::vector<uint8_t> ReplicationSender::Build(const ReplicationWorld& world, uint32_t acknowledged, size_t budget, const ReplicationFilter& filter)
+	std::vector<uint8_t> ReplicationSender::Build(const ReplicationWorld& world, uint32_t acknowledged, size_t budget, const ReplicationFilter& filter, const NetStateExtras& extras)
 	{
 		const bool hostToClient = m_Options.Direction == ReplicationDirection::HostToClient;
 		const uint32_t sequence = m_NextSequence++;
@@ -326,7 +326,7 @@ namespace Breccia {
 			while (m_History.size() > m_Options.HistoryLength)
 				m_History.pop_front();
 		}
-		return NetProtocol::AssembleState(hostToClient ? NetMessageType::Snapshot : NetMessageType::ClientUpdate, sequence, acknowledged, spawns, updates, sentDespawns);
+		return NetProtocol::AssembleState(hostToClient ? NetMessageType::Snapshot : NetMessageType::ClientUpdate, sequence, acknowledged, spawns, updates, sentDespawns, extras);
 	}
 
 	bool ReplicationSender::Acknowledge(uint32_t sequence)

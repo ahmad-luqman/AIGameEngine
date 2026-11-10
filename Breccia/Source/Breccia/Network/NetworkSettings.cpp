@@ -41,7 +41,7 @@ namespace Breccia {
 
 	nlohmann::json NetworkSettings::ToJson() const
 	{
-		return { { "Port", Port }, { "MaxClients", MaxClients }, { "TickRate", TickRate }, { "MaxBytesPerSecond", MaxBytesPerSecond }, { "TimeoutSeconds", TimeoutSeconds } };
+		return { { "Port", Port }, { "MaxClients", MaxClients }, { "TickRate", TickRate }, { "MaxBytesPerSecond", MaxBytesPerSecond }, { "TimeoutSeconds", TimeoutSeconds }, { "InterpolationDelay", InterpolationDelay }, { "MaxMessagesPerSecond", MaxMessagesPerSecond } };
 	}
 
 	std::string NetworkSettings::Validate() const
@@ -57,6 +57,10 @@ namespace Breccia {
 			return fmt::format("Network.MaxBytesPerSecond must be an integer in [{}, {}]", MinBytesPerSecond, MaxBytesPerSecondLimit);
 		if (!(TimeoutSeconds >= MinTimeout && TimeoutSeconds <= MaxTimeout))
 			return fmt::format("Network.TimeoutSeconds must be a number in [{}, {}]", MinTimeout, MaxTimeout);
+		if (!(InterpolationDelay >= 0.0f && InterpolationDelay <= MaxInterpolationDelay))
+			return fmt::format("Network.InterpolationDelay must be a number in [0, {}]", MaxInterpolationDelay);
+		if (MaxMessagesPerSecond < 1 || MaxMessagesPerSecond > MaxMessagesPerSecondLimit)
+			return fmt::format("Network.MaxMessagesPerSecond must be an integer in [1, {}]", MaxMessagesPerSecondLimit);
 		return {};
 	}
 
@@ -67,11 +71,11 @@ namespace Breccia {
 			outError = "Network must be an object";
 			return std::nullopt;
 		}
-		if (!RejectUnknownKeys(data, { "Port", "MaxClients", "TickRate", "MaxBytesPerSecond", "TimeoutSeconds" }, "Network", outError))
+		if (!RejectUnknownKeys(data, { "Port", "MaxClients", "TickRate", "MaxBytesPerSecond", "TimeoutSeconds", "InterpolationDelay", "MaxMessagesPerSecond" }, "Network", outError))
 			return std::nullopt;
 		NetworkSettings settings;
 		uint32_t port = settings.Port;
-		if (!ReadInteger(data, "Port", port, outError) || !ReadInteger(data, "MaxClients", settings.MaxClients, outError) || !ReadInteger(data, "MaxBytesPerSecond", settings.MaxBytesPerSecond, outError) || !ReadNumber(data, "TickRate", settings.TickRate, outError) || !ReadNumber(data, "TimeoutSeconds", settings.TimeoutSeconds, outError))
+		if (!ReadInteger(data, "Port", port, outError) || !ReadInteger(data, "MaxClients", settings.MaxClients, outError) || !ReadInteger(data, "MaxBytesPerSecond", settings.MaxBytesPerSecond, outError) || !ReadNumber(data, "TickRate", settings.TickRate, outError) || !ReadNumber(data, "TimeoutSeconds", settings.TimeoutSeconds, outError) || !ReadNumber(data, "InterpolationDelay", settings.InterpolationDelay, outError) || !ReadInteger(data, "MaxMessagesPerSecond", settings.MaxMessagesPerSecond, outError))
 			return std::nullopt;
 		if (port > 65535)
 		{

@@ -5,6 +5,9 @@
 #include "Breccia/Core/FileSystem.h"
 #include "Breccia/Core/Input.h"
 #include "Breccia/Core/Log.h"
+#include "Breccia/Network/EnetTransport.h"
+#include "Breccia/Network/NetworkSystem.h"
+#include "Breccia/Network/SimulatedNetwork.h"
 #include "Breccia/Project/Project.h"
 #include "Breccia/Scene/Entity.h"
 #include "Breccia/Scene/Scene.h"
@@ -548,6 +551,7 @@ namespace Breccia {
 		m_EditScene->ResetParticlePreview();
 		m_EditScene->ResetAnimationPreview();
 		m_Scene = Scene::Copy(m_EditScene);
+		m_Scene->SetNetworkTransports(ScriptsUseUdp ? EnetTransport::CreateFactory() : GetSimulatedNetwork().CreateFactory());
 		// Before the systems start, so errors of the first OnCreate calls are reported too, after the play event.
 		m_Scene->SetEventListener(m_SceneEvents.get());
 		PublishPlayState(simulate ? PlayStateChange::Simulate : PlayStateChange::Play);
@@ -575,10 +579,12 @@ namespace Breccia {
 	{
 		if (!IsPlaying())
 			return;
+		StopNetworkClients();
 		if (m_Scene->GetState() == SceneState::Simulate)
 			m_Scene->OnSimulationStop();
 		else
 			m_Scene->OnRuntimeStop();
+		m_Network.reset();
 		// Hosts may keep the stopped copy alive a little longer (renderers); it must not report anymore.
 		m_Scene->SetEventListener(nullptr);
 		m_Scene = m_EditScene;
@@ -686,9 +692,165 @@ namespace Breccia {
 		for (uint32_t i = 0; i < frames; i++)
 		{
 			RecordViewChange();
+			UpdateNetworkClients(frameTime);
+			// A headless host routes input to the game: to the play scene unless net.focus picked a client.
+			const bool muted = Input::IsGameMuted();
+			Input::SetGameMuted(muted || m_InputPeer != 0);
 			m_Scene->OnUpdate(frameTime);
+			Input::SetGameMuted(muted);
 			Input::EndFrame();
 		}
+	}
+
+	AutomationSession::SceneOverride::SceneOverride(AutomationSession& session, Ref<Scene> scene)
+		: m_Session(session)
+		, m_Previous(session.m_Scene)
+	{
+		m_Session.m_Scene = std::move(scene);
+	}
+
+	AutomationSession::SceneOverride::~SceneOverride()
+	{
+		m_Session.m_Scene = std::move(m_Previous);
+	}
+
+	SimulatedNetwork& AutomationSession::GetSimulatedNetwork()
+	{
+		if (!m_Network)
+			m_Network = CreateScope<SimulatedNetwork>();
+		return *m_Network;
+	}
+
+	bool AutomationSession::HostNetwork(bool udp, uint16_t port, std::string& outError)
+	{
+		if (!IsPlaying() || IsSimulating())
+		{
+			outError = "not playing (use play.start)";
+			return false;
+		}
+		if (m_Scene->GetNetworkSystem() && m_Scene->GetNetworkSystem()->GetState() != NetConnectionState::Disconnected)
+		{
+			outError = "the play scene is already in a network session (net.disconnect ends it)";
+			return false;
+		}
+		const NetworkSettings& settings = Project::GetActive() ? Project::GetActive()->GetConfig().Network : NetworkSettings{};
+		const Ref<NetTransportFactory> transports = udp ? EnetTransport::CreateFactory() : GetSimulatedNetwork().CreateFactory();
+		Scope<NetTransport> transport = transports->Listen(port, settings.MaxClients + NetworkSystem::SpareTransportSlots, settings.TimeoutSeconds, outError);
+		if (!transport)
+			return false;
+		BR_CORE_INFO("Network: hosting on {} port {} (up to {} clients)", transports->GetName(), transport->GetListenPort(), settings.MaxClients);
+		m_Scene->StartNetwork(CreateScope<NetworkSystem>(*m_Scene, NetworkRole::Host, std::move(transport), settings, NetworkSystem::Identity::FromActiveProject()));
+		return true;
+	}
+
+	bool AutomationSession::JoinNetwork(const std::string& address, uint16_t port, std::string& outError)
+	{
+		if (!IsPlaying() || IsSimulating())
+		{
+			outError = "not playing (use play.start)";
+			return false;
+		}
+		if (m_Scene->GetNetworkSystem() && m_Scene->GetNetworkSystem()->GetState() != NetConnectionState::Disconnected)
+		{
+			outError = "the play scene is already in a network session (net.disconnect ends it)";
+			return false;
+		}
+		const NetworkSettings& settings = Project::GetActive() ? Project::GetActive()->GetConfig().Network : NetworkSettings{};
+		Scope<NetTransport> transport = EnetTransport::CreateFactory()->Connect(address, port, settings.TimeoutSeconds, outError);
+		if (!transport)
+			return false;
+		BR_CORE_INFO("Network: connecting to {}:{}", address, port);
+		m_Scene->StartNetwork(CreateScope<NetworkSystem>(*m_Scene, NetworkRole::Client, std::move(transport), settings, NetworkSystem::Identity::FromActiveProject()));
+		return true;
+	}
+
+	void AutomationSession::LeaveNetwork()
+	{
+		if (IsPlaying())
+			m_Scene->StopNetwork();
+	}
+
+	std::optional<size_t> AutomationSession::AddNetworkClient(std::string& outError)
+	{
+		const NetworkSystem* host = IsPlaying() ? m_Scene->GetNetworkSystem() : nullptr;
+		if (!host || host->GetRole() != NetworkRole::Host)
+		{
+			outError = "the play scene is not hosting (net.host first)";
+			return std::nullopt;
+		}
+		if (!m_Network || !m_Network->IsListening(host->GetListenPort()))
+		{
+			outError = "the play scene hosts over UDP: in-process clients join an in-process host (net.host without udp)";
+			return std::nullopt;
+		}
+		if (std::ranges::count_if(m_NetworkClients, [](const Ref<Scene>& client) { return client != nullptr; }) >= static_cast<std::ptrdiff_t>(MaxNetworkClients))
+		{
+			outError = fmt::format("at most {} in-process clients", MaxNetworkClients);
+			return std::nullopt;
+		}
+		const NetworkSettings& settings = Project::GetActive() ? Project::GetActive()->GetConfig().Network : NetworkSettings{};
+		Ref<Scene> client = Scene::Copy(m_EditScene);
+		client->SetNetworkTransports(m_Network->CreateFactory());
+		client->StartNetwork(CreateScope<NetworkSystem>(*client, NetworkRole::Client, m_Network->Connect(host->GetListenPort()), settings, NetworkSystem::Identity::FromActiveProject()));
+		// Its scripts start without the input (net.focus routes it).
+		const bool muted = Input::IsGameMuted();
+		Input::SetGameMuted(true);
+		client->OnRuntimeStart();
+		Input::SetGameMuted(muted);
+		const size_t index = m_NetworkClients.size() + 1;
+		m_NetworkClients.push_back(client);
+		return index;
+	}
+
+	bool AutomationSession::RemoveNetworkClient(size_t index, std::string& outError)
+	{
+		if (index == 0 || index > m_NetworkClients.size() || !m_NetworkClients[index - 1])
+		{
+			outError = fmt::format("no in-process client {}", index);
+			return false;
+		}
+		m_NetworkClients[index - 1]->OnRuntimeStop();
+		m_NetworkClients[index - 1].reset();
+		if (m_InputPeer == index)
+			m_InputPeer = 0;
+		return true;
+	}
+
+	Ref<Scene> AutomationSession::GetNetworkClient(size_t index) const
+	{
+		return index >= 1 && index <= m_NetworkClients.size() ? m_NetworkClients[index - 1] : nullptr;
+	}
+
+	void AutomationSession::UpdateNetworkClients(float frameTime)
+	{
+		if (m_Network)
+			m_Network->Advance(frameTime);
+		const bool muted = Input::IsGameMuted();
+		for (size_t i = 0; i < m_NetworkClients.size(); i++)
+		{
+			const Ref<Scene> client = m_NetworkClients[i];
+			if (!client)
+				continue;
+			// What the host routes to the game reaches the client net.focus names; the others hear nothing.
+			Input::SetGameMuted(muted || m_InputPeer != i + 1);
+			client->OnUpdate(frameTime);
+			// A client's Game.Quit ends that client.
+			if (client->IsQuitRequested())
+			{
+				client->OnRuntimeStop();
+				m_NetworkClients[i].reset();
+			}
+		}
+		Input::SetGameMuted(muted);
+	}
+
+	void AutomationSession::StopNetworkClients()
+	{
+		for (Ref<Scene>& client : m_NetworkClients)
+			if (client)
+				client->OnRuntimeStop();
+		m_NetworkClients.clear();
+		m_InputPeer = 0;
 	}
 
 }

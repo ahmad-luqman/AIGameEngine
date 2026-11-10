@@ -262,6 +262,9 @@ namespace Breccia {
 			bool Degenerate = false;
 			// As BodyRecord::BuiltScale.
 			glm::vec3 BuiltScale = { 1.0f, 1.0f, 1.0f };
+			// SetCharacterInputRecording: the steps taken since TakeCharacterInputs, kept while RecordInputs is set.
+			bool RecordInputs = false;
+			std::vector<CharacterInput> Inputs;
 		};
 
 		PhysicsCapacity Capacity;
@@ -447,6 +450,12 @@ namespace Breccia {
 		// Applies changed CharacterController settings in place, rebuilding only when the layer changed.
 		void ApplyCharacterSettings(Entity entity);
 		void UpdateCharacters(float fixedStep);
+		// One fixed step of one character, at the entity's current transform: with the record's Move velocity and root
+		// motion, or with `input` (its velocity alone, turned to its rotation). Returns what it walked with; nullopt when
+		// the transform is degenerate and it did not move.
+		std::optional<CharacterInput> StepCharacter(Entity entity, CharacterRecord& record, float fixedStep, const CharacterInput* input);
+		// A driven character (ExternallyDriven) in a Step: it follows the entity's transform, teleporting there when it moved.
+		void FollowCharacterTransform(Entity entity, CharacterRecord& record);
 		void RebuildDirtyJoints();
 		// Marks every joint moving or connected to the entity's body for a rebuild (it was just created).
 		void MarkJointsDirty(UUID uuid);
@@ -463,6 +472,8 @@ namespace Breccia {
 		// Borrowed pointers must not survive mutations of the registry's BodyRecord pool.
 		BodyRecord* FindBody(Entity entity) const;
 		BodyRecord* FindBody(UUID uuid) const;
+		// The body queries see for the entity: its rigid body, or its character's inner body (invalid: none).
+		JPH::BodyID QueryBodyOf(Entity entity) const;
 		// Whether a (possibly null) record is a dynamic or kinematic body Jolt has put to sleep; static bodies are always
 		// inactive in Jolt, which is not sleep. Look records up by Entity where the scene matters: the play copy shares the
 		// edit scene's UUIDs.

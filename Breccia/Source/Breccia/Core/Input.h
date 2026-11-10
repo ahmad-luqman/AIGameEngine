@@ -119,6 +119,11 @@ namespace Breccia {
 		// the view has keyboard focus, the pointer while the mouse is over it or the game holds the cursor locked).
 		static void SetGameFocus(bool focused);
 		static bool HasGameFocus();
+		// While set, every GameInput read is empty (nothing held, no mouse movement, no text), and nothing else changes:
+		// a host stepping several games in one process (in-process network clients) mutes all but the one its input is
+		// for, within a frame, without the held-key blocking a change of focus causes.
+		static void SetGameMuted(bool muted);
+		static bool IsGameMuted();
 		static void SetGamePointer(bool enabled);
 		static bool HasGamePointer();
 		// Withholds a held key or mouse button from the game until it is let go, as if it had been held when the

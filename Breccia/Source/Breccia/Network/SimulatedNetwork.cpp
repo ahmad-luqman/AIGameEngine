@@ -331,12 +331,12 @@ namespace Breccia {
 			uint32_t m_Endpoint = 0;
 		};
 
-		[[maybe_unused]] bool IsValidLink(const SimulatedLinkSettings& settings)
-		{
-			// The comparisons are false for NaN, which they refuse too.
-			return settings.Latency >= 0.0f && settings.Jitter >= 0.0f && settings.Loss >= 0.0f && settings.Loss <= 1.0f && settings.TimeoutSeconds > 0.0f && std::isfinite(settings.Latency) && std::isfinite(settings.Jitter) && std::isfinite(settings.TimeoutSeconds);
-		}
+	}
 
+	bool SimulatedNetwork::IsValidLink(const SimulatedLinkSettings& settings)
+	{
+		// The comparisons are false for NaN, which they refuse too.
+		return settings.Latency >= 0.0f && settings.Jitter >= 0.0f && settings.Loss >= 0.0f && settings.Loss <= 1.0f && settings.TimeoutSeconds > 0.0f && std::isfinite(settings.Latency) && std::isfinite(settings.Jitter) && std::isfinite(settings.TimeoutSeconds);
 	}
 
 	SimulatedNetwork::SimulatedNetwork(SimulatedLinkSettings settings, uint32_t seed)
@@ -347,43 +347,87 @@ namespace Breccia {
 
 	SimulatedNetwork::~SimulatedNetwork() = default;
 
+	namespace {
+
+		Scope<NetTransport> ListenOn(const std::shared_ptr<SimulatedNetwork::State>& state, uint16_t port, uint32_t maxPeers, std::string& outError)
+		{
+			if (port == 0)
+			{
+				port = 1;
+				while (state->Ports.contains(port))
+					port++;
+			}
+			else if (state->Ports.contains(port))
+			{
+				outError = "simulated port " + std::to_string(port) + " is already in use";
+				return nullptr;
+			}
+			const uint32_t id = state->NextEndpoint++;
+			SimulatedEndpoint& endpoint = state->Endpoints[id];
+			endpoint.ListenPort = port;
+			endpoint.MaxPeers = maxPeers;
+			state->Ports[port] = id;
+			return CreateScope<SimulatedTransport>(state, id);
+		}
+
+		Scope<NetTransport> ConnectTo(const std::shared_ptr<SimulatedNetwork::State>& state, uint16_t port)
+		{
+			const uint32_t id = state->NextEndpoint++;
+			SimulatedEndpoint& endpoint = state->Endpoints[id];
+			endpoint.MaxPeers = 1;
+			const NetPeerHandle handle = endpoint.NextHandle++;
+			SimulatedConnection& connection = endpoint.Connections[handle];
+			connection.LastHeard = state->Time;
+			// Nobody listening: the request goes nowhere and the attempt times out.
+			if (const auto host = state->Ports.find(port); host != state->Ports.end())
+			{
+				connection.RemoteEndpoint = host->second;
+				if (const float arrival = state->Arrival(connection, true); arrival >= 0.0f)
+					state->Queue({ .DeliverAt = arrival, .Endpoint = host->second, .Kind = FlightKind::ConnectRequest, .Channel = NetChannel::Reliable, .FromEndpoint = id, .FromHandle = handle });
+			}
+			return CreateScope<SimulatedTransport>(state, id);
+		}
+
+	}
+
 	Scope<NetTransport> SimulatedNetwork::Listen(uint16_t port, uint32_t maxPeers, std::string& outError)
 	{
-		if (port == 0)
-		{
-			port = 1;
-			while (m_State->Ports.contains(port))
-				port++;
-		}
-		else if (m_State->Ports.contains(port))
-		{
-			outError = "simulated port " + std::to_string(port) + " is already in use";
-			return nullptr;
-		}
-		const uint32_t id = m_State->NextEndpoint++;
-		SimulatedEndpoint& endpoint = m_State->Endpoints[id];
-		endpoint.ListenPort = port;
-		endpoint.MaxPeers = maxPeers;
-		m_State->Ports[port] = id;
-		return CreateScope<SimulatedTransport>(m_State, id);
+		return ListenOn(m_State, port, maxPeers, outError);
 	}
 
 	Scope<NetTransport> SimulatedNetwork::Connect(uint16_t port)
 	{
-		const uint32_t id = m_State->NextEndpoint++;
-		SimulatedEndpoint& endpoint = m_State->Endpoints[id];
-		endpoint.MaxPeers = 1;
-		const NetPeerHandle handle = endpoint.NextHandle++;
-		SimulatedConnection& connection = endpoint.Connections[handle];
-		connection.LastHeard = m_State->Time;
-		// Nobody listening: the request goes nowhere and the attempt times out.
-		if (const auto host = m_State->Ports.find(port); host != m_State->Ports.end())
+		return ConnectTo(m_State, port);
+	}
+
+	Ref<NetTransportFactory> SimulatedNetwork::CreateFactory()
+	{
+		class Factory final : public NetTransportFactory
 		{
-			connection.RemoteEndpoint = host->second;
-			if (const float arrival = m_State->Arrival(connection, true); arrival >= 0.0f)
-				m_State->Queue({ .DeliverAt = arrival, .Endpoint = host->second, .Kind = FlightKind::ConnectRequest, .Channel = NetChannel::Reliable, .FromEndpoint = id, .FromHandle = handle });
-		}
-		return CreateScope<SimulatedTransport>(m_State, id);
+		public:
+			explicit Factory(std::shared_ptr<State> state)
+				: m_State(std::move(state))
+			{
+			}
+			Scope<NetTransport> Listen(uint16_t port, uint32_t maxPeers, float, std::string& outError) override { return ListenOn(m_State, port, maxPeers, outError); }
+			// Every address names this network: the port picks the host.
+			Scope<NetTransport> Connect(const std::string&, uint16_t port, float, std::string&) override { return ConnectTo(m_State, port); }
+			const char* GetName() const override { return "simulated"; }
+
+		private:
+			std::shared_ptr<State> m_State;
+		};
+		return CreateRef<Factory>(m_State);
+	}
+
+	bool SimulatedNetwork::IsListening(uint16_t port) const
+	{
+		return m_State->Ports.contains(port);
+	}
+
+	const SimulatedLinkSettings& SimulatedNetwork::GetLinkSettings() const
+	{
+		return m_State->Settings;
 	}
 
 	void SimulatedNetwork::Advance(float seconds)

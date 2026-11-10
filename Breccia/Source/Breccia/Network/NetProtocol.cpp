@@ -5,6 +5,8 @@
 #include "Breccia/Network/ReplicationSchema.h"
 #include "Breccia/Scene/ComponentRegistry.h"
 
+#include <glm/glm.hpp>
+
 #include <cmath>
 #include <limits>
 #include <unordered_set>
@@ -42,6 +44,39 @@ namespace Breccia {
 				break;
 		}
 		return "an unknown reason (a newer peer's)";
+	}
+
+	const char* NetDisconnectReasonName(NetDisconnectReason reason)
+	{
+		switch (reason)
+		{
+			case NetDisconnectReason::None:
+				return "None";
+			case NetDisconnectReason::ClientQuit:
+				return "ClientQuit";
+			case NetDisconnectReason::ServerShutdown:
+				return "ServerShutdown";
+			case NetDisconnectReason::ProtocolMismatch:
+				return "ProtocolMismatch";
+			case NetDisconnectReason::SchemaMismatch:
+				return "SchemaMismatch";
+			case NetDisconnectReason::GameMismatch:
+				return "GameMismatch";
+			case NetDisconnectReason::ServerFull:
+				return "ServerFull";
+			case NetDisconnectReason::Timeout:
+				return "Timeout";
+			case NetDisconnectReason::HandshakeTimeout:
+				return "HandshakeTimeout";
+			case NetDisconnectReason::InvalidPacket:
+				return "InvalidPacket";
+			case NetDisconnectReason::ConnectionFailed:
+				return "ConnectionFailed";
+			case NetDisconnectReason::Unknown:
+			case NetDisconnectReason::Count:
+				break;
+		}
+		return "Unknown";
 	}
 
 	NetDisconnectReason DisconnectReasonFromCode(uint32_t code)
@@ -159,6 +194,58 @@ namespace Breccia {
 				return true;
 			}
 
+			bool ReadVec3(NetReader& reader, glm::vec3& value)
+			{
+				return reader.ReadFloat(value.x) && reader.ReadFloat(value.y) && reader.ReadFloat(value.z) && std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+			}
+
+			void WriteVec3(NetWriter& writer, const glm::vec3& value)
+			{
+				writer.WriteFloat(value.x);
+				writer.WriteFloat(value.y);
+				writer.WriteFloat(value.z);
+			}
+
+			bool ReadPrediction(NetReader& reader, NetPrediction& prediction, std::string& outError)
+			{
+				if (!ReadUuid(reader, prediction.Entity, outError))
+					return false;
+				uint8_t jumped = 0;
+				CharacterState& state = prediction.State;
+				if (!reader.ReadU32(prediction.Input) || !ReadVec3(reader, state.Position) || !ReadVec3(reader, state.Velocity) || !reader.ReadFloat(state.SinceGrounded) || !reader.ReadU8(jumped))
+					return Fail(reader, outError, "a predicted character's state is truncated or not finite");
+				if (!(state.SinceGrounded >= 0.0f && state.SinceGrounded <= CharacterState::MaxSinceGrounded) || jumped > 1)
+					return Fail(reader, outError, "a predicted character's time in the air or jump flag is out of range");
+				state.Jumped = jumped != 0;
+				return true;
+			}
+
+			bool ReadInputs(NetReader& reader, NetInputs& inputs, std::string& outError)
+			{
+				if (!ReadUuid(reader, inputs.Entity, outError))
+					return false;
+				uint32_t count = 0;
+				if (!reader.ReadU32(inputs.First) || !reader.ReadCount(count, MaxInputsPerCharacter))
+					return Fail(reader, outError, "a character's inputs are truncated or too many");
+				// Wrapping past UINT32_MAX would reorder them; at 240 steps per second that takes 207 days.
+				if (inputs.First == 0 || count == 0 || inputs.First > std::numeric_limits<uint32_t>::max() - (count - 1))
+					return Fail(reader, outError, "a character's inputs are numbered from 0, empty, or past the last sequence number");
+				inputs.Steps.resize(count);
+				for (CharacterInput& step : inputs.Steps)
+				{
+					glm::quat& rotation = step.Rotation;
+					if (!ReadVec3(reader, step.Velocity) || !reader.ReadFloat(rotation.w) || !reader.ReadFloat(rotation.x) || !reader.ReadFloat(rotation.y) || !reader.ReadFloat(rotation.z))
+						return Fail(reader, outError, "a character input is truncated or not finite");
+					const float length = glm::length(rotation);
+					// A sender normalizes its rotations: far from unit length is no rotation (and NaN fails here too).
+					if (!(length > 0.5f && length < 2.0f))
+						return Fail(reader, outError, "a character input's rotation is not a unit quaternion");
+					if (!(glm::length(step.Velocity) <= MaxInputSpeed))
+						return Fail(reader, outError, "a character input is faster than " + std::to_string(static_cast<int>(MaxInputSpeed)) + " m/s");
+				}
+				return true;
+			}
+
 			bool ReadState(NetReader& reader, NetMessageType type, const ReplicationSchema& schema, NetState& state, std::string& outError)
 			{
 				if (!reader.ReadU32(state.Sequence) || !reader.ReadU32(state.Acknowledged))
@@ -192,6 +279,57 @@ namespace Breccia {
 				for (UUID& uuid : state.Despawns)
 					if (!ReadUuid(reader, uuid, outError) || !unique(uuid))
 						return false;
+
+				NetStateExtras& extras = state.Extras;
+				if (type == NetMessageType::Snapshot)
+				{
+					if (!reader.ReadDouble(extras.Time) || !std::isfinite(extras.Time) || extras.Time < 0.0)
+						return Fail(reader, outError, "the snapshot's time is truncated, negative or not finite");
+					if (!reader.ReadCount(count, MaxPredictedCharacters))
+						return Fail(reader, outError, "the predicted character count is malformed or too large");
+					extras.Predictions.resize(count);
+					std::unordered_set<UUID> predicted;
+					for (NetPrediction& prediction : extras.Predictions)
+					{
+						if (!ReadPrediction(reader, prediction, outError))
+							return false;
+						if (!predicted.insert(prediction.Entity).second)
+							return Fail(reader, outError, "a character is predicted twice in one message");
+					}
+				}
+				else
+				{
+					if (!reader.ReadCount(count, MaxPredictedCharacters))
+						return Fail(reader, outError, "the input count is malformed or too large");
+					extras.Inputs.resize(count);
+					std::unordered_set<UUID> characters;
+					for (NetInputs& inputs : extras.Inputs)
+					{
+						if (!ReadInputs(reader, inputs, outError))
+							return false;
+						if (!characters.insert(inputs.Entity).second)
+							return Fail(reader, outError, "a character's inputs appear twice in one message");
+					}
+				}
+				return true;
+			}
+
+			bool ReadScript(NetReader& reader, NetScriptMessage& message, std::string& outError)
+			{
+				uint8_t kind = 0;
+				if (!reader.ReadU8(kind) || kind > static_cast<uint8_t>(NetScriptKind::Rpc))
+					return Fail(reader, outError, "a script message has an invalid kind");
+				message.Kind = static_cast<NetScriptKind>(kind);
+				uint64_t entity = 0;
+				if (!reader.ReadU64(entity))
+					return Fail(reader, outError, "a script message's entity is truncated");
+				message.Entity = entity;
+				if (!reader.ReadString(message.Name, MaxScriptNameLength))
+					return Fail(reader, outError, "a script message's name is truncated or too long");
+				if (!NetValue::Decode(reader, message.Arguments))
+					return Fail(reader, outError, "a script message's arguments are malformed (truncated, too deep, not UTF-8 or with a repeated key)");
+				if (std::string problem = CheckScript(message); !problem.empty())
+					return Fail(reader, outError, std::move(problem));
 				return true;
 			}
 
@@ -260,6 +398,33 @@ namespace Breccia {
 			return {};
 		}
 
+		std::string CheckScript(const NetScriptMessage& message)
+		{
+			if (message.Name.empty() || message.Name.size() > MaxScriptNameLength)
+				return "a script message's name must be 1 to " + std::to_string(MaxScriptNameLength) + " bytes";
+			if (!TextEncoding::IsValidUtf8(message.Name))
+				return "a script message's name is not UTF-8";
+			if (!message.Arguments.is_array() || message.Arguments.size() > MaxScriptArguments)
+				return "a script message carries at most " + std::to_string(MaxScriptArguments) + " arguments, as an array";
+			if (message.Kind == NetScriptKind::Rpc && !message.Entity.IsValid())
+				return "an RPC names no entity";
+			if (message.Kind == NetScriptKind::Message && message.Entity.IsValid())
+				return "a message names an entity";
+			return {};
+		}
+
+		std::vector<uint8_t> EncodeScript(const NetScriptMessage& message)
+		{
+			NetWriter writer;
+			writer.WriteU8(static_cast<uint8_t>(NetMessageType::Script));
+			writer.WriteU8(static_cast<uint8_t>(message.Kind));
+			writer.WriteU64(message.Entity);
+			writer.WriteString(message.Name);
+			if (!NetValue::Encode(message.Arguments, writer) || writer.GetBytes().size() > MaxScriptMessageBytes)
+				return {};
+			return writer.TakeBytes();
+		}
+
 		std::vector<uint8_t> EncodeHello(const NetHello& hello)
 		{
 			NetWriter writer;
@@ -310,7 +475,7 @@ namespace Breccia {
 			return true;
 		}
 
-		std::vector<uint8_t> AssembleState(NetMessageType type, uint32_t sequence, uint32_t acknowledged, std::span<const std::vector<uint8_t>> spawns, std::span<const std::vector<uint8_t>> updates, std::span<const UUID> despawns)
+		std::vector<uint8_t> AssembleState(NetMessageType type, uint32_t sequence, uint32_t acknowledged, std::span<const std::vector<uint8_t>> spawns, std::span<const std::vector<uint8_t>> updates, std::span<const UUID> despawns, const NetStateExtras& extras)
 		{
 			NetWriter writer;
 			writer.WriteU8(static_cast<uint8_t>(type));
@@ -325,6 +490,38 @@ namespace Breccia {
 			writer.WriteVarUInt(despawns.size());
 			for (UUID uuid : despawns)
 				writer.WriteU64(uuid);
+			if (type == NetMessageType::Snapshot)
+			{
+				writer.WriteDouble(extras.Time);
+				writer.WriteVarUInt(extras.Predictions.size());
+				for (const NetPrediction& prediction : extras.Predictions)
+				{
+					writer.WriteU64(prediction.Entity);
+					writer.WriteU32(prediction.Input);
+					WriteVec3(writer, prediction.State.Position);
+					WriteVec3(writer, prediction.State.Velocity);
+					writer.WriteFloat(prediction.State.SinceGrounded);
+					writer.WriteU8(prediction.State.Jumped ? 1 : 0);
+				}
+			}
+			else
+			{
+				writer.WriteVarUInt(extras.Inputs.size());
+				for (const NetInputs& inputs : extras.Inputs)
+				{
+					writer.WriteU64(inputs.Entity);
+					writer.WriteU32(inputs.First);
+					writer.WriteVarUInt(inputs.Steps.size());
+					for (const CharacterInput& step : inputs.Steps)
+					{
+						WriteVec3(writer, step.Velocity);
+						writer.WriteFloat(step.Rotation.w);
+						writer.WriteFloat(step.Rotation.x);
+						writer.WriteFloat(step.Rotation.y);
+						writer.WriteFloat(step.Rotation.z);
+					}
+				}
+			}
 			return writer.TakeBytes();
 		}
 
@@ -346,7 +543,7 @@ namespace Breccia {
 					return {};
 				updates.push_back(writer.TakeBytes());
 			}
-			return AssembleState(type, state.Sequence, state.Acknowledged, spawns, updates, state.Despawns);
+			return AssembleState(type, state.Sequence, state.Acknowledged, spawns, updates, state.Despawns, state.Extras);
 		}
 
 		std::optional<NetMessage> Decode(std::span<const uint8_t> bytes, const ReplicationSchema& schema, std::string& outError)
@@ -413,6 +610,19 @@ namespace Breccia {
 					if (!ReadState(reader, message.Type, schema, state, outError))
 						return std::nullopt;
 					message.Body = std::move(state);
+					break;
+				}
+				case NetMessageType::Script:
+				{
+					if (bytes.size() > MaxScriptMessageBytes)
+					{
+						outError = "a script message is larger than " + std::to_string(MaxScriptMessageBytes) + " bytes";
+						return std::nullopt;
+					}
+					NetScriptMessage script;
+					if (!ReadScript(reader, script, outError))
+						return std::nullopt;
+					message.Body = std::move(script);
 					break;
 				}
 				default:
