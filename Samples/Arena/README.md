@@ -62,7 +62,8 @@ advances one frame at a time, so it runs the same way every time. Its `lua.exec`
 - The edit scene: the scoreboard and both bots are networked, `Match` is not, and no player or Autoplay is in the scene.
 - Practice: the player spawns, walks at 5 m/s and turns to face where it walks. The cooldown holds on both ends (a second
   press within it asks for nothing, `Player:Tag`, the host's check, ignores a second tag that soon, and a tag after it
-  counts). A tag on a passing bot scores, sends the bot back to the start of its lane and shows a beam that fades.
+  counts). A tag on a passing bot scores, sends the bot back to the start of its lane and shows a beam that fades, and a bot turns
+  round at the end of its lane.
 - Hosting under the CLI, which is headless: the host's player goes (a dedicated server). Two clients join and every peer
   shows both players and the same scores, and client 1 their colors. `HostPlays`: "Auto" plays when the host renders,
   "No" never, "Yes" always; a wrong `HostPlays` or `WinScore` set in play is warned about and the last good one kept.
@@ -76,22 +77,23 @@ advances one frame at a time, so it runs the same way every time. Its `lua.exec`
   BotA stands still, the host ignores tags (and counts them), and a modified client that walks on is held in place by the
   host. The next round puts everyone back at spawn points (correcting client 1's player).
 - A modified client that sends a time almost a second back, when the bot crossed its line as the host saw it, misses: the
-  host clamps the time.
+  host clamps the time. A tag sent 0.1 s late, about 0.43 s behind the host, still hits what the client saw.
 - A round that ends while client 1 walks does not pull it back, and a player that appears during that break (one
   respawned after something destroyed it) is held where it stands.
 - A player tags a player: client 2 tags client 1, which is corrected to its new spawn point.
 - A client that joins late sees the whole table, and a destroyed player comes back with its row. A client that leaves
   loses its player and its row on the host and the other clients.
 - What a modified client may not do: tag as another client's player, or call the host-only `ShowScores` and `ShowTag`;
-  tag twice in a frame (a tag 0.45 s later counts: still within the 0.5 s cooldown, but past the 80% of it, 0.4 s, that
-  the host enforces); or send malformed tags (short, empty or named vectors, a string, infinite and NaN values, a
-  straight-up direction, a huge one). The host refuses them all, warning once, and the player can still be tagged
+  tag twice in a frame, or 0.33 s apart (a tag 0.45 s later counts: still within the 0.5 s cooldown, but past the 80% of
+  it, 0.4 s, that the host enforces); or send malformed tags (short, empty or named vectors, a bad second or third component, a
+  string, a number, a boolean, infinite and NaN values, a straight-up direction, huge ones). The host refuses them all, warning once, and the player can still be tagged
   afterwards; a tag time past a million seconds (a session weeks old) is a time like any other. A client's own copy of a
   player never tags, and a beam or scoreboard table that is not one (a malformed, holed or repeated row, a winner that is
   no peer) is kept out, warning once.
 - A score send that fails is retried to the client that missed it, with one warning, until it gets through.
 - When the host stops hosting, each client says why and stays in its ended session; client 1 presses Enter, removes the
-  host's players and practises, while client 3 still waits. A session that starts again is a new match.
+  host's players and practises, while client 3 still waits. A session that starts again is a new match: the host's player may tag at once (its cooldown does
+  not follow the session clock), and a client that joins it forgets why it left the last one.
 
 Every `play.step` fails on script errors, the session logs no warnings until the forbidden and malformed calls (which
 warn, as they should, and whose warnings the steps count), and the edit scene is unchanged after play.
