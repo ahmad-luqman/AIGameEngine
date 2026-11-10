@@ -25,6 +25,9 @@ namespace Breccia {
 	// A Hello carries the project's name and version, which hosts refuse when longer than this.
 	static_assert(NetProtocol::MaxTextLength >= ProjectConfig::MaxTextLength, "a Hello must hold any project name");
 	static_assert(NetworkedComponent::MaxInputSpeedLimit == NetProtocol::MaxInputSpeed, "Networked.MaxInputSpeed may allow what the wire allows");
+	// A client update's inputs at most (per character: its ID, first number, step count and steps of a velocity and a
+	// rotation, after the character count) leave room for its records within what the host accepts from a client.
+	static_assert(5 + NetProtocol::MaxPredictedCharacters * (8 + 4 + 5 + NetProtocol::MaxInputsPerCharacter * 7 * 4) <= NetworkSystem::MaxClientMessageBytes - 4096, "a client update's inputs must leave room for its records");
 
 	namespace {
 
@@ -56,6 +59,17 @@ namespace Breccia {
 			return s_Index;
 		}
 
+		// How many levels of arrays and objects a value holds (a scalar has none).
+		int JsonDepth(const nlohmann::json& value)
+		{
+			if (!value.is_array() && !value.is_object())
+				return 0;
+			int deepest = 0;
+			for (const nlohmann::json& element : value)
+				deepest = std::max(deepest, JsonDepth(element));
+			return deepest + 1;
+		}
+
 		// A per-second allowance: refilled at `rate` for `seconds`, holding at most a second's worth.
 		void RefillCredit(double& credit, double rate, double seconds)
 		{
@@ -80,7 +94,7 @@ namespace Breccia {
 				// An empty key marks the set full: nothing else is inserted or logged. (insert({}) would insert nothing: it
 				// takes the empty initializer list.)
 				reported.insert(std::string());
-				BR_CORE_WARN("Network: {} problems were logged for this peer; further ones are not", MaxReportedProblems);
+				BR_CORE_WARN("Network: {} problems were logged for this connection; further ones are not", MaxReportedProblems);
 				return;
 			}
 			reported.insert(key);
@@ -320,7 +334,9 @@ namespace Breccia {
 			const Connection* connection = FindPeer(peer);
 			return connection ? std::optional<float>(m_Transport->GetRoundTripTime(connection->Handle)) : std::nullopt;
 		}
-		return peer == 0 && m_HostHandle ? std::optional<float>(m_Transport->GetRoundTripTime(*m_HostHandle)) : std::nullopt;
+		if (peer != 0 || m_State != NetConnectionState::Connected || !m_HostHandle)
+			return std::nullopt;
+		return m_Transport->GetRoundTripTime(*m_HostHandle);
 	}
 
 	double NetworkSystem::GetTime() const
@@ -348,7 +364,7 @@ namespace Breccia {
 		{
 			m_Statistics.ScriptMessagesDropped++;
 			if (!std::exchange(m_ReportedEventOverflow, true))
-				BR_CORE_WARN("Network: more than {} events waited for the scripts in one frame; later script messages are dropped (NetworkStatistics counts them)", MaxQueuedEvents);
+				BR_CORE_WARN("Network: more than {} events waited for the scripts in one frame; script messages past that are dropped (NetworkStatistics counts them; this is logged once a session)", MaxQueuedEvents);
 			return;
 		}
 		if (script)
@@ -383,17 +399,23 @@ namespace Breccia {
 		if (m_Role == NetworkRole::Host)
 		{
 			// Connected, but never said who it is; or sent script messages that do not decode.
-			std::vector<std::pair<NetPeerHandle, std::string>> ended;
+			struct Ending
+			{
+				NetPeerHandle Handle = 0;
+				NetDisconnectReason Reason = NetDisconnectReason::None;
+				std::string Detail;
+			};
+			std::vector<Ending> ended;
 			for (auto& [handle, connection] : m_Connections)
 			{
 				std::string error;
 				if (!connection.IsAdmitted() && m_Clock - connection.ConnectedAt >= m_Settings.TimeoutSeconds)
-					ended.emplace_back(handle, std::string());
+					ended.push_back({ handle, NetDisconnectReason::HandshakeTimeout, "it sent no Hello" });
 				else if (connection.IsAdmitted() && !ReleaseInbox(connection, false, error))
-					ended.emplace_back(handle, std::move(error));
+					ended.push_back({ handle, NetDisconnectReason::InvalidPacket, std::move(error) });
 			}
-			for (const auto& [handle, error] : ended)
-				Kick(handle, error.empty() ? NetDisconnectReason::HandshakeTimeout : NetDisconnectReason::InvalidPacket, error.empty() ? "it sent no Hello" : error);
+			for (const Ending& ending : ended)
+				Kick(ending.Handle, ending.Reason, ending.Detail);
 		}
 		else
 		{
@@ -444,9 +466,10 @@ namespace Breccia {
 					if (it->second.IsAdmitted())
 					{
 						BR_CORE_INFO("Network: client {} ({}) left: {}", it->second.PeerId, it->second.Address, DescribeDisconnectReason(reason));
-						// What it sent before leaving reaches the scripts first (a farewell), whatever the rate.
-						std::string ignored;
-						ReleaseInbox(it->second, true, ignored);
+						// What it sent before leaving reaches the scripts first (a farewell), whatever the rate, up to a message that
+						// does not decode (it and the rest are dropped and counted).
+						if (std::string error; !ReleaseInbox(it->second, true, error))
+							BR_CORE_WARN("Network: client {} sent a script message that does not decode before it left ({}); it and those after it are dropped", it->second.PeerId, error);
 						PushEvent({ .Type = NetworkEvent::Kind::PeerDisconnected, .Peer = it->second.PeerId, .Reason = reason });
 					}
 					m_Connections.erase(it);
@@ -475,7 +498,7 @@ namespace Breccia {
 				{
 					m_Statistics.Traffic.Received(event.Data.size());
 					m_HostTraffic.Received(event.Data.size());
-					HandleClientMessage(event.Data);
+					HandleClientMessage(event.Data, event.Channel);
 				}
 				break;
 		}
@@ -531,8 +554,7 @@ namespace Breccia {
 				Kick(handle, NetDisconnectReason::InvalidPacket, fmt::format("it sent script messages faster than Network.MaxMessagesPerSecond ({}) allows for too long", m_Settings.MaxMessagesPerSecond));
 				return;
 			}
-			inbox.Bytes += data.size();
-			inbox.Messages.push_back(data);
+			inbox.Push(data);
 			return;
 		}
 		std::string error;
@@ -612,7 +634,7 @@ namespace Breccia {
 		PushEvent({ .Type = NetworkEvent::Kind::PeerConnected, .Peer = connection.PeerId });
 	}
 
-	void NetworkSystem::HandleClientMessage(const std::vector<uint8_t>& data)
+	void NetworkSystem::HandleClientMessage(const std::vector<uint8_t>& data, NetChannel channel)
 	{
 		std::string error;
 		std::optional<NetMessage> message = NetProtocol::Decode(data, Schema(), error);
@@ -670,7 +692,7 @@ namespace Breccia {
 			case NetMessageType::Script:
 				// One that overtook the Welcome (unreliable) is lost, as a lost datagram would be.
 				if (m_State == NetConnectionState::Connected)
-					HandleScriptMessage(0, std::get<NetScriptMessage>(std::move(message->Body)), m_Reported);
+					HandleScriptMessage(0, std::get<NetScriptMessage>(std::move(message->Body)), channel == NetChannel::Reliable, m_Reported);
 				else
 					m_Statistics.ScriptMessagesDropped++;
 				return;
@@ -714,7 +736,11 @@ namespace Breccia {
 			*m_ServerClock += (time - *m_ServerClock) * ServerClockSmoothing;
 
 		for (const NetEntitySpawn& spawn : state.Spawns)
+		{
 			ApplySpawn(spawn);
+			if (!m_RemoteEntities.contains(spawn.Entity))
+				MarkGone(spawn.Entity);
+		}
 		const uint32_t transformIndex = TransformComponentIndex();
 		for (const NetEntityUpdate& update : state.Updates)
 		{
@@ -722,6 +748,7 @@ namespace Breccia {
 			// Not one the host spawned here: a spawn this client refused, or an entity a local script destroyed.
 			if (!entity || !m_RemoteEntities.contains(update.Entity))
 			{
+				MarkGone(update.Entity);
 				m_Statistics.RejectedRecords++;
 				Report(m_Reported, "unknown-" + IdText(update.Entity), "the host updated entity " + IdText(update.Entity) + ", which this client does not have (a spawn it refused, or one a script destroyed); its updates are ignored");
 				continue;
@@ -758,6 +785,7 @@ namespace Breccia {
 	{
 		if (!m_RemoteEntities.erase(uuid))
 			return;
+		MarkGone(uuid);
 		m_PendingParents.erase(uuid);
 		m_Interpolation.erase(uuid);
 		m_Statistics.DespawnsApplied++;
@@ -1238,7 +1266,11 @@ namespace Breccia {
 			m_TickAccumulator += deltaTime;
 			m_SinceLastTick += deltaTime;
 		}
-		const float interval = 1.0f / m_TickRate;
+		float interval = 1.0f / m_TickRate;
+		// A client predicting characters sends at least every half of MaxInputsPerCharacter fixed steps, so every input it
+		// records goes out (each in two updates) whatever the tick rate.
+		if (m_Role == NetworkRole::Client && !m_Predicted.empty())
+			interval = std::min(interval, static_cast<float>(NetProtocol::MaxInputsPerCharacter) * 0.5f * m_Scene.GetFixedTimestep());
 		if (m_TickAccumulator < interval)
 			return;
 		// One tick per frame at most; a long frame does not queue a burst of them.
@@ -1325,9 +1357,14 @@ namespace Breccia {
 		const std::vector<uint8_t> bytes = NetProtocol::EncodeScript(message);
 		if (bytes.empty())
 		{
-			// The only other reason it cannot encode.
+			// Too large, nested too deeply, or text that is not UTF-8.
 			NetWriter writer;
-			outError = NetValue::Encode(message.Arguments, writer) ? fmt::format("the message is larger than {} bytes", NetProtocol::MaxScriptMessageBytes) : "an argument holds text that is not UTF-8";
+			if (NetValue::Encode(message.Arguments, writer))
+				outError = fmt::format("the message is larger than {} bytes", NetProtocol::MaxScriptMessageBytes);
+			else if (JsonDepth(message.Arguments) > NetValue::MaxDepth)
+				outError = fmt::format("its arguments are nested more than {} levels deep", NetValue::MaxDepth);
+			else
+				outError = "an argument holds text that is not UTF-8";
 			return false;
 		}
 		// Where it goes, and the allowances it spends there.
@@ -1385,7 +1422,7 @@ namespace Breccia {
 		return true;
 	}
 
-	void NetworkSystem::HandleScriptMessage(uint32_t sender, NetScriptMessage message, std::unordered_set<std::string>& reported)
+	void NetworkSystem::HandleScriptMessage(uint32_t sender, NetScriptMessage message, bool reliable, std::unordered_set<std::string>& reported)
 	{
 		const bool rpc = message.Kind == NetScriptKind::Rpc;
 		NetworkEvent event{ .Type = rpc ? NetworkEvent::Kind::Rpc : NetworkEvent::Kind::Message, .Peer = sender, .Entity = message.Entity, .Name = std::move(message.Name), .Arguments = std::move(message.Arguments) };
@@ -1402,59 +1439,96 @@ namespace Breccia {
 			PushEvent(std::move(event));
 			return;
 		}
+		// One the host despawned, or whose spawn this client refused, is not coming: the RPC raced its despawn (another
+		// channel) or names what this client never showed.
+		if (missing && IsGone(event.Entity))
+		{
+			m_Statistics.ScriptMessagesDropped++;
+			Report(reported, "rpc-gone", fmt::format("the host called {} on entity {}, which it despawned or whose spawn this client refused; dropped (later ones are counted in NetworkStatistics, not logged)", event.Name, IdText(event.Entity)));
+			return;
+		}
 		// An RPC whose entity's spawn may still be on its way (snapshots are unreliable, RPCs need not be) waits for it,
-		// and so does everything after it: reliable messages arrive in order.
+		// and a reliable one holds the reliable messages after it, which arrive in order (ReleasePendingScripts; unreliable
+		// ones promise no order and pass).
 		if (!missing && m_PendingScripts.empty())
 		{
 			PushEvent(std::move(event));
 			return;
 		}
-		if (m_PendingScripts.size() >= MaxPendingRpcs)
+		if (m_PendingScripts.size() >= MaxPendingScripts)
 		{
 			m_Statistics.ScriptMessagesDropped++;
-			Report(reported, "rpc-overflow", fmt::format("more than {} script messages wait for entities this client does not have; the oldest is dropped", MaxPendingRpcs));
+			Report(reported, "pending-overflow", fmt::format("more than {} script messages wait behind RPCs for entities this client does not have; the oldest is dropped", MaxPendingScripts));
 			m_PendingScripts.pop_front();
 		}
-		m_PendingScripts.push_back({ std::move(event), m_Clock });
+		m_PendingScripts.push_back({ std::move(event), m_Clock, reliable });
 		ReleasePendingScripts();
 	}
 
 	bool NetworkSystem::ReleaseInbox(Connection& connection, bool all, std::string& outError)
 	{
 		Inbox& inbox = connection.Received;
-		while (!inbox.Messages.empty() && (all || inbox.ReleaseCredit >= 1.0))
+		// A full event queue would drop them: they wait (keeping their credit) unless the client left.
+		while (!inbox.Messages.empty() && (all || (inbox.ReleaseCredit >= 1.0 && m_Events.size() < MaxQueuedEvents)))
 		{
-			const std::vector<uint8_t> bytes = std::move(inbox.Messages.front());
-			inbox.Messages.pop_front();
-			inbox.Bytes -= bytes.size();
+			const std::vector<uint8_t> bytes = inbox.Pop();
 			inbox.ReleaseCredit -= 1.0;
 			std::optional<NetMessage> message = NetProtocol::Decode(bytes, Schema(), outError);
-			if (!message)
+			NetScriptMessage* script = message ? std::get_if<NetScriptMessage>(&message->Body) : nullptr;
+			if (!script)
+			{
+				if (outError.empty())
+					outError = "a queued message is not a script message";
+				// It and those after it: the connection ends.
+				m_Statistics.ScriptMessagesDropped += 1 + inbox.Messages.size();
+				inbox = {};
 				return false;
-			HandleScriptMessage(connection.PeerId, std::get<NetScriptMessage>(std::move(message->Body)), connection.Reported);
+			}
+			HandleScriptMessage(connection.PeerId, std::move(*script), true, connection.Reported);
 		}
 		return true;
 	}
 
 	void NetworkSystem::ReleasePendingScripts()
 	{
-		// In arrival order: a message waits for every RPC before it.
-		while (!m_PendingScripts.empty())
+		// In arrival order: a reliable message waits for every reliable RPC before it that still waits for its entity.
+		bool held = false;
+		for (auto it = m_PendingScripts.begin(); it != m_PendingScripts.end();)
 		{
-			PendingScript& front = m_PendingScripts.front();
-			const bool waiting = front.Event.Type == NetworkEvent::Kind::Rpc && !m_Scene.GetEntityByUUID(front.Event.Entity);
-			if (waiting && m_Clock - front.Since < PendingRpcSeconds)
-				return;
+			const bool waiting = it->Event.Type == NetworkEvent::Kind::Rpc && !m_Scene.GetEntityByUUID(it->Event.Entity);
+			if (waiting && !IsGone(it->Event.Entity) && m_Clock - it->Since < PendingRpcSeconds)
+			{
+				held = held || it->Reliable;
+				++it;
+				continue;
+			}
+			if (!waiting && held && it->Reliable)
+			{
+				++it;
+				continue;
+			}
 			if (waiting)
 			{
 				m_Statistics.ScriptMessagesDropped++;
 				// One key for every entity: they are the host's choice.
-				Report(m_Reported, "rpc-timeout", fmt::format("the host called {} on entity {}, which did not arrive within {} seconds; dropped (later ones are counted in NetworkStatistics, not logged)", front.Event.Name, IdText(front.Event.Entity), PendingRpcSeconds));
+				Report(m_Reported, "rpc-timeout", fmt::format("the host called {} on entity {}, which did not arrive within {} seconds (or was despawned meanwhile); dropped (later ones are counted in NetworkStatistics, not logged)", it->Event.Name, IdText(it->Event.Entity), PendingRpcSeconds));
 			}
 			else
-				PushEvent(std::move(front.Event));
-			m_PendingScripts.pop_front();
+				PushEvent(std::move(it->Event));
+			it = m_PendingScripts.erase(it);
 		}
+	}
+
+	void NetworkSystem::MarkGone(UUID uuid)
+	{
+		while (!m_GoneEntities.empty() && (m_GoneEntities.size() >= MaxPendingScripts || m_Clock - m_GoneEntities.front().second >= PendingRpcSeconds))
+			m_GoneEntities.pop_front();
+		m_GoneEntities.emplace_back(uuid, m_Clock);
+	}
+
+	bool NetworkSystem::IsGone(UUID uuid) const
+	{
+		return std::ranges::any_of(m_GoneEntities, [&](const auto& gone) { return gone.first == uuid && m_Clock - gone.second < PendingRpcSeconds; });
 	}
 
 	void NetworkSystem::SyncPredictedCharacters()
@@ -1495,20 +1569,22 @@ namespace Breccia {
 		PhysicsWorld* physics = m_Scene.GetPhysicsWorld();
 		if (!physics)
 			return result;
-		// Below the host's limit after float rounding too, which a scale to exactly MaxInputSpeed can miss.
-		constexpr float ClampedSpeed = NetProtocol::MaxInputSpeed * 0.999f;
 		for (auto& [uuid, character] : m_Predicted)
 		{
 			Entity entity = m_Scene.GetEntityByUUID(uuid);
 			if (!entity)
 				continue;
+			// The host clamps to the character's Networked.MaxInputSpeed (this client's copy, from the spawn: it is not
+			// replicated), so the prediction does too, a little below it so float rounding cannot cross it.
+			const float allowed = std::min(entity.GetComponent<NetworkedComponent>().MaxInputSpeed, NetProtocol::MaxInputSpeed);
+			const float limit = allowed * 0.999f;
 			for (CharacterInput input : physics->TakeCharacterInputs(entity))
 			{
-				if (const float speed = glm::length(input.Velocity); speed > ClampedSpeed)
+				if (const float speed = glm::length(input.Velocity); speed > limit)
 				{
-					input.Velocity *= ClampedSpeed / speed;
+					input.Velocity *= limit / speed;
 					if (!std::exchange(character.ReportedClamp, true))
-						BR_CORE_WARN("Network: '{}' walked at {} m/s, faster than the {} m/s inputs may ask for; it is sent slower and the host's state corrects it", entity.GetName(), speed, NetProtocol::MaxInputSpeed);
+						BR_CORE_WARN("Network: '{}' walked at {} m/s, faster than its Networked.MaxInputSpeed ({} m/s); it moves at that speed, as the host moves it", entity.GetName(), speed, allowed);
 				}
 				input.Rotation = glm::normalize(input.Rotation);
 				character.Unacknowledged.push_back(input);
@@ -1533,7 +1609,7 @@ namespace Breccia {
 			const size_t skipped = character.Unacknowledged.size() - count;
 			NetInputs& inputs = result.emplace_back();
 			inputs.Entity = uuid;
-			inputs.First = character.First + static_cast<uint32_t>(skipped);
+			inputs.First = character.Next() - static_cast<uint32_t>(count);
 			inputs.Steps.assign(character.Unacknowledged.begin() + static_cast<std::ptrdiff_t>(skipped), character.Unacknowledged.end());
 		}
 		return result;
@@ -1553,6 +1629,7 @@ namespace Breccia {
 			character.Unacknowledged.pop_front();
 			character.First++;
 		}
+		// (The decoder refuses input number UINT32_MAX, so this cannot wrap.)
 		if (character.First <= prediction.Input)
 			character.First = prediction.Input + 1;
 		const std::optional<CharacterState> before = physics->GetCharacterState(entity);
@@ -1565,11 +1642,18 @@ namespace Breccia {
 		if (!replayed && !std::exchange(character.ReportedReplay, true))
 			BR_CORE_WARN("Network: '{}' could not be put at the host's state and its inputs replayed (a degenerate transform?); it shows its own prediction until it can", entity.GetName());
 		const std::optional<CharacterState> after = physics->GetCharacterState(entity);
-		if (!before || !after)
+		if (!before.has_value())
+			return;
+		if (!after.has_value())
 			return;
 		const glm::vec3 moved = after->Position - before->Position;
 		if (glm::length(moved) > PredictionTolerance)
 			m_Statistics.Corrections++;
+	}
+
+	float NetworkSystem::InputWindowSteps() const
+	{
+		return std::max(2.0f, std::floor(InputWindowSeconds / m_Scene.GetFixedTimestep()));
 	}
 
 	void NetworkSystem::SyncRemoteCharacters()
@@ -1583,7 +1667,7 @@ namespace Breccia {
 		const uint64_t steps = physics->GetStepCount();
 		const float credited = static_cast<float>(steps - std::min(steps, m_CreditedSteps));
 		m_CreditedSteps = steps;
-		const float window = std::max(2.0f, std::floor(InputWindowSeconds / m_Scene.GetFixedTimestep()));
+		const float window = InputWindowSteps();
 		std::set<UUID> live;
 		for (auto handle : m_Scene.GetRegistry().view<NetworkedComponent, CharacterControllerComponent>())
 		{
@@ -1596,7 +1680,7 @@ namespace Breccia {
 			// New, or another client's now: its inputs start afresh, half the window ahead of the host's steps.
 			if (character.Peer != networked.Owner)
 			{
-				character = RemoteCharacter{ networked.Owner, 0, window / 2.0f };
+				character = RemoteCharacter{ .Peer = networked.Owner, .LastInput = 0, .Credit = window / 2.0f, .Silent = false };
 				continue;
 			}
 			character.Credit += credited;
@@ -1605,11 +1689,24 @@ namespace Breccia {
 			// the window of them at once.
 			character.Silent = character.Silent || character.Credit > window;
 			uint32_t idle = 0;
-			while (character.Silent && character.Credit > window / 2.0f && idle < MaxIdleStepsPerFrame)
+			if (character.Silent)
 			{
-				physics->StepCharacter(entity, { glm::vec3(0.0f), entity.GetComponent<TransformComponent>().Rotation });
-				character.Credit -= 1.0f;
-				idle++;
+				// Facing as it does in the world, as recorded inputs do (the transform's rotation is its parent's space).
+				glm::vec3 translation(0.0f);
+				glm::vec3 scale(1.0f);
+				glm::quat world(1.0f, 0.0f, 0.0f, 0.0f);
+				const glm::quat rotation = Math::DecomposeTransform(m_Scene.GetWorldTransform(entity), translation, world, scale) ? world : entity.GetComponent<TransformComponent>().Rotation;
+				while (character.Credit > window / 2.0f && idle < MaxIdleStepsPerFrame)
+				{
+					if (!physics->StepCharacter(entity, { glm::vec3(0.0f), rotation }))
+					{
+						const std::string id = IdText(entity.GetUUID());
+						Report(m_Reported, "step-" + id, fmt::format("entity {} ('{}') cannot be stepped while its owner is silent (a degenerate transform?)", id, entity.GetName()));
+						break;
+					}
+					character.Credit -= 1.0f;
+					idle++;
+				}
 			}
 			m_Statistics.IdleSteps += idle;
 			character.Credit = std::min(character.Credit, window);
@@ -1623,7 +1720,7 @@ namespace Breccia {
 		const auto found = m_RemoteCharacters.find(inputs.Entity);
 		if (found == m_RemoteCharacters.end() || found->second.Peer != connection.PeerId)
 		{
-			m_Statistics.InputsRejected++;
+			m_Statistics.InputsRejected += inputs.Steps.size();
 			// Ownership may have changed while the inputs travelled (not worth a line); one the sender predicts that the
 			// host cannot move (no character built) is a problem worth knowing about.
 			const Entity entity = m_Scene.GetEntityByUUID(inputs.Entity);
@@ -1635,8 +1732,15 @@ namespace Breccia {
 		PhysicsWorld* physics = m_Scene.GetPhysicsWorld();
 		Entity entity = m_Scene.GetEntityByUUID(inputs.Entity);
 		if (!physics || !entity)
+		{
+			m_Statistics.InputsRejected += inputs.Steps.size();
 			return;
+		}
 		RemoteCharacter& character = found->second;
+		// The first input: the owner's steps start now, half the window ahead, whatever its trip here took (the credit
+		// banked meanwhile would shorten the silence the window allows).
+		if (character.LastInput == 0 && !character.Silent)
+			character.Credit = std::min(character.Credit, InputWindowSteps() / 2.0f);
 		const float maxSpeed = entity.GetComponent<NetworkedComponent>().MaxInputSpeed;
 		for (size_t i = 0; i < inputs.Steps.size(); i++)
 		{
@@ -1657,7 +1761,7 @@ namespace Breccia {
 			}
 			// Lost on the way (more than MaxInputsPerCharacter in a row): those steps are never taken.
 			if (character.LastInput != 0 && sequence > character.LastInput + 1)
-				m_Statistics.InputsSkipped += sequence - character.LastInput - 1;
+				m_Statistics.InputsSkipped += std::min<uint64_t>(sequence - character.LastInput - 1, MaxUnacknowledgedInputs);
 			character.LastInput = sequence;
 			character.Credit -= 1.0f;
 			character.Silent = false;
@@ -1671,7 +1775,6 @@ namespace Breccia {
 		PhysicsWorld* physics = m_Scene.GetPhysicsWorld();
 		if (!physics)
 			return predictions;
-		const auto inRange = [](const glm::vec3& value, float limit) { return glm::all(glm::lessThanEqual(glm::abs(value), glm::vec3(limit))); };
 		for (const auto& [uuid, character] : m_RemoteCharacters)
 		{
 			if (character.Peer != peer)
@@ -1685,12 +1788,13 @@ namespace Breccia {
 			if (!state)
 				continue;
 			// What the client's decoder accepts: anything else would end its whole session.
-			if (!inRange(state->Position, NetProtocol::MaxPredictedCoordinate) || !inRange(state->Velocity, NetProtocol::MaxInputSpeed))
+			const NetPrediction prediction{ uuid, character.LastInput, *state };
+			if (const std::string problem = NetProtocol::CheckPrediction(prediction); !problem.empty())
 			{
-				Report(m_Reported, "prediction-range-" + IdText(uuid), fmt::format("entity {} is out of the range predicted states may carry (position within {} m, speed {} m/s per axis); its owner is not corrected", IdText(uuid), NetProtocol::MaxPredictedCoordinate, NetProtocol::MaxInputSpeed));
+				Report(m_Reported, "prediction-range-" + IdText(uuid), fmt::format("entity {} cannot be corrected: {}; its owner keeps its own prediction", IdText(uuid), problem));
 				continue;
 			}
-			predictions.push_back({ uuid, character.LastInput, *state });
+			predictions.push_back(prediction);
 		}
 		return predictions;
 	}
@@ -1736,6 +1840,7 @@ namespace Breccia {
 			}
 			while (track.size() >= 2 && track[1].Time <= viewTime)
 				track.pop_front();
+			BR_CORE_ASSERT(!track.empty(), "a track starts with a sample and keeps its newest");
 			TransformComponent& transform = entity.GetComponent<TransformComponent>();
 			const TransformSample& from = track.front();
 			TransformSample shown = from;

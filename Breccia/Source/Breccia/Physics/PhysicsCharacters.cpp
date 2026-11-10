@@ -228,12 +228,15 @@ namespace Breccia {
 
 	void PhysicsWorld::Impl::RefreshCharacterContacts(Entity entity)
 	{
-		const auto found = Characters.find(entity.GetUUID());
-		if (found == Characters.end())
-			return;
-		const JPH::ObjectLayer layer = MakeObjectLayer(true, found->second.Layer);
-		found->second.Character->RefreshContacts(JPH::DefaultBroadPhaseLayerFilter(ObjectVsBroadPhaseLayerFilter, layer), JPH::DefaultObjectLayerFilter(ObjectLayerPairFilter, layer), NonCharacterBodyFilter(*this, entity.GetUUID()), JPH::ShapeFilter(),
-												 *TempAllocator);
+		if (const auto found = Characters.find(entity.GetUUID()); found != Characters.end())
+			RefreshCharacterContacts(entity, found->second);
+	}
+
+	void PhysicsWorld::Impl::RefreshCharacterContacts(Entity entity, CharacterRecord& record)
+	{
+		const JPH::ObjectLayer layer = MakeObjectLayer(true, record.Layer);
+		record.Character->RefreshContacts(JPH::DefaultBroadPhaseLayerFilter(ObjectVsBroadPhaseLayerFilter, layer), JPH::DefaultObjectLayerFilter(ObjectLayerPairFilter, layer), NonCharacterBodyFilter(*this, entity.GetUUID()), JPH::ShapeFilter(),
+										  *TempAllocator);
 	}
 
 	bool PhysicsWorld::Impl::ReshapeCharacter(Entity entity, CharacterRecord& record, const glm::vec3& scale, std::vector<std::string>& warnings)
@@ -342,6 +345,11 @@ namespace Breccia {
 
 	PhysicsWorld::Impl::CharacterRecord* PhysicsWorld::Impl::FindCharacter(Entity entity)
 	{
+		return const_cast<CharacterRecord*>(std::as_const(*this).FindCharacter(entity));
+	}
+
+	const PhysicsWorld::Impl::CharacterRecord* PhysicsWorld::Impl::FindCharacter(Entity entity) const
+	{
 		if (!Owns(entity))
 			return nullptr;
 		const auto it = Characters.find(entity.GetUUID());
@@ -357,7 +365,7 @@ namespace Breccia {
 		if (glm::any(glm::greaterThan(glm::abs(position - record.LastPosition), glm::vec3(1e-5f))))
 		{
 			character.SetPosition(ToJolt(position));
-			RefreshCharacterContacts(entity);
+			RefreshCharacterContacts(entity, record);
 		}
 		if (glm::abs(glm::dot(rotation, record.LastRotation)) < 1.0f - 1e-6f)
 			character.SetRotation(ToJolt(rotation));

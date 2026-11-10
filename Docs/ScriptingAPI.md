@@ -917,19 +917,21 @@ handler, called as `fn(sender, ...)` with the sender's peer ID (0 for the host) 
 message no handler listens for is logged once per name (a misspelled name, most likely). The values are data, as `Storage`
 keeps them: nil, booleans, numbers, strings and tables; vectors arrive as arrays (`{x, y, z}`) and entities as their IDs
 (`Scene.GetEntityByID`). At most 32 values and 32 KiB per message, and a name of 1 to 64 bytes. Sends return `true`, or
-`false` and the reasons when it did not reach every target: no session, no such client, the project's
-`Network.MaxMessagesPerSecond` spent this second, or the connection's bandwidth (`Network.MaxBytesPerSecond`) spent. With
-`"Clients"` the clients that did not fail still received it, and with none connected nothing is sent and the result is
-`true`. Mistakes in the call itself (a target the role cannot send to, a bad name or value) raise errors. A host hands a
-client's messages to its scripts at most `MaxMessagesPerSecond` a second (more wait their turn), hands over everything a
-client sent before it left, and disconnects a client that keeps sending faster.
+`false` and the reasons when it did not reach every target: no session, no such client (or a peer ID the role cannot send
+to), a message over 32 KiB, text that is not UTF-8, values nested too deeply, the project's `Network.MaxMessagesPerSecond`
+spent this second, or the connection's bandwidth (`Network.MaxBytesPerSecond`) spent. With `"Clients"` the clients that
+did not fail still received it, and with none connected nothing is sent and the result is `true`. A target string the role
+cannot use, an empty, over-long or built-in name, a value Lua cannot convert or more than 32 values raise errors. A host
+hands a client's messages to its scripts at most `MaxMessagesPerSecond` a second (more wait their turn), hands over what a
+client sent before it left (up to a message that does not decode), and disconnects a client that keeps sending faster.
 
 **RPCs.** `Network.Rpc(entity, method, target, ...)` (and `Network.RpcUnreliable`) calls `method` on the entity's script
 on the target peers, as `self:method(sender, ...)`, with the targets of `Send` plus `"Owner"` (from the host: the client that
 owns the entity). The script must list the method in its class's `Rpcs` table, with who may call it: `"Host"` (only the
 host, on clients), `"Owner"` (the host, or the client that owns the entity), or `"Any"` (any peer). Calls a script does not
 declare, or a peer may not make, are dropped and logged once. An RPC that reaches a client before the entity's spawn waits
-for it (up to 2 seconds), and the messages that came after it wait behind it, so a client's scripts see them in order.
+for it (up to 2 seconds), and the reliable messages that came after it wait behind it, so a client's scripts see them in
+order; one for an entity the client just saw despawned, or whose spawn it refused, is dropped at once.
 
 **Connection events.** `Network.On` also delivers `"Connected"` (on a client, with its peer ID), `"Disconnected"` (on a
 client, with the reason), `"PeerConnected"` and `"PeerDisconnected"` (on the host, with the client's peer ID, and the reason
@@ -946,15 +948,19 @@ session it is a plain raycast.
 
 **Prediction.** A character controller whose `Networked.Authority` is `"Predicted"` and whose `Owner` is a client moves on
 that client at once from its own `Move` calls (only `IsOwner` should call `Move`), and the host moves it from the inputs the
-client sends, no faster than its own fixed steps and no faster than `Networked.MaxInputSpeed` (the character's top speed,
-vertical included, so a modified client cannot run or jump faster). Each snapshot corrects the client from the host's state
+client sends, no faster than its own fixed steps and no faster than `Networked.MaxInputSpeed` (the length of the fastest
+velocity a step may ask for, vertical included, such as `sqrt(run^2 + jump^2)`, so a modified client cannot run or jump
+faster; the owner sends and replays its inputs with the same limit, from its spawn, as the field is not replicated
+afterwards). Each snapshot corrects the client from the host's state
 and replays the inputs the host has not seen. The host's own `Move` calls on such a character do nothing while its owner is
 connected; if the owner falls silent for a quarter of a second, the host steps the character without inputs, so it does not
-hang in the air. Other peers' characters, and remote dynamic bodies, follow the host instead of simulating.
+hang in the air. An entity the host cannot move (no character controller built there) is still predicted by its owner,
+which is never corrected; the host ignores its inputs (logged). Other peers' characters, and remote dynamic bodies, follow the host instead of simulating.
 
 The `Networked` component is replicated like any other: `Owner` (a peer ID: 0 is the host, clients are 1, 2, ... in the
 order they join), `Authority` (`"Server"`, `"Owner"` or `"Predicted"`), `Priority` (above 0, at most 100) and
-`MaxInputSpeed` (m/s, above 0, at most 1000, the default). A host's script
+`MaxInputSpeed` (m/s, above 0, at most 1000, the default); after the spawn only `Owner` and `Authority` are sent when they
+change. A host's script
 hands an entity to a client with `e:SetComponent("Networked", { Owner = 2, Authority = "Owner" })`. `Scene.Load` fails
 while a session runs.
 

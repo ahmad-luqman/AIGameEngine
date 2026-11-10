@@ -197,15 +197,19 @@ namespace Breccia {
 		m_NetworkSystem.reset();
 	}
 
-	void Scene::RequestNetworkStart(Scope<NetworkSystem> next)
+	bool Scene::RequestNetworkStart(Scope<NetworkSystem> next)
 	{
-		BR_CORE_ASSERT(next, "RequestNetworkStop ends a session");
-		m_PendingNetwork = PendingNetwork{ std::move(next) };
+		if (!next || HasPendingNetworkChange())
+			return false;
+		m_PendingNetworkStart = std::move(next);
+		m_PendingNetworkStop = true;
+		return true;
 	}
 
 	void Scene::RequestNetworkStop()
 	{
-		m_PendingNetwork = PendingNetwork{};
+		m_PendingNetworkStart.reset();
+		m_PendingNetworkStop = true;
 	}
 
 	const Ref<NetTransportFactory>& Scene::GetNetworkTransports()
@@ -738,7 +742,8 @@ namespace Breccia {
 
 		GameUI::BeginFrame();
 		// Peers learn first, before scripts and systems wind down.
-		m_PendingNetwork.reset();
+		m_PendingNetworkStart.reset();
+		m_PendingNetworkStop = false;
 		m_NetworkSystem.reset();
 		// OnDestroy callbacks may destroy entities; apply those once every system is shut down.
 		m_DeferDestruction++;
@@ -856,11 +861,11 @@ namespace Breccia {
 		// After every system and destruction, so the snapshot is this frame's final state.
 		if (m_NetworkSystem && m_State == SceneState::Play)
 			m_NetworkSystem->Send(ts.GetSeconds());
-		if (m_PendingNetwork && m_State == SceneState::Play)
+		if (HasPendingNetworkChange() && m_State == SceneState::Play)
 		{
 			// The old session's peers hear of its end before the new one starts.
-			Scope<NetworkSystem> next = std::move(m_PendingNetwork->Next);
-			m_PendingNetwork.reset();
+			Scope<NetworkSystem> next = std::move(m_PendingNetworkStart);
+			m_PendingNetworkStop = false;
 			m_NetworkSystem.reset();
 			if (next)
 				StartNetwork(std::move(next));
@@ -894,7 +899,9 @@ namespace Breccia {
 			outError = "scenes can only be loaded while playing";
 			return false;
 		}
-		if (m_NetworkSystem || (m_PendingNetwork && m_PendingNetwork->Next))
+		// A session ending at the end of this frame ends before the load applies; one starting then would see the old level
+		// change under it.
+		if ((m_NetworkSystem && !(m_PendingNetworkStop && !m_PendingNetworkStart)) || m_PendingNetworkStart)
 		{
 			// Clients would keep the old level: switching every peer's scene together is not supported yet.
 			outError = "scenes cannot be loaded during a network session";

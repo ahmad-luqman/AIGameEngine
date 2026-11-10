@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <functional>
 #include <limits>
+#include <map>
 #include <optional>
 
 using namespace Breccia;
@@ -128,6 +129,33 @@ TEST_SUITE("Ragdolls")
 		component.MotorTorque = 500;
 		component.Bones.resize(RagdollComponent::MaxBones + 1);
 		CHECK_FALSE(ValidateRagdoll(component).empty());
+	}
+
+	TEST_CASE("A raycast with other poses for an entity still hits its active ragdoll's parts where they are")
+	{
+		// Lag compensation poses an entity's own body; ragdoll parts share its UUID but are never posed, so they stay
+		// where they are (a regression: they were skipped with the entity's UUID).
+		ClearAssetCache clear;
+		Scene scene;
+		Floor(scene);
+		Entity rig = Rig(scene);
+		scene.OnSimulationStart();
+		PhysicsWorld& physics = *scene.GetPhysicsWorld();
+		scene.GetAnimationSystem()->Update(0);
+		REQUIRE(physics.ActivateRagdoll(rig));
+		const auto capsules = physics.GetRagdollCapsules(rig);
+		REQUIRE_FALSE(capsules.empty());
+		const glm::vec3 origin = (capsules[0].Start + capsules[0].End) * 0.5f + glm::vec3(0.0f, 5.0f, 0.0f);
+		const glm::vec3 down(0.0f, -1.0f, 0.0f);
+		const std::optional<RaycastHit> plain = physics.Raycast(origin, down, 20.0f);
+		REQUIRE(plain);
+		CHECK(plain->EntityID == rig.GetUUID());
+		const std::map<UUID, std::optional<PhysicsBodyPose>> poses = { { rig.GetUUID(), PhysicsBodyPose{ glm::vec3(100.0f, 0.0f, 0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f) } } };
+		const std::optional<RaycastHit> rewound = physics.RaycastWithPoses(origin, down, 20.0f, poses);
+		REQUIRE(rewound);
+		CHECK(rewound->EntityID == rig.GetUUID());
+		CHECK(rewound->Distance == doctest::Approx(plain->Distance));
+		scene.OnSimulationStop();
 	}
 
 	TEST_CASE("Ragdoll starts from the shown pose and falls onto collision geometry")

@@ -2523,7 +2523,7 @@ Starts play mode on a copy of the scene (scripts, physics, audio run).
 
 ### `play.step`
 
-Advances play mode by N fixed frames (default dt 1/60), with every in-process network client (net.connect), and reports script errors (clientScriptErrors: those of in-process clients, [{client, errors}], present when there are some) and the playing scene (which Lua Scene.Load may switch).
+Advances play mode by N fixed frames (default dt 1/60), with every in-process network client (net.connect), and reports script errors (clientScriptErrors: those of in-process clients, [{client, errors, ended}], ended for a client that ended since the last step, present when there are some) and the playing scene (which Lua Scene.Load may switch).
 
 | Parameter | Type / description |
 |-----------|--------------------|

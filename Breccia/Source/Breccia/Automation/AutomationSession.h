@@ -17,6 +17,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 #include <unordered_set>
 
@@ -149,7 +150,7 @@ namespace Breccia {
 		// The play scene's scripts start sessions (Lua Network.Host, Network.Connect) over the session's in-process network
 		// (SimulatedNetwork, seeded and advanced with every frame), unless ScriptsUseUdp is set (the editor, so a game in
 		// Play can host runtimes or join one). In-process clients are further playing copies of the edit scene, each joined
-		// to the play scene's simulated host and stepped with it (Step, UpdateNetworkClients); they end with Play.
+		// to the play scene's simulated host and stepped with it (Step, UpdatePlayScene); they end with Play.
 		static constexpr size_t MaxNetworkClients = 16;
 		// The play scene hosts: over the in-process network (in-process clients can join), or real UDP (runtimes can).
 		bool HostNetwork(bool udp, uint16_t port, std::string& outError);
@@ -163,6 +164,9 @@ namespace Breccia {
 		bool RemoveNetworkClient(size_t index, std::string& outError);
 		// In-process clients by index - 1; a removed one leaves a null entry, so indices stay.
 		const std::vector<Ref<Scene>>& GetNetworkClients() const { return m_NetworkClients; }
+		// The script errors of in-process clients that ended (Game.Quit, net.disconnect) since the last call, by client
+		// index: play.step reports them with the running clients' errors, which would otherwise end with the client.
+		std::vector<std::pair<size_t, std::vector<std::string>>> TakeEndedClientErrors() { return std::exchange(m_EndedClientErrors, {}); }
 		// The scene of client `index`, or null.
 		Ref<Scene> GetNetworkClient(size_t index) const;
 		// The in-process network, created on first use (link settings apply to messages sent from then on).
@@ -362,11 +366,14 @@ namespace Breccia {
 		Scope<SimulatedNetwork> m_Network;
 		std::vector<Ref<Scene>> m_NetworkClients;
 		size_t m_InputPeer = 0;
+		std::vector<std::pair<size_t, std::vector<std::string>>> m_EndedClientErrors;
 		// Ends every in-process client (StopPlay, which forgets the in-process network once the play scene's session ends).
 		void StopNetworkClients();
-		// Ends in-process client `index` (from 1) and resets the input peer when it had the input.
-		void EndNetworkClient(size_t index);
-		// The play scene can start a session: it plays, and has none (or only a client session that ended).
+		// Ends in-process client `index` (from 1), keeping its script errors for TakeEndedClientErrors, and resets the input
+		// peer when it had the input. False when there is no such client.
+		bool EndNetworkClient(size_t index);
+		// The play scene can start a session: it plays, has none (or only a client session that ended), and waits for no
+		// session change or scene load its scripts asked for.
 		bool CanStartNetwork(std::string& outError) const;
 	};
 

@@ -6,7 +6,6 @@
 
 #include <nlohmann/json.hpp>
 
-#include <array>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -219,13 +218,17 @@ namespace Breccia {
 		// Characters one client may predict, and steps of each one ClientUpdate carries (the newest ones not acknowledged).
 		inline constexpr uint32_t MaxPredictedCharacters = 64;
 		inline constexpr uint32_t MaxInputsPerCharacter = 32;
-		// The fastest a predicted character may be asked to move (m/s): faster inputs are refused as invalid, and so are
-		// predicted states faster than this. A client clamps below it (CollectInputs).
+		// The fastest a predicted character may be asked to move (m/s, the length of an input's velocity): faster inputs are
+		// refused as invalid, and so are predicted states with a velocity component (on any axis) beyond it. A client clamps
+		// below it and below its character's Networked.MaxInputSpeed (CollectInputs).
 		inline constexpr float MaxInputSpeed = 1000.0f;
-		// The farthest from the origin (each axis, meters) a predicted state may put a character.
+		// The farthest from the origin (meters, on each axis) a predicted state may put a character.
 		inline constexpr float MaxPredictedCoordinate = 1.0e7f;
 		// The connection events Network.On delivers, which no script message may be named.
-		inline constexpr std::array<const char*, 4> ReservedScriptNames = { "Connected", "Disconnected", "PeerConnected", "PeerDisconnected" };
+		inline constexpr const char* ConnectedEvent = "Connected";
+		inline constexpr const char* DisconnectedEvent = "Disconnected";
+		inline constexpr const char* PeerConnectedEvent = "PeerConnected";
+		inline constexpr const char* PeerDisconnectedEvent = "PeerDisconnected";
 		// A script message's name, its arguments and its whole encoding at most.
 		inline constexpr size_t MaxScriptNameLength = 64;
 		inline constexpr uint32_t MaxScriptArguments = 32;
@@ -240,11 +243,16 @@ namespace Breccia {
 		std::vector<uint8_t> AssembleState(NetMessageType type, uint32_t sequence, uint32_t acknowledged, std::span<const std::vector<uint8_t>> spawns, std::span<const std::vector<uint8_t>> updates, std::span<const UUID> despawns, const NetStateExtras& extras);
 		// The bytes a type's extras take in its message (the sender keeps its records within what is left).
 		size_t ExtrasBytes(NetMessageType type, const NetStateExtras& extras);
+		// Whether a name is one of the connection events above.
 		bool IsReservedScriptName(std::string_view name);
+		// What is wrong with a predicted character's state on the wire, or an empty string: an input number past the last
+		// (a client would number its next input 0), a time in the air outside [0, MaxSinceGrounded], a velocity component
+		// beyond MaxInputSpeed or a coordinate beyond MaxPredictedCoordinate. The decoder and the host share it.
+		std::string CheckPrediction(const NetPrediction& prediction);
 		// Empty when the arguments cannot be encoded (NetValue::Encode) or the message would exceed MaxScriptMessageBytes.
 		std::vector<uint8_t> EncodeScript(const NetScriptMessage& message);
 		// What is wrong with a script message, or an empty string: a name that is empty, too long or not UTF-8, a message
-		// named like a connection event (ReservedScriptNames), arguments that are not an array or too many, an RPC without
+		// named like a connection event, arguments that are not an array or too many, an RPC without
 		// an entity or a message with one.
 		std::string CheckScript(const NetScriptMessage& message);
 		// Empty when a value cannot be encoded.

@@ -731,15 +731,19 @@ namespace Breccia {
 		return true;
 	}
 
-	void AutomationSession::EndNetworkClient(size_t index)
+	bool AutomationSession::EndNetworkClient(size_t index)
 	{
 		const Ref<Scene> client = GetNetworkClient(index);
 		if (!client)
-			return;
+			return false;
+		// After stopping, so errors its OnDestroy callbacks raise are kept too.
 		client->OnRuntimeStop();
+		if (const std::vector<std::string>& errors = client->GetStoppedSessionScriptErrors(); !errors.empty())
+			m_EndedClientErrors.emplace_back(index, errors);
 		m_NetworkClients[index - 1].reset();
 		if (m_InputPeer == index)
 			m_InputPeer = 0;
+		return true;
 	}
 
 	bool AutomationSession::CanStartNetwork(std::string& outError) const
@@ -752,6 +756,12 @@ namespace Breccia {
 		if (m_Scene->GetNetworkSystem() && m_Scene->GetNetworkSystem()->GetState() != NetConnectionState::Disconnected)
 		{
 			outError = "the play scene is already in a network session (net.disconnect ends it)";
+			return false;
+		}
+		// What a script asked for would replace or refuse the session at the end of the frame.
+		if (m_Scene->HasPendingNetworkChange() || m_Scene->HasPendingLoad())
+		{
+			outError = "the play scene's scripts asked for a network change or a scene load that has not happened yet (play.step first)";
 			return false;
 		}
 		return true;
@@ -844,13 +854,10 @@ namespace Breccia {
 
 	bool AutomationSession::RemoveNetworkClient(size_t index, std::string& outError)
 	{
-		if (!GetNetworkClient(index))
-		{
-			outError = fmt::format("no in-process client {}", index);
-			return false;
-		}
-		EndNetworkClient(index);
-		return true;
+		if (EndNetworkClient(index))
+			return true;
+		outError = fmt::format("no in-process client {}", index);
+		return false;
 	}
 
 	Ref<Scene> AutomationSession::GetNetworkClient(size_t index) const
@@ -864,6 +871,7 @@ namespace Breccia {
 			if (client)
 				client->OnRuntimeStop();
 		m_NetworkClients.clear();
+		m_EndedClientErrors.clear();
 		m_InputPeer = 0;
 	}
 

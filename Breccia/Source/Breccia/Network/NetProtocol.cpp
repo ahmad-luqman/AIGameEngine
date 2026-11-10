@@ -274,12 +274,11 @@ namespace Breccia {
 				CharacterState& state = prediction.State;
 				if (!reader.ReadU32(prediction.Input) || !ReadVec3(reader, state.Position) || !ReadVec3(reader, state.Velocity) || !reader.ReadFloat(state.SinceGrounded) || !reader.ReadU8(jumped))
 					return Fail(reader, outError, "a predicted character's state is truncated or not finite");
-				if (!(state.SinceGrounded >= 0.0f && state.SinceGrounded <= CharacterState::MaxSinceGrounded) || jumped > 1)
-					return Fail(reader, outError, "a predicted character's time in the air or jump flag is out of range");
-				// Far beyond any world physics handles well; a host sending more is broken or hostile.
-				if (!WithinMagnitude(state.Position, MaxPredictedCoordinate) || !WithinMagnitude(state.Velocity, MaxInputSpeed))
-					return Fail(reader, outError, "a predicted character's position or velocity is out of range");
+				if (jumped > 1)
+					return Fail(reader, outError, "a predicted character's jump flag is out of range");
 				state.Jumped = jumped != 0;
+				if (std::string problem = CheckPrediction(prediction); !problem.empty())
+					return Fail(reader, outError, std::move(problem));
 				return true;
 			}
 
@@ -462,7 +461,20 @@ namespace Breccia {
 
 		bool IsReservedScriptName(std::string_view name)
 		{
-			return std::ranges::any_of(ReservedScriptNames, [name](const char* reserved) { return name == reserved; });
+			return name == ConnectedEvent || name == DisconnectedEvent || name == PeerConnectedEvent || name == PeerDisconnectedEvent;
+		}
+
+		std::string CheckPrediction(const NetPrediction& prediction)
+		{
+			if (prediction.Input == std::numeric_limits<uint32_t>::max())
+				return "a predicted character's input number is the last there is";
+			const CharacterState& state = prediction.State;
+			if (!(state.SinceGrounded >= 0.0f && state.SinceGrounded <= CharacterState::MaxSinceGrounded))
+				return "a predicted character's time in the air is out of range";
+			// Far beyond any world physics handles well; a host sending more is broken or hostile.
+			if (!WithinMagnitude(state.Position, MaxPredictedCoordinate) || !WithinMagnitude(state.Velocity, MaxInputSpeed))
+				return "a predicted character's position or velocity is out of range";
+			return {};
 		}
 
 		size_t ExtrasBytes(NetMessageType type, const NetStateExtras& extras)

@@ -447,6 +447,7 @@ namespace Breccia {
 		bool ReshapeCharacter(Entity entity, CharacterRecord& record, const glm::vec3& scale, std::vector<std::string>& warnings);
 		// What the character touches now, for a step that must not start from what it touched before a new shape.
 		void RefreshCharacterContacts(Entity entity);
+		void RefreshCharacterContacts(Entity entity, CharacterRecord& record);
 		// Applies changed CharacterController settings in place, rebuilding only when the layer changed.
 		void ApplyCharacterSettings(Entity entity);
 		void UpdateCharacters(float fixedStep);
@@ -456,11 +457,13 @@ namespace Breccia {
 		std::optional<CharacterInput> StepCharacter(Entity entity, CharacterRecord& record, float fixedStep, const CharacterInput* input);
 		// A driven character (ExternallyDriven) in a Step: it follows the entity's transform, teleporting there when it moved.
 		void FollowCharacterTransform(Entity entity, CharacterRecord& record);
-		// Puts the character where the entity's transform says (position and rotation, in world space).
+		// Puts the character at a world position and rotation (the entity's world transform, or a step's result): a position
+		// that differs from the last one it was given teleports it and refreshes its contacts; the rotation is set when it
+		// changed. The entity's transform is not written.
 		void MoveCharacterTo(Entity entity, CharacterRecord& record, const glm::vec3& position, const glm::quat& rotation);
 		// The entity's character, or null (another scene's entity, or none).
 		CharacterRecord* FindCharacter(Entity entity);
-		const CharacterRecord* FindCharacter(Entity entity) const { return const_cast<Impl*>(this)->FindCharacter(entity); }
+		const CharacterRecord* FindCharacter(Entity entity) const;
 		void RebuildDirtyJoints();
 		// Marks every joint moving or connected to the entity's body for a rebuild (it was just created).
 		void MarkJointsDirty(UUID uuid);
