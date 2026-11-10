@@ -152,8 +152,8 @@ if(Python3_Interpreter_FOUND)
 		add_test(NAME NetworkSession
 			COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/Automation/NetworkSession.py" $<TARGET_FILE:BrecciaCLI> $<TARGET_FILE:BrecciaRuntime>)
 		set_tests_properties(NetworkSession PROPERTIES LABELS integration TIMEOUT 300 COST 60)
-		# The arena sample over real UDP: a headless host and two clients play a round with Match.Autoplay, in a copy of the
-		# sample, and must agree on the scores and positions (Samples/Arena/README.md).
+		# The arena sample over real UDP: a headless host and two clients play a round with Autoplay.lua (an entity the test adds
+		# to a copy of the sample), and must agree on the scores and positions (Samples/Arena/README.md).
 		add_test(NAME SampleArenaNetwork
 			COMMAND "${Python3_EXECUTABLE}" -B "${PROJECT_SOURCE_DIR}/Samples/Arena/test_network.py" $<TARGET_FILE:BrecciaCLI> $<TARGET_FILE:BrecciaRuntime>)
 		set_tests_properties(SampleArenaNetwork PROPERTIES LABELS integration TIMEOUT 300 COST 60)

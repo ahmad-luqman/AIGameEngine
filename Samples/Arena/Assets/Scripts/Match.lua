@@ -1,8 +1,8 @@
 -- Runs the arena's match on the peer that decides it (the host, or a game playing alone): spawns a player for every
--- peer (Player.bprefab, owned by that peer and predicted on it), scores the tags players land, respawns whoever was
--- tagged and ends the round when someone reaches WinScore. Scripts run on every peer: on a client it keeps the HUD's
--- status line and, when the host goes away, ends the session and goes back to practice. Scores reach clients through
--- the Scoreboard's RPC.
+-- peer (Player.bprefab, owned by that peer, and predicted on it for a client), scores the tags players land, respawns
+-- whoever was tagged and ends the round when someone reaches WinScore. Scripts run on every peer: on a client it keeps
+-- the HUD's status line and, once the host has gone away, lets the player go back to practice (Enter, or the pad's
+-- Start). Scores reach clients through the Scoreboard's RPC.
 --
 -- This entity is not networked on purpose: a client keeps it (and its Network.On handlers) when the host's networked
 -- entities replace its own.
@@ -11,16 +11,15 @@ local Arena = require("Assets.Scripts.Lib.Arena")
 local Match = {}
 
 Match.Properties = {
-	-- Tags that win a round.
+	-- Tags that win a round (a whole number, at least 1).
 	WinScore = 5,
-	-- Seconds the winner is shown before the next round starts.
+	-- Seconds the winner is shown before the next round starts (at least 0).
 	RoundBreak = 3.0,
 	-- Whether the host plays too: "Auto" (unless it is headless: a dedicated server), "Yes" or "No".
 	HostPlays = "Auto"
 }
 
 local PlayerPrefab = "Assets/Prefabs/Player.bprefab"
-local BodyName = "PlayerBody"
 
 -- Where players start and come back after a tag: the corners, then the middle of the north and south sides (north is
 -- -Z, away from the camera).
@@ -41,6 +40,13 @@ local HostPlaysModes = {
 	No = function() return false end
 }
 
+-- What each setting may hold. Scripts and tests may change them in play.
+local SettingChecks = {
+	WinScore = function(value) return math.type(value) == "integer" and value >= 1 end,
+	RoundBreak = function(value) return type(value) == "number" and value >= 0 end,
+	HostPlays = function(value) return HostPlaysModes[value] ~= nil end
+}
+
 local function RequireEntity(name, component)
 	local entity = Scene.FindEntityByName(name)
 	if not entity then error("Match: the scene has no entity named '" .. name .. "'", 2) end
@@ -48,24 +54,47 @@ local function RequireEntity(name, component)
 	return entity
 end
 
+-- The keys of a table, sorted, so every run visits peers in the same order.
+local function SortedKeys(t)
+	local keys = {}
+	for key in pairs(t) do keys[#keys + 1] = key end
+	table.sort(keys)
+	return keys
+end
+
 -- Whether this peer decides the match: the host, or a game with no session.
 local function Decides()
 	return not Network.IsClient()
 end
 
+-- Whether an entity is a player: players, and only players, are predicted (bots are the host's).
+local function IsPlayer(entity)
+	local networked = entity:GetComponent("Networked")
+	return networked ~= nil and networked.Authority == "Predicted"
+end
+
 function Match:OnCreate()
-	self:HostPlaysNow()
+	-- A setting the scene gets wrong is an error now; one changed in play to a wrong value is warned about and the last
+	-- good one kept (an error there would stop this script, and with it the match, every frame after).
+	self.GoodSettings = {}
+	for name, check in pairs(SettingChecks) do
+		if not check(self[name]) then error("Match: " .. name .. " cannot be " .. tostring(self[name])) end
+		self.GoodSettings[name] = self[name]
+	end
+	self.WarnedSetting = nil
 	self.StatusText = RequireEntity("StatusText", "UIText")
 	self.Scoreboard = RequireEntity("Scoreboard", "Networked")
-	-- On the deciding peer, by peer ID: { Entity = the player, Score = its tags this round, Held = where it waits out the
-	-- break }. Clients show the Scoreboard's copy of the scores instead.
+	-- On the deciding peer, by peer ID: { Entity = the player, Score = its tags this round }. Clients show the
+	-- Scoreboard's copy of the scores instead.
 	self.Roster = {}
-	-- The peer that won the round, while its break lasts (nil during play), and the seconds left of the break.
-	self.Winner = nil
-	self.BreakLeft = 0
-	-- The scores changed and not every client has them yet (a send can fail: the message rate or bandwidth is spent).
-	self.PublishPending = true
-	self.PublishFailing = false
+	-- While a round's break runs: { Winner = peer, Left = seconds, Holds = { [peer] = { Position, Grace } } }; nil during
+	-- play.
+	self.Break = nil
+	-- The current table (rows by peer, and the winner or false), and the clients that have not had it yet: a send can
+	-- fail when that client's message rate or bandwidth is spent.
+	self.Rows, self.Winner = {}, false
+	self.Unsent = {}
+	self.SendFailing = false
 	-- Why this peer's last session as a client ended, shown while it practises again.
 	self.LeftReason = nil
 	self.Role = Network.GetRole()
@@ -73,24 +102,31 @@ function Match:OnCreate()
 		Log.Info("Arena: " .. Arena.PeerName(peer) .. " joined")
 		-- RPCs are not replayed to clients that join later: the newcomer gets the whole table now. (Here a join also adds a
 		-- row, which publishes anyway; this keeps it right for state a join does not change.)
-		self.PublishPending = true
+		self.Unsent[peer] = true
 	end)
 	Network.On("PeerDisconnected", function(peer, reason) Log.Info("Arena: " .. Arena.PeerName(peer) .. " left (" .. reason .. ")") end)
 	Network.On("Connected", function(peer) Log.Info("Arena: joined as " .. Arena.PeerName(peer)) end)
-	-- The host went away (or refused this client): end the session and practise again. What the host spawned stays as it
-	-- was; SyncPlayers removes the players it left behind.
-	Network.On("Disconnected", function(reason)
-		self.LeftReason = reason
-		Network.Disconnect()
-	end)
+	-- A player's tag landed (Player:Tag). An event rather than a call, so an error in scoring stops this script, not the
+	-- shooter's.
+	Events.On("ArenaTagged", function(shooter, target) self:OnTag(shooter, target) end)
 	self:UpdateStatus()
 end
 
--- Whether the host has a player of its own now (HostPlays is checked every time, as scripts may change it in play).
+-- A setting's value, or its last good one when a script set it to something it cannot be (warned about once).
+function Match:Setting(name)
+	local value = self[name]
+	if SettingChecks[name](value) then
+		self.GoodSettings[name] = value
+		return value
+	end
+	if self.WarnedSetting ~= name then Log.Warn("Match: " .. name .. " cannot be " .. tostring(value) .. "; it stays " .. tostring(self.GoodSettings[name])) end
+	self.WarnedSetting = name
+	return self.GoodSettings[name]
+end
+
+-- Whether the host has a player of its own now.
 function Match:HostPlaysNow()
-	local mode = HostPlaysModes[self.HostPlays]
-	if not mode then error("Match: HostPlays must be \"Auto\", \"Yes\" or \"No\", not " .. tostring(self.HostPlays)) end
-	return mode()
+	return HostPlaysModes[self:Setting("HostPlays")]()
 end
 
 -- The peers that should have a player now.
@@ -107,10 +143,10 @@ end
 
 function Match:SpawnPlayer(peer)
 	local player = Scene.Instantiate(PlayerPrefab, self:FreeSpawn(nil))
-	local body = player:FindChild(BodyName)
-	if not body then
+	local body = player:FindChild(Arena.BodyName)
+	if not body or not IsPlayer(player) then
 		player:Destroy()
-		error("Match: " .. PlayerPrefab .. " has no child named " .. BodyName)
+		error("Match: " .. PlayerPrefab .. " needs Predicted authority and a child named " .. Arena.BodyName)
 	end
 	player.Name = "Player" .. peer
 	-- Before the next tick, which spawns it on the clients with these values: the owner predicts it from then on.
@@ -128,7 +164,7 @@ function Match:FreeSpawn(except)
 	for _, spawn in ipairs(Spawns) do
 		local nearest = math.huge
 		for _, entry in pairs(self.Roster) do
-			if entry.Entity ~= except and entry.Entity:IsValid() then
+			if entry.Entity ~= except then
 				nearest = math.min(nearest, Arena.FlatOffset(entry.Entity.WorldPosition, spawn):Length())
 			end
 		end
@@ -147,24 +183,32 @@ function Match:PeerOf(entity)
 	return nil
 end
 
--- Spawns and removes players so that every wanted peer has one: peers come and go, and a session can start or end
--- under a game already playing (the host's own player goes when it turns into a dedicated server). Players this peer
--- does not keep (a host's, left behind when a client's session ended) are removed.
+-- Spawns and removes players so that every wanted peer has one: peers come and go, a player can be destroyed by
+-- something else, and a session can start or end under a game already playing (the host's own player goes when it
+-- turns into a dedicated server). Players this peer does not keep (a host's, left behind when a client's session ended)
+-- are removed. Every roster entity is valid afterwards.
 function Match:SyncPlayers()
 	local wanted = self:WantedPeers()
 	local changed = false
+	-- Destroyed at the end of the frame: until then they are still in the scene.
+	local removed = {}
 	for peer, entry in pairs(self.Roster) do
 		if not wanted[peer] or not entry.Entity:IsValid() then
-			if entry.Entity:IsValid() then entry.Entity:Destroy() end
+			if entry.Entity:IsValid() then
+				entry.Entity:Destroy()
+				removed[entry.Entity.ID] = true
+			end
 			self.Roster[peer] = nil
 			changed = true
 		end
 	end
-	for _, entity in ipairs(Scene.GetEntitiesWith("Script")) do
-		local script = entity:GetScript()
-		if script and script.IsPlayer and not self:PeerOf(entity) then entity:Destroy() end
+	for _, entity in ipairs(Scene.GetEntitiesWith("Networked")) do
+		if IsPlayer(entity) and not removed[entity.ID] and not self:PeerOf(entity) then
+			Log.Info("Arena: removing " .. entity.Name .. ", which is nobody's player here")
+			entity:Destroy()
+		end
 	end
-	for _, peer in ipairs(Arena.SortedKeys(wanted)) do
+	for _, peer in ipairs(SortedKeys(wanted)) do
 		if not self.Roster[peer] then
 			self:SpawnPlayer(peer)
 			changed = true
@@ -179,32 +223,37 @@ function Match:OnUpdate(dt)
 		-- A session started or ended: a new match. (A client's practice player goes when the host accepts it, as it is
 		-- networked; SyncPlayers forgets it when this peer decides again.)
 		self.Role = role
-		for _, entry in pairs(self.Roster) do entry.Score = 0 end
-		self.Winner = nil
-		self.PublishPending = true
-		if role ~= nil then self.LeftReason = nil end
+		self:ResetRound()
+		self:Publish()
+	end
+	-- A client whose host went away stays in its ended session, so the runtime still reports it (a dialog, or exit code
+	-- 8 for a --frames run), until its player asks to practise.
+	if Network.GetState() == "Disconnected" and Input.IsActionPressed("Practice") then
+		self.LeftReason = Network.GetDisconnectReason()
+		Network.Disconnect()
 	end
 	self:UpdateStatus()
 	if not Decides() then return end
-	if self:SyncPlayers() then self.PublishPending = true end
-	if self.Winner ~= nil then
-		self.BreakLeft = self.BreakLeft - dt
-		if self.BreakLeft <= 0 then
+	if self:SyncPlayers() then self:Publish() end
+	if self.Break then
+		self.Break.Left = self.Break.Left - dt
+		if self.Break.Left <= 0 then
 			self:StartRound()
 		else
-			self:HoldPlayers()
+			self:HoldPlayers(dt)
 		end
 	end
-	if self.PublishPending then self:Publish() end
+	self:SendScores()
 end
 
--- Called on the deciding peer by a player whose tag hit `target`, a player or a bot entity.
+-- A player's tag hit `target` (whatever the ray hit; only players and bots score), on the deciding peer.
 function Match:OnTag(shooter, target)
-	if self.Winner ~= nil then return end
+	if self.Break then return end
 	local shooterPeer = self:PeerOf(shooter)
 	local targetPeer = self:PeerOf(target)
 	local bot = target:GetScript()
 	if not shooterPeer or not (targetPeer or (bot and bot.IsBot)) then return end
+	local winScore = self:Setting("WinScore")
 	local entry = self.Roster[shooterPeer]
 	entry.Score = entry.Score + 1
 	if targetPeer then
@@ -213,64 +262,87 @@ function Match:OnTag(shooter, target)
 		bot:Respawn()
 	end
 	Log.Info("Arena: " .. Arena.PeerName(shooterPeer) .. " tagged " .. target.Name .. " (" .. entry.Score .. ")")
-	if entry.Score >= self.WinScore then self:EndRound(shooterPeer) end
+	if entry.Score >= winScore then self:EndRound(shooterPeer) end
 	-- At once, so the scoreboard shows the tag the frame it lands.
 	self:Publish()
 end
 
--- Someone won: show it for RoundBreak seconds, with everyone held where they stand.
+-- Someone won: show it for RoundBreak seconds, with everyone standing still.
 function Match:EndRound(winner)
-	self.Winner = winner
-	self.BreakLeft = self.RoundBreak
-	for _, entry in pairs(self.Roster) do entry.Held = entry.Entity.Translation end
+	self.Break = { Winner = winner, Left = self:Setting("RoundBreak"), Holds = {} }
 end
 
--- During the break players stand still. Their scripts stop moving them, but the host moves a predicted character from
--- whatever its owner sends, so a modified client could walk on: the host puts it back.
-function Match:HoldPlayers()
-	for _, entry in pairs(self.Roster) do
-		local held = entry.Held
-		if held and entry.Entity:IsValid() and Arena.FlatOffset(entry.Entity.Translation, held):Length() > 0.01 then
-			entry.Entity.Translation = held
+-- A new round, or a new match: no break, and every score back to 0.
+function Match:ResetRound()
+	self.Break = nil
+	for _, entry in pairs(self.Roster) do entry.Score = 0 end
+end
+
+-- During the break players stand still. Their scripts stop moving them once they hear of it, but the host moves a
+-- predicted character from whatever its owner sends, so a modified client could walk on: the host puts it back. Each
+-- player (one that joins during the break too) is held where it stands once its owner has had time to hear: its round
+-- trip and the view lag, during which an honest player's last steps are still arriving.
+function Match:HoldPlayers(dt)
+	for peer, entry in pairs(self.Roster) do
+		local hold = self.Break.Holds[peer]
+		if not hold then
+			hold = { Grace = (Network.GetRoundTripTime(peer) or 0) + Arena.MaxViewLag }
+			self.Break.Holds[peer] = hold
+		end
+		if hold.Grace > 0 then
+			hold.Grace = hold.Grace - dt
+			hold.Position = entry.Entity.Translation
+		elseif Arena.FlatOffset(entry.Entity.Translation, hold.Position):Length() > 0.01 then
+			entry.Entity.Translation = hold.Position
 		end
 	end
 end
 
 function Match:StartRound()
-	self.Winner = nil
+	self:ResetRound()
 	-- Everyone back to a spawn point, in peer order so every run agrees; a player not placed yet still counts where
 	-- it stands, which at worst leaves two players a little closer than they could be.
-	for _, peer in ipairs(Arena.SortedKeys(self.Roster)) do
+	for _, peer in ipairs(SortedKeys(self.Roster)) do
 		local entry = self.Roster[peer]
-		entry.Score = 0
-		entry.Held = nil
 		entry.Entity.Translation = self:FreeSpawn(entry.Entity)
 	end
 	for _, entity in ipairs(Scene.GetEntitiesWith("Script")) do
 		local script = entity:GetScript()
 		if script and script.IsBot then script:Respawn() end
 	end
-	self.PublishPending = true
+	self:Publish()
 end
 
--- Sends the scoreboard rows (by peer) and the winner (false during play) to this peer's scoreboard and every client's,
--- whole, so one message brings a client up to date. A send that fails is tried again next frame.
+-- The scoreboard rows (by peer) and the winner (false during play), whole, so one message brings a client up to date:
+-- shown on this peer at once, and sent to every client by SendScores.
 function Match:Publish()
 	local rows = {}
-	for _, peer in ipairs(Arena.SortedKeys(self.Roster)) do rows[#rows + 1] = { Peer = peer, Score = self.Roster[peer].Score } end
-	local winner = self.Winner ~= nil and self.Winner or false
-	self.Scoreboard:GetScript():ShowScores(0, rows, winner)
-	self.PublishPending = false
+	for _, peer in ipairs(SortedKeys(self.Roster)) do rows[#rows + 1] = { Peer = peer, Score = self.Roster[peer].Score } end
+	self.Rows, self.Winner = rows, self.Break and self.Break.Winner or false
+	Arena.RequireScript("Scoreboard"):ShowScores(0, self.Rows, self.Winner)
 	if Network.IsHost() then
-		local sent, reason = Network.Rpc(self.Scoreboard, "ShowScores", "Clients", rows, winner)
-		if not sent then
-			if not self.PublishFailing then Log.Warn("Arena: could not send the scores to every client (trying again each frame): " .. tostring(reason)) end
-			self.PublishFailing = true
-			self.PublishPending = true
-			return
-		end
+		for _, peer in ipairs(Network.GetPeers()) do self.Unsent[peer] = true end
 	end
-	self.PublishFailing = false
+end
+
+-- Sends the current table to each client that has not had it. One whose send fails (its message rate or bandwidth is
+-- spent) gets it next frame; the others are not sent it again.
+function Match:SendScores()
+	if not Network.IsHost() then
+		self.Unsent = {}
+		return
+	end
+	local connected = {}
+	for _, peer in ipairs(Network.GetPeers()) do connected[peer] = true end
+	local failure
+	for _, peer in ipairs(SortedKeys(self.Unsent)) do
+		local sent, reason = true, nil
+		if connected[peer] then sent, reason = Network.Rpc(self.Scoreboard, "ShowScores", peer, self.Rows, self.Winner) end
+		if sent then self.Unsent[peer] = nil else failure = failure or reason end
+	end
+	if failure and not self.SendFailing then Log.Warn("Arena: could not send the scores to every client (trying again each frame): " .. tostring(failure)) end
+	if not failure and self.SendFailing then Log.Info("Arena: the scores reached every client again") end
+	self.SendFailing = failure ~= nil
 end
 
 function Match:UpdateStatus()
@@ -286,7 +358,7 @@ function Match:UpdateStatus()
 	elseif state == "Connecting" then
 		text = "Connecting..."
 	else
-		text = "Disconnected: " .. tostring(Network.GetDisconnectReason())
+		text = "Disconnected: " .. tostring(Network.GetDisconnectReason()) .. ". Press Enter to practise"
 	end
 	if self.StatusText:GetComponent("UIText").Text ~= text then self.StatusText:SetComponent("UIText", { Text = text }) end
 end

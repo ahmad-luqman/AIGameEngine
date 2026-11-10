@@ -23,8 +23,8 @@ BrecciaRuntime --project MyGame --connect 192.168.1.20:7777
 
 Scripts start sessions too (`Network.Host`, `Network.Connect`, `Network.Disconnect`), and the editor's Play can host or
 join over UDP (the toolbar's Network button), so the editor and runtimes play together. `Game.IsHeadless()` says the
-game runs with no window (`--headless`, or the `breccia` CLI); with `Network.IsHost()` it tells a dedicated server,
-where a game usually spawns no player for the host. `--host 0` lets the system pick a
+game renders nothing and has no window (`--headless`, or the `breccia` CLI); with `Network.IsHost()` it tells a dedicated
+server, where a game usually spawns no player for the host. `--host 0` lets the system pick a
 free port; the log says which (`Network: hosting on UDP port N`). Headless runs with a
 network session sleep out the rest of each frame instead of spinning a core. With `--frames`, a client that is not
 connected when the run ends exits with code 8, so a test cannot pass without a session. A windowed client whose connection

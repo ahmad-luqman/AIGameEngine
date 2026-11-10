@@ -1096,8 +1096,8 @@ function Game.Quit() end
 ---@return { Name: string, Version: string, Company: string }
 function Game.GetInfo() end
 
----Whether the game runs with no window, so nobody plays at this machine: the runtime's `--headless` (a dedicated server
----or a headless client) and the breccia CLI.
+---Whether the game renders nothing and has no window, so nobody plays at this machine: the runtime's `--headless` (a
+---dedicated server or a headless client) and the breccia CLI.
 ---@return boolean
 function Game.IsHeadless() end
 

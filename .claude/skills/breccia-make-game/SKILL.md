@@ -90,9 +90,12 @@ broken version leaves the old one running). Typical patterns:
   Check every argument on the host before using it: vectors arrive as arrays, so read each component by index (an
   `ipairs` loop stops at the first missing one) and refuse non-numbers, NaN and infinities, since an error in an RPC
   stops that entity's script on the host. Hits use `Network.Raycast` at the sender's `GetViewTime()`, clamped to no more
-  than its round trip plus the interpolation delay back. Send shared state (scores) from the host as a whole table
+  than its round trip plus the interpolation delay, a snapshot interval and some jitter back (the sample allows its round
+  trip plus 0.25 s); a client's view honestly lags by about the round trip and the delay. Send shared state (scores) from the host as a whole table
   through an RPC on a networked entity, whenever it changes and to every peer that joins (RPCs are not replayed to late
-  joiners), and send again when `Network.Rpc` returns false. Test with `net.host`, `net.connect` (in-process clients),
+  joiners), and send again, to the peers that missed it, when `Network.Rpc` returns false. Let a client whose host left
+  stay in its ended session until its player chooses to go on: `Network.Disconnect()` there drops the session the runtime
+  reports (its dialog, and exit code 8 for `--frames` runs). Test with `net.host`, `net.connect` (in-process clients),
   `net.focus` (whose input), `net.link` (latency) and `net.command` (asserts on a client's scene).
 - Random numbers repeat every play session (the project's `RandomSeed`); `Math.Seed(n)` picks another sequence, `Debug.Draw*` to visualise logic, `Game.Quit()` to exit.
 - HUDs and menus: put `UIRect` + `UIImage`/`UIText` entities in the scene (anchored, nine-slice panels,

@@ -12,7 +12,7 @@ Bot.Properties = {
 	Speed = 3.0
 }
 
--- Tells a bot's script apart from a player's (Player.IsPlayer).
+-- Tells a bot's script apart from others when a tag hits its entity.
 Bot.IsBot = true
 
 -- Ends closer than this turn the bot around.
@@ -20,8 +20,9 @@ local Arrived = 0.1
 
 function Bot:OnCreate()
 	if Arena.FlatOffset(self.Start, self.End):Length() <= 2 * Arrived then
-		error("Bot: '" .. self.Entity.Name .. "' needs a lane: its Start and End are less than " .. 2 * Arrived .. " m apart")
+		error("Bot: '" .. self.Entity.Name .. "' needs a lane: its Start and End are " .. 2 * Arrived .. " m or less apart")
 	end
+	if type(self.Speed) ~= "number" or self.Speed <= 0 then error("Bot: '" .. self.Entity.Name .. "' needs a Speed above 0") end
 	self.Forward = true
 end
 
@@ -39,14 +40,15 @@ end
 function Bot:OnUpdate(dt)
 	-- On clients the host's snapshots move it.
 	if not Network.HasAuthority(self.Entity) then return end
-	if Arena.RoundOver() then
-		self.Entity:Move(Vec3(0, 0, 0))
-		return
-	end
 	local offset = Arena.FlatOffset(self.Entity.WorldPosition, self:Target())
 	if offset:Length() < Arrived then
 		self.Forward = not self.Forward
 		offset = Arena.FlatOffset(self.Entity.WorldPosition, self:Target())
+	end
+	-- Standing still during the break, and on a lane a script shrank to nothing (no direction to face).
+	if Arena.RoundOver() or offset:Length() < 1e-4 then
+		self.Entity:Move(Vec3(0, 0, 0))
+		return
 	end
 	local direction = offset:Normalized()
 	self.Entity:Move(direction * self.Speed)

@@ -61,6 +61,18 @@
 			],
 			"Name": "Fire",
 			"Type": "Button"
+		},
+		{
+			"Bindings": [
+				{
+					"Key": "Enter"
+				},
+				{
+					"GamepadButton": "Start"
+				}
+			],
+			"Name": "Practice",
+			"Type": "Button"
 		}
 	],
 	"Format": "BrecciaInput",
