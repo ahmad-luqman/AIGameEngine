@@ -1110,7 +1110,7 @@ TEST_SUITE("Physics")
 		CHECK_FALSE(physics.SetCharacterState(plain, *start));
 	}
 
-	TEST_CASE("Character prediction: a jump's air time survives a state round trip")
+	TEST_CASE("Character prediction: a restored state steps exactly as the state it came from")
 	{
 		Scene scene;
 		CreateGround(scene);
@@ -1119,19 +1119,46 @@ TEST_SUITE("Physics")
 		scene.OnRuntimeStart();
 		PhysicsWorld& physics = *scene.GetPhysicsWorld();
 		Simulate(scene, 0.5f);
-		physics.MoveCharacter(character, { 0.0f, 4.0f, 0.0f });
+		const glm::quat rotation = character.GetTransform().Rotation;
+		// What a state and some inputs lead to, from wherever the character is now.
+		const auto run = [&](const CharacterState& from, const std::vector<CharacterInput>& inputs) {
+			REQUIRE(physics.SetCharacterState(character, from));
+			for (const CharacterInput& input : inputs)
+				REQUIRE(physics.StepCharacter(character, input));
+			return *physics.GetCharacterState(character);
+		};
+		const CharacterInput still{ glm::vec3(0.0f), rotation };
+		const CharacterInput jump{ { 1.0f, 4.0f, 0.0f }, rotation };
+
+		// In the air after a jump: velocity, air time and the spent jump all carry over.
+		physics.MoveCharacter(character, jump.Velocity);
 		Simulate(scene, 0.1f);
-		physics.MoveCharacter(character, { 0.0f, 0.0f, 0.0f });
-		const std::optional<CharacterState> airborne = physics.GetCharacterState(character);
-		REQUIRE(airborne);
-		CHECK(airborne->Jumped);
-		CHECK(airborne->SinceGrounded > 0.0f);
-		CHECK(airborne->Velocity.y > 0.0f);
-		// A restored airborne character keeps falling with that speed and cannot jump again in mid-air.
+		physics.MoveCharacter(character, still.Velocity);
+		const CharacterState airborne = *physics.GetCharacterState(character);
+		REQUIRE(airborne.Jumped);
+		REQUIRE(airborne.SinceGrounded > 0.0f);
+		REQUIRE(airborne.Velocity.y > 0.0f);
+		const std::vector<CharacterInput> fall(30, jump);
+		const CharacterState first = run(airborne, fall);
+		Simulate(scene, 1.0f);
+		const CharacterState again = run(airborne, fall);
+		CHECK(glm::length(again.Position - first.Position) < 1e-5f);
+		CHECK(glm::length(again.Velocity - first.Velocity) < 1e-5f);
+		CHECK(again.SinceGrounded == first.SinceGrounded);
+		CHECK(again.Jumped == first.Jumped);
+		// A spent jump stays spent: asking to jump in mid-air only steers.
+		CHECK(first.Velocity.y < airborne.Velocity.y);
+
+		// A grounded state put on an airborne character can jump at once.
+		Simulate(scene, 1.0f);
+		const CharacterState grounded = *physics.GetCharacterState(character);
+		REQUIRE(physics.IsCharacterGrounded(character));
+		physics.MoveCharacter(character, jump.Velocity);
 		Simulate(scene, 0.2f);
-		REQUIRE(physics.SetCharacterState(character, *airborne));
-		CHECK(physics.StepCharacter(character, { { 0.0f, 6.0f, 0.0f }, glm::quat(1, 0, 0, 0) }));
-		CHECK(physics.GetCharacterState(character)->Velocity.y < airborne->Velocity.y);
+		physics.MoveCharacter(character, still.Velocity);
+		const CharacterState jumped = run(grounded, { jump });
+		CHECK(jumped.Velocity.y > 3.0f);
+		CHECK(jumped.Jumped);
 	}
 
 	TEST_CASE("A driven character follows its transform and moves only through StepCharacter")

@@ -1465,12 +1465,18 @@ namespace Breccia {
 	struct NetworkedComponent
 	{
 		static constexpr float MaxPriority = 100.0f;
+		// NetProtocol::MaxInputSpeed: inputs faster than that are invalid on the wire.
+		static constexpr float MaxInputSpeedLimit = 1000.0f;
 
 		uint32_t Owner = 0;
 		NetworkAuthority Authority = NetworkAuthority::Server;
 		// How quickly the entity's changes go out when a connection's bandwidth is short, relative to the others (an entity
 		// waiting to be sent gains this much each tick; the highest totals go first). In (0, MaxPriority].
 		float Priority = 1.0f;
+		// With Predicted authority: the fastest (m/s, in (0, MaxInputSpeedLimit]) the owning client's inputs may move the
+		// character on the host, vertical speed included, so a modified client cannot run or jump faster than the game
+		// allows. The host clamps faster inputs; the client is corrected. Set it to the character's top speed.
+		float MaxInputSpeed = MaxInputSpeedLimit;
 
 		bool operator==(const NetworkedComponent&) const = default;
 	};

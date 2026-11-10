@@ -35,8 +35,8 @@ namespace Breccia {
 		// A connection that hears nothing for this long ends (Timeout); a handshake not finished by then ends with
 		// HandshakeTimeout.
 		float TimeoutSeconds = 10.0f;
-		// How far behind the newest snapshot (seconds) a client shows the entities it does not decide, moving them smoothly
-		// between the snapshots around that time; 0 shows each snapshot as it arrives. Two or three snapshot intervals hide
+		// How far behind its estimate of the host's clock (seconds) a client shows the entities it does not decide, moving
+		// them smoothly between the snapshots around that time; 0 shows each snapshot as it arrives. Two or three snapshot intervals hide
 		// a lost snapshot. A client takes its own project's value.
 		float InterpolationDelay = 0.1f;
 		// Script messages and RPCs each connection may send per second, per direction (Lua Network.Send, Network.Rpc): a
@@ -45,6 +45,13 @@ namespace Breccia {
 		uint32_t MaxMessagesPerSecond = 120;
 
 		bool operator==(const NetworkSettings&) const = default;
+
+		// The active project's settings, or the defaults without one.
+		static NetworkSettings FromActiveProject();
+
+		// Reads "host" or "host:port" (IPv4 addresses and names only, as ENet has no IPv6, so the last ':' starts the
+		// port), with defaultPort when it names none. False for an empty host or a port outside [1, 65535].
+		static bool ParseAddress(const std::string& text, uint16_t defaultPort, std::string& outHost, uint16_t& outPort);
 
 		// What is out of range, naming the field ("Network.TickRate must be ..."), or an empty string. FromJson checks it;
 		// settings built in code must pass it too.

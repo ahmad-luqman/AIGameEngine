@@ -1,5 +1,6 @@
 #include "Breccia/Network/NetProtocol.h"
 
+#include "Breccia/Core/Assert.h"
 #include "Breccia/Core/TextEncoding.h"
 #include "Breccia/Network/NetValue.h"
 #include "Breccia/Network/ReplicationSchema.h"
@@ -7,6 +8,7 @@
 
 #include <glm/glm.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <unordered_set>
@@ -206,6 +208,64 @@ namespace Breccia {
 				writer.WriteFloat(value.z);
 			}
 
+			// The wire order is w, x, y, z.
+			bool ReadQuat(NetReader& reader, glm::quat& value)
+			{
+				return reader.ReadFloat(value.w) && reader.ReadFloat(value.x) && reader.ReadFloat(value.y) && reader.ReadFloat(value.z);
+			}
+
+			void WriteQuat(NetWriter& writer, const glm::quat& value)
+			{
+				writer.WriteFloat(value.w);
+				writer.WriteFloat(value.x);
+				writer.WriteFloat(value.y);
+				writer.WriteFloat(value.z);
+			}
+
+			bool WithinMagnitude(const glm::vec3& value, float limit)
+			{
+				return std::abs(value.x) <= limit && std::abs(value.y) <= limit && std::abs(value.z) <= limit;
+			}
+
+			void WritePrediction(NetWriter& writer, const NetPrediction& prediction)
+			{
+				writer.WriteU64(prediction.Entity);
+				writer.WriteU32(prediction.Input);
+				WriteVec3(writer, prediction.State.Position);
+				WriteVec3(writer, prediction.State.Velocity);
+				writer.WriteFloat(prediction.State.SinceGrounded);
+				writer.WriteU8(prediction.State.Jumped ? 1 : 0);
+			}
+
+			void WriteInputs(NetWriter& writer, const NetInputs& inputs)
+			{
+				writer.WriteU64(inputs.Entity);
+				writer.WriteU32(inputs.First);
+				writer.WriteVarUInt(inputs.Steps.size());
+				for (const CharacterInput& step : inputs.Steps)
+				{
+					WriteVec3(writer, step.Velocity);
+					WriteQuat(writer, step.Rotation);
+				}
+			}
+
+			void WriteExtras(NetWriter& writer, NetMessageType type, const NetStateExtras& extras)
+			{
+				if (type == NetMessageType::Snapshot)
+				{
+					writer.WriteDouble(extras.Time);
+					writer.WriteVarUInt(extras.Predictions.size());
+					for (const NetPrediction& prediction : extras.Predictions)
+						WritePrediction(writer, prediction);
+				}
+				else
+				{
+					writer.WriteVarUInt(extras.Inputs.size());
+					for (const NetInputs& inputs : extras.Inputs)
+						WriteInputs(writer, inputs);
+				}
+			}
+
 			bool ReadPrediction(NetReader& reader, NetPrediction& prediction, std::string& outError)
 			{
 				if (!ReadUuid(reader, prediction.Entity, outError))
@@ -216,6 +276,9 @@ namespace Breccia {
 					return Fail(reader, outError, "a predicted character's state is truncated or not finite");
 				if (!(state.SinceGrounded >= 0.0f && state.SinceGrounded <= CharacterState::MaxSinceGrounded) || jumped > 1)
 					return Fail(reader, outError, "a predicted character's time in the air or jump flag is out of range");
+				// Far beyond any world physics handles well; a host sending more is broken or hostile.
+				if (!WithinMagnitude(state.Position, MaxPredictedCoordinate) || !WithinMagnitude(state.Velocity, MaxInputSpeed))
+					return Fail(reader, outError, "a predicted character's position or velocity is out of range");
 				state.Jumped = jumped != 0;
 				return true;
 			}
@@ -233,10 +296,9 @@ namespace Breccia {
 				inputs.Steps.resize(count);
 				for (CharacterInput& step : inputs.Steps)
 				{
-					glm::quat& rotation = step.Rotation;
-					if (!ReadVec3(reader, step.Velocity) || !reader.ReadFloat(rotation.w) || !reader.ReadFloat(rotation.x) || !reader.ReadFloat(rotation.y) || !reader.ReadFloat(rotation.z))
+					if (!ReadVec3(reader, step.Velocity) || !ReadQuat(reader, step.Rotation))
 						return Fail(reader, outError, "a character input is truncated or not finite");
-					const float length = glm::length(rotation);
+					const float length = glm::length(step.Rotation);
 					// A sender normalizes its rotations: far from unit length is no rotation (and NaN fails here too).
 					if (!(length > 0.5f && length < 2.0f))
 						return Fail(reader, outError, "a character input's rotation is not a unit quaternion");
@@ -398,12 +460,27 @@ namespace Breccia {
 			return {};
 		}
 
+		bool IsReservedScriptName(std::string_view name)
+		{
+			return std::ranges::any_of(ReservedScriptNames, [name](const char* reserved) { return name == reserved; });
+		}
+
+		size_t ExtrasBytes(NetMessageType type, const NetStateExtras& extras)
+		{
+			NetWriter writer;
+			WriteExtras(writer, type, extras);
+			return writer.GetBytes().size();
+		}
+
 		std::string CheckScript(const NetScriptMessage& message)
 		{
 			if (message.Name.empty() || message.Name.size() > MaxScriptNameLength)
 				return "a script message's name must be 1 to " + std::to_string(MaxScriptNameLength) + " bytes";
 			if (!TextEncoding::IsValidUtf8(message.Name))
 				return "a script message's name is not UTF-8";
+			// A peer must not be able to fake the session's own events (Network.On delivers both).
+			if (message.Kind == NetScriptKind::Message && IsReservedScriptName(message.Name))
+				return "'" + message.Name + "' is a connection event, not a message name";
 			if (!message.Arguments.is_array() || message.Arguments.size() > MaxScriptArguments)
 				return "a script message carries at most " + std::to_string(MaxScriptArguments) + " arguments, as an array";
 			if (message.Kind == NetScriptKind::Rpc && !message.Entity.IsValid())
@@ -490,38 +567,9 @@ namespace Breccia {
 			writer.WriteVarUInt(despawns.size());
 			for (UUID uuid : despawns)
 				writer.WriteU64(uuid);
-			if (type == NetMessageType::Snapshot)
-			{
-				writer.WriteDouble(extras.Time);
-				writer.WriteVarUInt(extras.Predictions.size());
-				for (const NetPrediction& prediction : extras.Predictions)
-				{
-					writer.WriteU64(prediction.Entity);
-					writer.WriteU32(prediction.Input);
-					WriteVec3(writer, prediction.State.Position);
-					WriteVec3(writer, prediction.State.Velocity);
-					writer.WriteFloat(prediction.State.SinceGrounded);
-					writer.WriteU8(prediction.State.Jumped ? 1 : 0);
-				}
-			}
-			else
-			{
-				writer.WriteVarUInt(extras.Inputs.size());
-				for (const NetInputs& inputs : extras.Inputs)
-				{
-					writer.WriteU64(inputs.Entity);
-					writer.WriteU32(inputs.First);
-					writer.WriteVarUInt(inputs.Steps.size());
-					for (const CharacterInput& step : inputs.Steps)
-					{
-						WriteVec3(writer, step.Velocity);
-						writer.WriteFloat(step.Rotation.w);
-						writer.WriteFloat(step.Rotation.x);
-						writer.WriteFloat(step.Rotation.y);
-						writer.WriteFloat(step.Rotation.z);
-					}
-				}
-			}
+			// Each direction carries only its own extras: anything else would be lost silently.
+			BR_CORE_ASSERT(type == NetMessageType::Snapshot ? extras.Inputs.empty() : (extras.Predictions.empty() && extras.Time == 0.0), "state extras of the other direction");
+			WriteExtras(writer, type, extras);
 			return writer.TakeBytes();
 		}
 

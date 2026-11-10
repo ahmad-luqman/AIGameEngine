@@ -197,9 +197,15 @@ namespace Breccia {
 		m_NetworkSystem.reset();
 	}
 
-	void Scene::RequestNetworkChange(Scope<NetworkSystem> next)
+	void Scene::RequestNetworkStart(Scope<NetworkSystem> next)
 	{
-		m_PendingNetwork = std::move(next);
+		BR_CORE_ASSERT(next, "RequestNetworkStop ends a session");
+		m_PendingNetwork = PendingNetwork{ std::move(next) };
+	}
+
+	void Scene::RequestNetworkStop()
+	{
+		m_PendingNetwork = PendingNetwork{};
 	}
 
 	const Ref<NetTransportFactory>& Scene::GetNetworkTransports()
@@ -853,7 +859,7 @@ namespace Breccia {
 		if (m_PendingNetwork && m_State == SceneState::Play)
 		{
 			// The old session's peers hear of its end before the new one starts.
-			Scope<NetworkSystem> next = std::move(*m_PendingNetwork);
+			Scope<NetworkSystem> next = std::move(m_PendingNetwork->Next);
 			m_PendingNetwork.reset();
 			m_NetworkSystem.reset();
 			if (next)
@@ -888,7 +894,7 @@ namespace Breccia {
 			outError = "scenes can only be loaded while playing";
 			return false;
 		}
-		if (m_NetworkSystem)
+		if (m_NetworkSystem || (m_PendingNetwork && m_PendingNetwork->Next))
 		{
 			// Clients would keep the old level: switching every peer's scene together is not supported yet.
 			outError = "scenes cannot be loaded during a network session";

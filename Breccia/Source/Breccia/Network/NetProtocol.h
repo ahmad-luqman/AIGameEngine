@@ -6,10 +6,12 @@
 
 #include <nlohmann/json.hpp>
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <variant>
 #include <vector>
 
@@ -172,6 +174,7 @@ namespace Breccia {
 		NetStateExtras Extras;
 	};
 
+	// What a Script message asks of the receiver's scripts.
 	enum class NetScriptKind : uint8_t
 	{
 		// A named message for the receiver's Network.On handlers.
@@ -216,8 +219,13 @@ namespace Breccia {
 		// Characters one client may predict, and steps of each one ClientUpdate carries (the newest ones not acknowledged).
 		inline constexpr uint32_t MaxPredictedCharacters = 64;
 		inline constexpr uint32_t MaxInputsPerCharacter = 32;
-		// The fastest a predicted character may be asked to move (m/s): faster inputs are refused as invalid.
+		// The fastest a predicted character may be asked to move (m/s): faster inputs are refused as invalid, and so are
+		// predicted states faster than this. A client clamps below it (CollectInputs).
 		inline constexpr float MaxInputSpeed = 1000.0f;
+		// The farthest from the origin (each axis, meters) a predicted state may put a character.
+		inline constexpr float MaxPredictedCoordinate = 1.0e7f;
+		// The connection events Network.On delivers, which no script message may be named.
+		inline constexpr std::array<const char*, 4> ReservedScriptNames = { "Connected", "Disconnected", "PeerConnected", "PeerDisconnected" };
 		// A script message's name, its arguments and its whole encoding at most.
 		inline constexpr size_t MaxScriptNameLength = 64;
 		inline constexpr uint32_t MaxScriptArguments = 32;
@@ -229,11 +237,15 @@ namespace Breccia {
 		bool WriteSpawn(NetWriter& writer, const NetEntitySpawn& spawn);
 		bool WriteUpdate(NetWriter& writer, const NetEntityUpdate& update);
 		// A Snapshot or ClientUpdate from records WriteSpawn and WriteUpdate wrote.
-		std::vector<uint8_t> AssembleState(NetMessageType type, uint32_t sequence, uint32_t acknowledged, std::span<const std::vector<uint8_t>> spawns, std::span<const std::vector<uint8_t>> updates, std::span<const UUID> despawns, const NetStateExtras& extras = {});
+		std::vector<uint8_t> AssembleState(NetMessageType type, uint32_t sequence, uint32_t acknowledged, std::span<const std::vector<uint8_t>> spawns, std::span<const std::vector<uint8_t>> updates, std::span<const UUID> despawns, const NetStateExtras& extras);
+		// The bytes a type's extras take in its message (the sender keeps its records within what is left).
+		size_t ExtrasBytes(NetMessageType type, const NetStateExtras& extras);
+		bool IsReservedScriptName(std::string_view name);
 		// Empty when the arguments cannot be encoded (NetValue::Encode) or the message would exceed MaxScriptMessageBytes.
 		std::vector<uint8_t> EncodeScript(const NetScriptMessage& message);
-		// What is wrong with a script message, or an empty string: a name that is empty, too long or not UTF-8, arguments
-		// that are not an array or too many, an RPC without an entity or a message with one.
+		// What is wrong with a script message, or an empty string: a name that is empty, too long or not UTF-8, a message
+		// named like a connection event (ReservedScriptNames), arguments that are not an array or too many, an RPC without
+		// an entity or a message with one.
 		std::string CheckScript(const NetScriptMessage& message);
 		// Empty when a value cannot be encoded.
 		std::vector<uint8_t> EncodeState(NetMessageType type, const NetState& state);

@@ -1333,12 +1333,9 @@ namespace Breccia {
 		{
 			Scene& scene = *m_Session.GetScene();
 			m_Session.RecordViewChange();
+			// With the in-process network clients (net.connect), as play.step steps them.
 			if (!m_Paused || scene.IsPaused())
-			{
-				// In-process network clients (net.connect) first, so the game UI left drawn is the play scene's.
-				m_Session.UpdateNetworkClients(ts);
-				scene.OnUpdate(ts);
-			}
+				m_Session.UpdatePlayScene(ts);
 			if (scene.IsQuitRequested())
 			{
 				Stop();
@@ -1987,7 +1984,12 @@ namespace Breccia {
 				ImGui::TextDisabled("Play's network session (UDP)");
 				int mode = static_cast<int>(m_PlayNetwork);
 				if (ImGui::Combo("Mode", &mode, modes, IM_ARRAYSIZE(modes)))
+				{
 					m_PlayNetwork = static_cast<PlayNetwork>(mode);
+					// A host may pick any free port (0); a client needs the host's.
+					if (m_PlayNetwork == PlayNetwork::Client && m_PlayNetworkPort == 0)
+						m_PlayNetworkPort = NetworkSettings::DefaultPort;
+				}
 				if (m_PlayNetwork == PlayNetwork::Client)
 					ImGui::InputText("Address", &m_PlayNetworkAddress);
 				if (m_PlayNetwork != PlayNetwork::Offline && ImGui::InputInt("Port", &m_PlayNetworkPort))

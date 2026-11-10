@@ -21,6 +21,13 @@ namespace Breccia {
 		uint64_t ID = 0;
 	};
 
+	// Lua-side handle of a Network.On subscription (NetworkHandle): network handlers live on their own bus, whose ids are
+	// counted apart from Events', so the handle types differ.
+	struct ScriptNetworkHandle
+	{
+		uint64_t ID = 0;
+	};
+
 	// Named events between scripts of one play session (Lua Events.On/Once/Emit). Emit is synchronous: the
 	// handlers subscribed when it starts run in subscription order before it returns. A handler belongs to its
 	// owner (ScriptContext::GetCurrentOwner when subscribing): it runs with that owner current, is skipped while

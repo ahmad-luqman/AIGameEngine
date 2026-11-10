@@ -1349,6 +1349,17 @@ function Events.Emit(name, ...) end
 ---A target of Network.Send and Network.Rpc: "Server" (from a client), "Clients" (from the host), "Owner" (RPCs from the host) or a client's peer ID.
 ---@alias NetworkTarget "Server"|"Clients"|"Owner"|integer
 
+---A Network.On subscription.
+---@class NetworkHandle
+NetworkHandle = {}
+
+---Ends the subscription; false when it had ended already.
+---@return boolean
+function NetworkHandle:Cancel() end
+
+---@return boolean
+function NetworkHandle:IsActive() end
+
 ---The network session: sessions, queries, messages, RPCs and lag-compensated raycasts (Docs/ScriptingAPI.md, Networking).
 ---@class Network
 Network = {}
@@ -1387,9 +1398,9 @@ function Network.GetPeers() end
 ---@return integer|nil
 function Network.GetPort() end
 
----Seconds of round trip to a peer (a client's host by default); 0 when unknown.
+---Seconds of round trip to a peer (a client's host by default; 0 while unmeasured), or nil without a connection to it.
 ---@param peer? integer
----@return number
+---@return number|nil
 function Network.GetRoundTripTime(peer) end
 
 ---The session clock (a client's estimate of the host's).
@@ -1415,13 +1426,13 @@ function Network.IsOwner(entity) end
 ---@return boolean
 function Network.IsPredicted(entity) end
 
----Hosts a session from the end of the frame; false and the reason when the port cannot be used.
+---Hosts a session from the end of the frame; false and the reason when the port cannot be used, a session is active, or a session change or scene load waits.
 ---@param port? integer 0 picks a free port; default the project's Network.Port
 ---@return boolean ok
 ---@return string? error
 function Network.Host(port) end
 
----Joins a host from the end of the frame; false and the reason when the address cannot be used.
+---Joins a host from the end of the frame; false and the reason when the address cannot be used, a session is active, or a session change or scene load waits.
 ---@param address string
 ---@param port? integer default the project's Network.Port
 ---@return boolean ok
@@ -1431,7 +1442,7 @@ function Network.Connect(address, port) end
 ---Ends the session at the end of the frame.
 function Network.Disconnect() end
 
----Sends a reliable message; false and the reason when nothing went.
+---Sends a reliable message; false and the reasons when it did not reach every target.
 ---@param target NetworkTarget
 ---@param name string
 ---@param ... any
@@ -1439,7 +1450,7 @@ function Network.Disconnect() end
 ---@return string? error
 function Network.Send(target, name, ...) end
 
----Sends a message that may be lost; false and the reason when nothing went.
+---Sends a message that may be lost; false and the reasons when it did not reach every target.
 ---@param target NetworkTarget
 ---@param name string
 ---@param ... any
@@ -1468,7 +1479,7 @@ function Network.RpcUnreliable(entity, method, target, ...) end
 ---Subscribes to a message, or to "Connected", "Disconnected", "PeerConnected" or "PeerDisconnected".
 ---@param name string
 ---@param fn fun(...: any)
----@return EventHandle
+---@return NetworkHandle
 function Network.On(name, fn) end
 
 ---A raycast on the host as networked bodies stood at `time` (a client's GetViewTime); elsewhere a plain raycast.
@@ -2099,6 +2110,7 @@ function BrecciaScript:StopAllCoroutines() end
 ---@field Owner integer
 ---@field Authority "Server"|"Owner"|"Predicted"
 ---@field Priority number
+---@field MaxInputSpeed number
 
 ---An element of a component list field.
 ---@class AnimationEvent

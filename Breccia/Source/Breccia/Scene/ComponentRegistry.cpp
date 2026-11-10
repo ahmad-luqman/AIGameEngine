@@ -1241,6 +1241,7 @@ namespace Breccia {
 			r.Field("Owner", c.Owner);
 			r.EnumField("Authority", c.Authority, s_NetworkAuthorityNames);
 			r.Field("Priority", c.Priority);
+			r.Field("MaxInputSpeed", c.MaxInputSpeed);
 		}
 
 		void Fields(FieldReader& r, PrefabComponent& c)
@@ -1833,7 +1834,7 @@ namespace Breccia {
 
 		json Write(const NetworkedComponent& c)
 		{
-			return { { "Owner", c.Owner }, { "Authority", EnumName(s_NetworkAuthorityNames, c.Authority) }, { "Priority", c.Priority } };
+			return { { "Owner", c.Owner }, { "Authority", EnumName(s_NetworkAuthorityNames, c.Authority) }, { "Priority", c.Priority }, { "MaxInputSpeed", c.MaxInputSpeed } };
 		}
 
 		json Write(const PrefabComponent& c)
@@ -2261,6 +2262,8 @@ namespace Breccia {
 			// The comparison is false for NaN, which it rejects too.
 			if (!(c.Priority > 0.0f && c.Priority <= NetworkedComponent::MaxPriority))
 				return fmt::format("Priority must be in (0, {}], got {}", NetworkedComponent::MaxPriority, c.Priority);
+			if (!(c.MaxInputSpeed > 0.0f && c.MaxInputSpeed <= NetworkedComponent::MaxInputSpeedLimit))
+				return fmt::format("MaxInputSpeed must be in (0, {}] m/s, got {}", NetworkedComponent::MaxInputSpeedLimit, c.MaxInputSpeed);
 			return {};
 		}
 
