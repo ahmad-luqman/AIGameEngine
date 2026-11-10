@@ -201,14 +201,16 @@ TEST_SUITE("Network")
 	{
 		Scene scene;
 		Entity entity = scene.CreateEntity("Avatar");
-		Patch(entity, "Networked", { { "Owner", 3 }, { "Authority", "Owner" }, { "Priority", 2.5 } });
+		CHECK(NetworkedComponent{}.MaxInputSpeed == NetworkedComponent::MaxInputSpeedLimit);
+		Patch(entity, "Networked", { { "Owner", 3 }, { "Authority", "Predicted" }, { "Priority", 2.5 }, { "MaxInputSpeed", 6 } });
 		const NetworkedComponent& networked = entity.GetComponent<NetworkedComponent>();
 		CHECK(networked.Owner == 3);
-		CHECK(networked.Authority == NetworkAuthority::Owner);
+		CHECK(networked.Authority == NetworkAuthority::Predicted);
 		CHECK(networked.Priority == 2.5f);
-		CHECK(ComponentRegistry::Find("Networked")->Serialize(entity) == nlohmann::json{ { "Owner", 3 }, { "Authority", "Owner" }, { "Priority", 2.5 } });
+		CHECK(networked.MaxInputSpeed == 6.0f);
+		CHECK(ComponentRegistry::Find("Networked")->Serialize(entity) == nlohmann::json{ { "Owner", 3 }, { "Authority", "Predicted" }, { "Priority", 2.5 }, { "MaxInputSpeed", 6.0 } });
 		std::string error;
-		for (const nlohmann::json& bad : { nlohmann::json{ { "Priority", 0 } }, nlohmann::json{ { "Priority", 101 } }, nlohmann::json{ { "Priority", -1 } }, nlohmann::json{ { "Authority", "Client" } }, nlohmann::json{ { "Owner", -1 } } })
+		for (const nlohmann::json& bad : { nlohmann::json{ { "Priority", 0 } }, nlohmann::json{ { "Priority", 101 } }, nlohmann::json{ { "Priority", -1 } }, nlohmann::json{ { "Authority", "Client" } }, nlohmann::json{ { "Owner", -1 } }, nlohmann::json{ { "MaxInputSpeed", 0 } }, nlohmann::json{ { "MaxInputSpeed", 1001 } } })
 		{
 			CHECK_FALSE(ComponentRegistry::AddOrPatch(entity, "Networked", bad, error));
 			CHECK(entity.GetComponent<NetworkedComponent>() == networked);

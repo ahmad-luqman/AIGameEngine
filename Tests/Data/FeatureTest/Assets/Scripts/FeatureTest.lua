@@ -163,7 +163,8 @@ local function TestEntities(self)
 	-- Networked marks network-replicated entities; without a session it is plain data.
 	local networkedProbe = Scene.FindEntityByName("NetworkedProbe")
 	local networked = networkedProbe and networkedProbe:GetComponent("Networked")
-	Check("Networked fields", networked ~= nil and networked.Owner == 2 and networked.Authority == "Owner" and Near(networked.Priority, 3, 1e-6))
+	Check("Networked fields", networked ~= nil and networked.Owner == 2 and networked.Authority == "Owner" and Near(networked.Priority, 3, 1e-6) and networked.MaxInputSpeed == 1000)
+	ExpectError("Networked MaxInputSpeed range", function() networkedProbe:SetComponent("Networked", { MaxInputSpeed = 0 }) end, "MaxInputSpeed")
 	ExpectError("Networked Priority range", function() networkedProbe:SetComponent("Networked", { Priority = 0 }) end, "Priority")
 	ExpectError("Networked Authority names", function() networkedProbe:SetComponent("Networked", { Authority = "Client" }) end, "Authority")
 

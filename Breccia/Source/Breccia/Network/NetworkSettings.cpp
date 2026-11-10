@@ -1,9 +1,13 @@
 #include "Breccia/Network/NetworkSettings.h"
 
 #include "Breccia/Core/JsonUtils.h"
+#include "Breccia/Project/Project.h"
 
 #include <nlohmann/json.hpp>
 #include <spdlog/fmt/fmt.h>
+
+#include <charconv>
+#include <string_view>
 
 namespace Breccia {
 
@@ -37,6 +41,30 @@ namespace Breccia {
 			return true;
 		}
 
+	}
+
+	NetworkSettings NetworkSettings::FromActiveProject()
+	{
+		const Ref<Project>& project = Project::GetActive();
+		return project ? project->GetConfig().Network : NetworkSettings{};
+	}
+
+	bool NetworkSettings::ParseAddress(const std::string& text, uint16_t defaultPort, std::string& outHost, uint16_t& outPort)
+	{
+		const size_t colon = text.rfind(':');
+		outHost = text.substr(0, colon);
+		outPort = defaultPort;
+		if (outHost.empty())
+			return false;
+		if (colon == std::string::npos)
+			return true;
+		const std::string_view port = std::string_view(text).substr(colon + 1);
+		uint32_t value = 0;
+		const auto [end, error] = std::from_chars(port.data(), port.data() + port.size(), value);
+		if (error != std::errc() || end != port.data() + port.size() || value < 1 || value > 65535)
+			return false;
+		outPort = static_cast<uint16_t>(value);
+		return true;
 	}
 
 	nlohmann::json NetworkSettings::ToJson() const

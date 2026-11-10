@@ -98,14 +98,6 @@ namespace Breccia {
 				BR_CORE_CRITICAL("--host and --connect cannot be combined (a host plays its own game)");
 				return false;
 			}
-			const auto readPort = [](const std::string& text, uint16_t& port) {
-				int64_t value = -1;
-				const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), value);
-				if (error != std::errc() || end != text.data() + text.size() || value < 1 || value > 65535)
-					return false;
-				port = static_cast<uint16_t>(value);
-				return true;
-			};
 			if (host)
 			{
 				const std::optional<int64_t> port = commandLine.GetInteger("host");
@@ -119,11 +111,7 @@ namespace Breccia {
 			}
 			else if (connect)
 			{
-				// IPv4 addresses and names only (ENet has no IPv6), so the last ':' starts the port.
-				const size_t colon = connect->rfind(':');
-				options.ConnectAddress = connect->substr(0, colon);
-				options.NetworkPort = settings.Port;
-				if (options.ConnectAddress.empty() || (colon != std::string::npos && !readPort(connect->substr(colon + 1), options.NetworkPort)))
+				if (!NetworkSettings::ParseAddress(*connect, settings.Port, options.ConnectAddress, options.NetworkPort))
 				{
 					BR_CORE_CRITICAL("--connect must be <address> or <address>:<port> with a port in [1, 65535], not '{}'", *connect);
 					return false;

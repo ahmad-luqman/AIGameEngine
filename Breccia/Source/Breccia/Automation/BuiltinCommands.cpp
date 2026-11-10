@@ -281,6 +281,9 @@ namespace Breccia {
 			return "smoke test failed: " + result.Summary + "\n" + LastLines(result.Process.Output, LogLines);
 		}
 
+		// In-process network client indices count every client a play session added (removed ones keep theirs).
+		constexpr int64_t MaxClientIndex = static_cast<int64_t>(AutomationSession::MaxNetworkClients) * 1024;
+
 		Scene& RequireScene(AutomationSession& session)
 		{
 			if (!session.GetScene())
@@ -1155,11 +1158,11 @@ namespace Breccia {
 				session.ClearDirty();
 				return json{ { "path", path } }; }, CommandPolicy::EditBoundary);
 
-			Add(registry, "scene.hash", "Hash of the current scene state (the play copy while playing), or of an in-process network client's (client, from net.connect); equal states give equal hashes, whatever the entity UUIDs. Peers agree once the networked entities are at rest: a client shows moving ones InterpolationDelay behind the host.", Schema::Object({ { "expectHash", Schema::String("string: fail unless the hash equals this one (16 lowercase hex digits)", true) }, { "client", Schema::Integer("integer, an in-process network client's index (net.connect)", 1, AutomationSession::MaxNetworkClients * 1024) } }), [](AutomationSession& session, const json& params) {
+			Add(registry, "scene.hash", "Hash of the current scene state (the play copy while playing), or of an in-process network client's (client, from net.connect); equal states give equal hashes, whatever the entity UUIDs. Peers agree once the networked entities are at rest: a client shows moving ones InterpolationDelay behind the host.", Schema::Object({ { "expectHash", Schema::String("string: fail unless the hash equals this one (16 lowercase hex digits)", true) }, { "client", Schema::Integer("integer, an in-process network client's index (net.connect)", 1, MaxClientIndex) } }), [](AutomationSession& session, const json& params) {
 				Ref<Scene> client;
 				if (params.contains("client"))
 				{
-					client = session.GetNetworkClient(static_cast<size_t>(OptionalInteger(params, "client", 0, 1, AutomationSession::MaxNetworkClients * 1024)));
+					client = session.GetNetworkClient(static_cast<size_t>(OptionalInteger(params, "client", 0, 1, MaxClientIndex)));
 					if (!client)
 						throw CommandError("no such in-process network client (net.connect adds one)");
 				}
@@ -2612,7 +2615,7 @@ namespace Breccia {
 				return json{ { "playing", false } };
 			});
 
-			Add(registry, "play.step", "Advances play mode by N fixed frames (default dt 1/60) and reports script errors and the playing scene (which Lua Scene.Load may switch).", Schema::Object({ { "frames", Schema::Nullable(Schema::Integer("integer (default 1)", 1, 100000)) }, { "dt", json{ { "type", "number" }, { "description", "number, seconds per frame" }, { "exclusiveMinimum", 0.0 }, { "maximum", 0.25 } } }, { "assertNoErrors", Schema::Nullable(Schema::Boolean("bool: fail the command if any script error occurred")) }, { "hash", Schema::Nullable(Schema::Boolean("bool: also return stateHash (see scene.hash)")) }, { "expectHash", Schema::String("string: fail unless the state hash after the step (which has run either way) equals this one; also returns stateHash", true) } }), [](AutomationSession& session, const json& params) {
+			Add(registry, "play.step", "Advances play mode by N fixed frames (default dt 1/60), with every in-process network client (net.connect), and reports script errors (clientScriptErrors: those of in-process clients, [{client, errors}], present when there are some) and the playing scene (which Lua Scene.Load may switch).", Schema::Object({ { "frames", Schema::Nullable(Schema::Integer("integer (default 1)", 1, 100000)) }, { "dt", json{ { "type", "number" }, { "description", "number, seconds per frame" }, { "exclusiveMinimum", 0.0 }, { "maximum", 0.25 } } }, { "assertNoErrors", Schema::Nullable(Schema::Boolean("bool: fail the command if any script error occurred")) }, { "hash", Schema::Nullable(Schema::Boolean("bool: also return stateHash (see scene.hash)")) }, { "expectHash", Schema::String("string: fail unless the state hash after the step (which has run either way) equals this one; also returns stateHash", true) } }), [](AutomationSession& session, const json& params) {
 				if (!session.IsPlaying())
 					throw CommandError("not playing (use play.start)");
 				const uint32_t frames = static_cast<uint32_t>(OptionalInteger(params, "frames", 1, 1, 100000));
@@ -2626,9 +2629,17 @@ namespace Breccia {
 				session.Step(frames, dt);
 				Scene& scene = RequireScene(session);
 				json errors = scene.GetScriptEngine() ? json(scene.GetScriptEngine()->GetErrors()) : json::array();
-				if (OptionalBool(params, "assertNoErrors", false) && !errors.empty())
-					throw CommandError("script errors: " + errors.dump(-1, ' ', false, json::error_handler_t::replace));
+				// In-process network clients' scripts fail as the play scene's do.
+				json clientErrors = json::array();
+				const std::vector<Ref<Scene>>& clients = session.GetNetworkClients();
+				for (size_t i = 0; i < clients.size(); i++)
+					if (clients[i] && clients[i]->GetScriptEngine() && !clients[i]->GetScriptEngine()->GetErrors().empty())
+						clientErrors.push_back({ { "client", i + 1 }, { "errors", clients[i]->GetScriptEngine()->GetErrors() } });
+				if (OptionalBool(params, "assertNoErrors", false) && (!errors.empty() || !clientErrors.empty()))
+					throw CommandError("script errors: " + errors.dump(-1, ' ', false, json::error_handler_t::replace) + (clientErrors.empty() ? "" : "; in-process clients: " + clientErrors.dump(-1, ' ', false, json::error_handler_t::replace)));
 				json result = { { "time", scene.GetTime() }, { "frame", scene.GetFrameCount() }, { "scriptErrors", errors }, { "quitRequested", scene.IsQuitRequested() }, { "scene", scene.GetName() }, { "scenePath", scene.GetPath() } };
+				if (!clientErrors.empty())
+					result["clientScriptErrors"] = std::move(clientErrors);
 				if (OptionalBool(params, "hash", false) || params.contains("expectHash"))
 				{
 					const std::string hash = SceneSerializer::ComputeStateHash(scene);
@@ -3312,6 +3323,12 @@ namespace Breccia {
 			});
 		}
 
+		json LinkJson(const SimulatedNetwork& network)
+		{
+			const SimulatedLinkSettings& link = network.GetLinkSettings();
+			return { { "latency", link.Latency }, { "jitter", link.Jitter }, { "loss", link.Loss }, { "timeoutSeconds", link.TimeoutSeconds }, { "lost", network.GetLostCount() } };
+		}
+
 		// Commands net.command may run on an in-process client: they read a scene or change the playing one, never edit state
 		// or play itself (stepping one peer alone would leave the others behind).
 		constexpr std::array<const char*, 14> ClientCommands = { "scene.hash", "scene.get", "scene.info", "scene.snapshot", "scene.diff", "entity.get", "entity.list", "entity.transform", "component.get", "component.set", "assert.entity_exists", "assert.component", "lua.exec", "input.actions" };
@@ -3330,11 +3347,9 @@ namespace Breccia {
 			json connections = json::array();
 			for (const NetConnectionInfo& connection : network->GetConnections())
 				connections.push_back({ { "peer", connection.PeerId }, { "address", connection.Address }, { "roundTripTime", connection.RoundTripTime }, { "knownEntities", connection.KnownEntities }, { "traffic", NetTrafficJson(connection.Traffic) } });
-			const char* state = network->GetState() == NetConnectionState::Connecting ? "Connecting" : network->GetState() == NetConnectionState::Connected ? "Connected"
-																																							: "Disconnected";
 			return {
-				{ "role", network->GetRole() == NetworkRole::Host ? "Host" : "Client" },
-				{ "state", state },
+				{ "role", NetworkRoleName(network->GetRole()) },
+				{ "state", NetConnectionStateName(network->GetState()) },
 				{ "peerId", network->GetLocalPeerId() },
 				{ "disconnectReason", network->GetDisconnectReason() == NetDisconnectReason::None ? json(nullptr) : json(NetDisconnectReasonName(network->GetDisconnectReason())) },
 				{ "port", network->GetRole() == NetworkRole::Host ? json(network->GetListenPort()) : json(nullptr) },
@@ -3355,13 +3370,16 @@ namespace Breccia {
 					{ "scriptMessagesReceived", statistics.ScriptMessagesReceived },
 					{ "scriptMessagesDropped", statistics.ScriptMessagesDropped },
 					{ "inputsApplied", statistics.InputsApplied },
+					{ "inputsRejected", statistics.InputsRejected },
+					{ "inputsSkipped", statistics.InputsSkipped },
+					{ "idleSteps", statistics.IdleSteps },
 					{ "corrections", statistics.Corrections } } }
 			};
 		}
 
 		Ref<Scene> RequireNetworkClient(AutomationSession& session, const json& params)
 		{
-			const size_t index = static_cast<size_t>(OptionalInteger(params, "client", 0, 1, AutomationSession::MaxNetworkClients * 1024));
+			const size_t index = static_cast<size_t>(OptionalInteger(params, "client", 0, 1, MaxClientIndex));
 			Ref<Scene> client = session.GetNetworkClient(index);
 			if (!client)
 				throw CommandError(fmt::format("no in-process client {} (net.connect adds one; net.status lists them)", index));
@@ -3376,7 +3394,7 @@ namespace Breccia {
 
 		void RegisterNetwork(CommandRegistry& registry)
 		{
-			const json clientSchema = Schema::Integer("integer, an in-process client's index (from net.connect)", 1, AutomationSession::MaxNetworkClients * 1024);
+			const json clientSchema = Schema::Integer("integer, an in-process client's index (from net.connect)", 1, MaxClientIndex);
 
 			Add(registry, "net.host", "Makes the playing scene the host of a network session. Without udp it listens on the session's in-process network, where net.connect adds clients that play copies of the scene in this process (stepped by play.step, with net.link's latency and loss); with udp, on a real UDP port that BrecciaRuntime --connect, another editor or Lua Network.Connect can join. port 0 picks a free one. Returns {transport, port}.", Schema::Object({ { "udp", Schema::Nullable(Schema::Boolean("bool (default false): a real UDP port instead of the in-process network")) }, { "port", Schema::Nullable(Schema::Integer("integer in [0, 65535] (default 0: a free port)", 0, 65535)) } }), [](AutomationSession& session, const json& params) {
 				RequireNetworkPlay(session);
@@ -3392,20 +3410,10 @@ namespace Breccia {
 				std::string error;
 				if (params.contains("address"))
 				{
-					std::string address = RequireString(params, "address");
-					uint16_t port = Project::GetActive() ? Project::GetActive()->GetConfig().Network.Port : NetworkSettings::DefaultPort;
-					if (const size_t colon = address.rfind(':'); colon != std::string::npos)
-					{
-						const std::string text = address.substr(colon + 1);
-						address.resize(colon);
-						uint32_t value = 0;
-						const auto [end, problem] = std::from_chars(text.data(), text.data() + text.size(), value);
-						if (problem != std::errc() || end != text.data() + text.size() || value == 0 || value > 65535)
-							throw CommandError("address: the port after ':' must be an integer in [1, 65535]");
-						port = static_cast<uint16_t>(value);
-					}
-					if (address.empty())
-						throw CommandError("address: the host is empty");
+					std::string address;
+					uint16_t port = 0;
+					if (!NetworkSettings::ParseAddress(RequireString(params, "address"), NetworkSettings::FromActiveProject().Port, address, port))
+						throw CommandError("address must be <host> or <host>:<port> with a port in [1, 65535]");
 					if (!session.JoinNetwork(address, port, error))
 						throw CommandError(error);
 					return json{ { "address", address }, { "port", port } };
@@ -3421,7 +3429,7 @@ namespace Breccia {
 				if (params.contains("client"))
 				{
 					std::string error;
-					if (!session.RemoveNetworkClient(static_cast<size_t>(OptionalInteger(params, "client", 0, 1, AutomationSession::MaxNetworkClients * 1024)), error))
+					if (!session.RemoveNetworkClient(static_cast<size_t>(OptionalInteger(params, "client", 0, 1, MaxClientIndex)), error))
 						throw CommandError(error);
 					return json{ { "disconnected", true } };
 				}
@@ -3431,7 +3439,7 @@ namespace Breccia {
 				return json{ { "disconnected", true } };
 			});
 
-			Add(registry, "net.status", "Describes the network session of the playing scene, or of an in-process client: role (Host, Client or null without a session), state (Connecting, Connected, Disconnected), peerId, disconnectReason, port (a host's), time and viewTime (the host clock, and the time a client shows other entities at), remoteEntities (a client's entities from the host), connections ({peer, address, roundTripTime, knownEntities, traffic}), and statistics (traffic, spawns, updates, despawns, rejected values and records, script messages sent, received and dropped, inputs applied, corrections). Without client it also lists the in-process clients ({client, role, state, peerId}), the simulated link and which peer receives injected input (inputPeer).", Schema::Object({ { "client", clientSchema } }), [](AutomationSession& session, const json& params) {
+			Add(registry, "net.status", "Describes the network session of the playing scene, or of an in-process client: role (Host, Client or null without a session), state (Connecting, Connected, Disconnected), peerId, disconnectReason, port (a host's), time and viewTime (the host clock, and the time a client shows other entities at), remoteEntities (a client's entities from the host), connections ({peer, address, roundTripTime, knownEntities, traffic}), and statistics (traffic, stale messages, spawns, adoptions, updates, despawns, rejected values and records, script messages sent, received and dropped, inputs applied, rejected and skipped, steps taken without inputs, corrections). Without client it also lists the in-process clients ({client, role, state, peerId}), which peer receives injected input (inputPeer) and, once the in-process network exists, the simulated link ({latency, jitter, loss, timeoutSeconds, lost}).", Schema::Object({ { "client", clientSchema } }), [](AutomationSession& session, const json& params) {
 				if (params.contains("client"))
 					return NetworkStatusJson(*RequireNetworkClient(session, params));
 				json result = NetworkStatusJson(RequireScene(session));
@@ -3447,10 +3455,7 @@ namespace Breccia {
 				result["clients"] = std::move(clients);
 				result["inputPeer"] = session.GetInputPeer();
 				if (session.HasSimulatedNetwork())
-				{
-					const SimulatedLinkSettings& link = session.GetSimulatedNetwork().GetLinkSettings();
-					result["link"] = { { "latency", link.Latency }, { "jitter", link.Jitter }, { "loss", link.Loss }, { "timeoutSeconds", link.TimeoutSeconds }, { "lost", session.GetSimulatedNetwork().GetLostCount() } };
-				}
+					result["link"] = LinkJson(session.GetSimulatedNetwork());
 				return result;
 			});
 
@@ -3465,15 +3470,14 @@ namespace Breccia {
 				if (!SimulatedNetwork::IsValidLink(link))
 					throw CommandError("the link settings are out of range");
 				network.SetLinkSettings(link);
-				return json{ { "latency", link.Latency }, { "jitter", link.Jitter }, { "loss", link.Loss }, { "timeoutSeconds", link.TimeoutSeconds } };
+				return LinkJson(network);
 			});
 
-			Add(registry, "net.focus", "Chooses which peer injected input (input.key, input.mouse, input.gamepad) reaches while play.step runs: client 0 is the playing scene, N an in-process client. The others' scripts see no keys, buttons or gamepads. Resets to 0 when play stops or that client ends.", Schema::Object({ { "client", Schema::Integer("integer: 0 for the playing scene, or an in-process client's index", 0, AutomationSession::MaxNetworkClients * 1024) } }, { "client" }), [](AutomationSession& session, const json& params) {
+			Add(registry, "net.focus", "Chooses which peer injected input (input.key, input.mouse, input.gamepad) reaches while play.step runs: client 0 is the playing scene, N an in-process client. The others' games read no keys, buttons, mouse motion, scroll, text or gamepads (the pointer position stays visible). Resets to 0 when play stops or that client ends (net.disconnect, or its Game.Quit).", Schema::Object({ { "client", Schema::Integer("integer: 0 for the playing scene, or an in-process client's index", 0, MaxClientIndex) } }, { "client" }), [](AutomationSession& session, const json& params) {
 				RequireNetworkPlay(session);
-				const size_t client = static_cast<size_t>(OptionalInteger(params, "client", 0, 0, AutomationSession::MaxNetworkClients * 1024));
-				if (client != 0)
-					RequireNetworkClient(session, params);
-				session.SetInputPeer(client);
+				const size_t client = static_cast<size_t>(OptionalInteger(params, "client", 0, 0, MaxClientIndex));
+				if (!session.SetInputPeer(client))
+					throw CommandError(fmt::format("no in-process client {} (net.connect adds one; net.status lists them)", client));
 				return json{ { "client", client } };
 			});
 

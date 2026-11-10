@@ -186,7 +186,10 @@ namespace Breccia {
 		const uint32_t sequence = m_NextSequence++;
 		m_Deferred = 0;
 		budget = std::min(budget, m_Options.MaxMessageBytes);
-		const size_t maxRecordBytes = m_Options.MaxMessageBytes - HeaderBytes;
+		// The extras go into every message whole: records share what is left.
+		const size_t header = HeaderBytes + NetProtocol::ExtrasBytes(hostToClient ? NetMessageType::Snapshot : NetMessageType::ClientUpdate, extras);
+		BR_CORE_ASSERT(header < m_Options.MaxMessageBytes, "a message's extras leave no room for records");
+		const size_t maxRecordBytes = header < m_Options.MaxMessageBytes ? m_Options.MaxMessageBytes - header : 0;
 
 		// Despawns, in ID order: entities the receiver may have that are gone (destroyed, or no longer networked), and those
 		// whose despawn is still unacknowledged, even if the entity is back: the receiver may have lost the old despawn, and
@@ -276,7 +279,7 @@ namespace Breccia {
 		// Highest wait first; parents before children; then capture order (stable).
 		std::ranges::stable_sort(candidates, [](const Candidate& a, const Candidate& b) { return a.Accumulator != b.Accumulator ? a.Accumulator > b.Accumulator : a.Depth < b.Depth; });
 
-		size_t used = HeaderBytes;
+		size_t used = header;
 		bool any = false;
 		const auto fits = [&](size_t size) {
 			if (used + size <= budget || (!any && budget > 0))

@@ -75,11 +75,11 @@ driven remote characters, and the `net.*` commands with in-process clients, simu
   owned (today it rejoins as a new peer).
 - A client-side despawn that the host respawns (today it stays gone until the host despawns it).
 - Smoothing of prediction corrections (today a corrected character snaps), and interpolation of physics steps for predicted
-  characters (needs Scale I's fixed-step interpolation).
+  characters (needs the fixed-step interpolation in P2).
 - **Later:** interest management for large worlds; deterministic lockstep or rollback, which needs the whole simulation to
   be deterministic (today only physics is pinned: IK uses libm, and Lua is not checked); encryption, through ENet's
   per-datagram compressor hook with keys from an authenticated handshake (`Docs/Networking.md`); IPv6; quantized rotations
-  and positions in snapshots; byte-level flood protection on the host.
+  and positions in snapshots; byte-level limits on the state updates a client sends (script messages are capped already).
 
 ### Multiplayer sample — M
 A small arena or co-op game built through the automation API, with a ctest that runs a server and two clients headless

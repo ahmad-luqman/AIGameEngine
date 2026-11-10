@@ -168,13 +168,15 @@ namespace Breccia {
 		// The in-process network, created on first use (link settings apply to messages sent from then on).
 		SimulatedNetwork& GetSimulatedNetwork();
 		bool HasSimulatedNetwork() const { return m_Network != nullptr; }
-		// Which peer injected input reaches while stepping: 0 the play scene, N in-process client N. Others get no game
-		// keyboard, mouse or gamepads.
-		void SetInputPeer(size_t peer) { m_InputPeer = peer; }
+		// Which peer the host's game input reaches: 0 the play scene, N in-process client N. The others' games read no keys,
+		// buttons, mouse motion, scroll, text or gamepads (Input::SetGameMuted; the pointer position stays visible). False,
+		// changing nothing, for a client that does not exist. Back to 0 when that client ends or play stops.
+		bool SetInputPeer(size_t peer);
 		size_t GetInputPeer() const { return m_InputPeer; }
-		// Steps every in-process client by one frame and advances the in-process network: hosts call it every frame before
-		// updating the play scene (Step does), so the play scene's game UI and debug lines are the ones left drawn.
-		void UpdateNetworkClients(float frameTime);
+		// One frame of every peer: the in-process network advances, each in-process client updates, then the play scene, so
+		// the play scene's game UI and debug lines are the ones left drawn. Input reaches the peer SetInputPeer names. Hosts
+		// call it every frame (Step does); the caller ends the input frame.
+		void UpdatePlayScene(float frameTime);
 		// Whether the play scene's scripts use UDP instead of the in-process network (set by the editor at startup).
 		bool ScriptsUseUdp = false;
 		// Makes an in-process client's scene the current one for its lifetime, so a command reads or changes that peer
@@ -360,8 +362,12 @@ namespace Breccia {
 		Scope<SimulatedNetwork> m_Network;
 		std::vector<Ref<Scene>> m_NetworkClients;
 		size_t m_InputPeer = 0;
-		// Ends every in-process client and forgets the in-process network (StopPlay).
+		// Ends every in-process client (StopPlay, which forgets the in-process network once the play scene's session ends).
 		void StopNetworkClients();
+		// Ends in-process client `index` (from 1) and resets the input peer when it had the input.
+		void EndNetworkClient(size_t index);
+		// The play scene can start a session: it plays, and has none (or only a client session that ended).
+		bool CanStartNetwork(std::string& outError) const;
 	};
 
 }

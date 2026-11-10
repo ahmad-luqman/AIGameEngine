@@ -145,6 +145,9 @@ namespace Breccia {
 		// declares it in Rpcs and the sender may call it).
 		void DispatchNetworkEvent(const NetworkEvent& event);
 		void DispatchRpc(const NetworkEvent& event);
+		// Logs a problem with a script message once per key, and at most MaxReportedNetworkProblems of them (peers choose
+		// the names).
+		void ReportNetworkProblem(const std::string& key, const std::string& message);
 
 	private:
 		struct Impl;
@@ -152,8 +155,8 @@ namespace Breccia {
 		Scene* m_Scene = nullptr;
 		std::vector<std::string> m_Errors;
 		std::unordered_set<std::string> m_ReportedUICallbacks;
-		// RPC problems already reported, by entity, method and kind (at most MaxReportedRpcProblems).
-		std::unordered_set<std::string> m_ReportedRpcs;
+		// Script message problems already reported (an empty key: the limit was reached).
+		std::unordered_set<std::string> m_ReportedNetworkProblems;
 
 		friend struct ScriptEngineAccess;
 		friend struct ScriptClassLoader;

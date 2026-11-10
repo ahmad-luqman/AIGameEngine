@@ -2316,7 +2316,7 @@ Ends an in-process client (client), or the playing scene's network session (with
 
 ### `net.focus`
 
-Chooses which peer injected input (input.key, input.mouse, input.gamepad) reaches while play.step runs: client 0 is the playing scene, N an in-process client. The others' scripts see no keys, buttons or gamepads. Resets to 0 when play stops or that client ends.
+Chooses which peer injected input (input.key, input.mouse, input.gamepad) reaches while play.step runs: client 0 is the playing scene, N an in-process client. The others' games read no keys, buttons, mouse motion, scroll, text or gamepads (the pointer position stays visible). Resets to 0 when play stops or that client ends (net.disconnect, or its Game.Quit).
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -2476,7 +2476,7 @@ Sets the in-process network's link, both ways, for messages sent from now on: la
 
 ### `net.status`
 
-Describes the network session of the playing scene, or of an in-process client: role (Host, Client or null without a session), state (Connecting, Connected, Disconnected), peerId, disconnectReason, port (a host's), time and viewTime (the host clock, and the time a client shows other entities at), remoteEntities (a client's entities from the host), connections ({peer, address, roundTripTime, knownEntities, traffic}), and statistics (traffic, spawns, updates, despawns, rejected values and records, script messages sent, received and dropped, inputs applied, corrections). Without client it also lists the in-process clients ({client, role, state, peerId}), the simulated link and which peer receives injected input (inputPeer).
+Describes the network session of the playing scene, or of an in-process client: role (Host, Client or null without a session), state (Connecting, Connected, Disconnected), peerId, disconnectReason, port (a host's), time and viewTime (the host clock, and the time a client shows other entities at), remoteEntities (a client's entities from the host), connections ({peer, address, roundTripTime, knownEntities, traffic}), and statistics (traffic, stale messages, spawns, adoptions, updates, despawns, rejected values and records, script messages sent, received and dropped, inputs applied, rejected and skipped, steps taken without inputs, corrections). Without client it also lists the in-process clients ({client, role, state, peerId}), which peer receives injected input (inputPeer) and, once the in-process network exists, the simulated link ({latency, jitter, loss, timeoutSeconds, lost}).
 
 | Parameter | Type / description |
 |-----------|--------------------|
@@ -2523,7 +2523,7 @@ Starts play mode on a copy of the scene (scripts, physics, audio run).
 
 ### `play.step`
 
-Advances play mode by N fixed frames (default dt 1/60) and reports script errors and the playing scene (which Lua Scene.Load may switch).
+Advances play mode by N fixed frames (default dt 1/60), with every in-process network client (net.connect), and reports script errors (clientScriptErrors: those of in-process clients, [{client, errors}], present when there are some) and the playing scene (which Lua Scene.Load may switch).
 
 | Parameter | Type / description |
 |-----------|--------------------|

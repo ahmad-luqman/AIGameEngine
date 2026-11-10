@@ -1162,6 +1162,37 @@ namespace Breccia {
 		}
 	}
 
+	namespace {
+
+		// Problems of network messages logged at most: the names and entities come from peers.
+		constexpr size_t MaxReportedNetworkProblems = 256;
+
+		// The sender's peer ID, then the values sent: what a message handler or an RPC method receives.
+		std::vector<sol::object> PeerAndArguments(sol::state_view lua, const NetworkEvent& event)
+		{
+			std::vector<sol::object> args;
+			args.push_back(sol::make_object(lua, event.Peer));
+			for (const nlohmann::json& argument : event.Arguments)
+				args.push_back(JsonToLua(lua, argument));
+			return args;
+		}
+
+	}
+
+	void ScriptEngine::ReportNetworkProblem(const std::string& key, const std::string& message)
+	{
+		if (m_ReportedNetworkProblems.size() > MaxReportedNetworkProblems || m_ReportedNetworkProblems.contains(key))
+			return;
+		if (m_ReportedNetworkProblems.size() == MaxReportedNetworkProblems)
+		{
+			m_ReportedNetworkProblems.insert(std::string());
+			BR_CORE_WARN("Network: {} problems with script messages were logged; further ones are not", MaxReportedNetworkProblems);
+			return;
+		}
+		m_ReportedNetworkProblems.insert(key);
+		BR_CORE_WARN("Network: {} (not logged again)", message);
+	}
+
 	void ScriptEngine::DispatchNetworkEvent(const NetworkEvent& event)
 	{
 		// The handler's budget ran out: what follows this frame would fail with it (as Events.Emit stops).
@@ -1191,37 +1222,33 @@ namespace Breccia {
 				break;
 			case NetworkEvent::Kind::Message:
 				name = event.Name;
-				args.push_back(sol::make_object(lua, event.Peer));
-				for (const nlohmann::json& argument : event.Arguments)
-					args.push_back(JsonToLua(lua, argument));
+				args = PeerAndArguments(lua, event);
 				break;
 			case NetworkEvent::Kind::Rpc:
 				DispatchRpc(event);
 				return;
 		}
-		m_Impl->NetworkEvents.EmitValues(name, args);
+		// A message nobody listens for is most likely a misspelled name.
+		if (m_Impl->NetworkEvents.EmitValues(name, args) == 0 && event.Type == NetworkEvent::Kind::Message)
+			ReportNetworkProblem("message/" + name, fmt::format("{} sent message '{}', which no Network.On handler listens for", event.Peer == 0 ? std::string("the host") : fmt::format("client {}", event.Peer), name));
 	}
 
 	void ScriptEngine::DispatchRpc(const NetworkEvent& event)
 	{
-		// Each entity, method and problem once: a peer chooses the names, so the keys are capped.
-		constexpr size_t MaxReportedRpcProblems = 256;
+		// Each entity, method and problem once.
 		Entity entity = m_Scene->GetEntityByUUID(event.Entity);
 		const auto report = [&](const char* kind, const std::string& problem) {
-			if (m_ReportedRpcs.size() >= MaxReportedRpcProblems)
-				return;
-			if (m_ReportedRpcs.insert(fmt::format("{}/{}/{}", static_cast<uint64_t>(event.Entity), event.Name, kind)).second)
-				BR_CORE_WARN("Network: {} called {} on '{}': {} (not logged again)", event.Peer == 0 ? std::string("the host") : fmt::format("client {}", event.Peer), event.Name, entity ? entity.GetName() : std::to_string(static_cast<uint64_t>(event.Entity)), problem);
+			ReportNetworkProblem(fmt::format("rpc/{}/{}/{}", static_cast<uint64_t>(event.Entity), event.Name, kind), fmt::format("{} called {} on '{}': {}", event.Peer == 0 ? std::string("the host") : fmt::format("client {}", event.Peer), event.Name, entity ? entity.GetName() : std::to_string(static_cast<uint64_t>(event.Entity)), problem));
 		};
+		// Destroyed since it arrived (by an earlier handler this frame): nothing is left to call, as for a UI callback.
 		if (!entity || m_Scene->IsEntityPendingDestruction(entity))
 			return;
-		auto it = m_Impl->Instances.find(event.Entity);
-		if (it == m_Impl->Instances.end() || it->second.Failed || !it->second.Created)
+		if (!ScriptEngineAccess::IsActive(*this, event.Entity))
 		{
 			report("script", "the entity has no running script");
 			return;
 		}
-		const sol::table self = it->second.Self;
+		const sol::table self = m_Impl->Instances.at(event.Entity).Self;
 		std::optional<sol::object> declarations;
 		std::string lookupError;
 		{
@@ -1252,11 +1279,7 @@ namespace Breccia {
 				return;
 			}
 		}
-		sol::state_view lua(m_Impl->Lua);
-		std::vector<sol::object> args;
-		args.push_back(sol::make_object(lua, event.Peer));
-		for (const nlohmann::json& argument : event.Arguments)
-			args.push_back(JsonToLua(lua, argument));
+		const std::vector<sol::object> args = PeerAndArguments(m_Impl->Lua, event);
 		ScriptOwnerScope scope(m_Impl->Context, event.Entity, "an RPC");
 		std::string error;
 		const std::optional<sol::object> method = scope.Index(self, event.Name, error);

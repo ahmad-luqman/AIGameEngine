@@ -456,6 +456,11 @@ namespace Breccia {
 		std::optional<CharacterInput> StepCharacter(Entity entity, CharacterRecord& record, float fixedStep, const CharacterInput* input);
 		// A driven character (ExternallyDriven) in a Step: it follows the entity's transform, teleporting there when it moved.
 		void FollowCharacterTransform(Entity entity, CharacterRecord& record);
+		// Puts the character where the entity's transform says (position and rotation, in world space).
+		void MoveCharacterTo(Entity entity, CharacterRecord& record, const glm::vec3& position, const glm::quat& rotation);
+		// The entity's character, or null (another scene's entity, or none).
+		CharacterRecord* FindCharacter(Entity entity);
+		const CharacterRecord* FindCharacter(Entity entity) const { return const_cast<Impl*>(this)->FindCharacter(entity); }
 		void RebuildDirtyJoints();
 		// Marks every joint moving or connected to the entity's body for a rebuild (it was just created).
 		void MarkJointsDirty(UUID uuid);

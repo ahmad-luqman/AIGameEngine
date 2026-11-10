@@ -692,20 +692,76 @@ namespace Breccia {
 		for (uint32_t i = 0; i < frames; i++)
 		{
 			RecordViewChange();
-			UpdateNetworkClients(frameTime);
-			// A headless host routes input to the game: to the play scene unless net.focus picked a client.
-			const bool muted = Input::IsGameMuted();
-			Input::SetGameMuted(muted || m_InputPeer != 0);
-			m_Scene->OnUpdate(frameTime);
-			Input::SetGameMuted(muted);
+			UpdatePlayScene(frameTime);
 			Input::EndFrame();
 		}
+	}
+
+	void AutomationSession::UpdatePlayScene(float frameTime)
+	{
+		if (!IsPlaying())
+			return;
+		if (m_Network)
+			m_Network->Advance(frameTime);
+		for (size_t i = 0; i < m_NetworkClients.size(); i++)
+		{
+			const Ref<Scene> client = m_NetworkClients[i];
+			if (!client)
+				continue;
+			{
+				const ScopedGameMute mute(m_InputPeer != i + 1);
+				client->OnUpdate(frameTime);
+			}
+			// A client's Game.Quit ends that client.
+			if (client->IsQuitRequested())
+			{
+				BR_CORE_INFO("Network: in-process client {} quit", i + 1);
+				EndNetworkClient(i + 1);
+			}
+		}
+		const ScopedGameMute mute(m_InputPeer != 0);
+		m_Scene->OnUpdate(frameTime);
+	}
+
+	bool AutomationSession::SetInputPeer(size_t peer)
+	{
+		if (peer != 0 && !GetNetworkClient(peer))
+			return false;
+		m_InputPeer = peer;
+		return true;
+	}
+
+	void AutomationSession::EndNetworkClient(size_t index)
+	{
+		const Ref<Scene> client = GetNetworkClient(index);
+		if (!client)
+			return;
+		client->OnRuntimeStop();
+		m_NetworkClients[index - 1].reset();
+		if (m_InputPeer == index)
+			m_InputPeer = 0;
+	}
+
+	bool AutomationSession::CanStartNetwork(std::string& outError) const
+	{
+		if (!IsPlaying() || IsSimulating())
+		{
+			outError = "not playing (use play.start)";
+			return false;
+		}
+		if (m_Scene->GetNetworkSystem() && m_Scene->GetNetworkSystem()->GetState() != NetConnectionState::Disconnected)
+		{
+			outError = "the play scene is already in a network session (net.disconnect ends it)";
+			return false;
+		}
+		return true;
 	}
 
 	AutomationSession::SceneOverride::SceneOverride(AutomationSession& session, Ref<Scene> scene)
 		: m_Session(session)
 		, m_Previous(session.m_Scene)
 	{
+		BR_CORE_ASSERT(scene && scene != session.m_EditScene, "a scene override names a playing peer's scene");
 		m_Session.m_Scene = std::move(scene);
 	}
 
@@ -723,17 +779,9 @@ namespace Breccia {
 
 	bool AutomationSession::HostNetwork(bool udp, uint16_t port, std::string& outError)
 	{
-		if (!IsPlaying() || IsSimulating())
-		{
-			outError = "not playing (use play.start)";
+		if (!CanStartNetwork(outError))
 			return false;
-		}
-		if (m_Scene->GetNetworkSystem() && m_Scene->GetNetworkSystem()->GetState() != NetConnectionState::Disconnected)
-		{
-			outError = "the play scene is already in a network session (net.disconnect ends it)";
-			return false;
-		}
-		const NetworkSettings& settings = Project::GetActive() ? Project::GetActive()->GetConfig().Network : NetworkSettings{};
+		const NetworkSettings settings = NetworkSettings::FromActiveProject();
 		const Ref<NetTransportFactory> transports = udp ? EnetTransport::CreateFactory() : GetSimulatedNetwork().CreateFactory();
 		Scope<NetTransport> transport = transports->Listen(port, settings.MaxClients + NetworkSystem::SpareTransportSlots, settings.TimeoutSeconds, outError);
 		if (!transport)
@@ -745,17 +793,9 @@ namespace Breccia {
 
 	bool AutomationSession::JoinNetwork(const std::string& address, uint16_t port, std::string& outError)
 	{
-		if (!IsPlaying() || IsSimulating())
-		{
-			outError = "not playing (use play.start)";
+		if (!CanStartNetwork(outError))
 			return false;
-		}
-		if (m_Scene->GetNetworkSystem() && m_Scene->GetNetworkSystem()->GetState() != NetConnectionState::Disconnected)
-		{
-			outError = "the play scene is already in a network session (net.disconnect ends it)";
-			return false;
-		}
-		const NetworkSettings& settings = Project::GetActive() ? Project::GetActive()->GetConfig().Network : NetworkSettings{};
+		const NetworkSettings settings = NetworkSettings::FromActiveProject();
 		Scope<NetTransport> transport = EnetTransport::CreateFactory()->Connect(address, port, settings.TimeoutSeconds, outError);
 		if (!transport)
 			return false;
@@ -788,15 +828,15 @@ namespace Breccia {
 			outError = fmt::format("at most {} in-process clients", MaxNetworkClients);
 			return std::nullopt;
 		}
-		const NetworkSettings& settings = Project::GetActive() ? Project::GetActive()->GetConfig().Network : NetworkSettings{};
+		const NetworkSettings settings = NetworkSettings::FromActiveProject();
 		Ref<Scene> client = Scene::Copy(m_EditScene);
 		client->SetNetworkTransports(m_Network->CreateFactory());
 		client->StartNetwork(CreateScope<NetworkSystem>(*client, NetworkRole::Client, m_Network->Connect(host->GetListenPort()), settings, NetworkSystem::Identity::FromActiveProject()));
 		// Its scripts start without the input (net.focus routes it).
-		const bool muted = Input::IsGameMuted();
-		Input::SetGameMuted(true);
-		client->OnRuntimeStart();
-		Input::SetGameMuted(muted);
+		{
+			const ScopedGameMute mute(true);
+			client->OnRuntimeStart();
+		}
 		const size_t index = m_NetworkClients.size() + 1;
 		m_NetworkClients.push_back(client);
 		return index;
@@ -804,44 +844,18 @@ namespace Breccia {
 
 	bool AutomationSession::RemoveNetworkClient(size_t index, std::string& outError)
 	{
-		if (index == 0 || index > m_NetworkClients.size() || !m_NetworkClients[index - 1])
+		if (!GetNetworkClient(index))
 		{
 			outError = fmt::format("no in-process client {}", index);
 			return false;
 		}
-		m_NetworkClients[index - 1]->OnRuntimeStop();
-		m_NetworkClients[index - 1].reset();
-		if (m_InputPeer == index)
-			m_InputPeer = 0;
+		EndNetworkClient(index);
 		return true;
 	}
 
 	Ref<Scene> AutomationSession::GetNetworkClient(size_t index) const
 	{
 		return index >= 1 && index <= m_NetworkClients.size() ? m_NetworkClients[index - 1] : nullptr;
-	}
-
-	void AutomationSession::UpdateNetworkClients(float frameTime)
-	{
-		if (m_Network)
-			m_Network->Advance(frameTime);
-		const bool muted = Input::IsGameMuted();
-		for (size_t i = 0; i < m_NetworkClients.size(); i++)
-		{
-			const Ref<Scene> client = m_NetworkClients[i];
-			if (!client)
-				continue;
-			// What the host routes to the game reaches the client net.focus names; the others hear nothing.
-			Input::SetGameMuted(muted || m_InputPeer != i + 1);
-			client->OnUpdate(frameTime);
-			// A client's Game.Quit ends that client.
-			if (client->IsQuitRequested())
-			{
-				client->OnRuntimeStop();
-				m_NetworkClients[i].reset();
-			}
-		}
-		Input::SetGameMuted(muted);
 	}
 
 	void AutomationSession::StopNetworkClients()

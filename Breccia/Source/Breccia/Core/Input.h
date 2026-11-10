@@ -177,6 +177,23 @@ namespace Breccia {
 		static void UpdateGamepadFromDevice(uint32_t index, const GamepadDeviceState* state, bool focused = true);
 	};
 
+	// Mutes game input for its lifetime when `muted` (Input::SetGameMuted), then restores what was set before.
+	class ScopedGameMute
+	{
+	public:
+		explicit ScopedGameMute(bool muted)
+			: m_Previous(Input::IsGameMuted())
+		{
+			Input::SetGameMuted(m_Previous || muted);
+		}
+		~ScopedGameMute() { Input::SetGameMuted(m_Previous); }
+		ScopedGameMute(const ScopedGameMute&) = delete;
+		ScopedGameMute& operator=(const ScopedGameMute&) = delete;
+
+	private:
+		bool m_Previous;
+	};
+
 	// Input as the game sees it (Lua's Input, input actions): only what the host routes to it. The keyboard and
 	// gamepads reach the game while it has focus (Input::SetGameFocus), the mouse buttons, movement and scroll while
 	// it has the pointer (Input::SetGamePointer); the mouse position, gamepad connections and names are never

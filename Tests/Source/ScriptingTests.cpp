@@ -2902,6 +2902,7 @@ namespace {
 			Entity = function() return Scene.CreateEntity("LuaTypes") end,
 			TaskHandle = function() return Timer.After(100, function() end) end,
 			EventHandle = function() return Events.On("LuaTypes", function() end) end,
+			NetworkHandle = function() return Network.On("LuaTypes", function() end) end,
 		}
 		local out = {}
 		for name, value in pairs(_G) do

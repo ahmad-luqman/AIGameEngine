@@ -70,8 +70,9 @@ namespace Breccia {
 		class QueryBodyFilter final : public JPH::BodyFilter
 		{
 		public:
-			// excluded: entities whose bodies are left out too (RaycastWithPoses tests them at other poses).
-			explicit QueryBodyFilter(const PhysicsQueryFilter& filter, const std::unordered_set<uint64_t>* excluded = nullptr)
+			// excluded: bodies (JPH::BodyID::GetIndexAndSequenceNumber) left out too, which RaycastWithPoses tests at other
+			// poses. By body, not entity: the parts of a ragdoll share their entity's UUID with the body it replaced.
+			explicit QueryBodyFilter(const PhysicsQueryFilter& filter, const std::unordered_set<uint32_t>* excluded = nullptr)
 				: m_Ignore(static_cast<uint64_t>(filter.IgnoreEntity))
 				, m_IncludeTriggers(filter.IncludeTriggers)
 				, m_Excluded(excluded)
@@ -80,16 +81,16 @@ namespace Breccia {
 
 			bool ShouldCollideLocked(const JPH::Body& body) const override
 			{
-				return (m_IncludeTriggers || !body.IsSensor()) && (m_Ignore == 0 || body.GetUserData() != m_Ignore) && !(m_Excluded && m_Excluded->contains(body.GetUserData()));
+				return (m_IncludeTriggers || !body.IsSensor()) && (m_Ignore == 0 || body.GetUserData() != m_Ignore) && !(m_Excluded && m_Excluded->contains(body.GetID().GetIndexAndSequenceNumber()));
 			}
 
 		private:
 			uint64_t m_Ignore = 0;
 			bool m_IncludeTriggers = false;
-			const std::unordered_set<uint64_t>* m_Excluded = nullptr;
+			const std::unordered_set<uint32_t>* m_Excluded = nullptr;
 		};
 
-		std::vector<RaycastHit> CastRay(const JPH::PhysicsSystem& system, const glm::vec3& origin, const glm::vec3& direction, float maxDistance, const PhysicsQueryFilter& filter, bool all, const std::unordered_set<uint64_t>* excluded = nullptr)
+		std::vector<RaycastHit> CastRay(const JPH::PhysicsSystem& system, const glm::vec3& origin, const glm::vec3& direction, float maxDistance, const PhysicsQueryFilter& filter, bool all, const std::unordered_set<uint32_t>* excluded = nullptr)
 		{
 			const auto unitDirection = CastDirection(direction, maxDistance);
 			if (!unitDirection || !IsFiniteVec(origin))
@@ -263,9 +264,10 @@ namespace Breccia {
 		const auto unitDirection = CastDirection(direction, maxDistance);
 		if (!unitDirection || !IsFiniteVec(origin))
 			return std::nullopt;
-		std::unordered_set<uint64_t> excluded;
+		std::unordered_set<uint32_t> excluded;
 		for (const auto& [uuid, pose] : poses)
-			excluded.insert(static_cast<uint64_t>(uuid));
+			if (const JPH::BodyID id = m_Impl->QueryBodyOf(m_Impl->ScenePtr->GetEntityByUUID(uuid)); !id.IsInvalid())
+				excluded.insert(id.GetIndexAndSequenceNumber());
 		std::optional<RaycastHit> closest = ClosestHit(CastRay(*m_Impl->System, origin, direction, maxDistance, filter, false, &excluded));
 
 		const JPH::RRayCast ray(ToJolt(origin), ToJolt(*unitDirection * maxDistance));

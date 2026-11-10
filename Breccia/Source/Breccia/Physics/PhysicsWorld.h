@@ -289,13 +289,14 @@ namespace Breccia {
 		std::vector<CharacterInput> TakeCharacterInputs(Entity entity);
 		// Moves the character one fixed step now, as Step would with that Move velocity and no root motion, turned to the
 		// input's rotation, and writes its pose: the host applying a client's inputs, a client replaying its own after a
-		// correction. Works on driven characters too. False without a character (or with a non-finite input, which does
-		// nothing).
+		// correction. Works on driven characters too. False, doing nothing, without a character, for a non-finite input or a
+		// rotation near zero length, or while the entity's transform is degenerate.
 		bool StepCharacter(Entity entity, const CharacterInput& input);
 		// The character's state, nullopt without one.
 		std::optional<CharacterState> GetCharacterState(Entity entity) const;
-		// Puts the character at the state (finding its contacts there), keeping its rotation, and writes its pose. False
-		// without a character or for a state with a non-finite value.
+		// Puts the character at the state (finding its contacts there), keeping its rotation, and writes its pose (not while
+		// the entity's transform is degenerate, which still returns true). False without a character or for a state with a
+		// non-finite value.
 		bool SetCharacterState(Entity entity, const CharacterState& state);
 
 		// Enables skeleton physics, inheriting body linear/angular and tangential motion (controller: linear), and
@@ -342,15 +343,16 @@ namespace Breccia {
 		std::vector<RaycastHit> BoxCastAll(const glm::vec3& origin, const glm::vec3& halfExtents, const glm::quat& rotation, const glm::vec3& direction, float maxDistance, const PhysicsQueryFilter& filter = {}) const;
 		std::vector<UUID> OverlapSphere(const glm::vec3& center, float radius, const PhysicsQueryFilter& filter = {}) const;
 		std::vector<UUID> OverlapBox(const glm::vec3& center, const glm::vec3& halfExtents, const glm::quat& rotation, const PhysicsQueryFilter& filter = {}) const;
+		// Lag compensation. The pose of the entity's body (a rigid body, or a character's inner body), nullopt without one.
+		std::optional<PhysicsBodyPose> GetBodyPose(Entity entity) const;
+		// Raycast as if the bodies of the entities `poses` lists stood at those poses (their shapes as they are now), and
+		// those listed without a pose were not there; every other body (the parts of an entity's active ragdoll too) is where
+		// it is. Filtered like Raycast.
+		std::optional<RaycastHit> RaycastWithPoses(const glm::vec3& origin, const glm::vec3& direction, float maxDistance, const std::map<UUID, std::optional<PhysicsBodyPose>>& poses, const PhysicsQueryFilter& filter = {}) const;
 		// The bodies whose bounds touch the box [min, max], for PushOut and Sweep queries of spheres of `radius` (at least
 		// PhysicsShapeSnapshot::MinRadius), seen through `filter` and, when given, `accept` (by entity UUID; called with no
 		// body locked, so it may query this world). Non-finite or inverted bounds, or a radius that is not finite and
 		// nonnegative, gather nothing, as other queries return nothing for invalid input.
-		// Lag compensation. The pose of the entity's body (a rigid body, or a character's inner body), nullopt without one.
-		std::optional<PhysicsBodyPose> GetBodyPose(Entity entity) const;
-		// Raycast as if the bodies of the entities `poses` lists stood at those poses (their shapes as they are now), and
-		// those listed without a pose were not there; every other body is where it is. Filtered like Raycast.
-		std::optional<RaycastHit> RaycastWithPoses(const glm::vec3& origin, const glm::vec3& direction, float maxDistance, const std::map<UUID, std::optional<PhysicsBodyPose>>& poses, const PhysicsQueryFilter& filter = {}) const;
 		PhysicsShapeSnapshot CollectShapes(const glm::vec3& min, const glm::vec3& max, float radius, const PhysicsQueryFilter& filter = {}, const std::function<bool(UUID)>& accept = {}) const;
 
 		// The layers this world filters with (resolved when it was built).

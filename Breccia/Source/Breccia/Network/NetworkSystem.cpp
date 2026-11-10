@@ -24,6 +24,7 @@ namespace Breccia {
 
 	// A Hello carries the project's name and version, which hosts refuse when longer than this.
 	static_assert(NetProtocol::MaxTextLength >= ProjectConfig::MaxTextLength, "a Hello must hold any project name");
+	static_assert(NetworkedComponent::MaxInputSpeedLimit == NetProtocol::MaxInputSpeed, "Networked.MaxInputSpeed may allow what the wire allows");
 
 	namespace {
 
@@ -36,14 +37,29 @@ namespace Breccia {
 			return ReplicationSchema::Get();
 		}
 
+		uint32_t RequiredComponentIndex(const char* name)
+		{
+			const std::optional<uint32_t> index = Schema().FindComponentIndex(name);
+			BR_CORE_ASSERT(index, "a component the network session needs is registered");
+			return index.value_or(UINT32_MAX);
+		}
+
 		uint32_t NetworkedComponentIndex()
 		{
-			static const uint32_t s_Index = [] {
-				const std::optional<uint32_t> index = Schema().FindComponentIndex("Networked");
-				BR_CORE_ASSERT(index, "the Networked component is registered");
-				return index.value_or(UINT32_MAX);
-			}();
+			static const uint32_t s_Index = RequiredComponentIndex("Networked");
 			return s_Index;
+		}
+
+		uint32_t TransformComponentIndex()
+		{
+			static const uint32_t s_Index = RequiredComponentIndex("Transform");
+			return s_Index;
+		}
+
+		// A per-second allowance: refilled at `rate` for `seconds`, holding at most a second's worth.
+		void RefillCredit(double& credit, double rate, double seconds)
+		{
+			credit = std::min(rate, credit + rate * seconds);
 		}
 
 		std::string IdText(UUID uuid)
@@ -137,16 +153,6 @@ namespace Breccia {
 			return std::isfinite(seconds) && seconds > 0.0f;
 		}
 
-		uint32_t TransformComponentIndex()
-		{
-			static const uint32_t s_Index = [] {
-				const std::optional<uint32_t> index = Schema().FindComponentIndex("Transform");
-				BR_CORE_ASSERT(index, "the Transform component is registered");
-				return index.value_or(UINT32_MAX);
-			}();
-			return s_Index;
-		}
-
 		// How a client's estimate of the host clock follows the snapshots' times: a fraction of each difference, so jitter
 		// averages out; a difference beyond the limit (a stall, a host that restarted its clock) is taken at once.
 		constexpr double ServerClockSmoothing = 0.1;
@@ -154,6 +160,25 @@ namespace Breccia {
 		// Transforms a client keeps per interpolated entity at most.
 		constexpr size_t MaxTransformSamples = 32;
 
+	}
+
+	const char* NetworkRoleName(NetworkRole role)
+	{
+		return role == NetworkRole::Host ? "Host" : "Client";
+	}
+
+	const char* NetConnectionStateName(NetConnectionState state)
+	{
+		switch (state)
+		{
+			case NetConnectionState::Connecting:
+				return "Connecting";
+			case NetConnectionState::Connected:
+				return "Connected";
+			case NetConnectionState::Disconnected:
+				break;
+		}
+		return "Disconnected";
 	}
 
 	NetworkSystem::Identity NetworkSystem::Identity::FromActiveProject()
@@ -221,13 +246,6 @@ namespace Breccia {
 		return it != m_Connections.end() ? &it->second : nullptr;
 	}
 
-	bool NetworkSystem::IsActivePeer(uint32_t peerId) const
-	{
-		if (peerId == 0)
-			return false;
-		return std::ranges::any_of(m_Connections, [peerId](const auto& entry) { return entry.second.PeerId == peerId; });
-	}
-
 	uint32_t NetworkSystem::GetAdmittedCount() const
 	{
 		return static_cast<uint32_t>(std::ranges::count_if(m_Connections, [](const auto& entry) { return entry.second.IsAdmitted(); }));
@@ -239,10 +257,9 @@ namespace Breccia {
 		if (!networked)
 			return true;
 		// Predicted entities are the host's: the owner only predicts them.
-		const bool ownerDecides = networked->Authority == NetworkAuthority::Owner;
-		if (m_Role == NetworkRole::Host)
-			return !(ownerDecides && IsActivePeer(networked->Owner));
-		return m_State == NetConnectionState::Connected && ownerDecides && networked->Owner == m_LocalPeerId && m_LocalPeerId != 0;
+		if (networked->Authority == NetworkAuthority::Owner)
+			return IsOwner(entity);
+		return m_Role == NetworkRole::Host;
 	}
 
 	bool NetworkSystem::IsOwner(Entity entity) const
@@ -251,24 +268,24 @@ namespace Breccia {
 		if (!networked)
 			return true;
 		if (m_Role == NetworkRole::Host)
-			return !IsActivePeer(networked->Owner);
+			return FindPeer(networked->Owner) == nullptr;
 		return m_State == NetConnectionState::Connected && m_LocalPeerId != 0 && networked->Owner == m_LocalPeerId;
 	}
 
 	bool NetworkSystem::IsPredicted(Entity entity) const
 	{
-		const auto* networked = entity ? entity.TryGetComponent<NetworkedComponent>() : nullptr;
+		return entity && m_Predicted.contains(entity.GetUUID());
+	}
+
+	bool NetworkSystem::WantsPrediction(Entity entity) const
+	{
+		const auto* networked = entity.TryGetComponent<NetworkedComponent>();
 		return m_Role == NetworkRole::Client && networked && networked->Authority == NetworkAuthority::Predicted && entity.HasComponent<CharacterControllerComponent>() && IsOwner(entity);
 	}
 
 	NetworkSystem::Connection* NetworkSystem::FindPeer(uint32_t peer)
 	{
-		if (peer == 0)
-			return nullptr;
-		for (auto& [handle, connection] : m_Connections)
-			if (connection.PeerId == peer)
-				return &connection;
-		return nullptr;
+		return const_cast<Connection*>(std::as_const(*this).FindPeer(peer));
 	}
 
 	const NetworkSystem::Connection* NetworkSystem::FindPeer(uint32_t peer) const
@@ -296,14 +313,14 @@ namespace Breccia {
 		return peers;
 	}
 
-	float NetworkSystem::GetRoundTripTime(uint32_t peer) const
+	std::optional<float> NetworkSystem::GetRoundTripTime(uint32_t peer) const
 	{
 		if (m_Role == NetworkRole::Host)
 		{
 			const Connection* connection = FindPeer(peer);
-			return connection ? m_Transport->GetRoundTripTime(connection->Handle) : 0.0f;
+			return connection ? std::optional<float>(m_Transport->GetRoundTripTime(connection->Handle)) : std::nullopt;
 		}
-		return peer == 0 && m_HostHandle ? m_Transport->GetRoundTripTime(*m_HostHandle) : 0.0f;
+		return peer == 0 && m_HostHandle ? std::optional<float>(m_Transport->GetRoundTripTime(*m_HostHandle)) : std::nullopt;
 	}
 
 	double NetworkSystem::GetTime() const
@@ -320,20 +337,21 @@ namespace Breccia {
 
 	std::vector<NetworkEvent> NetworkSystem::TakeEvents()
 	{
-		m_ReportedEventOverflow = false;
 		return std::exchange(m_Events, {});
 	}
 
 	void NetworkSystem::PushEvent(NetworkEvent event)
 	{
-		if (m_Events.size() >= MaxQueuedEvents)
+		const bool script = event.Type == NetworkEvent::Kind::Message || event.Type == NetworkEvent::Kind::Rpc;
+		// Connection events always go (there are no more of them than connections): scripts keep track of players by them.
+		if (script && m_Events.size() >= MaxQueuedEvents)
 		{
 			m_Statistics.ScriptMessagesDropped++;
 			if (!std::exchange(m_ReportedEventOverflow, true))
-				BR_CORE_WARN("Network: more than {} events wait for the scripts; later ones are dropped", MaxQueuedEvents);
+				BR_CORE_WARN("Network: more than {} events waited for the scripts in one frame; later script messages are dropped (NetworkStatistics counts them)", MaxQueuedEvents);
 			return;
 		}
-		if (event.Type == NetworkEvent::Kind::Message || event.Type == NetworkEvent::Kind::Rpc)
+		if (script)
 			m_Statistics.ScriptMessagesReceived++;
 		m_Events.push_back(std::move(event));
 	}
@@ -341,15 +359,15 @@ namespace Breccia {
 	void NetworkSystem::Receive(float deltaTime)
 	{
 		const double rate = m_Settings.MaxMessagesPerSecond;
-		if (IsUsableStep(deltaTime))
+		const float step = IsUsableStep(deltaTime) ? deltaTime : 0.0f;
+		m_Clock += step;
+		if (m_ServerClock)
+			*m_ServerClock += step;
+		RefillCredit(m_ClientSendCredit, rate, step);
+		for (auto& [handle, connection] : m_Connections)
 		{
-			m_Clock += deltaTime;
-			if (m_ServerClock)
-				*m_ServerClock += deltaTime;
-			const double refill = rate * deltaTime;
-			m_ClientMessageCredit = std::min(rate, m_ClientMessageCredit + refill);
-			for (auto& [handle, connection] : m_Connections)
-				connection.MessageCredit = std::min(rate, connection.MessageCredit + refill);
+			RefillCredit(connection.SendCredit, rate, step);
+			RefillCredit(connection.Received.ReleaseCredit, rate, step);
 		}
 		std::vector<NetTransportEvent> events;
 		m_Transport->Poll(events);
@@ -364,23 +382,26 @@ namespace Breccia {
 
 		if (m_Role == NetworkRole::Host)
 		{
-			// Connected, but never said who it is.
-			std::vector<NetPeerHandle> silent;
-			for (const auto& [handle, connection] : m_Connections)
+			// Connected, but never said who it is; or sent script messages that do not decode.
+			std::vector<std::pair<NetPeerHandle, std::string>> ended;
+			for (auto& [handle, connection] : m_Connections)
+			{
+				std::string error;
 				if (!connection.IsAdmitted() && m_Clock - connection.ConnectedAt >= m_Settings.TimeoutSeconds)
-					silent.push_back(handle);
-			for (NetPeerHandle handle : silent)
-				Kick(handle, NetDisconnectReason::HandshakeTimeout, "it sent no Hello");
+					ended.emplace_back(handle, std::string());
+				else if (connection.IsAdmitted() && !ReleaseInbox(connection, false, error))
+					ended.emplace_back(handle, std::move(error));
+			}
+			for (const auto& [handle, error] : ended)
+				Kick(handle, error.empty() ? NetDisconnectReason::HandshakeTimeout : NetDisconnectReason::InvalidPacket, error.empty() ? "it sent no Hello" : error);
 		}
-		// Connected, but the host never answered the Hello (not a Breccia host, or a stuck one).
-		else if (m_State == NetConnectionState::Connecting && m_HostHandle && m_Clock - m_HelloSentAt >= m_Settings.TimeoutSeconds)
-			LeaveHost(NetDisconnectReason::HandshakeTimeout, true);
-		if (m_Role == NetworkRole::Host)
-			ReleaseInboxes(IsUsableStep(deltaTime) ? deltaTime : 0.0f);
 		else
 		{
+			// Connected, but the host never answered the Hello (not a Breccia host, or a stuck one).
+			if (m_State == NetConnectionState::Connecting && m_HostHandle && m_Clock - m_HelloSentAt >= m_Settings.TimeoutSeconds)
+				LeaveHost(NetDisconnectReason::HandshakeTimeout, true);
 			SyncPredictedCharacters();
-			ReleasePendingRpcs();
+			ReleasePendingScripts();
 		}
 		ResolvePendingParents();
 		UpdateDrivenBodies();
@@ -423,6 +444,9 @@ namespace Breccia {
 					if (it->second.IsAdmitted())
 					{
 						BR_CORE_INFO("Network: client {} ({}) left: {}", it->second.PeerId, it->second.Address, DescribeDisconnectReason(reason));
+						// What it sent before leaving reaches the scripts first (a farewell), whatever the rate.
+						std::string ignored;
+						ReleaseInbox(it->second, true, ignored);
 						PushEvent({ .Type = NetworkEvent::Kind::PeerDisconnected, .Peer = it->second.PeerId, .Reason = reason });
 					}
 					m_Connections.erase(it);
@@ -467,6 +491,8 @@ namespace Breccia {
 		BR_CORE_WARN("Network: disconnected {} ({}): {} ({})", who, connection.Address, DescribeDisconnectReason(reason), detail);
 		if (connection.IsAdmitted())
 			PushEvent({ .Type = NetworkEvent::Kind::PeerDisconnected, .Peer = connection.PeerId, .Reason = reason });
+		// A disconnected client's waiting messages are not its scripts' to see.
+		m_Statistics.ScriptMessagesDropped += connection.Received.Messages.size();
 		m_Transport->Disconnect(handle, static_cast<uint32_t>(reason));
 		m_Connections.erase(it);
 	}
@@ -480,9 +506,11 @@ namespace Breccia {
 		m_DisconnectReason = reason;
 		BR_CORE_WARN("Network: disconnected from the host: {}", DescribeDisconnectReason(reason));
 		PushEvent({ .Type = NetworkEvent::Kind::Disconnected, .Reason = reason });
-		// What waited for the host will not come now.
-		m_Statistics.ScriptMessagesDropped += m_PendingRpcs.size();
-		m_PendingRpcs.clear();
+		// What waited for the host's entities will not come now.
+		if (!m_PendingScripts.empty())
+			BR_CORE_WARN("Network: {} script messages that waited for entities from the host are dropped", m_PendingScripts.size());
+		m_Statistics.ScriptMessagesDropped += m_PendingScripts.size();
+		m_PendingScripts.clear();
 	}
 
 	void NetworkSystem::HandleHostMessage(Connection& connection, const std::vector<uint8_t>& data)
@@ -491,6 +519,20 @@ namespace Breccia {
 		if (data.size() > MaxClientMessageBytes)
 		{
 			Kick(handle, NetDisconnectReason::InvalidPacket, "a message of " + std::to_string(data.size()) + " bytes, more than clients may send");
+			return;
+		}
+		// An admitted client's script messages wait as they came, and decode as they are released at MaxMessagesPerSecond:
+		// a burst waits, a flood ends the connection.
+		if (connection.IsAdmitted() && !data.empty() && data.front() == static_cast<uint8_t>(NetMessageType::Script))
+		{
+			Inbox& inbox = connection.Received;
+			if (inbox.Messages.size() >= MaxInboxMessages || inbox.Bytes + data.size() > MaxInboxBytes)
+			{
+				Kick(handle, NetDisconnectReason::InvalidPacket, fmt::format("it sent script messages faster than Network.MaxMessagesPerSecond ({}) allows for too long", m_Settings.MaxMessagesPerSecond));
+				return;
+			}
+			inbox.Bytes += data.size();
+			inbox.Messages.push_back(data);
 			return;
 		}
 		std::string error;
@@ -508,17 +550,6 @@ namespace Breccia {
 				return;
 			}
 			AcceptHello(connection, std::get<NetHello>(message->Body));
-			return;
-		}
-		if (message->Type == NetMessageType::Script)
-		{
-			// Handed to scripts at MaxMessagesPerSecond: a burst waits, a flood ends the connection.
-			if (connection.Received.Messages.size() >= MaxInboxMessages)
-			{
-				Kick(handle, NetDisconnectReason::InvalidPacket, fmt::format("it sent script messages faster than Network.MaxMessagesPerSecond ({}) allows for too long", m_Settings.MaxMessagesPerSecond));
-				return;
-			}
-			connection.Received.Messages.push_back(std::get<NetScriptMessage>(std::move(message->Body)));
 			return;
 		}
 		if (message->Type != NetMessageType::ClientUpdate)
@@ -575,8 +606,8 @@ namespace Breccia {
 		connection.PeerId = m_NextPeerId++;
 		// A full second of budget to start, so the first snapshots can carry the initial spawns.
 		connection.Tokens = FullBudget();
-		connection.MessageCredit = m_Settings.MaxMessagesPerSecond;
-		connection.Received.Credit = m_Settings.MaxMessagesPerSecond;
+		connection.SendCredit = m_Settings.MaxMessagesPerSecond;
+		connection.Received.ReleaseCredit = m_Settings.MaxMessagesPerSecond;
 		BR_CORE_INFO("Network: client {} joined from {}", connection.PeerId, connection.Address);
 		PushEvent({ .Type = NetworkEvent::Kind::PeerConnected, .Peer = connection.PeerId });
 	}
@@ -609,7 +640,7 @@ namespace Breccia {
 					BR_CORE_WARN("Network: the host's tick rate {} is outside [{}, {}]; sending at {}", welcome.TickRate, NetworkSettings::MinTickRate, NetworkSettings::MaxTickRate, m_TickRate);
 				m_State = NetConnectionState::Connected;
 				m_ClientTokens = FullBudget();
-				m_ClientMessageCredit = m_Settings.MaxMessagesPerSecond;
+				m_ClientSendCredit = m_Settings.MaxMessagesPerSecond;
 				BR_CORE_INFO("Network: connected to {} as client {}", m_HostAddress, m_LocalPeerId);
 				RemoveLocalNetworkedEntities();
 				PushEvent({ .Type = NetworkEvent::Kind::Connected, .Peer = m_LocalPeerId });
@@ -639,7 +670,9 @@ namespace Breccia {
 			case NetMessageType::Script:
 				// One that overtook the Welcome (unreliable) is lost, as a lost datagram would be.
 				if (m_State == NetConnectionState::Connected)
-					HandleScriptMessage(0, std::get<NetScriptMessage>(std::move(message->Body)));
+					HandleScriptMessage(0, std::get<NetScriptMessage>(std::move(message->Body)), m_Reported);
+				else
+					m_Statistics.ScriptMessagesDropped++;
 				return;
 			case NetMessageType::Hello:
 			case NetMessageType::ClientUpdate:
@@ -670,13 +703,15 @@ namespace Breccia {
 
 	void NetworkSystem::ApplySnapshot(const NetState& state)
 	{
-		// The host's clock as of this snapshot: absent fields mean "unchanged as of the previous one".
-		const double previousSnapshot = m_ServerClock ? m_LastSnapshotTime : state.Extras.Time;
-		m_LastSnapshotTime = state.Extras.Time;
-		if (!m_ServerClock || std::abs(state.Extras.Time - *m_ServerClock) > ServerClockSnapSeconds)
-			m_ServerClock = state.Extras.Time;
+		// The host's clock as of this snapshot: absent fields mean "unchanged as of the previous one". It never runs back
+		// (a host's clock does not; a broken one's must not reorder the samples).
+		const double time = m_ServerClock ? std::max(state.Extras.Time, m_LastSnapshotTime) : state.Extras.Time;
+		const double previousSnapshot = m_ServerClock ? m_LastSnapshotTime : time;
+		m_LastSnapshotTime = time;
+		if (!m_ServerClock || std::abs(time - *m_ServerClock) > ServerClockSnapSeconds)
+			m_ServerClock = time;
 		else
-			*m_ServerClock += (state.Extras.Time - *m_ServerClock) * ServerClockSmoothing;
+			*m_ServerClock += (time - *m_ServerClock) * ServerClockSmoothing;
 
 		for (const NetEntitySpawn& spawn : state.Spawns)
 			ApplySpawn(spawn);
@@ -696,20 +731,16 @@ namespace Breccia {
 				m_Interpolation.erase(update.Entity);
 			const bool moves = !update.Parent && std::ranges::any_of(update.Components, [transformIndex](const NetComponentUpdate& change) { return change.Component == transformIndex; });
 			const bool interpolate = moves && IsInterpolated(entity);
-			// The fields this update leaves out keep their newest values, not the ones shown now.
-			if (const auto track = m_Interpolation.find(update.Entity); interpolate && track != m_Interpolation.end() && !track->second.Samples.empty())
+			// The fields this update leaves out keep their newest values, not the ones shown now. Without a track the entity
+			// shows its newest values, from where it starts moving.
+			std::optional<TransformSample> before;
+			if (interpolate)
 			{
 				TransformComponent& transform = entity.GetComponent<TransformComponent>();
-				const TransformSample& newest = track->second.Samples.back();
-				transform.Translation = newest.Translation;
-				transform.Rotation = newest.Rotation;
-				transform.Scale = newest.Scale;
-			}
-			std::optional<TransformSample> before;
-			if (interpolate && !m_Interpolation.contains(update.Entity))
-			{
-				const TransformComponent& transform = entity.GetComponent<TransformComponent>();
-				before = TransformSample{ previousSnapshot, transform.Translation, transform.Rotation, transform.Scale };
+				if (const auto track = m_Interpolation.find(update.Entity); track != m_Interpolation.end())
+					track->second.Samples.back().ApplyTo(transform);
+				else
+					before = TransformSample::From(transform, previousSnapshot);
 			}
 			ApplyUpdate(entity, update, true, m_Reported);
 			if (interpolate)
@@ -926,8 +957,6 @@ namespace Breccia {
 		const std::string id = IdText(entity.GetUUID());
 		if (update.Parent && fromHost)
 			ApplyParent(entity, *update.Parent);
-		// Set before the components other than ownership, which may hand the entity to this client.
-		bool predicted = false;
 		const auto apply = [&](const NetComponentUpdate& change, bool authority) {
 			const ReplicationSchema::Component* component = Schema().FindComponent(change.Component);
 			BR_CORE_ASSERT(component, "component indices are checked when a message is decoded");
@@ -935,9 +964,6 @@ namespace Breccia {
 			const bool networked = change.Component == NetworkedComponentIndex();
 			// This client decides the entity's values; the host still decides which components it has and who owns it.
 			if (authority && !networked && change.Change == NetComponentChange::Changed)
-				return;
-			// A character this client predicts takes the host's position through Reconcile, never as a field.
-			if (predicted && change.Component == TransformComponentIndex())
 				return;
 			if (change.Change == NetComponentChange::Removed)
 			{
@@ -978,7 +1004,6 @@ namespace Breccia {
 		if (ownership)
 			apply(*ownership, false);
 		const bool authority = fromHost && entity.HasComponent<NetworkedComponent>() && HasAuthority(entity);
-		predicted = fromHost && IsPredicted(entity);
 		for (const NetComponentUpdate& change : update.Components)
 			if (&change != ownership)
 				apply(change, authority);
@@ -1078,7 +1103,7 @@ namespace Breccia {
 				continue;
 			// A character a host moves from its client's inputs moves only by them; one a client predicts moves itself.
 			const bool remoteInputs = m_RemoteCharacters.contains(entity.GetUUID());
-			if ((!HasAuthority(entity) && !(character && IsPredicted(entity))) || remoteInputs)
+			if ((!HasAuthority(entity) && !IsPredicted(entity)) || remoteInputs)
 				driven.insert(entity.GetUUID());
 		}
 		for (UUID uuid : m_DrivenBodies)
@@ -1228,10 +1253,11 @@ namespace Breccia {
 
 		if (m_Role == NetworkRole::Host)
 		{
+			// Every tick, clients or not: lag compensation must know bodies that existed before a client joined.
+			RecordPoses();
 			if (GetAdmittedCount() == 0)
 				return;
 			const ReplicationWorld world = CaptureWorld();
-			RecordPoses();
 			const uint32_t networkedIndex = NetworkedComponentIndex();
 			const uint32_t transformIndex = TransformComponentIndex();
 			for (auto& [handle, connection] : m_Connections)
@@ -1239,14 +1265,15 @@ namespace Breccia {
 				if (!connection.IsAdmitted())
 					continue;
 				const uint32_t peer = connection.PeerId;
-				// The client decides the values of what it owns, and the position of the characters it predicts (which it
-				// corrects from their states instead); it hears who owns them and which components they have.
-				const ReplicationFilter filter = [peer, networkedIndex, transformIndex](const ReplicatedEntity& entity, uint32_t component) {
+				// The client decides the values of what it owns, and the position of the characters the host moves by its inputs
+				// (which it corrects from their states instead); it hears who owns them and which components they have.
+				const ReplicationFilter filter = [this, peer, networkedIndex, transformIndex](const ReplicatedEntity& entity, uint32_t component) {
 					if (entity.Owner != peer)
 						return ReplicationScope::Everything;
 					if (entity.Authority == NetworkAuthority::Owner && component != networkedIndex)
 						return ReplicationScope::PresenceOnly;
-					if (entity.Authority == NetworkAuthority::Predicted && component == transformIndex)
+					const auto remote = m_RemoteCharacters.find(entity.Entity);
+					if (component == transformIndex && remote != m_RemoteCharacters.end() && remote->second.Peer == peer)
 						return ReplicationScope::PresenceOnly;
 					return ReplicationScope::Everything;
 				};
@@ -1258,10 +1285,10 @@ namespace Breccia {
 		}
 		// A client that spent its budget skips the tick: what it would send waits, and the host never receives more than
 		// MaxBytesPerSecond from it (one message of debt at most).
-		else if (m_State == NetConnectionState::Connected && m_HostHandle && refill(m_ClientTokens) > 0)
+		else if (const size_t budget = m_State == NetConnectionState::Connected && m_HostHandle ? refill(m_ClientTokens) : 0; budget > 0)
 		{
 			const NetStateExtras extras{ .Inputs = std::move(inputs) };
-			const std::vector<uint8_t> message = m_ClientSender.Build(CaptureWorld(), m_LastSnapshot, static_cast<size_t>(m_ClientTokens), {}, extras);
+			const std::vector<uint8_t> message = m_ClientSender.Build(CaptureWorld(), m_LastSnapshot, budget, {}, extras);
 			if (Transmit(*m_HostHandle, NetChannel::Unreliable, message, m_HostTraffic))
 				m_ClientTokens -= static_cast<double>(message.size());
 		}
@@ -1294,13 +1321,20 @@ namespace Breccia {
 		const std::vector<uint8_t> bytes = NetProtocol::EncodeScript(message);
 		if (bytes.empty())
 		{
-			outError = fmt::format("the message is larger than {} bytes, or holds text that is not UTF-8", NetProtocol::MaxScriptMessageBytes);
+			// The only other reason it cannot encode.
+			NetWriter writer;
+			outError = NetValue::Encode(message.Arguments, writer) ? fmt::format("the message is larger than {} bytes", NetProtocol::MaxScriptMessageBytes) : "an argument holds text that is not UTF-8";
 			return false;
 		}
-		NetPeerHandle handle = 0;
-		double* credit = nullptr;
-		double* tokens = nullptr;
-		NetTraffic* traffic = nullptr;
+		// Where it goes, and the allowances it spends there.
+		struct Route
+		{
+			NetPeerHandle Handle = 0;
+			double* Credit = nullptr;
+			double* Tokens = nullptr;
+			NetTraffic* Traffic = nullptr;
+		};
+		Route route;
 		if (m_Role == NetworkRole::Host)
 		{
 			Connection* connection = FindPeer(peer);
@@ -1309,10 +1343,7 @@ namespace Breccia {
 				outError = peer == 0 ? "the host sends to clients (peer 1 and up)" : fmt::format("no client {} is connected", peer);
 				return false;
 			}
-			handle = connection->Handle;
-			credit = &connection->MessageCredit;
-			tokens = &connection->Tokens;
-			traffic = &connection->Traffic;
+			route = { connection->Handle, &connection->SendCredit, &connection->Tokens, &connection->Traffic };
 		}
 		else
 		{
@@ -1326,96 +1357,99 @@ namespace Breccia {
 				outError = "not connected to a host";
 				return false;
 			}
-			handle = *m_HostHandle;
-			credit = &m_ClientMessageCredit;
-			tokens = &m_ClientTokens;
-			traffic = &m_HostTraffic;
+			route = { *m_HostHandle, &m_ClientSendCredit, &m_ClientTokens, &m_HostTraffic };
 		}
-		if (*credit < 1.0)
+		if (*route.Credit < 1.0)
 		{
 			outError = fmt::format("more than Network.MaxMessagesPerSecond ({}) messages this second", m_Settings.MaxMessagesPerSecond);
 			return false;
 		}
 		// Messages share the connection's bandwidth with snapshots; one may run the budget into debt, as a record may.
-		if (*tokens <= 0.0)
+		if (*route.Tokens <= 0.0)
 		{
 			outError = fmt::format("the connection's Network.MaxBytesPerSecond ({}) is spent", m_Settings.MaxBytesPerSecond);
 			return false;
 		}
-		if (!Transmit(handle, reliable ? NetChannel::Reliable : NetChannel::Unreliable, bytes, *traffic))
+		if (!Transmit(route.Handle, reliable ? NetChannel::Reliable : NetChannel::Unreliable, bytes, *route.Traffic))
 		{
 			outError = "the transport did not take the message";
 			return false;
 		}
-		*credit -= 1.0;
-		*tokens -= static_cast<double>(bytes.size());
+		*route.Credit -= 1.0;
+		*route.Tokens -= static_cast<double>(bytes.size());
 		m_Statistics.ScriptMessagesSent++;
 		return true;
 	}
 
-	void NetworkSystem::HandleScriptMessage(uint32_t sender, NetScriptMessage message)
+	void NetworkSystem::HandleScriptMessage(uint32_t sender, NetScriptMessage message, std::unordered_set<std::string>& reported)
 	{
 		const bool rpc = message.Kind == NetScriptKind::Rpc;
 		NetworkEvent event{ .Type = rpc ? NetworkEvent::Kind::Rpc : NetworkEvent::Kind::Message, .Peer = sender, .Entity = message.Entity, .Name = std::move(message.Name), .Arguments = std::move(message.Arguments) };
-		if (rpc && !m_Scene.GetEntityByUUID(event.Entity))
+		const bool missing = rpc && !m_Scene.GetEntityByUUID(event.Entity);
+		if (m_Role == NetworkRole::Host)
 		{
-			if (m_Role == NetworkRole::Host)
+			if (missing)
 			{
 				// The entity is gone, or never existed: the client acted on what it saw a moment ago.
 				m_Statistics.ScriptMessagesDropped++;
-				if (Connection* connection = FindPeer(sender))
-					Report(connection->Reported, "rpc-entity", fmt::format("client {} called {} on entity {}, which the host does not have; ignored", sender, event.Name, IdText(event.Entity)));
+				Report(reported, "rpc-entity", fmt::format("client {} called {} on entity {}, which the host does not have; ignored", sender, event.Name, IdText(event.Entity)));
 				return;
 			}
-			// Its spawn may still be on its way (snapshots are unreliable, RPCs need not be).
-			if (m_PendingRpcs.size() >= MaxPendingRpcs)
-			{
-				m_Statistics.ScriptMessagesDropped++;
-				Report(m_Reported, "rpc-overflow", fmt::format("more than {} RPCs wait for entities this client does not have; the oldest is dropped", MaxPendingRpcs));
-				m_PendingRpcs.pop_front();
-			}
-			m_PendingRpcs.push_back({ std::move(event), m_Clock });
+			PushEvent(std::move(event));
 			return;
 		}
-		PushEvent(std::move(event));
-	}
-
-	void NetworkSystem::ReleaseInboxes(float deltaTime)
-	{
-		const double rate = m_Settings.MaxMessagesPerSecond;
-		for (auto& [handle, connection] : m_Connections)
+		// An RPC whose entity's spawn may still be on its way (snapshots are unreliable, RPCs need not be) waits for it,
+		// and so does everything after it: reliable messages arrive in order.
+		if (!missing && m_PendingScripts.empty())
 		{
-			if (!connection.IsAdmitted())
-				continue;
-			Inbox& inbox = connection.Received;
-			inbox.Credit = std::min(rate, inbox.Credit + rate * deltaTime);
-			while (!inbox.Messages.empty() && inbox.Credit >= 1.0)
-			{
-				NetScriptMessage message = std::move(inbox.Messages.front());
-				inbox.Messages.pop_front();
-				inbox.Credit -= 1.0;
-				HandleScriptMessage(connection.PeerId, std::move(message));
-			}
+			PushEvent(std::move(event));
+			return;
 		}
+		if (m_PendingScripts.size() >= MaxPendingRpcs)
+		{
+			m_Statistics.ScriptMessagesDropped++;
+			Report(reported, "rpc-overflow", fmt::format("more than {} script messages wait for entities this client does not have; the oldest is dropped", MaxPendingRpcs));
+			m_PendingScripts.pop_front();
+		}
+		m_PendingScripts.push_back({ std::move(event), m_Clock });
+		ReleasePendingScripts();
 	}
 
-	void NetworkSystem::ReleasePendingRpcs()
+	bool NetworkSystem::ReleaseInbox(Connection& connection, bool all, std::string& outError)
 	{
-		for (auto it = m_PendingRpcs.begin(); it != m_PendingRpcs.end();)
+		Inbox& inbox = connection.Received;
+		while (!inbox.Messages.empty() && (all || inbox.ReleaseCredit >= 1.0))
 		{
-			if (m_Scene.GetEntityByUUID(it->Event.Entity))
-			{
-				PushEvent(std::move(it->Event));
-				it = m_PendingRpcs.erase(it);
-			}
-			else if (m_Clock - it->Since >= PendingRpcSeconds)
+			const std::vector<uint8_t> bytes = std::move(inbox.Messages.front());
+			inbox.Messages.pop_front();
+			inbox.Bytes -= bytes.size();
+			inbox.ReleaseCredit -= 1.0;
+			std::optional<NetMessage> message = NetProtocol::Decode(bytes, Schema(), outError);
+			if (!message)
+				return false;
+			HandleScriptMessage(connection.PeerId, std::get<NetScriptMessage>(std::move(message->Body)), connection.Reported);
+		}
+		return true;
+	}
+
+	void NetworkSystem::ReleasePendingScripts()
+	{
+		// In arrival order: a message waits for every RPC before it.
+		while (!m_PendingScripts.empty())
+		{
+			PendingScript& front = m_PendingScripts.front();
+			const bool waiting = front.Event.Type == NetworkEvent::Kind::Rpc && !m_Scene.GetEntityByUUID(front.Event.Entity);
+			if (waiting && m_Clock - front.Since < PendingRpcSeconds)
+				return;
+			if (waiting)
 			{
 				m_Statistics.ScriptMessagesDropped++;
-				Report(m_Reported, "rpc-timeout-" + IdText(it->Event.Entity), fmt::format("the host called {} on entity {}, which did not arrive within {} seconds; dropped", it->Event.Name, IdText(it->Event.Entity), PendingRpcSeconds));
-				it = m_PendingRpcs.erase(it);
+				// One key for every entity: they are the host's choice.
+				Report(m_Reported, "rpc-timeout", fmt::format("the host called {} on entity {}, which did not arrive within {} seconds; dropped (later ones are counted in NetworkStatistics, not logged)", front.Event.Name, IdText(front.Event.Entity), PendingRpcSeconds));
 			}
 			else
-				++it;
+				PushEvent(std::move(front.Event));
+			m_PendingScripts.pop_front();
 		}
 	}
 
@@ -1428,7 +1462,7 @@ namespace Breccia {
 		for (auto handle : m_Scene.GetRegistry().view<NetworkedComponent, CharacterControllerComponent>())
 		{
 			Entity entity(handle, &m_Scene);
-			if (IsPredicted(entity) && physics->HasCharacter(entity))
+			if (WantsPrediction(entity) && physics->HasCharacter(entity))
 				wanted.insert(entity.GetUUID());
 		}
 		for (auto it = m_Predicted.begin(); it != m_Predicted.end();)
@@ -1457,6 +1491,8 @@ namespace Breccia {
 		PhysicsWorld* physics = m_Scene.GetPhysicsWorld();
 		if (!physics)
 			return result;
+		// Below the host's limit after float rounding too, which a scale to exactly MaxInputSpeed can miss.
+		constexpr float ClampedSpeed = NetProtocol::MaxInputSpeed * 0.999f;
 		for (auto& [uuid, character] : m_Predicted)
 		{
 			Entity entity = m_Scene.GetEntityByUUID(uuid);
@@ -1464,24 +1500,37 @@ namespace Breccia {
 				continue;
 			for (CharacterInput input : physics->TakeCharacterInputs(entity))
 			{
-				// What the host accepts: a faster request is clamped here, and the correction shows the difference.
-				if (const float speed = glm::length(input.Velocity); speed > NetProtocol::MaxInputSpeed)
-					input.Velocity *= NetProtocol::MaxInputSpeed / speed;
+				if (const float speed = glm::length(input.Velocity); speed > ClampedSpeed)
+				{
+					input.Velocity *= ClampedSpeed / speed;
+					if (!std::exchange(character.ReportedClamp, true))
+						BR_CORE_WARN("Network: '{}' walked at {} m/s, faster than the {} m/s inputs may ask for; it is sent slower and the host's state corrects it", entity.GetName(), speed, NetProtocol::MaxInputSpeed);
+				}
 				input.Rotation = glm::normalize(input.Rotation);
-				character.Unacknowledged.emplace_back(character.NextInput++, input);
+				character.Unacknowledged.push_back(input);
 			}
-			while (character.Unacknowledged.size() > MaxUnacknowledgedInputs)
-				character.Unacknowledged.pop_front();
-			if (character.Unacknowledged.empty() || result.size() >= NetProtocol::MaxPredictedCharacters)
+			if (character.Unacknowledged.size() > MaxUnacknowledgedInputs)
+			{
+				const size_t excess = character.Unacknowledged.size() - MaxUnacknowledgedInputs;
+				character.Unacknowledged.erase(character.Unacknowledged.begin(), character.Unacknowledged.begin() + static_cast<std::ptrdiff_t>(excess));
+				character.First += static_cast<uint32_t>(excess);
+				if (!std::exchange(character.ReportedBacklog, true))
+					BR_CORE_WARN("Network: the host has not acknowledged the last {} inputs of '{}'; older ones are forgotten, and its corrections replay only these", MaxUnacknowledgedInputs, entity.GetName());
+			}
+			if (character.Unacknowledged.empty())
 				continue;
-			// The newest ones: consecutive, as only the oldest are ever dropped.
+			if (result.size() >= NetProtocol::MaxPredictedCharacters)
+			{
+				Report(m_Reported, "predicted-limit", fmt::format("this client predicts more than {} characters; the inputs of the others are not sent", NetProtocol::MaxPredictedCharacters));
+				continue;
+			}
+			// The newest ones, which the host may not have.
 			const size_t count = std::min<size_t>(character.Unacknowledged.size(), NetProtocol::MaxInputsPerCharacter);
+			const size_t skipped = character.Unacknowledged.size() - count;
 			NetInputs& inputs = result.emplace_back();
 			inputs.Entity = uuid;
-			const auto first = character.Unacknowledged.end() - static_cast<std::ptrdiff_t>(count);
-			inputs.First = first->first;
-			for (auto it = first; it != character.Unacknowledged.end(); ++it)
-				inputs.Steps.push_back(it->second);
+			inputs.First = character.First + static_cast<uint32_t>(skipped);
+			inputs.Steps.assign(character.Unacknowledged.begin() + static_cast<std::ptrdiff_t>(skipped), character.Unacknowledged.end());
 		}
 		return result;
 	}
@@ -1494,18 +1543,25 @@ namespace Breccia {
 		if (found == m_Predicted.end() || !physics || !entity)
 			return;
 		PredictedCharacter& character = found->second;
-		while (!character.Unacknowledged.empty() && character.Unacknowledged.front().first <= prediction.Input)
+		// Acknowledged: the host's state includes them.
+		while (!character.Unacknowledged.empty() && character.First <= prediction.Input)
+		{
 			character.Unacknowledged.pop_front();
+			character.First++;
+		}
+		if (character.First <= prediction.Input)
+			character.First = prediction.Input + 1;
 		const std::optional<CharacterState> before = physics->GetCharacterState(entity);
 		// Replaying turns the character as each input did; the rotation a script gave it since stays.
 		const glm::quat rotation = entity.GetComponent<TransformComponent>().Rotation;
-		if (!physics->SetCharacterState(entity, prediction.State))
-			return;
-		for (const auto& [sequence, input] : character.Unacknowledged)
-			physics->StepCharacter(entity, input);
+		bool replayed = physics->SetCharacterState(entity, prediction.State);
+		for (const CharacterInput& input : character.Unacknowledged)
+			replayed = replayed && physics->StepCharacter(entity, input);
 		entity.GetComponent<TransformComponent>().Rotation = rotation;
+		if (!replayed && !std::exchange(character.ReportedReplay, true))
+			BR_CORE_WARN("Network: '{}' could not be put at the host's state and its inputs replayed (a degenerate transform?); it shows its own prediction until it can", entity.GetName());
 		const std::optional<CharacterState> after = physics->GetCharacterState(entity);
-		if (before && after && glm::length(after->Position - before->Position) > PredictionTolerance)
+		if (before.has_value() && after.has_value() && glm::length(after->Position - before->Position) > PredictionTolerance)
 			m_Statistics.Corrections++;
 	}
 
@@ -1520,31 +1576,53 @@ namespace Breccia {
 		const uint64_t steps = physics->GetStepCount();
 		const float credited = static_cast<float>(steps - std::min(steps, m_CreditedSteps));
 		m_CreditedSteps = steps;
-		const float maxCredit = std::max(1.0f, std::floor(MaxInputLeadSeconds / m_Scene.GetFixedTimestep()));
+		const float window = std::max(2.0f, std::floor(InputWindowSeconds / m_Scene.GetFixedTimestep()));
 		std::set<UUID> live;
-		for (auto [handle, networked, controller] : m_Scene.GetRegistry().view<NetworkedComponent, CharacterControllerComponent>().each())
+		for (auto handle : m_Scene.GetRegistry().view<NetworkedComponent, CharacterControllerComponent>())
 		{
 			Entity entity(handle, &m_Scene);
-			if (networked.Authority != NetworkAuthority::Predicted || !IsActivePeer(networked.Owner) || !physics->HasCharacter(entity) || m_Scene.IsEntityPendingDestruction(entity))
+			const NetworkedComponent& networked = entity.GetComponent<NetworkedComponent>();
+			if (networked.Authority != NetworkAuthority::Predicted || !FindPeer(networked.Owner) || !physics->HasCharacter(entity) || m_Scene.IsEntityPendingDestruction(entity))
 				continue;
 			live.insert(entity.GetUUID());
-			auto [it, inserted] = m_RemoteCharacters.try_emplace(entity.GetUUID(), RemoteCharacter{ networked.Owner, 0, maxCredit });
-			// Another client's now: its inputs start afresh.
-			if (!inserted && it->second.Peer != networked.Owner)
-				it->second = RemoteCharacter{ networked.Owner, 0, maxCredit };
-			else if (!inserted)
-				it->second.Credit = std::min(maxCredit, it->second.Credit + credited);
+			RemoteCharacter& character = m_RemoteCharacters[entity.GetUUID()];
+			// New, or another client's now: its inputs start afresh, half the window ahead of the host's steps.
+			if (character.Peer != networked.Owner)
+			{
+				character = RemoteCharacter{ networked.Owner, 0, window / 2.0f };
+				continue;
+			}
+			character.Credit += credited;
+			// The owner sent nothing for half the window: its character must not hang where it is (in mid-jump), so it takes
+			// the steps it misses without inputs, and the client is corrected. Its inputs, when they come, follow, at most half
+			// the window of them at once.
+			character.Silent = character.Silent || character.Credit > window;
+			uint32_t idle = 0;
+			while (character.Silent && character.Credit > window / 2.0f && idle < MaxIdleStepsPerFrame)
+			{
+				physics->StepCharacter(entity, { glm::vec3(0.0f), entity.GetComponent<TransformComponent>().Rotation });
+				character.Credit -= 1.0f;
+				idle++;
+			}
+			m_Statistics.IdleSteps += idle;
+			character.Credit = std::min(character.Credit, window);
 		}
 		std::erase_if(m_RemoteCharacters, [&live](const auto& entry) { return !live.contains(entry.first); });
 	}
 
 	void NetworkSystem::ApplyInputs(Connection& connection, const NetInputs& inputs)
 	{
+		const std::string id = IdText(inputs.Entity);
 		const auto found = m_RemoteCharacters.find(inputs.Entity);
-		// Ownership may have changed while the inputs travelled.
 		if (found == m_RemoteCharacters.end() || found->second.Peer != connection.PeerId)
 		{
-			m_Statistics.RejectedRecords++;
+			m_Statistics.InputsRejected++;
+			// Ownership may have changed while the inputs travelled (not worth a line); one the sender predicts that the
+			// host cannot move (no character built) is a problem worth knowing about.
+			const Entity entity = m_Scene.GetEntityByUUID(inputs.Entity);
+			const auto* networked = entity ? entity.TryGetComponent<NetworkedComponent>() : nullptr;
+			if (networked && networked->Authority == NetworkAuthority::Predicted && networked->Owner == connection.PeerId)
+				Report(connection.Reported, "inputs-" + id, fmt::format("client {} predicts entity {} ('{}'), which the host cannot move (no character controller built there); its inputs are ignored", connection.PeerId, id, entity.GetName()));
 			return;
 		}
 		PhysicsWorld* physics = m_Scene.GetPhysicsWorld();
@@ -1552,6 +1630,7 @@ namespace Breccia {
 		if (!physics || !entity)
 			return;
 		RemoteCharacter& character = found->second;
+		const float maxSpeed = entity.GetComponent<NetworkedComponent>().MaxInputSpeed;
 		for (size_t i = 0; i < inputs.Steps.size(); i++)
 		{
 			const uint32_t sequence = inputs.First + static_cast<uint32_t>(i);
@@ -1560,10 +1639,21 @@ namespace Breccia {
 			// Faster than the host's own steps: the rest waits for the next message, which repeats them.
 			if (character.Credit < 1.0f)
 				break;
-			if (!physics->StepCharacter(entity, inputs.Steps[i]))
+			// The game's limit, not the client's word: a modified client runs and jumps no faster than this.
+			CharacterInput input = inputs.Steps[i];
+			if (const float speed = glm::length(input.Velocity); speed > maxSpeed)
+				input.Velocity *= maxSpeed / speed;
+			if (!physics->StepCharacter(entity, input))
+			{
+				Report(connection.Reported, "step-" + id, fmt::format("the inputs of client {} cannot move entity {} ('{}') (a degenerate transform?)", connection.PeerId, id, entity.GetName()));
 				break;
+			}
+			// Lost on the way (more than MaxInputsPerCharacter in a row): those steps are never taken.
+			if (character.LastInput != 0 && sequence > character.LastInput + 1)
+				m_Statistics.InputsSkipped += sequence - character.LastInput - 1;
 			character.LastInput = sequence;
 			character.Credit -= 1.0f;
+			character.Silent = false;
 			m_Statistics.InputsApplied++;
 		}
 	}
@@ -1574,6 +1664,7 @@ namespace Breccia {
 		PhysicsWorld* physics = m_Scene.GetPhysicsWorld();
 		if (!physics)
 			return predictions;
+		const auto inRange = [](const glm::vec3& value, float limit) { return glm::all(glm::lessThanEqual(glm::abs(value), glm::vec3(limit))); };
 		for (const auto& [uuid, character] : m_RemoteCharacters)
 		{
 			if (character.Peer != peer)
@@ -1583,8 +1674,16 @@ namespace Breccia {
 				Report(m_Reported, "predicted-" + std::to_string(peer), fmt::format("client {} predicts more than {} characters; the others are not corrected", peer, NetProtocol::MaxPredictedCharacters));
 				break;
 			}
-			if (const std::optional<CharacterState> state = physics->GetCharacterState(m_Scene.GetEntityByUUID(uuid)))
-				predictions.push_back({ uuid, character.LastInput, *state });
+			const std::optional<CharacterState> state = physics->GetCharacterState(m_Scene.GetEntityByUUID(uuid));
+			if (!state)
+				continue;
+			// What the client's decoder accepts: anything else would end its whole session.
+			if (!inRange(state->Position, NetProtocol::MaxPredictedCoordinate) || !inRange(state->Velocity, NetProtocol::MaxInputSpeed))
+			{
+				Report(m_Reported, "prediction-range-" + IdText(uuid), fmt::format("entity {} is out of the range predicted states may carry (position within {} m, speed {} m/s per axis); its owner is not corrected", IdText(uuid), NetProtocol::MaxPredictedCoordinate, NetProtocol::MaxInputSpeed));
+				continue;
+			}
+			predictions.push_back({ uuid, character.LastInput, *state });
 		}
 		return predictions;
 	}
@@ -1597,7 +1696,8 @@ namespace Breccia {
 	void NetworkSystem::RecordTransform(Entity entity, double previousSnapshot, const std::optional<TransformSample>& before)
 	{
 		std::deque<TransformSample>& track = m_Interpolation[entity.GetUUID()].Samples;
-		if (track.empty() && before)
+		// A track always holds a sample: a new one starts from what the entity showed.
+		if (before)
 			track.push_back(*before);
 		// Unchanged until the previous snapshot: it starts moving from there, not from its last change.
 		else if (!track.empty() && track.back().Time < previousSnapshot)
@@ -1606,8 +1706,7 @@ namespace Breccia {
 			held.Time = previousSnapshot;
 			track.push_back(held);
 		}
-		const TransformComponent& transform = entity.GetComponent<TransformComponent>();
-		const TransformSample now{ m_LastSnapshotTime, transform.Translation, transform.Rotation, transform.Scale };
+		const TransformSample now = TransformSample::From(entity.GetComponent<TransformComponent>(), m_LastSnapshotTime);
 		if (!track.empty() && track.back().Time >= now.Time)
 			track.back() = now;
 		else
@@ -1623,7 +1722,7 @@ namespace Breccia {
 		{
 			Entity entity = m_Scene.GetEntityByUUID(it->first);
 			std::deque<TransformSample>& track = it->second.Samples;
-			if (!entity || track.empty() || !IsInterpolated(entity))
+			if (!entity || !IsInterpolated(entity))
 			{
 				it = m_Interpolation.erase(it);
 				continue;
@@ -1641,9 +1740,7 @@ namespace Breccia {
 				shown.Rotation = Math::Slerp(from.Rotation, to.Rotation, weight);
 				shown.Scale = glm::mix(from.Scale, to.Scale, weight);
 			}
-			transform.Translation = shown.Translation;
-			transform.Rotation = shown.Rotation;
-			transform.Scale = shown.Scale;
+			shown.ApplyTo(transform);
 			// Arrived and at rest: nothing to follow until the next change.
 			if (track.size() == 1 && from.Time <= viewTime)
 			{
@@ -1664,8 +1761,7 @@ namespace Breccia {
 			const Entity entity = m_Scene.GetEntityByUUID(entry.first);
 			if (!entity)
 				return true;
-			const TransformComponent& transform = entity.GetComponent<TransformComponent>();
-			return transform.Translation != track.Written->Translation || transform.Rotation != track.Written->Rotation || transform.Scale != track.Written->Scale;
+			return !track.Written->Shows(entity.GetComponent<TransformComponent>());
 		});
 	}
 

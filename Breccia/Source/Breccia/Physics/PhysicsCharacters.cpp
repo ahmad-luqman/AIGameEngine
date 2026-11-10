@@ -340,13 +340,19 @@ namespace Breccia {
 		}
 	}
 
-	void PhysicsWorld::Impl::FollowCharacterTransform(Entity entity, CharacterRecord& record)
+	PhysicsWorld::Impl::CharacterRecord* PhysicsWorld::Impl::FindCharacter(Entity entity)
 	{
-		glm::vec3 position;
-		glm::quat rotation;
-		glm::vec3 scale;
-		if (!Math::DecomposeTransform(ScenePtr->GetWorldTransform(entity), position, rotation, scale))
-			return;
+		if (!Owns(entity))
+			return nullptr;
+		const auto it = Characters.find(entity.GetUUID());
+		return it != Characters.end() ? &it->second : nullptr;
+	}
+
+	void PhysicsWorld::Impl::MoveCharacterTo(Entity entity, CharacterRecord& record, const glm::vec3& position, const glm::quat& rotation)
+	{
+		// A transform moved by something else teleports the character (whose old ground no longer holds it); its rotation
+		// always follows the entity. SetPosition and SetRotation take the inner body along, so other bodies and queries
+		// see it there.
 		JPH::CharacterVirtual& character = *record.Character;
 		if (glm::any(glm::greaterThan(glm::abs(position - record.LastPosition), glm::vec3(1e-5f))))
 		{
@@ -355,7 +361,16 @@ namespace Breccia {
 		}
 		if (glm::abs(glm::dot(rotation, record.LastRotation)) < 1.0f - 1e-6f)
 			character.SetRotation(ToJolt(rotation));
-		// SetPosition and SetRotation take the inner body along, so other bodies and queries see it there.
+	}
+
+	void PhysicsWorld::Impl::FollowCharacterTransform(Entity entity, CharacterRecord& record)
+	{
+		glm::vec3 position;
+		glm::quat rotation;
+		glm::vec3 scale;
+		if (!Math::DecomposeTransform(ScenePtr->GetWorldTransform(entity), position, rotation, scale))
+			return;
+		MoveCharacterTo(entity, record, position, rotation);
 		record.ActualVelocity = glm::vec3(0.0f);
 		record.LastPosition = position;
 		record.LastRotation = rotation;
@@ -394,16 +409,7 @@ namespace Breccia {
 		// Other characters are met through CharacterCollision, not their inner bodies, and this one's rig not at all.
 		const NonCharacterBodyFilter bodyFilter(*this, entity.GetUUID());
 		const JPH::ShapeFilter shapeFilter;
-
-		// A script that moved the transform teleports the character (whose old ground no longer holds it);
-		// its rotation always follows the entity.
-		if (glm::any(glm::greaterThan(glm::abs(position - record.LastPosition), glm::vec3(1e-5f))))
-		{
-			character.SetPosition(ToJolt(position));
-			character.RefreshContacts(broadPhaseFilter, objectLayerFilter, bodyFilter, shapeFilter, *TempAllocator);
-		}
-		if (glm::abs(glm::dot(rotation, record.LastRotation)) < 1.0f - 1e-6f)
-			character.SetRotation(ToJolt(rotation));
+		MoveCharacterTo(entity, record, position, rotation);
 
 		// Standing characters move with their ground and may jump off it; airborne ones keep their vertical
 		// speed under gravity and steer sideways (Jolt's CharacterVirtual sample). Unlike the sample, gravity
@@ -558,65 +564,50 @@ namespace Breccia {
 
 	void PhysicsWorld::SetCharacterInputRecording(Entity entity, bool recording)
 	{
-		if (!m_Impl->Owns(entity))
+		Impl::CharacterRecord* record = m_Impl->FindCharacter(entity);
+		if (!record)
 			return;
-		auto it = m_Impl->Characters.find(entity.GetUUID());
-		if (it == m_Impl->Characters.end())
-			return;
-		it->second.RecordInputs = recording;
+		record->RecordInputs = recording;
 		if (!recording)
-			it->second.Inputs.clear();
+			record->Inputs.clear();
 	}
 
 	std::vector<CharacterInput> PhysicsWorld::TakeCharacterInputs(Entity entity)
 	{
-		if (!m_Impl->Owns(entity))
-			return {};
-		auto it = m_Impl->Characters.find(entity.GetUUID());
-		return it != m_Impl->Characters.end() ? std::exchange(it->second.Inputs, {}) : std::vector<CharacterInput>{};
+		Impl::CharacterRecord* record = m_Impl->FindCharacter(entity);
+		return record ? std::exchange(record->Inputs, {}) : std::vector<CharacterInput>{};
 	}
 
 	bool PhysicsWorld::StepCharacter(Entity entity, const CharacterInput& input)
 	{
-		if (!m_Impl->Owns(entity))
-			return false;
-		auto it = m_Impl->Characters.find(entity.GetUUID());
-		if (it == m_Impl->Characters.end())
-			return false;
 		const float length = glm::length(input.Rotation);
-		if (!IsFiniteVec(input.Velocity) || !std::isfinite(length) || length < 1e-3f)
+		if (!m_Impl->FindCharacter(entity) || !IsFiniteVec(input.Velocity) || !std::isfinite(length) || length < 1e-3f)
 			return false;
-		// What changed since the last step (a new collider, settings) applies first, as at the start of a Step.
+		// What changed since the last step (a new collider, settings) applies first, as at the start of a Step; it may
+		// rebuild the record.
 		m_Impl->ApplyPendingChanges();
-		it = m_Impl->Characters.find(entity.GetUUID());
-		if (it == m_Impl->Characters.end())
-			return false;
-		return m_Impl->StepCharacter(entity, it->second, m_Impl->ScenePtr->GetFixedTimestep(), &input).has_value();
+		Impl::CharacterRecord* record = m_Impl->FindCharacter(entity);
+		return record && m_Impl->StepCharacter(entity, *record, m_Impl->ScenePtr->GetFixedTimestep(), &input).has_value();
 	}
 
 	std::optional<CharacterState> PhysicsWorld::GetCharacterState(Entity entity) const
 	{
-		if (!m_Impl->Owns(entity))
+		const Impl::CharacterRecord* record = m_Impl->FindCharacter(entity);
+		if (!record)
 			return std::nullopt;
-		auto it = m_Impl->Characters.find(entity.GetUUID());
-		if (it == m_Impl->Characters.end())
-			return std::nullopt;
-		const Impl::CharacterRecord& record = it->second;
-		const JPH::CharacterVirtual& character = *record.Character;
+		const JPH::CharacterVirtual& character = *record->Character;
 		return CharacterState{ .Position = FromJolt(JPH::Vec3(character.GetPosition())),
 							   .Velocity = FromJolt(character.GetLinearVelocity()),
-							   .SinceGrounded = std::min(record.Air.SinceGrounded, CharacterState::MaxSinceGrounded),
-							   .Jumped = record.Air.Jumped };
+							   .SinceGrounded = std::min(record->Air.SinceGrounded, CharacterState::MaxSinceGrounded),
+							   .Jumped = record->Air.Jumped };
 	}
 
 	bool PhysicsWorld::SetCharacterState(Entity entity, const CharacterState& state)
 	{
-		if (!m_Impl->Owns(entity) || !IsFiniteVec(state.Position) || !IsFiniteVec(state.Velocity) || !std::isfinite(state.SinceGrounded))
+		Impl::CharacterRecord* found = m_Impl->FindCharacter(entity);
+		if (!found || !IsFiniteVec(state.Position) || !IsFiniteVec(state.Velocity) || !std::isfinite(state.SinceGrounded))
 			return false;
-		auto it = m_Impl->Characters.find(entity.GetUUID());
-		if (it == m_Impl->Characters.end())
-			return false;
-		Impl::CharacterRecord& record = it->second;
+		Impl::CharacterRecord& record = *found;
 		JPH::CharacterVirtual& character = *record.Character;
 		character.SetPosition(ToJolt(state.Position));
 		character.SetLinearVelocity(ToJolt(state.Velocity));

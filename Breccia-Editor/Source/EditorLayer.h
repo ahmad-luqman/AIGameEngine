@@ -4,6 +4,7 @@
 #include "EditorContext.h"
 #include "ThumbnailManager.h"
 #include "Breccia/Automation/EditorHistory.h"
+#include "Breccia/Network/NetworkSettings.h"
 #include "Panels/ConsolePanel.h"
 #include "Panels/ContentBrowserPanel.h"
 #include "Panels/InspectorPanel.h"
@@ -280,7 +281,7 @@ namespace Breccia {
 			Client
 		};
 		PlayNetwork m_PlayNetwork = PlayNetwork::Offline;
-		int m_PlayNetworkPort = 7777;
+		int m_PlayNetworkPort = NetworkSettings::DefaultPort;
 		std::string m_PlayNetworkAddress = "127.0.0.1";
 		// Starts the toolbar's network session on the play scene that just started.
 		void StartPlayNetwork();
