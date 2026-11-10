@@ -3,9 +3,11 @@
 #include <Breccia/Automation/AutomationSession.h>
 #include <Breccia/Automation/CommandRegistry.h>
 #include <Breccia/Core/FileSystem.h>
+#include <Breccia/Core/Log.h>
 #include <Breccia/Math/Random.h>
 #include <Breccia/Network/NetBuffer.h>
 #include <Breccia/Network/NetProtocol.h>
+#include <Breccia/Network/NetValue.h>
 #include <Breccia/Network/NetworkSettings.h>
 #include <Breccia/Network/NetworkSystem.h>
 #include <Breccia/Network/ReplicationSchema.h>
@@ -15,6 +17,7 @@
 #include <Breccia/Scene/Entity.h>
 #include <Breccia/Scene/Scene.h>
 #include <Breccia/Scene/SceneSerializer.h>
+#include <Breccia/Scripting/ScriptEngine.h>
 
 #include "AutomationTestUtils.h"
 #include "NetworkTestUtils.h"
@@ -23,10 +26,12 @@
 #include <glm/gtc/quaternion.hpp>
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
-#include <span>
 #include <limits>
+#include <optional>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -76,6 +81,31 @@ namespace {
 			found = OfKind(network.TakeEvents(), kind);
 		}
 		return found;
+	}
+
+	// Advances the link and receives on one network system by hand (no scene update takes its events) for `frames` frames;
+	// returns every event it queued meanwhile.
+	std::vector<NetworkEvent> PumpAll(Session& session, NetworkSystem& network, int frames)
+	{
+		std::vector<NetworkEvent> events;
+		for (int i = 0; i < frames; i++)
+		{
+			session.Link().Advance(Step);
+			network.Receive(Step);
+			for (NetworkEvent& event : network.TakeEvents())
+				events.push_back(std::move(event));
+		}
+		return events;
+	}
+
+	// A client update carrying `count` equal inputs for `entity`, numbered from `first`, with the update sequence number
+	// `sequence` (0: `first`; a host ignores an update older than the newest it has).
+	std::vector<uint8_t> InputUpdate(UUID entity, uint32_t first, uint32_t count, const glm::vec3& velocity = { 1.0f, 0.0f, 0.0f }, uint32_t sequence = 0)
+	{
+		NetState update;
+		update.Sequence = sequence != 0 ? sequence : first;
+		update.Extras.Inputs.push_back({ entity, first, std::vector<CharacterInput>(count, { velocity, glm::quat(1, 0, 0, 0) }) });
+		return NetProtocol::EncodeState(NetMessageType::ClientUpdate, update);
 	}
 
 	std::vector<uint8_t> ScriptBytes(NetScriptKind kind, UUID entity, const std::string& name, nlohmann::json arguments = nlohmann::json::array())
@@ -379,7 +409,7 @@ TEST_SUITE("Network")
 		// Far fewer, but large ones past MaxInboxBytes: that ends it too.
 		RawPeer heavy(session, session.Link().Connect(session.GetPort()));
 		REQUIRE(heavy.Join() == 2);
-		const std::string payload(30 * 1024, 'h');
+		const std::string payload(size_t{ 30 } * 1024, 'h');
 		const size_t count = NetworkSystem::MaxInboxBytes / payload.size() + 70;
 		REQUIRE(count < NetworkSystem::MaxInboxMessages / 2);
 		for (size_t i = 0; i < count; i++)
@@ -576,13 +606,10 @@ TEST_SUITE("Network")
 		session.Run(30);
 		NetworkSystem& network = session.HostNetwork();
 		const float startX = host.GetEntityByUUID(playerId).GetTransform().Translation.x;
-		// A second's worth of inputs at once (a speed hack): at most MaxInputLeadSeconds of steps apply now.
+		// A burst of inputs at once (a speed hack): at most half the input window of steps apply now.
 		uint32_t next = 1;
 		const auto sendInputs = [&](uint32_t count, UUID entity) {
-			NetState update;
-			update.Sequence = next;
-			update.Extras.Inputs.push_back({ entity, next, std::vector<CharacterInput>(count, { { 10.0f, 0.0f, 0.0f }, glm::quat(1, 0, 0, 0) }) });
-			raw.Send(NetProtocol::EncodeState(NetMessageType::ClientUpdate, update), NetChannel::Unreliable);
+			raw.Send(InputUpdate(entity, next, count, glm::vec3(10.0f, 0.0f, 0.0f)), NetChannel::Unreliable);
 			next += count;
 		};
 		const uint64_t before = network.GetStatistics().InputsApplied;
@@ -601,22 +628,17 @@ TEST_SUITE("Network")
 		session.Run(2);
 		const uint64_t rejected = network.GetStatistics().InputsRejected;
 		const float playerX = host.GetEntityByUUID(playerId).GetTransform().Translation.x;
-		NetState stolen;
-		stolen.Sequence = 1;
-		stolen.Extras.Inputs.push_back({ playerId, 1000, std::vector<CharacterInput>(8, { { 10.0f, 0.0f, 0.0f }, glm::quat(1, 0, 0, 0) }) });
-		second.Send(NetProtocol::EncodeState(NetMessageType::ClientUpdate, stolen), NetChannel::Unreliable);
+		second.Send(InputUpdate(playerId, 1000, 8, { 10.0f, 0.0f, 0.0f }), NetChannel::Unreliable);
 		session.Run(2);
-		CHECK(network.GetStatistics().InputsRejected > rejected);
+		// Every step of the batch.
+		CHECK(network.GetStatistics().InputsRejected == rejected + 8);
 		CHECK(host.GetEntityByUUID(playerId).GetTransform().Translation.x == doctest::Approx(playerX).epsilon(1e-3));
 		// Handed to the second client, the character takes its inputs, numbered afresh.
 		const float otherX = host.GetEntityByUUID(otherId).GetTransform().Translation.x;
 		Patch(host.GetEntityByUUID(playerId), "Networked", { { "Owner", 2 } });
 		session.Run(2);
 		const uint64_t handed = network.GetStatistics().InputsApplied;
-		NetState fresh;
-		fresh.Sequence = 2;
-		fresh.Extras.Inputs.push_back({ playerId, 1, std::vector<CharacterInput>(4, { { 10.0f, 0.0f, 0.0f }, glm::quat(1, 0, 0, 0) }) });
-		second.Send(NetProtocol::EncodeState(NetMessageType::ClientUpdate, fresh), NetChannel::Unreliable);
+		second.Send(InputUpdate(playerId, 1, 4, { 10.0f, 0.0f, 0.0f }, 1001), NetChannel::Unreliable);
 		session.Run(2);
 		CHECK(network.GetStatistics().InputsApplied == handed + 4);
 		CHECK(host.GetEntityByUUID(otherId).GetTransform().Translation.x == otherX);
@@ -703,10 +725,11 @@ TEST_SUITE("Network")
 		// half a meter from its center.
 		const double between = then + Step / 2.0;
 		const float betweenX = thenX + 6.0f * Step / 2.0f;
-		CHECK(network.RaycastAt(between, { betweenX - 0.45f, 5.0f, 0.0f }, down, 10.0f));
-		CHECK_FALSE(network.RaycastAt(between, { betweenX - 0.55f, 5.0f, 0.0f }, down, 10.0f));
-		CHECK(network.RaycastAt(between, { betweenX + 0.45f, 5.0f, 0.0f }, down, 10.0f));
-		CHECK_FALSE(network.RaycastAt(between, { betweenX + 0.55f, 5.0f, 0.0f }, down, 10.0f));
+		// Probes half the half-step move inside and outside each edge: either tick's pose alone fails one of them.
+		CHECK(network.RaycastAt(between, { betweenX - 0.475f, 5.0f, 0.0f }, down, 10.0f));
+		CHECK_FALSE(network.RaycastAt(between, { betweenX - 0.525f, 5.0f, 0.0f }, down, 10.0f));
+		CHECK(network.RaycastAt(between, { betweenX + 0.475f, 5.0f, 0.0f }, down, 10.0f));
+		CHECK_FALSE(network.RaycastAt(between, { betweenX + 0.525f, 5.0f, 0.0f }, down, 10.0f));
 		// The present, or a time in the future, is a plain raycast.
 		hit = network.RaycastAt(network.GetTime() + 1.0, { nowX, 5.0f, 0.0f }, down, 10.0f);
 		REQUIRE(hit);
@@ -832,6 +855,7 @@ TEST_SUITE("Network")
 			{ "Network.Rpc(5, 'Hit', 'Server')", "expected an Entity" },
 			{ "Network.On('X', 5)", "expected a function" },
 			{ "Network.Raycast(Vec3(0,0,0), Vec3(0,-1,0), 10, 'now')", "time" },
+			{ "Network.Raycast(Vec3(0,0,0), Vec3(0,-1,0), 10, 0, { All = true })", "All" },
 		};
 		BrecciaTest::CheckLuaErrors(*owner.GetScriptEngine(), errors);
 		const std::pair<const char*, const char*> hostErrors[] = {
@@ -900,7 +924,8 @@ TEST_SUITE("Network")
 		CHECK(BrecciaTest::Eval(*host, "return Log") == "P1");
 
 		// Disconnect ends it at the end of the frame; Connect again joins as a new peer.
-		CHECK(BrecciaTest::Eval(*client, "Network.Disconnect() return Network.IsActive()") == "false");
+		// A load in the frame that ends the session is not refused for the session (this file is missing).
+		CHECK(BrecciaTest::Eval(*client, "Network.Disconnect() local ok, err = pcall(Scene.Load, 'Assets/Scenes/Missing.bscene') return tostring(Network.IsActive()) .. ' ' .. tostring(string.find(err, 'network session') ~= nil)") == "false false");
 		CHECK(client->GetNetworkSystem());
 		run(5);
 		CHECK_FALSE(client->GetNetworkSystem());
@@ -946,6 +971,9 @@ TEST_SUITE("Network")
 				HostSpace = 0
 				StartedHolding = Input.IsKeyDown("Space")
 				Network.On("Tick", function(sender) Messages = Messages + 1 end)
+			end
+			function Count:OnDestroy()
+				if FailOnDestroy then error("destroy boom") end
 			end
 			function Count:OnUpdate(dt)
 				if FailNow then error("boom") end
@@ -1010,8 +1038,13 @@ TEST_SUITE("Network")
 		CHECK(Run(registry, session, "play.step")["clientScriptErrors"][0]["client"] == 2);
 		// The focused client quitting gives the input back to the play scene.
 		Run(registry, session, "net.focus", { { "client", third["client"] } });
-		Run(registry, session, "net.command", { { "client", third["client"] }, { "command", "lua.exec" }, { "params", { { "code", "Game.Quit()" } } } });
-		Run(registry, session, "play.step");
+		// Its script fails as it is destroyed: play.step still reports that, marked as an ended client's, and fails its
+		// assertNoErrors.
+		Run(registry, session, "net.command", { { "client", third["client"] }, { "command", "lua.exec" }, { "params", { { "code", "FailOnDestroy = true Game.Quit()" } } } });
+		Run(registry, session, "net.command", { { "client", 2 }, { "command", "lua.exec" }, { "params", { { "code", "FailNow = false" } } } });
+		const std::string quitError = RunError(registry, session, "play.step", { { "assertNoErrors", true } });
+		CHECK(Contains(quitError, "destroy boom"));
+		CHECK(Contains(quitError, "\"ended\":true"));
 		CHECK(Run(registry, session, "net.status")["inputPeer"] == 0);
 		CHECK_FALSE(session.GetNetworkClient(third["client"].get<size_t>()));
 		Run(registry, session, "net.focus", { { "client", 1 } });
@@ -1019,6 +1052,8 @@ TEST_SUITE("Network")
 		// Ending a client tells the host; ending the play scene's session tells the rest.
 		Run(registry, session, "net.disconnect", { { "client", 1 } });
 		CHECK(Run(registry, session, "net.status")["inputPeer"] == 0);
+		// Its slot stays, but takes no input.
+		CHECK(Contains(RunError(registry, session, "net.focus", { { "client", 1 } }), "no in-process client 1"));
 		Run(registry, session, "play.step", { { "frames", 10 } });
 		CHECK(Run(registry, session, "net.status")["connections"].size() == 1);
 		CHECK(Contains(RunError(registry, session, "net.disconnect", { { "client", 1 } }), "no in-process client 1"));
@@ -1027,6 +1062,11 @@ TEST_SUITE("Network")
 		CHECK(Run(registry, session, "net.status", { { "client", 2 } })["disconnectReason"] == "ServerShutdown");
 		CHECK(Run(registry, session, "net.status")["role"] == nullptr);
 		CHECK(Contains(RunError(registry, session, "net.disconnect"), "no network session"));
+		// A session a script asked for, which starts at the end of the frame, refuses another one meanwhile.
+		CHECK(Run(registry, session, "lua.exec", { { "code", "tostring(Network.Host(0))" } })["result"] == "true");
+		CHECK(Contains(RunError(registry, session, "net.host"), "has not happened yet"));
+		Run(registry, session, "play.step");
+		CHECK(Run(registry, session, "net.status")["role"] == "Host");
 		// Play's end takes the clients and the in-process network with it.
 		Run(registry, session, "play.stop");
 		CHECK(session.GetNetworkClients().empty());
@@ -1059,14 +1099,7 @@ TEST_SUITE("Network")
 		writer.WriteString("PeerDisconnected");
 		writer.WriteBytes(Encode(nlohmann::json::array({ "Timeout" })));
 		raw.Send(writer.GetBytes());
-		std::vector<NetworkEvent> events;
-		for (int i = 0; i < 10; i++)
-		{
-			session.Link().Advance(Step);
-			session.HostNetwork().Receive(Step);
-			for (NetworkEvent& event : session.HostNetwork().TakeEvents())
-				events.push_back(std::move(event));
-		}
+		std::vector<NetworkEvent> events = PumpAll(session, session.HostNetwork(), 10);
 		CHECK(OfKind(events, NetworkEvent::Kind::Message).empty());
 		REQUIRE(OfKind(events, NetworkEvent::Kind::PeerDisconnected).size() == 1);
 		CHECK(OfKind(events, NetworkEvent::Kind::PeerDisconnected)[0].Reason == NetDisconnectReason::InvalidPacket);
@@ -1123,18 +1156,44 @@ TEST_SUITE("Network")
 		for (int i = 0; i < 20; i++)
 			raw.Send(ScriptBytes(NetScriptKind::Message, 0, "Bye", { i }));
 		raw.Transport().Disconnect(1, static_cast<uint32_t>(NetDisconnectReason::ClientQuit));
-		std::vector<NetworkEvent> events;
-		for (int i = 0; i < 10; i++)
-		{
-			session.Link().Advance(Step);
-			host.Receive(Step);
-			for (NetworkEvent& event : host.TakeEvents())
-				events.push_back(std::move(event));
-		}
+		std::vector<NetworkEvent> events = PumpAll(session, host, 10);
 		REQUIRE(events.size() == 21);
 		CHECK(events.back().Type == NetworkEvent::Kind::PeerDisconnected);
 		CHECK(events[19].Arguments[0] == 19);
 		CHECK(host.GetStatistics().ScriptMessagesDropped == 0);
+
+		// One that does not decode: what came before it is handed over, it and what came after are dropped and counted.
+		RawPeer broken(session, session.Link().Connect(session.GetPort()));
+		REQUIRE(broken.Join() == 2);
+		host.TakeEvents();
+		for (int i = 0; i < 3; i++)
+			broken.Send(ScriptBytes(NetScriptKind::Message, 0, "Before", { i }));
+		broken.Send(Bytes({ static_cast<int>(NetMessageType::Script), 7 }));
+		for (int i = 0; i < 2; i++)
+			broken.Send(ScriptBytes(NetScriptKind::Message, 0, "After", { i }));
+		broken.Transport().Disconnect(1, static_cast<uint32_t>(NetDisconnectReason::ClientQuit));
+		const auto brokenSince = Log::GetHistory().GetTotalCount();
+		events = PumpAll(session, host, 10);
+		CHECK(OfKind(events, NetworkEvent::Kind::Message).size() == 3);
+		CHECK(OfKind(events, NetworkEvent::Kind::PeerDisconnected).size() == 1);
+		CHECK(host.GetStatistics().ScriptMessagesDropped == 3);
+		CHECK(BrecciaTest::CountLogMessages(brokenSince, "does not decode before it left") == 1);
+		const uint64_t droppedBefore = host.GetStatistics().ScriptMessagesDropped;
+
+		// A client disconnected for flooding: what it queued is dropped and counted, never handed over.
+		RawPeer flood(session, session.Link().Connect(session.GetPort()));
+		REQUIRE(flood.Join() == 3);
+		host.TakeEvents();
+		for (size_t i = 0; i < NetworkSystem::MaxInboxMessages + 10; i++)
+			flood.Send(ScriptBytes(NetScriptKind::Message, 0, "Flood", nlohmann::json::array()));
+		events = PumpAll(session, host, 10);
+		const auto left = std::ranges::find_if(events, [](const NetworkEvent& event) { return event.Type == NetworkEvent::Kind::PeerDisconnected; });
+		REQUIRE(left != events.end());
+		CHECK(left->Reason == NetDisconnectReason::InvalidPacket);
+		CHECK(std::none_of(left, events.end(), [](const NetworkEvent& event) { return event.Type == NetworkEvent::Kind::Message; }));
+		const size_t delivered = OfKind(events, NetworkEvent::Kind::Message).size();
+		CHECK(delivered < NetworkSystem::MaxInboxMessages);
+		CHECK(host.GetStatistics().ScriptMessagesDropped - droppedBefore == NetworkSystem::MaxInboxMessages - delivered);
 	}
 
 	TEST_CASE("A client's script messages count against its bandwidth, and a muted budget refuses them")
@@ -1248,7 +1307,7 @@ TEST_SUITE("Network")
 		CHECK(session.HostNetwork().GetStatistics().IdleSteps == 0);
 	}
 
-	TEST_CASE("A predicted character obeys the host's speed limit, a fast client stays connected, and a silent one falls")
+	TEST_CASE("A predicted character obeys the host's speed limit, which its owner's inputs keep too, and a fast client stays connected")
 	{
 		Session session({}, WithDelay(0.0f));
 		UUID playerId = 0;
@@ -1280,11 +1339,14 @@ TEST_SUITE("Network")
 			}
 		}
 		REQUIRE(glm::length(fast) > 0.0f);
+		const auto since = Log::GetHistory().GetTotalCount();
 		client.GetPhysicsWorld()->MoveCharacter(clientPlayer, fast);
 		session.Run(30);
 		client.GetPhysicsWorld()->MoveCharacter(clientPlayer, glm::vec3(0.0f));
 		session.Run(30);
 		CHECK(session.ClientNetwork(0).GetState() == NetConnectionState::Connected);
+		// The owner clamped its inputs to its copy of Networked.MaxInputSpeed, not only to the wire's limit.
+		CHECK(BrecciaTest::CountLogMessages(since, "faster than its Networked.MaxInputSpeed (4 m/s)") == 1);
 		// The host moved it at its own limit: 4 m/s for half a second.
 		CHECK(glm::length(hostPlayer.GetTransform().Translation - glm::vec3(startX, hostPlayer.GetTransform().Translation.y, 0.0f)) == doctest::Approx(2.0f).epsilon(0.05));
 		CHECK(clientPlayer.GetTransform().Translation.x == doctest::Approx(hostPlayer.GetTransform().Translation.x).epsilon(1e-3));
@@ -1297,6 +1359,8 @@ TEST_SUITE("Network")
 		Scene& host = session.StartHost([&](Scene& scene) {
 			AddGround(scene);
 			playerId = CreatePredictedCharacter(scene, 1, { 0.0f, 6.0f, 0.0f }).GetUUID();
+			// A long frame may credit more steps than the host takes for a silent owner in one frame.
+			scene.GetPhysicsSettings().MaxStepsPerFrame = 30;
 		});
 		RawPeer raw(session, session.Link().Connect(session.GetPort()));
 		REQUIRE(raw.Join() == 1);
@@ -1305,32 +1369,71 @@ TEST_SUITE("Network")
 		// It fell from 6 m to the ground.
 		CHECK(host.GetEntityByUUID(playerId).GetTransform().Translation.y < 2.0f);
 		CHECK(host.GetPhysicsWorld()->IsDrivenExternally(host.GetEntityByUUID(playerId)));
-		// The owner speaks again, an input per step: the host takes no more steps of its own.
-		uint32_t sequence = 1;
+		// No more than MaxIdleStepsPerFrame at once, however long the frame, and long frames bank no more than the input
+		// window: a burst of inputs after them moves the character at most that far ahead.
+		// (A frame's steps are credited when the next frame receives.)
+		const uint64_t beforeLong = session.HostNetwork().GetStatistics().IdleSteps;
+		host.OnUpdate(0.4f);
+		host.OnUpdate(Step);
+		CHECK(session.HostNetwork().GetStatistics().IdleSteps - beforeLong <= NetworkSystem::MaxIdleStepsPerFrame + 1);
+		for (int frame = 0; frame < 4; frame++)
+			host.OnUpdate(0.4f);
+		const float window = std::floor(NetworkSystem::InputWindowSeconds / host.GetFixedTimestep());
+		{
+			const uint64_t applied = session.HostNetwork().GetStatistics().InputsApplied;
+			raw.Send(InputUpdate(playerId, 1, NetProtocol::MaxInputsPerCharacter, glm::vec3(0.0f)), NetChannel::Unreliable);
+			session.Link().Advance(Step);
+			session.HostNetwork().Receive(Step);
+			CHECK(static_cast<float>(session.HostNetwork().GetStatistics().InputsApplied - applied) <= window);
+		}
+		session.Run(30);
+		// The owner speaks again, an input per step: once its first input has arrived, the host takes no more steps of
+		// its own.
+		uint32_t sequence = NetProtocol::MaxInputsPerCharacter + 1;
+		uint64_t speaking = 0;
 		for (int frame = 0; frame < 30; frame++)
 		{
-			NetState update;
-			update.Sequence = sequence;
-			update.Extras.Inputs.push_back({ playerId, sequence, { { glm::vec3(1.0f, 0.0f, 0.0f), glm::quat(1, 0, 0, 0) } } });
-			raw.Send(NetProtocol::EncodeState(NetMessageType::ClientUpdate, update), NetChannel::Unreliable);
+			raw.Send(InputUpdate(playerId, sequence, 1), NetChannel::Unreliable);
 			sequence++;
 			session.Run(1);
+			if (frame == 1)
+				speaking = session.HostNetwork().GetStatistics().IdleSteps;
 		}
+		CHECK(session.HostNetwork().GetStatistics().IdleSteps == speaking);
 		// Then in bursts (four steps every fourth frame, as a client sending at 15 updates per second does): still none.
 		const uint64_t idle = session.HostNetwork().GetStatistics().IdleSteps;
 		for (int frame = 0; frame < 60; frame++)
 		{
 			if (frame % 4 == 3)
 			{
-				NetState update;
-				update.Sequence = sequence;
-				update.Extras.Inputs.push_back({ playerId, sequence, std::vector<CharacterInput>(4, { glm::vec3(1.0f, 0.0f, 0.0f), glm::quat(1, 0, 0, 0) }) });
-				raw.Send(NetProtocol::EncodeState(NetMessageType::ClientUpdate, update), NetChannel::Unreliable);
+				raw.Send(InputUpdate(playerId, sequence, 4, glm::vec3(1.0f, 0.0f, 0.0f)), NetChannel::Unreliable);
 				sequence += 4;
 			}
 			session.Run(1);
 		}
 		CHECK(session.HostNetwork().GetStatistics().IdleSteps == idle);
+	}
+
+	TEST_CASE("A host's steps for a silent owner keep a character's world rotation under a turned parent")
+	{
+		Session session({}, WithDelay(0.0f));
+		UUID playerId = 0;
+		Scene& host = session.StartHost([&](Scene& scene) {
+			AddGround(scene);
+			Entity parent = scene.CreateEntity("Turned");
+			parent.GetTransform().Rotation = glm::angleAxis(glm::radians(90.0f), glm::vec3(0, 1, 0));
+			Entity player = CreatePredictedCharacter(scene, 1, { 0.0f, 3.0f, 0.0f });
+			scene.SetParent(player, parent, false);
+			playerId = player.GetUUID();
+		});
+		RawPeer raw(session, session.Link().Connect(session.GetPort()));
+		REQUIRE(raw.Join() == 1);
+		Entity player = host.GetEntityByUUID(playerId);
+		const glm::quat world = glm::quat_cast(glm::mat3(host.GetWorldTransform(player)));
+		session.Run(60);
+		REQUIRE(session.HostNetwork().GetStatistics().IdleSteps > 0);
+		const glm::quat after = glm::quat_cast(glm::mat3(host.GetWorldTransform(player)));
+		CHECK(glm::abs(glm::dot(glm::normalize(after), glm::normalize(world))) > 0.9999f);
 	}
 
 	TEST_CASE("A Predicted entity without a character controller replicates like Server to its owner")
@@ -1428,6 +1531,10 @@ TEST_SUITE("Network")
 	TEST_CASE("A client's view of the host clock never runs back, whatever times a host sends")
 	{
 		FakeHost host;
+		host.Advance(2);
+		// Connected to the transport, but not yet accepted: no round trip to report.
+		REQUIRE(host.Network().GetState() == NetConnectionState::Connecting);
+		CHECK_FALSE(host.Network().GetRoundTripTime(0));
 		host.Welcome();
 		NetState state;
 		state.Extras.Time = 10.0;
@@ -1465,5 +1572,508 @@ TEST_SUITE("Network")
 		REQUIRE(hit);
 		CHECK(hit->EntityID == targetId);
 		CHECK_FALSE(session.HostNetwork().RaycastAt(session.HostNetwork().GetTime(), { 0.0f, 5.0f, 0.0f }, { 0.0f, -1.0f, 0.0f }, 10.0f));
+	}
+
+	TEST_CASE("NetworkSettings::ParseAddress reads a host and an optional port, and says what is wrong")
+	{
+		std::string host;
+		uint16_t port = 0;
+		CHECK(NetworkSettings::ParseAddress("example.org", 7777, host, port).empty());
+		CHECK(host == "example.org");
+		CHECK(port == 7777);
+		CHECK(NetworkSettings::ParseAddress("10.0.0.2:4000", 7777, host, port).empty());
+		CHECK(host == "10.0.0.2");
+		CHECK(port == 4000);
+		CHECK(Contains(NetworkSettings::ParseAddress("", 7777, host, port), "no host"));
+		CHECK(Contains(NetworkSettings::ParseAddress(":4000", 7777, host, port), "no host"));
+		CHECK(Contains(NetworkSettings::ParseAddress("host:", 7777, host, port), "not an integer"));
+		CHECK(Contains(NetworkSettings::ParseAddress("host:x1", 7777, host, port), "not an integer"));
+		CHECK(Contains(NetworkSettings::ParseAddress("host:0", 7777, host, port), "[1, 65535]"));
+		CHECK(Contains(NetworkSettings::ParseAddress("host:65536", 7777, host, port), "[1, 65535]"));
+		// ENet has no IPv6: a second ':' is not taken as part of a host.
+		CHECK(Contains(NetworkSettings::ParseAddress("a:b:7777", 7777, host, port), "more than one ':'"));
+	}
+
+	TEST_CASE("NetProtocol::CheckPrediction refuses what would break a client, and the decoder refuses it too")
+	{
+		const NetPrediction fine{ UUID(5), 10, { glm::vec3(1.0f), glm::vec3(2.0f), 0.5f, false } };
+		CHECK(NetProtocol::CheckPrediction(fine).empty());
+		std::vector<NetPrediction> invalid(5, fine);
+		// The client would number its next input 0.
+		invalid[0].Input = std::numeric_limits<uint32_t>::max();
+		invalid[1].State.SinceGrounded = CharacterState::MaxSinceGrounded + 1.0f;
+		invalid[2].State.SinceGrounded = -1.0f;
+		invalid[3].State.Velocity.y = -2.0f * NetProtocol::MaxInputSpeed;
+		invalid[4].State.Position.z = 2.0f * NetProtocol::MaxPredictedCoordinate;
+		for (const NetPrediction& prediction : invalid)
+		{
+			CHECK_FALSE(NetProtocol::CheckPrediction(prediction).empty());
+			NetState snapshot;
+			snapshot.Sequence = 1;
+			snapshot.Extras.Predictions.push_back(prediction);
+			CHECK_FALSE(DecodeMessage(NetProtocol::EncodeState(NetMessageType::Snapshot, snapshot)));
+		}
+	}
+
+	TEST_CASE("A script message that cannot be encoded says why: too deep, or not UTF-8")
+	{
+		Session session;
+		session.StartHost();
+		session.AddClient();
+		REQUIRE(session.RunUntil([&] { return session.ClientNetwork(0).GetState() == NetConnectionState::Connected; }, 60));
+		nlohmann::json deep = 1;
+		for (int i = 0; i < NetValue::MaxDepth + 4; i++)
+			deep = nlohmann::json::array({ deep });
+		std::string error;
+		CHECK_FALSE(session.ClientNetwork(0).SendScript(0, { NetScriptKind::Message, 0, "Deep", nlohmann::json::array({ deep }) }, true, error));
+		CHECK(Contains(error, "nested"));
+		error.clear();
+		CHECK_FALSE(session.ClientNetwork(0).SendScript(0, { NetScriptKind::Message, 0, "Text", nlohmann::json::array({ std::string("\xff\xfe") }) }, true, error));
+		CHECK(Contains(error, "UTF-8"));
+	}
+
+	TEST_CASE("A client drops at once an RPC for an entity it lost or refused, and only reliable messages wait behind an RPC")
+	{
+		FakeHost host;
+		host.Welcome();
+		NetworkSystem& client = host.Network();
+		const auto received = [&] { return client.GetStatistics().ScriptMessagesReceived; };
+		const auto dropped = [&] { return client.GetStatistics().ScriptMessagesDropped; };
+		// A spawn the client refuses (a file outside the project): an RPC for it is not worth waiting for.
+		NetState refused;
+		refused.Spawns.push_back(Spawn(10, { { "Mesh", { { "Mesh", "../../secret.gltf" } } } }));
+		host.Snapshot(refused);
+		REQUIRE_FALSE(host.Client().GetEntityByUUID(10));
+		uint64_t droppedBefore = dropped();
+		host.Send(ScriptBytes(NetScriptKind::Rpc, 10, "Open"));
+		CHECK(dropped() == droppedBefore + 1);
+
+		// An RPC for an entity not spawned yet waits; an unreliable message after it does not, a reliable one does.
+		const uint64_t receivedBefore = received();
+		host.Send(ScriptBytes(NetScriptKind::Rpc, 777, "Open"));
+		host.Send(ScriptBytes(NetScriptKind::Message, 0, "Fast"), NetChannel::Unreliable);
+		CHECK(received() == receivedBefore + 1);
+		host.Send(ScriptBytes(NetScriptKind::Message, 0, "Slow"));
+		CHECK(received() == receivedBefore + 1);
+		// The spawn releases the RPC and what waited behind it.
+		NetState spawn;
+		spawn.Spawns.push_back(Spawn(777, { { "Transform", { { "Translation", { 1.0, 2.0, 3.0 } } } } }));
+		host.Snapshot(spawn);
+		REQUIRE(host.Client().GetEntityByUUID(777));
+		CHECK(received() == receivedBefore + 3);
+
+		// Despawned (its despawn overtook the RPC, on another channel): dropped at once too.
+		NetState despawn;
+		despawn.Despawns.emplace_back(777);
+		host.Snapshot(despawn);
+		REQUIRE_FALSE(host.Client().GetEntityByUUID(777));
+		droppedBefore = dropped();
+		host.Send(ScriptBytes(NetScriptKind::Rpc, 777, "Open"));
+		host.Send(ScriptBytes(NetScriptKind::Message, 0, "After"));
+		CHECK(dropped() == droppedBefore + 1);
+		CHECK(received() == receivedBefore + 4);
+	}
+
+	TEST_CASE("A host counts the inputs lost on the way, up to the inputs a client keeps")
+	{
+		Session session({}, WithDelay(0.0f));
+		UUID playerId = 0;
+		session.StartHost([&](Scene& scene) {
+			AddGround(scene);
+			playerId = CreatePredictedCharacter(scene, 1).GetUUID();
+		});
+		RawPeer raw(session, session.Link().Connect(session.GetPort()));
+		REQUIRE(raw.Join() == 1);
+		session.Run(2);
+		NetworkSystem& network = session.HostNetwork();
+		const auto send = [&](uint32_t first, uint32_t count) {
+			raw.Send(InputUpdate(playerId, first, count, glm::vec3(1.0f, 0.0f, 0.0f)), NetChannel::Unreliable);
+			session.Run(2);
+		};
+		send(1, 4);
+		CHECK(network.GetStatistics().InputsSkipped == 0);
+		send(40, 4);
+		CHECK(network.GetStatistics().InputsApplied == 8);
+		CHECK(network.GetStatistics().InputsSkipped == 35);
+		// A wild jump in the numbering counts at most what a client keeps unacknowledged.
+		send(5000, 1);
+		CHECK(network.GetStatistics().InputsSkipped == 35 + NetworkSystem::MaxUnacknowledgedInputs);
+	}
+
+	TEST_CASE("A host's inbox limits a burst, not what a client sends over a session")
+	{
+		NetworkSettings settings;
+		settings.MaxMessagesPerSecond = 120;
+		Session session({}, settings);
+		session.StartHost();
+		RawPeer raw(session, session.Link().Connect(session.GetPort()));
+		REQUIRE(raw.Join() == 1);
+		NetworkSystem& host = session.HostNetwork();
+		host.TakeEvents();
+		// Well past MaxInboxBytes in all, but within the rate.
+		const std::string payload(size_t{ 30 } * 1024, 'p');
+		const size_t count = NetworkSystem::MaxInboxBytes / payload.size() + 20;
+		size_t delivered = 0;
+		for (size_t i = 0; i < count + 30; i++)
+		{
+			if (i < count)
+				raw.Send(ScriptBytes(NetScriptKind::Message, 0, "Steady", { payload }));
+			session.Link().Advance(Step);
+			host.Receive(Step);
+			delivered += OfKind(host.TakeEvents(), NetworkEvent::Kind::Message).size();
+		}
+		CHECK(delivered == count);
+		CHECK(host.GetPeers().size() == 1);
+	}
+
+	TEST_CASE("Connection events reach the scripts even past the event queue's limit")
+	{
+		NetworkSettings settings;
+		settings.MaxMessagesPerSecond = NetworkSettings::MaxMessagesPerSecondLimit;
+		Session session({}, settings);
+		session.StartHost();
+		RawPeer flood(session, session.Link().Connect(session.GetPort()));
+		REQUIRE(flood.Join() == 1);
+		RawPeer quiet(session, session.Link().Connect(session.GetPort()));
+		REQUIRE(quiet.Join() == 2);
+		NetworkSystem& host = session.HostNetwork();
+		host.TakeEvents();
+		const auto since = Log::GetHistory().GetTotalCount();
+		// Nobody takes the events meanwhile: the queue fills with messages, and the rest wait in the inbox rather than
+		// being dropped from a full queue.
+		for (int frame = 0; frame < 6; frame++)
+		{
+			for (int i = 0; i < 1000; i++)
+				flood.Send(ScriptBytes(NetScriptKind::Message, 0, "Flood", nlohmann::json::array()));
+			session.Link().Advance(Step);
+			host.Receive(Step);
+		}
+		quiet.Transport().Disconnect(1, static_cast<uint32_t>(NetDisconnectReason::ClientQuit));
+		for (int frame = 0; frame < 3; frame++)
+		{
+			session.Link().Advance(Step);
+			host.Receive(Step);
+		}
+		const std::vector<NetworkEvent> events = host.TakeEvents();
+		CHECK(OfKind(events, NetworkEvent::Kind::Message).size() <= NetworkSystem::MaxQueuedEvents);
+		CHECK(BrecciaTest::CountLogMessages(since, "events waited for the scripts in one frame") == 0);
+		const std::vector<NetworkEvent> left = OfKind(events, NetworkEvent::Kind::PeerDisconnected);
+		CHECK(std::ranges::any_of(left, [](const NetworkEvent& event) { return event.Peer == 2 && event.Reason == NetDisconnectReason::ClientQuit; }));
+	}
+
+	TEST_CASE("A host does not send a predicted state its client would refuse, and the client stays connected")
+	{
+		Session session({}, WithDelay(0.0f));
+		UUID playerId = 0;
+		Scene& host = session.StartHost([&](Scene& scene) {
+			AddGround(scene);
+			playerId = CreatePredictedCharacter(scene, 1).GetUUID();
+		});
+		Scene& client = session.AddClient([](Scene& scene) { AddGround(scene); });
+		REQUIRE(session.RunUntil([&] { return client.GetEntityByUUID(playerId) && session.ClientNetwork(0).IsPredicted(client.GetEntityByUUID(playerId)); }, 120));
+		session.Run(10);
+		const auto since = Log::GetHistory().GetTotalCount();
+		// Falling faster than a predicted state may carry.
+		Entity hostPlayer = host.GetEntityByUUID(playerId);
+		REQUIRE(host.GetPhysicsWorld()->SetCharacterState(hostPlayer, { { 0.0f, 1000.0f, 0.0f }, { 0.0f, -2.0f * NetProtocol::MaxInputSpeed, 0.0f }, 1.0f, false }));
+		session.Run(60);
+		CHECK(session.ClientNetwork(0).GetState() == NetConnectionState::Connected);
+		CHECK(BrecciaTest::CountLogMessages(since, "cannot be corrected") == 1);
+	}
+
+	TEST_CASE("Network events a script cannot take are logged once per sender and problem, within a cap per sender")
+	{
+		BrecciaTest::TempProject project("NetworkEventProblems");
+		const std::string listener = project.WriteFile("Assets/Scripts/Listener.lua", R"(
+			local Listener = {}
+			function Listener:OnCreate()
+			Network.On("Heard", function() Heard = (Heard or 0) + 1 end)
+			Network.On("Kill", function() Scene.FindEntityByName("Doomed"):Destroy() end)
+		end
+			return Listener
+		)");
+		const std::string doomed = project.WriteFile("Assets/Scripts/Doomed.lua", R"(
+			local Doomed = {}
+			function Doomed:OnCreate() Network.On("Doomed", function() DoomedHeard = true end) end
+			return Doomed
+		)");
+		const std::string broken = project.WriteFile("Assets/Scripts/Broken.lua", R"(
+			local Broken = {}
+			Broken.Rpcs = { Hit = "Any" }
+			function Broken:OnCreate()
+				Network.On("Orphan", function() OrphanHeard = true end)
+				error("broken on purpose")
+			end
+			function Broken:Hit() HitRan = true end
+			return Broken
+		)");
+		Scene scene;
+		scene.CreateEntity("Listener").AddComponent<ScriptComponent>().Script = listener;
+		Entity brokenEntity = scene.CreateEntity("Broken");
+		brokenEntity.AddComponent<ScriptComponent>().Script = broken;
+		scene.OnRuntimeStart();
+		ScriptEngine& scripts = *scene.GetScriptEngine();
+		const size_t errors = scripts.GetErrors().size();
+		REQUIRE(errors >= 1);
+		const auto since = Log::GetHistory().GetTotalCount();
+		const auto deliver = [&](std::vector<NetworkEvent> events) { scripts.Update(Step, {}, events); };
+		const auto message = [](uint32_t peer, std::string name) { return NetworkEvent{ .Type = NetworkEvent::Kind::Message, .Peer = peer, .Name = std::move(name) }; };
+
+		deliver({ message(1, "Heard"), message(1, "Nobody"), message(1, "Nobody") });
+		CHECK(BrecciaTest::Eval(scene, "return Heard") == "1");
+		CHECK(BrecciaTest::CountLogMessages(since, "which no Network.On handler listens for") == 1);
+		// A failed script's handlers are gone with it.
+		deliver({ message(1, "Orphan") });
+		CHECK(BrecciaTest::Eval(scene, "return tostring(OrphanHeard)") == "nil");
+		CHECK(BrecciaTest::CountLogMessages(since, "client 1 sent message 'Orphan', which no Network.On handler") == 1);
+
+		// An RPC for a script that is not running calls nothing and adds no script error.
+		deliver({ NetworkEvent{ .Type = NetworkEvent::Kind::Rpc, .Peer = 1, .Entity = brokenEntity.GetUUID(), .Name = "Hit" } });
+		CHECK(BrecciaTest::Eval(scene, "return tostring(HitRan)") == "nil");
+		CHECK(BrecciaTest::CountLogMessages(since, "has no running script") == 1);
+		CHECK(scripts.GetErrors().size() == errors);
+
+		// One sender's flood of names fills only its own budget.
+		std::vector<NetworkEvent> flood;
+		flood.reserve(100);
+		for (int i = 0; i < 100; i++)
+			flood.push_back(message(1, "Miss" + std::to_string(i)));
+		deliver(flood);
+		CHECK(BrecciaTest::CountLogMessages(since, "client 1 sent message 'Miss") < 64);
+		CHECK(BrecciaTest::CountLogMessages(since, "problems with script messages from client 1 were logged") == 1);
+		deliver({ message(2, "Other") });
+		CHECK(BrecciaTest::CountLogMessages(since, "client 2 sent message 'Other'") == 1);
+		scene.OnRuntimeStop();
+
+		// In a session: a handler destroys an entity, whose own handler then misses a message of the same frame. The log
+		// says why rather than blaming the name.
+		Session session;
+		session.StartHost([&](Scene& host) {
+			host.CreateEntity("Listener").AddComponent<ScriptComponent>().Script = listener;
+			host.CreateEntity("Doomed").AddComponent<ScriptComponent>().Script = doomed;
+		});
+		session.AddClient();
+		REQUIRE(session.RunUntil([&] { return session.ClientNetwork(0).GetState() == NetConnectionState::Connected; }, 60));
+		std::string error;
+		REQUIRE(session.ClientNetwork(0).SendScript(0, { NetScriptKind::Message, 0, "Kill", nlohmann::json::array() }, true, error));
+		REQUIRE(session.ClientNetwork(0).SendScript(0, { NetScriptKind::Message, 0, "Doomed", nlohmann::json::array() }, true, error));
+		session.Run(5);
+		CHECK_FALSE(session.Host().FindEntityByName("Doomed"));
+		CHECK(BrecciaTest::Eval(session.Host(), "return tostring(DoomedHeard)") == "nil");
+		CHECK(BrecciaTest::CountLogMessages(since, "belong to entities being destroyed") == 1);
+	}
+
+	TEST_CASE("A peer's physics never moves another scene's character with the same UUID")
+	{
+		Session session({}, WithDelay(0.0f));
+		UUID playerId = 0;
+		Scene& host = session.StartHost([&](Scene& scene) {
+			AddGround(scene);
+			playerId = CreatePredictedCharacter(scene, 1).GetUUID();
+		});
+		Scene& client = session.AddClient([](Scene& scene) { AddGround(scene); });
+		REQUIRE(session.RunUntil([&] { return client.GetEntityByUUID(playerId) && session.ClientNetwork(0).IsPredicted(client.GetEntityByUUID(playerId)); }, 120));
+		Entity hostPlayer = host.GetEntityByUUID(playerId);
+		Entity clientPlayer = client.GetEntityByUUID(playerId);
+		const std::optional<CharacterState> before = client.GetPhysicsWorld()->GetCharacterState(clientPlayer);
+		REQUIRE(before);
+		CHECK_FALSE(client.GetPhysicsWorld()->StepCharacter(hostPlayer, { glm::vec3(5.0f, 0.0f, 0.0f), glm::quat(1, 0, 0, 0) }));
+		CHECK_FALSE(client.GetPhysicsWorld()->GetCharacterState(hostPlayer));
+		CHECK(client.GetPhysicsWorld()->GetCharacterState(clientPlayer) == before);
+	}
+
+	TEST_CASE("Prediction across a long round trip sends the newest inputs under their own numbers")
+	{
+		// About 40 steps in flight: more than one update carries, so each sends only the newest.
+		Session session({ .Latency = 0.3f }, WithDelay(0.1f));
+		UUID playerId = 0;
+		Scene& host = session.StartHost([&](Scene& scene) {
+			AddGround(scene);
+			playerId = CreatePredictedCharacter(scene, 1).GetUUID();
+		});
+		Scene& client = session.AddClient([](Scene& scene) { AddGround(scene); });
+		REQUIRE(session.RunUntil([&] { return client.GetEntityByUUID(playerId) && session.ClientNetwork(0).IsPredicted(client.GetEntityByUUID(playerId)); }, 240));
+		session.Run(60);
+		Entity hostPlayer = host.GetEntityByUUID(playerId);
+		Entity clientPlayer = client.GetEntityByUUID(playerId);
+		const uint64_t corrections = session.ClientNetwork(0).GetStatistics().Corrections;
+		client.GetPhysicsWorld()->MoveCharacter(clientPlayer, { 2.0f, 0.0f, 0.0f });
+		session.Run(120);
+		client.GetPhysicsWorld()->MoveCharacter(clientPlayer, glm::vec3(0.0f));
+		session.Run(120);
+		CHECK(hostPlayer.GetTransform().Translation.x > 3.0f);
+		CHECK(glm::length(clientPlayer.GetTransform().Translation - hostPlayer.GetTransform().Translation) < 1e-3f);
+		CHECK(session.HostNetwork().GetStatistics().InputsSkipped == 0);
+		CHECK(session.ClientNetwork(0).GetStatistics().Corrections == corrections);
+	}
+
+	TEST_CASE("A short outage does not make the host step a character its owner still drives")
+	{
+		// The owner's first input took ten steps to arrive; that trip must not use up the silence the input window allows,
+		// or a few lost updates later would look like a silent owner.
+		Session session({}, WithDelay(0.0f));
+		UUID playerId = 0;
+		Scene& host = session.StartHost([&](Scene& scene) {
+			AddGround(scene);
+			playerId = CreatePredictedCharacter(scene, 1).GetUUID();
+		});
+		RawPeer raw(session, session.Link().Connect(session.GetPort()));
+		REQUIRE(raw.Join() == 1);
+		session.Run(10);
+		const uint64_t idle = session.HostNetwork().GetStatistics().IdleSteps;
+		uint32_t next = 1;
+		const auto sendThrough = [&](uint32_t last) {
+			raw.Send(InputUpdate(playerId, next, last - next + 1), NetChannel::Unreliable);
+			next = last + 1;
+		};
+		// An input a step, then nothing for 7 steps (lost updates), then the inputs it missed with the next ones.
+		for (uint32_t frame = 1; frame <= 30; frame++)
+		{
+			sendThrough(frame);
+			session.Run(1);
+		}
+		session.Run(7);
+		for (uint32_t frame = 38; frame <= 60; frame++)
+		{
+			sendThrough(frame);
+			session.Run(1);
+		}
+		CHECK(session.HostNetwork().GetStatistics().IdleSteps == idle);
+		CHECK(host.GetEntityByUUID(playerId).GetTransform().Translation.x > 0.8f);
+	}
+
+	TEST_CASE("Prediction at the lowest tick rate still sends every input")
+	{
+		NetworkSettings settings = WithDelay(0.1f);
+		settings.TickRate = NetworkSettings::MinTickRate;
+		Session session({}, settings);
+		UUID playerId = 0;
+		Scene& host = session.StartHost([&](Scene& scene) {
+			AddGround(scene);
+			playerId = CreatePredictedCharacter(scene, 1).GetUUID();
+		});
+		Scene& client = session.AddClient([](Scene& scene) { AddGround(scene); });
+		REQUIRE(session.RunUntil([&] { return client.GetEntityByUUID(playerId) && session.ClientNetwork(0).IsPredicted(client.GetEntityByUUID(playerId)); }, 600));
+		session.Run(120);
+		Entity hostPlayer = host.GetEntityByUUID(playerId);
+		Entity clientPlayer = client.GetEntityByUUID(playerId);
+		const float startX = hostPlayer.GetTransform().Translation.x;
+		client.GetPhysicsWorld()->MoveCharacter(clientPlayer, { 2.0f, 0.0f, 0.0f });
+		session.Run(120);
+		client.GetPhysicsWorld()->MoveCharacter(clientPlayer, glm::vec3(0.0f));
+		session.Run(180);
+		// Two seconds at 2 m/s, all of them applied on the host.
+		CHECK(hostPlayer.GetTransform().Translation.x - startX == doctest::Approx(4.0f).epsilon(0.03));
+		CHECK(session.HostNetwork().GetStatistics().InputsSkipped == 0);
+		CHECK(glm::length(clientPlayer.GetTransform().Translation - hostPlayer.GetTransform().Translation) < 1e-3f);
+	}
+
+	TEST_CASE("Prediction recovers from an outage longer than the inputs a client keeps")
+	{
+		Session session({ .Latency = 0.02f }, WithDelay(0.1f));
+		UUID playerId = 0;
+		Scene& host = session.StartHost([&](Scene& scene) {
+			AddGround(scene);
+			playerId = CreatePredictedCharacter(scene, 1).GetUUID();
+		});
+		Scene& client = session.AddClient([](Scene& scene) { AddGround(scene); });
+		REQUIRE(session.RunUntil([&] { return client.GetEntityByUUID(playerId) && session.ClientNetwork(0).IsPredicted(client.GetEntityByUUID(playerId)); }, 120));
+		session.Run(30);
+		Entity hostPlayer = host.GetEntityByUUID(playerId);
+		Entity clientPlayer = client.GetEntityByUUID(playerId);
+		// Five seconds of walking with nothing getting through: past MaxUnacknowledgedInputs.
+		client.GetPhysicsWorld()->MoveCharacter(clientPlayer, { 1.0f, 0.0f, 0.0f });
+		const uint64_t skipped = session.HostNetwork().GetStatistics().InputsSkipped;
+		session.Link().SetLinkSettings({ .Latency = 0.02f, .Loss = 1.0f });
+		session.Run(300);
+		session.Link().SetLinkSettings({ .Latency = 0.02f });
+		session.Run(30);
+		REQUIRE(session.ClientNetwork(0).GetState() == NetConnectionState::Connected);
+		// The client forgot the oldest of its inputs but kept numbering on: the host sees the whole gap (counted up to
+		// what a client keeps), not a renumbered one.
+		CHECK(session.HostNetwork().GetStatistics().InputsSkipped - skipped == NetworkSystem::MaxUnacknowledgedInputs);
+		// The host takes the client's new inputs again.
+		const float resumedX = hostPlayer.GetTransform().Translation.x;
+		session.Run(60);
+		CHECK(hostPlayer.GetTransform().Translation.x > resumedX + 0.8f);
+		client.GetPhysicsWorld()->MoveCharacter(clientPlayer, glm::vec3(0.0f));
+		session.Run(60);
+		CHECK(glm::length(clientPlayer.GetTransform().Translation - hostPlayer.GetTransform().Translation) < 1e-3f);
+	}
+
+	TEST_CASE("A client whose prediction restarts numbers its inputs after what the host applied")
+	{
+		Session session({ .Latency = 0.02f }, WithDelay(0.1f));
+		UUID playerId = 0;
+		Scene& host = session.StartHost([&](Scene& scene) {
+			AddGround(scene);
+			playerId = CreatePredictedCharacter(scene, 1).GetUUID();
+		});
+		Scene& client = session.AddClient([](Scene& scene) { AddGround(scene); });
+		const auto predicted = [&] { return client.GetEntityByUUID(playerId) && session.ClientNetwork(0).IsPredicted(client.GetEntityByUUID(playerId)); };
+		REQUIRE(session.RunUntil(predicted, 120));
+		// The host applies a couple of seconds of inputs.
+		session.Run(120);
+		Entity hostPlayer = host.GetEntityByUUID(playerId);
+		Entity clientPlayer = client.GetEntityByUUID(playerId);
+		// The client's character is rebuilt (a script removed and added its controller): its inputs start again at 1.
+		clientPlayer.RemoveComponent<CharacterControllerComponent>();
+		session.Run(1);
+		REQUIRE_FALSE(predicted());
+		clientPlayer.AddComponent<CharacterControllerComponent>();
+		REQUIRE(session.RunUntil(predicted, 30));
+		session.Run(10);
+		const float startX = hostPlayer.GetTransform().Translation.x;
+		client.GetPhysicsWorld()->MoveCharacter(clientPlayer, { 2.0f, 0.0f, 0.0f });
+		session.Run(60);
+		CHECK(hostPlayer.GetTransform().Translation.x > startX + 1.0f);
+	}
+
+	TEST_CASE("Interpolation: fields a snapshot leaves out are held at their newest values, and a new parent mid-move starts afresh")
+	{
+		NetworkSettings settings = WithDelay(0.1f);
+		settings.TickRate = 20.0f;
+		Session session({}, settings);
+		UUID moverId = 0;
+		UUID anchorId = 0;
+		Scene& host = session.StartHost([&](Scene& scene) {
+			moverId = CreateNetworked(scene, "Mover").GetUUID();
+			anchorId = CreateNetworked(scene, "Anchor", 0, { 10.0f, 0.0f, 0.0f }).GetUUID();
+		});
+		Scene& client = session.AddClient();
+		REQUIRE(session.RunUntil([&] { return client.GetEntityByUUID(moverId) && client.GetEntityByUUID(anchorId); }, 60));
+		session.Run(30);
+		Entity hostMover = host.GetEntityByUUID(moverId);
+		Entity clientMover = client.GetEntityByUUID(moverId);
+
+		// It moves, then stops and only turns, while the client still shows it moving.
+		for (int frame = 0; frame < 60; frame++)
+		{
+			if (frame < 30)
+				hostMover.GetTransform().Translation.x += 3.0f * Step;
+			else
+				hostMover.GetTransform().Rotation = glm::angleAxis(0.05f * static_cast<float>(frame - 29), glm::vec3(0, 1, 0));
+			session.Run(1);
+		}
+		session.Run(30);
+		CHECK(clientMover.GetTransform().Translation.x == doctest::Approx(hostMover.GetTransform().Translation.x));
+		CHECK(glm::abs(glm::dot(clientMover.GetTransform().Rotation, hostMover.GetTransform().Rotation)) > 0.99999f);
+
+		// A new parent while moving: under it, the client never shows the older local offsets.
+		std::optional<float> parentedAt;
+		for (int frame = 0; frame < 60; frame++)
+		{
+			hostMover.GetTransform().Translation.x += 3.0f * Step;
+			if (frame == 20)
+			{
+				host.SetParent(hostMover, host.GetEntityByUUID(anchorId), false);
+				parentedAt = hostMover.GetTransform().Translation.x;
+			}
+			session.Run(1);
+			if (parentedAt && clientMover.GetParent() && clientMover.GetParent().GetUUID() == anchorId)
+				CHECK(clientMover.GetTransform().Translation.x >= *parentedAt - 1e-4f);
+		}
+		REQUIRE(clientMover.GetParent());
+		CHECK(clientMover.GetParent().GetUUID() == anchorId);
 	}
 }

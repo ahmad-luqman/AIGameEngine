@@ -49,22 +49,24 @@ namespace Breccia {
 		return project ? project->GetConfig().Network : NetworkSettings{};
 	}
 
-	bool NetworkSettings::ParseAddress(const std::string& text, uint16_t defaultPort, std::string& outHost, uint16_t& outPort)
+	std::string NetworkSettings::ParseAddress(const std::string& text, uint16_t defaultPort, std::string& outHost, uint16_t& outPort)
 	{
-		const size_t colon = text.rfind(':');
+		const size_t colon = text.find(':');
 		outHost = text.substr(0, colon);
 		outPort = defaultPort;
 		if (outHost.empty())
-			return false;
+			return "the address names no host";
 		if (colon == std::string::npos)
-			return true;
+			return {};
 		const std::string_view port = std::string_view(text).substr(colon + 1);
+		if (port.find(':') != std::string_view::npos)
+			return "the address holds more than one ':' (IPv6 addresses are not supported)";
 		uint32_t value = 0;
 		const auto [end, error] = std::from_chars(port.data(), port.data() + port.size(), value);
 		if (error != std::errc() || end != port.data() + port.size() || value < 1 || value > 65535)
-			return false;
+			return fmt::format("the port '{}' is not an integer in [1, 65535]", port);
 		outPort = static_cast<uint16_t>(value);
-		return true;
+		return {};
 	}
 
 	nlohmann::json NetworkSettings::ToJson() const

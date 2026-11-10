@@ -565,6 +565,19 @@ TEST_SUITE("Core")
 		CHECK(GameInput::GetTextInput().empty());
 		// The host still sees everything.
 		CHECK(Input::IsKeyDown(KeyCode::W));
+		// A scope that does not mute keeps an outer mute, and one that does restores the state it found.
+		{
+			const ScopedGameMute inner(false);
+			CHECK(Input::IsGameMuted());
+		}
+		CHECK(Input::IsGameMuted());
+		Input::SetGameMuted(false);
+		{
+			const ScopedGameMute inner(true);
+			CHECK(Input::IsGameMuted());
+		}
+		CHECK_FALSE(Input::IsGameMuted());
+		Input::SetGameMuted(true);
 		// Unmuted in the same frame: as if it had never been muted (unlike a change of focus, nothing is blocked).
 		Input::SetGameMuted(false);
 		CHECK(GameInput::IsKeyDown(KeyCode::W));

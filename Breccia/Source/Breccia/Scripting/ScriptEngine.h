@@ -12,6 +12,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -145,9 +146,9 @@ namespace Breccia {
 		// declares it in Rpcs and the sender may call it).
 		void DispatchNetworkEvent(const NetworkEvent& event);
 		void DispatchRpc(const NetworkEvent& event);
-		// Logs a problem with a script message once per key, and at most MaxReportedNetworkProblems of them (peers choose
-		// the names).
-		void ReportNetworkProblem(const std::string& key, const std::string& message);
+		// Logs a problem with a script message from `sender` (0: the host) once per key, and at most
+		// MaxReportedNetworkProblems of each sender's (peers choose the names).
+		void ReportNetworkProblem(uint32_t sender, const std::string& key, const std::string& message);
 
 	private:
 		struct Impl;
@@ -155,8 +156,13 @@ namespace Breccia {
 		Scene* m_Scene = nullptr;
 		std::vector<std::string> m_Errors;
 		std::unordered_set<std::string> m_ReportedUICallbacks;
-		// Script message problems already reported (an empty key: the limit was reached).
-		std::unordered_set<std::string> m_ReportedNetworkProblems;
+		// Script message problems already reported, by sender, and whether that sender reached the limit.
+		struct NetworkProblems
+		{
+			std::unordered_set<std::string> Keys;
+			bool Capped = false;
+		};
+		std::unordered_map<uint32_t, NetworkProblems> m_ReportedNetworkProblems;
 
 		friend struct ScriptEngineAccess;
 		friend struct ScriptClassLoader;

@@ -48,7 +48,6 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
-#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <limits>
@@ -2615,7 +2614,7 @@ namespace Breccia {
 				return json{ { "playing", false } };
 			});
 
-			Add(registry, "play.step", "Advances play mode by N fixed frames (default dt 1/60), with every in-process network client (net.connect), and reports script errors (clientScriptErrors: those of in-process clients, [{client, errors}], present when there are some) and the playing scene (which Lua Scene.Load may switch).", Schema::Object({ { "frames", Schema::Nullable(Schema::Integer("integer (default 1)", 1, 100000)) }, { "dt", json{ { "type", "number" }, { "description", "number, seconds per frame" }, { "exclusiveMinimum", 0.0 }, { "maximum", 0.25 } } }, { "assertNoErrors", Schema::Nullable(Schema::Boolean("bool: fail the command if any script error occurred")) }, { "hash", Schema::Nullable(Schema::Boolean("bool: also return stateHash (see scene.hash)")) }, { "expectHash", Schema::String("string: fail unless the state hash after the step (which has run either way) equals this one; also returns stateHash", true) } }), [](AutomationSession& session, const json& params) {
+			Add(registry, "play.step", "Advances play mode by N fixed frames (default dt 1/60), with every in-process network client (net.connect), and reports script errors (clientScriptErrors: those of in-process clients, [{client, errors, ended}], ended for a client that ended since the last step, present when there are some) and the playing scene (which Lua Scene.Load may switch).", Schema::Object({ { "frames", Schema::Nullable(Schema::Integer("integer (default 1)", 1, 100000)) }, { "dt", json{ { "type", "number" }, { "description", "number, seconds per frame" }, { "exclusiveMinimum", 0.0 }, { "maximum", 0.25 } } }, { "assertNoErrors", Schema::Nullable(Schema::Boolean("bool: fail the command if any script error occurred")) }, { "hash", Schema::Nullable(Schema::Boolean("bool: also return stateHash (see scene.hash)")) }, { "expectHash", Schema::String("string: fail unless the state hash after the step (which has run either way) equals this one; also returns stateHash", true) } }), [](AutomationSession& session, const json& params) {
 				if (!session.IsPlaying())
 					throw CommandError("not playing (use play.start)");
 				const uint32_t frames = static_cast<uint32_t>(OptionalInteger(params, "frames", 1, 1, 100000));
@@ -2631,6 +2630,8 @@ namespace Breccia {
 				json errors = scene.GetScriptEngine() ? json(scene.GetScriptEngine()->GetErrors()) : json::array();
 				// In-process network clients' scripts fail as the play scene's do.
 				json clientErrors = json::array();
+				for (auto& [client, ended] : session.TakeEndedClientErrors())
+					clientErrors.push_back({ { "client", client }, { "errors", std::move(ended) }, { "ended", true } });
 				const std::vector<Ref<Scene>>& clients = session.GetNetworkClients();
 				for (size_t i = 0; i < clients.size(); i++)
 					if (clients[i] && clients[i]->GetScriptEngine() && !clients[i]->GetScriptEngine()->GetErrors().empty())
@@ -3377,12 +3378,17 @@ namespace Breccia {
 			};
 		}
 
+		CommandError NoClientError(size_t index)
+		{
+			return CommandError(fmt::format("no in-process client {} (net.connect adds one; net.status lists them)", index));
+		}
+
 		Ref<Scene> RequireNetworkClient(AutomationSession& session, const json& params)
 		{
 			const size_t index = static_cast<size_t>(OptionalInteger(params, "client", 0, 1, MaxClientIndex));
 			Ref<Scene> client = session.GetNetworkClient(index);
 			if (!client)
-				throw CommandError(fmt::format("no in-process client {} (net.connect adds one; net.status lists them)", index));
+				throw NoClientError(index);
 			return client;
 		}
 
@@ -3412,8 +3418,8 @@ namespace Breccia {
 				{
 					std::string address;
 					uint16_t port = 0;
-					if (!NetworkSettings::ParseAddress(RequireString(params, "address"), NetworkSettings::FromActiveProject().Port, address, port))
-						throw CommandError("address must be <host> or <host>:<port> with a port in [1, 65535]");
+					if (const std::string problem = NetworkSettings::ParseAddress(RequireString(params, "address"), NetworkSettings::FromActiveProject().Port, address, port); !problem.empty())
+						throw CommandError("address must be <host> or <host>:<port> with a port in [1, 65535]: " + problem);
 					if (!session.JoinNetwork(address, port, error))
 						throw CommandError(error);
 					return json{ { "address", address }, { "port", port } };
@@ -3477,7 +3483,7 @@ namespace Breccia {
 				RequireNetworkPlay(session);
 				const size_t client = static_cast<size_t>(OptionalInteger(params, "client", 0, 0, MaxClientIndex));
 				if (!session.SetInputPeer(client))
-					throw CommandError(fmt::format("no in-process client {} (net.connect adds one; net.status lists them)", client));
+					throw NoClientError(client);
 				return json{ { "client", client } };
 			});
 

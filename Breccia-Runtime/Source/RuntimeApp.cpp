@@ -11,7 +11,7 @@
 #include "RuntimeLayer.h"
 
 #include <array>
-#include <charconv>
+#include <system_error>
 #include <optional>
 #include <vector>
 
@@ -111,9 +111,9 @@ namespace Breccia {
 			}
 			else if (connect)
 			{
-				if (!NetworkSettings::ParseAddress(*connect, settings.Port, options.ConnectAddress, options.NetworkPort))
+				if (const std::string problem = NetworkSettings::ParseAddress(*connect, settings.Port, options.ConnectAddress, options.NetworkPort); !problem.empty())
 				{
-					BR_CORE_CRITICAL("--connect must be <address> or <address>:<port> with a port in [1, 65535], not '{}'", *connect);
+					BR_CORE_CRITICAL("--connect must be <address> or <address>:<port> with a port in [1, 65535], not '{}': {}", *connect, problem);
 					return false;
 				}
 				options.Network = NetworkRole::Client;

@@ -224,11 +224,11 @@ namespace Breccia {
 		NetworkSystem* GetNetworkSystem() const { return m_NetworkSystem.get(); }
 		// Scripts' session changes (Lua Network.Host, Network.Connect, Network.Disconnect), applied at the end of this frame
 		// in Play, after its Send, so a session never ends inside its own Receive (where a despawn runs OnDestroy) or a
-		// script's handler: attach `next` (replacing any session), or end the current one. A later request this frame
-		// replaces an earlier one (the Lua bindings refuse a second).
-		void RequestNetworkStart(Scope<NetworkSystem> next);
+		// script's handler. A start attaches `next` (ending any session first) and is refused (false) while another change
+		// waits, or for a null session; a stop ends the current session and cancels a waiting start.
+		bool RequestNetworkStart(Scope<NetworkSystem> next);
 		void RequestNetworkStop();
-		bool HasPendingNetworkChange() const { return m_PendingNetwork.has_value(); }
+		bool HasPendingNetworkChange() const { return m_PendingNetworkStop || m_PendingNetworkStart != nullptr; }
 		// What scripts start sessions with: the factory set here, else real UDP (EnetTransport::CreateFactory). Play copies
 		// keep their source's.
 		void SetNetworkTransports(Ref<NetTransportFactory> transports) { m_NetworkTransports = std::move(transports); }
@@ -397,13 +397,10 @@ namespace Breccia {
 		Scope<PropertyAnimationSystem> m_PropertyAnimationSystem;
 		Scope<UIInteraction> m_UIInteraction;
 		Scope<NetworkSystem> m_NetworkSystem;
-		// RequestNetworkStart's session, or RequestNetworkStop's end of the current one, until the end of the frame.
-		struct PendingNetwork
-		{
-			// Null: end the current session.
-			Scope<NetworkSystem> Next;
-		};
-		std::optional<PendingNetwork> m_PendingNetwork;
+		// Until the end of the frame: the session RequestNetworkStart attaches, and whether the current one ends (always
+		// with a start).
+		Scope<NetworkSystem> m_PendingNetworkStart;
+		bool m_PendingNetworkStop = false;
 		Ref<NetTransportFactory> m_NetworkTransports;
 		// The seed of the runtime UUID stream: a client's differs from the host's (StartNetwork).
 		uint32_t IdentitySeed() const;

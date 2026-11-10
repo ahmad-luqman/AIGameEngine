@@ -1164,8 +1164,14 @@ namespace Breccia {
 
 	namespace {
 
-		// Problems of network messages logged at most: the names and entities come from peers.
-		constexpr size_t MaxReportedNetworkProblems = 256;
+		// Problems of network messages logged at most per sender: the names and entities come from peers, and one peer must
+		// not silence another's.
+		constexpr size_t MaxReportedNetworkProblems = 64;
+
+		std::string SenderText(uint32_t peer)
+		{
+			return peer == 0 ? std::string("the host") : fmt::format("client {}", peer);
+		}
 
 		// The sender's peer ID, then the values sent: what a message handler or an RPC method receives.
 		std::vector<sol::object> PeerAndArguments(const sol::state_view& lua, const NetworkEvent& event)
@@ -1179,17 +1185,18 @@ namespace Breccia {
 
 	}
 
-	void ScriptEngine::ReportNetworkProblem(const std::string& key, const std::string& message)
+	void ScriptEngine::ReportNetworkProblem(uint32_t sender, const std::string& key, const std::string& message)
 	{
-		if (m_ReportedNetworkProblems.size() > MaxReportedNetworkProblems || m_ReportedNetworkProblems.contains(key))
+		NetworkProblems& problems = m_ReportedNetworkProblems[sender];
+		if (problems.Keys.contains(key))
 			return;
-		if (m_ReportedNetworkProblems.size() == MaxReportedNetworkProblems)
+		if (problems.Keys.size() >= MaxReportedNetworkProblems)
 		{
-			m_ReportedNetworkProblems.insert(std::string());
-			BR_CORE_WARN("Network: {} problems with script messages were logged; further ones are not", MaxReportedNetworkProblems);
+			if (!std::exchange(problems.Capped, true))
+				BR_CORE_WARN("Network: {} problems with script messages from {} were logged; further ones are not", MaxReportedNetworkProblems, SenderText(sender));
 			return;
 		}
-		m_ReportedNetworkProblems.insert(key);
+		problems.Keys.insert(key);
 		BR_CORE_WARN("Network: {} (not logged again)", message);
 	}
 
@@ -1204,21 +1211,23 @@ namespace Breccia {
 		switch (event.Type)
 		{
 			case NetworkEvent::Kind::Connected:
-				name = "Connected";
+				name = NetProtocol::ConnectedEvent;
 				args.push_back(sol::make_object(lua, event.Peer));
 				break;
 			case NetworkEvent::Kind::Disconnected:
-				name = "Disconnected";
+				name = NetProtocol::DisconnectedEvent;
 				args.push_back(sol::make_object(lua, std::string(NetDisconnectReasonName(event.Reason))));
 				break;
 			case NetworkEvent::Kind::PeerConnected:
-				name = "PeerConnected";
+				name = NetProtocol::PeerConnectedEvent;
 				args.push_back(sol::make_object(lua, event.Peer));
 				break;
 			case NetworkEvent::Kind::PeerDisconnected:
-				name = "PeerDisconnected";
+				name = NetProtocol::PeerDisconnectedEvent;
 				args.push_back(sol::make_object(lua, event.Peer));
 				args.push_back(sol::make_object(lua, std::string(NetDisconnectReasonName(event.Reason))));
+				// A departed client's problem budget goes with it (peer IDs are never reused).
+				m_ReportedNetworkProblems.erase(event.Peer);
 				break;
 			case NetworkEvent::Kind::Message:
 				name = event.Name;
@@ -1228,9 +1237,14 @@ namespace Breccia {
 				DispatchRpc(event);
 				return;
 		}
-		// A message nobody listens for is most likely a misspelled name.
-		if (m_Impl->NetworkEvents.EmitValues(name, args) == 0 && event.Type == NetworkEvent::Kind::Message)
-			ReportNetworkProblem("message/" + name, fmt::format("{} sent message '{}', which no Network.On handler listens for", event.Peer == 0 ? std::string("the host") : fmt::format("client {}", event.Peer), name));
+		if (m_Impl->NetworkEvents.EmitValues(name, args) > 0 || event.Type != NetworkEvent::Kind::Message)
+			return;
+		// A message nobody listens for is most likely a misspelled name; one whose handlers' entities are being destroyed
+		// this frame is not (a failed script's handlers are gone with it).
+		if (m_Impl->NetworkEvents.HasSubscribers(name))
+			ReportNetworkProblem(event.Peer, "message/" + name, fmt::format("{} sent message '{}', whose Network.On handlers belong to entities being destroyed", SenderText(event.Peer), name));
+		else
+			ReportNetworkProblem(event.Peer, "message/" + name, fmt::format("{} sent message '{}', which no Network.On handler listens for", SenderText(event.Peer), name));
 	}
 
 	void ScriptEngine::DispatchRpc(const NetworkEvent& event)
@@ -1238,7 +1252,7 @@ namespace Breccia {
 		// Each entity, method and problem once.
 		Entity entity = m_Scene->GetEntityByUUID(event.Entity);
 		const auto report = [&](const char* kind, const std::string& problem) {
-			ReportNetworkProblem(fmt::format("rpc/{}/{}/{}", static_cast<uint64_t>(event.Entity), event.Name, kind), fmt::format("{} called {} on '{}': {}", event.Peer == 0 ? std::string("the host") : fmt::format("client {}", event.Peer), event.Name, entity ? entity.GetName() : std::to_string(static_cast<uint64_t>(event.Entity)), problem));
+			ReportNetworkProblem(event.Peer, fmt::format("rpc/{}/{}/{}", static_cast<uint64_t>(event.Entity), event.Name, kind), fmt::format("{} called {} on '{}': {}", SenderText(event.Peer), event.Name, entity ? entity.GetName() : std::to_string(static_cast<uint64_t>(event.Entity)), problem));
 		};
 		// Destroyed since it arrived (by an earlier handler this frame): nothing is left to call, as for a UI callback.
 		if (!entity || m_Scene->IsEntityPendingDestruction(entity))

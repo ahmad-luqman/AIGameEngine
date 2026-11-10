@@ -1474,8 +1474,11 @@ namespace Breccia {
 		// waiting to be sent gains this much each tick; the highest totals go first). In (0, MaxPriority].
 		float Priority = 1.0f;
 		// With Predicted authority: the fastest (m/s, in (0, MaxInputSpeedLimit]) the owning client's inputs may move the
-		// character on the host, vertical speed included, so a modified client cannot run or jump faster than the game
-		// allows. The host clamps faster inputs; the client is corrected. Set it to the character's top speed.
+		// character on the host, measured as the length of the whole velocity, vertical included, so a modified client
+		// cannot run or jump faster than the game allows. The host clamps faster inputs; the owner sends and replays its
+		// inputs with the same clamp, so only its own step of a faster Move is corrected. Set it to the length of the fastest velocity a step asks for: sqrt(run^2 + jump^2) when the character
+		// can jump while running. Not replicated after the spawn: change it before the entity is networked, or the owner
+		// predicts with the old value and is corrected.
 		float MaxInputSpeed = MaxInputSpeedLimit;
 
 		bool operator==(const NetworkedComponent&) const = default;

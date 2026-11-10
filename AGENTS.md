@@ -285,7 +285,7 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   override the component never sees, in sorted order; a driven character follows its transform). Clients draw runtime UUIDs
   from a salted stream; scene loads are refused during a session. Scripts never run inside the session: `Receive` queues
   `NetworkEvent`s (connections, script messages, RPCs) that `Scene::OnUpdate` hands to `ScriptEngine::Update`, and Lua's
-  `Network.Host/Connect/Disconnect` apply at the end of the frame (`Scene::RequestNetworkChange`) with transports from the
+  `Network.Host/Connect/Disconnect` apply at the end of the frame (`Scene::RequestNetworkStart/Stop`) with transports from the
   scene's `NetTransportFactory` (UDP by default, the automation session's `SimulatedNetwork` under the CLI). Script messages
   are their own `Script` messages, never named like a connection event; RPCs call only methods a script's `Rpcs` table
   declares, checked against the sender the host stamps; a host keeps a client's as bytes and releases them at

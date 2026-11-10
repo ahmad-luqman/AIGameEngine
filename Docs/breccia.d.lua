@@ -1357,6 +1357,7 @@ NetworkHandle = {}
 ---@return boolean
 function NetworkHandle:Cancel() end
 
+---Whether the subscription is still active (not cancelled, and its script instance not destroyed).
 ---@return boolean
 function NetworkHandle:IsActive() end
 
@@ -1403,7 +1404,7 @@ function Network.GetPort() end
 ---@return number|nil
 function Network.GetRoundTripTime(peer) end
 
----The session clock (a client's estimate of the host's).
+---The session clock (a client's estimate of the host's); without a session, the scene's time.
 ---@return number
 function Network.GetTime() end
 

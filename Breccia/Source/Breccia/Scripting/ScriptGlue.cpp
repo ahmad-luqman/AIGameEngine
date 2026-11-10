@@ -32,7 +32,6 @@
 #include <spdlog/fmt/ranges.h>
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <limits>
 #include <optional>
@@ -1462,7 +1461,7 @@ namespace Breccia {
 			lua_setglobal(state, name);
 		}
 
-		// TaskHandle/EventHandle: Cancel and IsActive act on the running session's registry and report false
+		// TaskHandle/EventHandle/NetworkHandle: Cancel and IsActive act on the running session's registry and report false
 		// once play has stopped.
 		template<typename Handle, typename Registry>
 		void RegisterHandleType(sol::state& lua, ScriptContext& context, const char* name, Registry& (ScriptHost::*registry)())
@@ -1849,7 +1848,9 @@ namespace Breccia {
 					BR_CORE_INFO("Network: hosting on {} port {} (up to {} clients)", transports->GetName(), transport->GetListenPort(), settings.MaxClients);
 				else
 					BR_CORE_INFO("Network: connecting to {}:{} ({})", address, chosen, transports->GetName());
-				scene.RequestNetworkStart(CreateScope<NetworkSystem>(scene, role, std::move(transport), settings, NetworkSystem::Identity::FromActiveProject()));
+				// Refused only while another change waits, which was checked above.
+				[[maybe_unused]] const bool requested = scene.RequestNetworkStart(CreateScope<NetworkSystem>(scene, role, std::move(transport), settings, NetworkSystem::Identity::FromActiveProject()));
+				BR_CORE_ASSERT(requested, "no session change waits");
 				return std::make_tuple(true, sol::make_object(view, sol::lua_nil));
 			};
 			network["Host"] = [start](sol::this_state state, const sol::object& port) { return start(state, NetworkRole::Host, {}, port, "Network.Host"); };
@@ -1897,7 +1898,7 @@ namespace Breccia {
 				RequireCast("Network.Raycast", origin, direction, maxDistance);
 				if (time.get_type() != sol::type::number || !std::isfinite(time.as<double>()))
 					throw std::runtime_error("Network.Raycast: the time must be a finite number (Network.GetViewTime on the client that acted)");
-				if (options.get_type() == sol::type::table && options.as<sol::table>().raw_get<sol::object>("All").valid() && options.as<sol::table>().raw_get<sol::object>("All").get_type() != sol::type::lua_nil)
+				if (options.get_type() == sol::type::table && !IsNil(options.as<sol::table>().raw_get<sol::object>("All")))
 					throw std::runtime_error("Network.Raycast: option 'All' is not supported (it returns the closest hit)");
 				const QueryOptions query = ParseQueryOptions(world, options, false);
 				const NetworkSystem* system = FindNetwork(context);

@@ -61,6 +61,8 @@ namespace Breccia {
 		// Emit for C++ (the network session's events, outside any script): handler(args...) on the main thread, without the
 		// depth limit's error or the emitter's (there is no emitter). Returns how many handlers were called.
 		int EmitValues(const std::string& name, const std::vector<sol::object>& args);
+		// Whether any subscription to name exists, its owner active or not.
+		bool HasSubscribers(const std::string& name) const;
 
 	private:
 		struct Subscription

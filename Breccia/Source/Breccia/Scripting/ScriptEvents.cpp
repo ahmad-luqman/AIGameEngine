@@ -3,6 +3,7 @@
 #include "Breccia/Core/Assert.h"
 #include "Breccia/Scripting/ScriptGlue.h"
 
+#include <algorithm>
 #include <functional>
 #include <stdexcept>
 #include <vector>
@@ -76,6 +77,11 @@ namespace Breccia {
 		if (emitterFailed)
 			throw std::runtime_error("Events.Emit('" + name + "'): a handler of this instance failed (see the previous error), which disabled it");
 		return called;
+	}
+
+	bool ScriptEvents::HasSubscribers(const std::string& name) const
+	{
+		return std::ranges::any_of(m_Subscriptions, [&name](const auto& entry) { return entry.second.Name == name; });
 	}
 
 	int ScriptEvents::EmitValues(const std::string& name, const std::vector<sol::object>& args)

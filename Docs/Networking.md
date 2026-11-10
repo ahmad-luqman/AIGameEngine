@@ -35,7 +35,7 @@ The project file's `Network` object (also `project.set {"network": {...}}`) hold
 | `TickRate` | 30 | Snapshots per second to each client, and updates per second back, at most one per frame. A client takes the host's. |
 | `MaxBytesPerSecond` | 65536 | Each connection's budget per direction. What does not fit waits. |
 | `TimeoutSeconds` | 10 | A connection that hears nothing for this long ends (`Timeout`); a handshake not finished by then ends with `HandshakeTimeout`. |
-| `InterpolationDelay` | 0.1 | Seconds (0 to 1) a client shows the entities it does not decide behind its estimate of the host's clock (`Network.GetViewTime`), moving them smoothly between snapshots; 0 shows each snapshot as it arrives. A client uses its own project's. |
+| `InterpolationDelay` | 0.1 | Seconds (0 to 1) a client shows the entities it does not decide behind its estimate of the host's clock (`Network.GetTime`; the moment it shows is `Network.GetViewTime`), moving them smoothly between snapshots; 0 shows each snapshot as it arrives. A client uses its own project's. |
 | `MaxMessagesPerSecond` | 120 | Script messages and RPCs each connection may send per second and direction; a host hands a client's to scripts at this rate and disconnects a client that keeps sending faster. |
 
 ## Connections
@@ -125,7 +125,8 @@ stays that large (logged once per entity).
   applying them and passing them on. While that client is not connected, or `Owner` is 0, the host decides.
 - `Predicted`: the host decides, from the inputs of the client named by `Owner`, which predicts the entity's character
   controller (see Prediction). On an entity without a character controller (or whose character the host could not build),
-  or while that client is not connected, this is `Server`.
+  or while that client is not connected, this is `Server` on the host (a client whose character exists still predicts it,
+  and the host ignores its inputs, logged).
 
 Ownership, parents and components are the host's alone: clients cannot change them (the host refuses and logs it), and an
 owner still hears of components the host adds (with their starting values) or removes. A peer drives the dynamic bodies of
@@ -175,8 +176,11 @@ cannot fake them. Limits: a name of 1 to 64 bytes, 32 arguments, 32 KiB in all. 
 debt, as a record may). A host keeps a client's messages in a queue, as they arrived, and decodes and hands them to scripts at
 that rate, so a burst waits and a client cannot make the host's scripts run more often than that; more than 1,024 waiting,
 or 1 MiB, disconnect it (`InvalidPacket`), and when a client leaves, what it sent first reaches the scripts before
-`PeerDisconnected`. An RPC that reaches a client before the entity's spawn waits for it for two seconds, and the script
-messages after it wait behind it, so they arrive in order; the host drops an RPC for an entity it does not have. Messages and
+`PeerDisconnected` (up to a message that does not decode: it and the rest are dropped, counted and logged). Messages wait
+in the queue, too, while the host's event queue is full. An RPC that reaches a client before the entity's spawn waits for it for two seconds, and the reliable script
+messages after it wait behind it, so they arrive in order (unreliable ones promise no order and do not wait); an RPC for an
+entity the client saw despawned, or whose spawn it refused, in the last two seconds is dropped at once, as the host drops an
+RPC for an entity it does not have. Messages and
 connection events reach scripts before `OnUpdate`, never in the middle of the network session's own work.
 
 ## Interpolation
@@ -195,17 +199,23 @@ makes it jump, as does a client's own change to the transform, which stops the i
 A character controller with `Predicted` authority moves on the client that owns it as soon as its scripts call `Move`
 (only the owner should: `Network.IsOwner`). Every fixed step the client records what the character walked with (its `Move`
 velocity, mixed with root motion, and its rotation) and numbers it; each update to the host carries the newest steps the
-host has not acknowledged (up to 32, so a few lost updates lose nothing). The host moves the character by exactly those
+host has not acknowledged (up to 32, so a few lost updates lose nothing), and a client that predicts sends an update at
+least every 16 fixed steps, whatever the tick rate, so every input goes out. The host moves the character by exactly those
 steps (`PhysicsWorld::StepCharacter`, the same code a physics step runs), never by its own physics steps or `Move` calls.
 The host trusts what an input asks for only so far:
 
 - No faster than its own fixed steps: it keeps half a second of room for inputs, half of it ahead of its steps, so a client
   sending inputs faster than real time waits and moves no faster.
-- No faster than `Networked.MaxInputSpeed`, vertical speed included: set it to the character's top speed (or jump speed, if
-  higher), and a modified client runs and jumps no faster. A velocity above 1,000 m/s is invalid on the wire; a client
-  clamps its own below that.
-- An owner that falls silent for a quarter of a second has its character stepped without inputs (gravity still pulls), so it
-  does not hang in mid-jump; its inputs, when they come again, follow, and the client is corrected.
+- No faster than `Networked.MaxInputSpeed`, the length of the whole velocity, vertical included: set it to the fastest
+  velocity a step asks for (`sqrt(run^2 + jump^2)` when the character can jump while running), and a modified client runs
+  and jumps no faster. The owner sends and replays its inputs with the same clamp (only its own step of a faster `Move`
+  is corrected), from the value its spawn carried: the field is not replicated afterwards, so set it before the entity is
+  networked. A velocity above 1,000 m/s is invalid on the wire.
+- An owner that falls silent for a quarter of a second (half the input room) has its character stepped without inputs
+  (gravity still pulls), at most 8 steps a frame, so it does not hang in mid-jump; its inputs, when they come again, follow,
+  and the client is corrected. The quarter second counts from the owner's first input, whatever its trip to the host took.
+- A `Predicted` entity the host cannot move (no character controller built there) is still predicted by its owner; the
+  host ignores its inputs and logs it once, and the owner is never corrected.
 
 Each snapshot to the owner carries the character's state after the newest input the host applied; the client puts the
 character there and replays the inputs since, which leaves it where it already was when nothing disagreed. Where something
@@ -266,8 +276,8 @@ Every message is untrusted input. `Network/NetBuffer` bounds-checks every read. 
 bytes that remain before allocating, limits nesting, and refuses non-UTF-8 text and duplicate keys. `NetProtocol::Decode`
 caps record, component and field counts (4,096, 256, 256) before allocating and checks every record
 (`NetProtocol::CheckUpdate`, `CheckSpawn`, `CheckScript`; senders check too: `CheckSpawn` and `CheckScript` always,
-`CheckUpdate` as an assert). Snapshot times, predicted states and inputs must be finite (inputs and predicted velocities at
-most 1,000 m/s, predicted positions within 10,000 km of the origin, rotations of roughly unit length, numbered without
+`CheckUpdate` as an assert). Snapshot times, predicted states and inputs must be finite (inputs at most 1,000 m/s;
+predicted velocities at most 1,000 m/s and positions within 10,000 km of the origin on each axis; rotations of roughly unit length, numbered without
 wrapping), and each character appears at most once. The `FuzzNetPacket` target fuzzes the
 decoder, its re-encoding, a live client applying whatever snapshot or script message decodes and a live host applying
 whatever client update or script message decodes, inputs to a predicted character included (`Tests/Fuzz`). The protocol is
