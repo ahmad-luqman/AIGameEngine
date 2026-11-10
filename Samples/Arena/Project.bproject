@@ -1,0 +1,39 @@
+{
+	"Company": "",
+	"DynamicResolution": false,
+	"FixedTimestep": 0.01666666753590107,
+	"Format": "BrecciaProject",
+	"Fullscreen": false,
+	"Icon": "",
+	"MinRenderScale": 0.5,
+	"Name": "Arena",
+	"Network": {
+		"InterpolationDelay": 0.10000000149011612,
+		"MaxBytesPerSecond": 65536,
+		"MaxClients": 4,
+		"MaxMessagesPerSecond": 120,
+		"Port": 7777,
+		"TickRate": 30.0,
+		"TimeoutSeconds": 10.0
+	},
+	"PhysicsLayers": {
+		"IgnoredPairs": [],
+		"Names": [
+			"Default"
+		]
+	},
+	"RandomSeed": 9067031,
+	"RenderScale": 1.0,
+	"SSAOQuality": "High",
+	"ScriptInstructionLimit": 2000000000,
+	"ShadowQuality": "High",
+	"StartScene": {
+		"Path": "Assets/Scenes/Arena.bscene",
+		"UUID": "15565965370473180057"
+	},
+	"TargetFrameRate": 60.0,
+	"VSync": true,
+	"Version": "1.0.0",
+	"WindowHeight": 720,
+	"WindowWidth": 1280
+}

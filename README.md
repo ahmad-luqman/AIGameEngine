@@ -59,6 +59,8 @@ build/bin/breccia --project Samples/Tetris project.export '{"output": "Dist/Tetr
   masked wave layer and additive breathing
 - [Samples/Platformer](Samples/Platformer) — a 3D platformer: a character controller driven through an animation state
   machine with root motion, foot placement, spring-bone hair and cape, and a moving platform
+- [Samples/Arena](Samples/Arena) — a multiplayer tag arena: a host (or dedicated server) and clients, predicted players,
+  lag-compensated tags by RPC and scores sent by the host; its tests play it in one process and over UDP
 
 ## License
 

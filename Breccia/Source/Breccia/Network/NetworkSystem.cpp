@@ -1142,9 +1142,11 @@ namespace Breccia {
 			if (!driven.contains(uuid))
 				if (Entity entity = m_Scene.GetEntityByUUID(uuid))
 					physics->SetDrivenExternally(entity, false);
+		// Physics says what it drives, not m_DrivenBodies: an entity destroyed and created again under the same UUID starts
+		// undriven (a client's own copy of an authored networked entity, replaced by the host's spawn of it).
 		for (UUID uuid : driven)
-			if (!m_DrivenBodies.contains(uuid))
-				physics->SetDrivenExternally(m_Scene.GetEntityByUUID(uuid), true);
+			if (const Entity entity = m_Scene.GetEntityByUUID(uuid); !physics->IsDrivenExternally(entity))
+				physics->SetDrivenExternally(entity, true);
 		m_DrivenBodies = std::move(driven);
 	}
 

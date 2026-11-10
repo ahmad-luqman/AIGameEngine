@@ -2,6 +2,7 @@
 
 #include <Breccia/Automation/AutomationSession.h>
 #include <Breccia/Automation/CommandRegistry.h>
+#include <Breccia/Core/Application.h>
 #include <Breccia/Core/FileSystem.h>
 #include <Breccia/Core/JsonUtils.h>
 #include <Breccia/Project/Exporter.h>
@@ -969,6 +970,27 @@ TEST_SUITE("Packaging")
 		Scene scene;
 		scene.OnRuntimeStart();
 		CHECK(BrecciaTest::Eval(scene, "local info = Game.GetInfo() return info.Name .. '|' .. info.Version .. '|' .. info.Company") == "Untitled|1.0.0|");
+	}
+
+	TEST_CASE("Game.IsHeadless is true without an application and in a headless one")
+	{
+		// The CLI and tests: no Application at all.
+		REQUIRE_FALSE(Application::HasInstance());
+		Project::SetActive(nullptr);
+		{
+			Scene scene;
+			scene.OnRuntimeStart();
+			CHECK(BrecciaTest::Eval(scene, "return tostring(Game.IsHeadless())") == "true");
+		}
+		// The runtime's --headless (a dedicated server). A windowed one cannot run here; it is false there.
+		ApplicationSpecification specification;
+		specification.Name = "HeadlessLua";
+		specification.Headless = true;
+		Application application(specification);
+		REQUIRE(application.IsInitialized());
+		Scene scene;
+		scene.OnRuntimeStart();
+		CHECK(BrecciaTest::Eval(scene, "return tostring(Game.IsHeadless())") == "true");
 	}
 
 	TEST_CASE("Windows resources are written only on Windows")

@@ -1111,6 +1111,48 @@ TEST_SUITE("Network")
 		CHECK_FALSE(client.GetPhysicsWorld()->IsDrivenExternally(crate));
 	}
 
+	TEST_CASE("A client drives the host's spawn of an authored networked body it had its own copy of")
+	{
+		// Both peers load the same scene: the client removes its own copies when the host accepts it, and the host's spawns
+		// take the same UUIDs. Its copies were driven while it connected; the spawns must be too.
+		const auto build = [](Scene& scene) {
+			AddGround(scene);
+			Entity crate = CreateNetworked(scene, "Crate", UUID(101), { 0.0f, 4.0f, 0.0f });
+			crate.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Dynamic;
+			crate.AddComponent<BoxColliderComponent>();
+			Entity bot = CreateNetworked(scene, "Bot", UUID(102), { 3.0f, 0.0f, 0.0f });
+			bot.AddComponent<CapsuleColliderComponent>();
+			bot.AddComponent<CharacterControllerComponent>();
+		};
+		// A snapshot every frame: the host's first one arrives with its Welcome, so the client removes its copy and creates
+		// the spawn in one frame.
+		NetworkSettings settings;
+		settings.TickRate = 60;
+		Session session({ .Latency = 0.05f }, settings);
+		Scene& host = session.StartHost(build);
+		Scene& client = session.AddClient(build);
+		session.Run(2);
+		CHECK(client.GetPhysicsWorld()->IsDrivenExternally(client.GetEntityByUUID(UUID(102))));
+		REQUIRE(session.RunUntil([&] { return session.ClientNetwork(0).GetRemoteEntityCount() == 2; }, 120));
+		session.Run(2);
+		for (const UUID id : { UUID(101), UUID(102) })
+		{
+			CAPTURE(id);
+			CHECK(client.GetPhysicsWorld()->IsDrivenExternally(client.GetEntityByUUID(id)));
+		}
+		// The host walks its bot, then stops it: the client shows it where the host has it, not where its own physics took it.
+		Entity bot = host.GetEntityByUUID(UUID(102));
+		for (int frame = 0; frame < 30; frame++)
+		{
+			host.GetPhysicsWorld()->MoveCharacter(bot, { -3.0f, 0.0f, 0.0f });
+			session.Run(1);
+		}
+		host.GetPhysicsWorld()->MoveCharacter(bot, glm::vec3(0.0f));
+		session.Run(60);
+		CHECK(bot.GetTransform().Translation.x < 2.0f);
+		CHECK(client.GetEntityByUUID(UUID(102)).GetTransform().Translation == bot.GetTransform().Translation);
+	}
+
 	TEST_CASE("Spawns from a host are checked like scene files, and asset paths stay inside the project")
 	{
 		FakeHost host([](Scene& scene) { scene.CreateEntityWithUUID(77, "Local"); });

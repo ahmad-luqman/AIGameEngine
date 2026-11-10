@@ -1096,6 +1096,10 @@ function Game.Quit() end
 ---@return { Name: string, Version: string, Company: string }
 function Game.GetInfo() end
 
+---Whether the game runs with no window and no GPU: the runtime's `--headless` (a dedicated server), the breccia CLI.
+---@return boolean
+function Game.IsHeadless() end
+
 -- Screen UI --------------------------------------------------------------------------------------------------------
 
 ---Options of UI.MeasureText.

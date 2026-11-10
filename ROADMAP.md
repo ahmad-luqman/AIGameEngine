@@ -49,11 +49,11 @@ ready" is a claim for after P1.
   with zero validation errors on an Apple M4 Max (MoltenVK), an NVIDIA RTX 4060 Laptop and Intel UHD 770 graphics on
   Windows (`Docs/TestedHardware.md`).
 - Over 1,600 unit test cases, 16 fuzz targets, a feature test with 411 `Check` calls, and Tetris, Joints, Marble Run,
-  Breakout, First Person, Movement Demo and Platformer samples with scripted gameplay tests.
+  Breakout, First Person, Movement Demo, Platformer and Arena (multiplayer) samples with scripted gameplay tests.
 - The assessment's five verified defects were fixed in PR #74: physics reports overflows and sizes its temporary memory
   from its capacity, the editor and CLI stop scripts that never return, the editor server closes connections that do not
   open with JSON, and `project.validate` refuses clips the engine cannot decode. Their residuals are in P1.
-- The largest gaps, by the assessment: networking without scene switching or a multiplayer sample yet, no navigation, no occlusion culling, global illumination, fog,
+- The largest gaps, by the assessment: networking without scene switching, no navigation, no occlusion culling, global illumination, fog,
   decals, terrain or custom shaders, no Lua debugger, a CPU cost that grows linearly with entity count, no GPU memory
   management, and no release, tutorial or real game.
 
@@ -61,13 +61,14 @@ ready" is a claim for after P1.
 
 ## P0 — Networking
 
-Multiplayer is the first new system. Two sessions build the layer; a sample proves it. Networking I shipped the ENet
+Multiplayer is the first new system. Two sessions built the layer and a sample proves it. Networking I shipped the ENet
 transport, authoritative host/client sessions, the `Networked` component with registry-declared replicated fields,
 acknowledged snapshot deltas with a bandwidth budget, and `FuzzNetPacket`. Networking II shipped the Lua `Network` API
 (sessions, connection events, reliable and unreliable messages, RPCs with declared permissions, authority queries),
 snapshot interpolation, client-side prediction with reconciliation for character controllers, lag-compensated raycasts,
 driven remote characters, and the `net.*` commands with in-process clients, simulated latency and loss, per-peer
-`scene.hash` and editor Play as host or client (`Docs/Networking.md`).
+`scene.hash` and editor Play as host or client (`Docs/Networking.md`). The Arena sample (`Samples/Arena`) plays all of it:
+a host and in-process clients in its gameplay test, and a dedicated server and two clients over UDP in another.
 
 ### Networking session gaps — M
 - Scene loads during a session (every peer switching together; refused today).
@@ -84,10 +85,6 @@ driven remote characters, and the `net.*` commands with in-process clients, simu
   be deterministic (today only physics is pinned: IK uses libm, and Lua is not checked); encryption, through ENet's
   per-datagram compressor hook with keys from an authenticated handshake (`Docs/Networking.md`); IPv6; quantized rotations
   and positions in snapshots; byte-level limits on the state updates a client sends (script messages are capped already).
-
-### Multiplayer sample — M
-A small arena or co-op game built through the automation API, with a ctest that runs a server and two clients headless
-and asserts on the outcome. It goes in `Samples/` like the others.
 
 ---
 
