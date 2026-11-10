@@ -1198,7 +1198,7 @@ function Driver:OnUpdate(dt)
 		Check("OnCollisionEnd contact", parted ~= nil and math.abs(parted.Normal.y) > 0.99 and parted.Impulse == 0 and Near(parted.Point.y, 0, 0.3))
 		local info = Game.GetInfo()
 		Check("Game.GetInfo", info.Name == "FeatureTest" and info.Version == "1.2.3" and info.Company == "Breccia Tests")
-		-- The CLI's batch is headless; the GPU tests' --offscreen runtime is not.
+		-- The value depends on the host (FeatureTest.batch.json checks that the CLI is headless).
 		Check("Game.IsHeadless", type(Game.IsHeadless()) == "boolean")
 		Expect("Game.Quit", function() Game.Quit() end)
 		FeatureTest.Quit = true

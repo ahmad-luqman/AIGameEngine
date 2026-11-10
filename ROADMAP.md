@@ -48,7 +48,7 @@ ready" is a claim for after P1.
   tests on lavapipe, Mesa's CPU Vulkan driver), plus clang-tidy, coverage and fuzzing. On real GPUs, rendering is verified
   with zero validation errors on an Apple M4 Max (MoltenVK), an NVIDIA RTX 4060 Laptop and Intel UHD 770 graphics on
   Windows (`Docs/TestedHardware.md`).
-- Over 1,600 unit test cases, 16 fuzz targets, a feature test with 411 `Check` calls, and Tetris, Joints, Marble Run,
+- Over 1,600 unit test cases, 16 fuzz targets, a feature test with 412 `Check` calls, and Tetris, Joints, Marble Run,
   Breakout, First Person, Movement Demo, Platformer and Arena (multiplayer) samples with scripted gameplay tests.
 - The assessment's five verified defects were fixed in PR #74: physics reports overflows and sizes its temporary memory
   from its capacity, the editor and CLI stop scripts that never return, the editor server closes connections that do not
@@ -67,8 +67,8 @@ acknowledged snapshot deltas with a bandwidth budget, and `FuzzNetPacket`. Netwo
 (sessions, connection events, reliable and unreliable messages, RPCs with declared permissions, authority queries),
 snapshot interpolation, client-side prediction with reconciliation for character controllers, lag-compensated raycasts,
 driven remote characters, and the `net.*` commands with in-process clients, simulated latency and loss, per-peer
-`scene.hash` and editor Play as host or client (`Docs/Networking.md`). The Arena sample (`Samples/Arena`) plays all of it:
-a host and in-process clients in its gameplay test, and a dedicated server and two clients over UDP in another.
+`scene.hash` and editor Play as host or client (`Docs/Networking.md`). The Arena sample (`Samples/Arena`) plays most of
+it: a host and in-process clients in its gameplay test, and a dedicated server and two clients over UDP in another.
 
 ### Networking session gaps — M
 - Scene loads during a session (every peer switching together; refused today).

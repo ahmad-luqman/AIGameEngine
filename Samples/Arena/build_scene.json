@@ -4,6 +4,8 @@
 	{"command": "script.check", "params": {"path": "Assets/Scripts/Bot.lua"}},
 	{"command": "script.check", "params": {"path": "Assets/Scripts/Scoreboard.lua"}},
 	{"command": "script.check", "params": {"path": "Assets/Scripts/Fade.lua"}},
+	{"command": "script.check", "params": {"path": "Assets/Scripts/Autoplay.lua"}},
+	{"command": "script.check", "params": {"path": "Assets/Scripts/Lib/Arena.lua"}},
 	{"command": "project.set", "params": {"inputActions": {"Actions": [{"Name": "MoveX", "Type": "Axis", "Bindings": [{"Key": "D"}, {"Key": "A", "Scale": -1}, {"Key": "Right"}, {"Key": "Left", "Scale": -1}, {"GamepadAxis": "LeftX", "DeadZone": 0.2}]}, {"Name": "MoveY", "Type": "Axis", "Bindings": [{"Key": "W"}, {"Key": "S", "Scale": -1}, {"Key": "Up"}, {"Key": "Down", "Scale": -1}, {"GamepadAxis": "LeftY", "Scale": -1, "DeadZone": 0.2}]}, {"Name": "Fire", "Type": "Button", "Bindings": [{"Key": "Space"}, {"GamepadButton": "A"}, {"GamepadButton": "RightBumper"}]}]}}},
 	{"command": "scene.new", "params": {"name": "Arena", "empty": true}},
 	{"command": "entity.create", "params": {"name": "Camera", "components": {"Transform": {"Translation": [0, 20, 13.5], "Rotation": [-58, 0, 0]}, "Camera": {"FOV": 50, "Near": 0.1, "Far": 100, "Primary": true}}}},

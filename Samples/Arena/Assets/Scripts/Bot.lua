@@ -1,7 +1,8 @@
--- A practice target: a character that walks back and forth along a lane in the middle of the arena. It is networked
--- with Server authority, so the host walks it and clients show it InterpolationDelay behind, which is what makes
--- lag compensation matter: a client aims at where it sees the bot, and the host checks the tag against where the bot
--- was at that moment.
+-- A practice target: a character that walks back and forth along a lane across the arena. It is networked with Server
+-- authority, so the host walks it and clients show it InterpolationDelay behind, which is what makes lag compensation
+-- matter: a client aims at where it sees the bot, and the host checks the tag against where the bot was at that moment.
+local Arena = require("Assets.Scripts.Lib.Arena")
+
 local Bot = {}
 
 Bot.Properties = {
@@ -11,11 +12,16 @@ Bot.Properties = {
 	Speed = 3.0
 }
 
--- Tells a bot's script apart from a player's when a tag hits it.
+-- Tells a bot's script apart from a player's (Player.IsPlayer).
 Bot.IsBot = true
 
+-- Ends closer than this turn the bot around.
+local Arrived = 0.1
+
 function Bot:OnCreate()
-	-- Heading to End first.
+	if Arena.FlatOffset(self.Start, self.End):Length() <= 2 * Arrived then
+		error("Bot: '" .. self.Entity.Name .. "' needs a lane: its Start and End are less than " .. 2 * Arrived .. " m apart")
+	end
 	self.Forward = true
 end
 
@@ -25,25 +31,26 @@ function Bot:Respawn()
 	self.Forward = true
 end
 
+-- The end of the lane it is heading to.
+function Bot:Target()
+	return self.Forward and self.End or self.Start
+end
+
 function Bot:OnUpdate(dt)
 	-- On clients the host's snapshots move it.
 	if not Network.HasAuthority(self.Entity) then return end
-	local board = Scene.FindEntityByName("Scoreboard")
-	local script = board and board:GetScript()
-	if script and script.Over then
+	if Arena.RoundOver() then
 		self.Entity:Move(Vec3(0, 0, 0))
 		return
 	end
-	local target = self.Forward and self.End or self.Start
-	local position = self.Entity.WorldPosition
-	local offset = Vec3(target.x - position.x, 0, target.z - position.z)
-	if offset:Length() < 0.1 then
+	local offset = Arena.FlatOffset(self.Entity.WorldPosition, self:Target())
+	if offset:Length() < Arrived then
 		self.Forward = not self.Forward
-		target = self.Forward and self.End or self.Start
-		offset = Vec3(target.x - position.x, 0, target.z - position.z)
+		offset = Arena.FlatOffset(self.Entity.WorldPosition, self:Target())
 	end
-	self.Entity:Move(offset:Normalized() * self.Speed)
-	self.Entity.Rotation = Quat.LookRotation(offset:Normalized())
+	local direction = offset:Normalized()
+	self.Entity:Move(direction * self.Speed)
+	self.Entity.Rotation = Quat.LookRotation(direction)
 end
 
 return Bot

@@ -1,14 +1,16 @@
 """The arena over real UDP (ctest SampleArenaNetwork): a headless BrecciaRuntime host (a dedicated server) and two
-headless clients play one round with Match.Autoplay on, in a copy of the sample. Player 1 tags player 2 until it wins;
-then every peer logs the scores and where it sees each character, and quits. The scores must match on every peer, and
-so must the positions (everyone is at rest by then).
+headless clients play one round with the computer playing (Autoplay.lua, added to a copy of the sample). Player 1 tags
+player 2 until it wins; then every peer logs the scores and where it sees each character, and quits. The scores must
+match on every peer, and so must the positions (everyone is at rest by then).
 
-Nothing here depends on how fast the processes start or run: the round starts whenever the clients join, ends at a
-score, and the host waits for the clients to report before it quits.
+Nothing here depends on how fast the machine is: the round starts whenever the clients join and ends at a score, the
+host's wait for everyone to come to rest is counted in its fixed 1/60 s frames, and the host quits once the clients
+have reported and left.
 
 Usage: test_network.py <breccia CLI> <BrecciaRuntime>
 """
 import json
+import math
 import os
 from pathlib import Path
 import queue
@@ -21,11 +23,20 @@ import threading
 import time
 
 SAMPLE = Path(__file__).resolve().parent
-TIMEOUT = 180
-# Frames each runtime may run at most (a headless runtime in a session is paced to 60 a second): a bound, not a timing.
+WIN_SCORE = 3
+# One deadline for the whole session, inside ctest's TIMEOUT (300 s), so a hang is reported here with every peer's log.
+SESSION_SECONDS = 240
+# Frames each runtime may run at most: --frames fixes the timestep at 1/60 s, and a headless runtime in a session sleeps
+# out each frame, so this is a bound of about 150 s, not a timing.
 MAX_FRAMES = 9000
 PORT_LINE = re.compile(r"Network: hosting on UDP port (\d+)")
 RESULT_LINE = re.compile(r"Arena: result peer=(\d+) scores=(\S*)((?: \S+=\S+)*)")
+STATISTICS_LINE = re.compile(r"Runtime: network (host|client) .* stale=\d+ rejectedValues=(\d+) rejectedRecords=(\d+)")
+# What no peer may log: refusals, failed sends, problems reported once (the engine's "(not logged again)"), and the
+# sample's own warnings.
+PROBLEMS = ("sent a value", "cannot spawn", "could not send", "could not ask", "could not show", "UDP socket failed",
+            "invalid message", "refuses", "not shown", "not logged again", "dropped", "ignored", "cannot be", "faster than",
+            "could not be put", "have not acknowledged", "may call it", "sent a tag", "the scoreboard received", "Script error")
 
 
 def require(condition, message):
@@ -43,7 +54,8 @@ class Runtime:
                                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
         self.lines = queue.Queue()
         self.output = []
-        threading.Thread(target=self._read, daemon=True).start()
+        self.reader = threading.Thread(target=self._read, daemon=True)
+        self.reader.start()
 
     def _read(self):
         for line in self.process.stdout:
@@ -51,8 +63,7 @@ class Runtime:
             self.lines.put(line)
         self.lines.put(None)
 
-    def wait_for(self, pattern, seconds):
-        deadline = time.monotonic() + seconds
+    def wait_for(self, pattern, deadline):
         while time.monotonic() < deadline:
             try:
                 line = self.lines.get(timeout=max(deadline - time.monotonic(), 0.01))
@@ -68,28 +79,32 @@ class Runtime:
     def text(self):
         return "".join(self.output)
 
-    def finish(self):
+    def finish(self, deadline):
+        """The exit code, or None when the process had to be killed at the deadline. Its output is complete either way."""
         try:
-            self.process.wait(timeout=TIMEOUT)
+            code = self.process.wait(timeout=max(deadline - time.monotonic(), 0.1))
         except subprocess.TimeoutExpired:
-            self.process.kill()
-            self.process.wait(timeout=TIMEOUT)
-        return self.process.returncode
+            code = None
+        self.stop()
+        return code
 
     def stop(self):
         if self.process.poll() is None:
             self.process.kill()
-        self.process.wait(timeout=TIMEOUT)
+        self.process.wait()
+        self.reader.join(timeout=30)
 
 
 def result(name, runtime):
-    """The peer ID, scores and positions a runtime logged in its result line."""
+    """The peer ID, scores and positions (name -> (x, y, z)) a runtime logged in its result line."""
     match = RESULT_LINE.search(runtime.text())
     require(match is not None, f"the {name} logged no result:\n{runtime.text()}")
+    entries = match.group(3).split()
     places = {}
-    for entry in match.group(3).split():
+    for entry in entries:
         entity, _, position = entry.partition("=")
         places[entity] = tuple(float(value) for value in position.split(","))
+    require(len(places) == len(entries), f"the {name} reported two characters under one name: {entries}")
     return int(match.group(1)), match.group(2), places
 
 
@@ -102,53 +117,60 @@ def main():
         batch = Path(temp) / "autoplay.json"
         batch.write_text(json.dumps([
             {"command": "scene.open", "params": {"path": "Assets/Scenes/Arena.bscene"}},
-            {"command": "component.set", "params": {"entity": "Match", "component": "Script", "data": {"Properties": {"Autoplay": True, "WinScore": 3}}}},
+            {"command": "entity.create", "params": {"name": "Autoplay", "components": {
+                "Script": {"Script": "Assets/Scripts/Autoplay.lua", "Properties": {"WinScore": WIN_SCORE}}}}},
             {"command": "scene.save"},
         ]), encoding="utf-8")
+        # The CLI exits 1 when any request of the batch fails.
         built = subprocess.run([str(cli), "--project", str(project), "batch", str(batch)], stdout=subprocess.PIPE,
-                               stderr=subprocess.STDOUT, text=True, timeout=TIMEOUT, env=env)
-        # A batch carries on past a failed request: every response must say ok.
-        require(built.returncode == 0 and built.stdout.count('"ok": true') == 3, f"turning Autoplay on: {built.stdout}")
+                               stderr=subprocess.STDOUT, text=True, timeout=SESSION_SECONDS, env=env)
+        require(built.returncode == 0, f"adding Autoplay: {built.stdout}")
 
+        deadline = time.monotonic() + SESSION_SECONDS
         host = Runtime(runtime, project, env, "--host", "0")
-        clients = []
+        processes = {"host": host}
         try:
-            match = host.wait_for(PORT_LINE, 60)
+            # In the order the host logs them.
+            match = host.wait_for(PORT_LINE, deadline)
             require(match is not None, f"the host never said which port it listens on:\n{host.text()}")
+            require(host.wait_for(r"Arena: autoplay to \d+", deadline), f"the host does not play by itself:\n{host.text()}")
             address = f"127.0.0.1:{match.group(1)}"
             # One at a time, so the first is peer 1 (the tagger) and the second peer 2.
             for peer in (1, 2):
-                clients.append(Runtime(runtime, project, env, "--connect", address))
-                require(host.wait_for(rf"Arena: Player {peer} joined", 60), f"client {peer} never joined:\n{host.text()}\n{clients[-1].text()}")
-            codes = [client.finish() for client in clients] + [host.finish()]
+                client = Runtime(runtime, project, env, "--connect", address)
+                processes[f"client {peer}"] = client
+                require(host.wait_for(rf"Arena: Player {peer} joined", deadline), f"client {peer} never joined:\n{host.text()}\n{client.text()}")
+            codes = {name: processes[name].finish(deadline) for name in ("client 1", "client 2", "host")}
         finally:
-            for process in clients + [host]:
+            for process in processes.values():
                 process.stop()
 
-        names = ["client 1", "client 2", "host"]
-        for name, code, process in zip(names, codes, clients + [host]):
-            require(code == 0, f"the {name} failed (exit {code}):\n{process.text()}")
-        results = {name: result(name, process) for name, process in zip(names, clients + [host])}
-        process_by_name = dict(zip(names, clients + [host]))
-        require([results[name][0] for name in names] == [1, 2, 0], f"peers reported as {[results[name][0] for name in names]}")
-        for name in names:
-            require(results[name][1] == "1:3,2:0", f"the {name} shows the scores {results[name][1]}, not 1:3,2:0")
+        for name, code in codes.items():
+            require(code is not None, f"the {name} was still running after {SESSION_SECONDS} s:\n{processes[name].text()}")
+            require(code == 0, f"the {name} failed (exit {code}):\n{processes[name].text()}")
+        results = {name: result(name, processes[name]) for name in codes}
+        peers = [results[name][0] for name in ("client 1", "client 2", "host")]
+        require(peers == [1, 2, 0], f"peers reported as {peers}")
+        expected_scores = f"1:{WIN_SCORE},2:0"
+        for name, (_, scores, _) in results.items():
+            require(scores == expected_scores, f"the {name} shows the scores {scores}, not {expected_scores}")
         host_places = results["host"][2]
         require(sorted(host_places) == ["BotA", "BotB", "Player1", "Player2"], f"the host reported {sorted(host_places)}")
-        for name in names[:2]:
+        for name in ("client 1", "client 2"):
             places = results[name][2]
             require(sorted(places) == sorted(host_places), f"the {name} sees {sorted(places)}, the host {sorted(host_places)}")
             for entity, position in host_places.items():
-                distance = sum((a - b) ** 2 for a, b in zip(position, places[entity])) ** 0.5
-                require(distance < 0.02, f"the {name} sees {entity} at {places[entity]}, the host at {position}")
+                require(math.dist(position, places[entity]) < 0.02, f"the {name} sees {entity} at {places[entity]}, the host at {position}")
         tagger = host_places["Player1"]
         require(abs(tagger[0] + 6) < 0.1 and abs(tagger[2] + 8) < 0.1, f"player 1 is not on its spot: {tagger}")
-        require(host.text().count("Arena: Player 1 tagged Player2") == 3, f"the host did not count three tags:\n{host.text()}")
-        # Nothing was refused, failed to send or decode, and no tag was malformed.
-        for problem in ("sent a value", "cannot spawn", "could not send", "UDP socket failed", "invalid message", "refuses", "not shown",
-                        "is not a direction", "not a score table", "Script error"):
-            for name, process in process_by_name.items():
-                require(problem not in process.text(), f"the {name} logged '{problem}':\n{process.text()}")
+        require(host.text().count("Arena: Player 1 tagged Player2") == WIN_SCORE, f"the host did not count {WIN_SCORE} tags:\n{host.text()}")
+        for name, process in processes.items():
+            text = process.text()
+            statistics = STATISTICS_LINE.search(text)
+            require(statistics is not None, f"the {name} logged no network statistics:\n{text}")
+            require(statistics.group(2) == "0" and statistics.group(3) == "0", f"the {name} rejected values or records: {statistics.group(0)}")
+            for problem in PROBLEMS:
+                require(problem not in text, f"the {name} logged '{problem}':\n{text}")
     print("OK")
 
 

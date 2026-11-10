@@ -5,7 +5,8 @@ admits clients, and sends each of them the entities marked `Networked` as snapsh
 back only what they have authority over, the inputs of the characters they predict, and script messages. This page covers
 the transport, sessions and replication, interpolation, prediction and lag compensation, and the `net.*` automation
 commands. The Lua `Network` API is in `Docs/ScriptingAPI.md` (Networking). `Samples/Arena` is a complete multiplayer game
-that uses all of it, with tests that play it in one process and over UDP.
+built on it (sessions, spawning and ownership, prediction, interpolation, lag compensation, RPCs and the `net.*`
+commands), with tests that play it in one process and over UDP.
 
 ## Running a session
 
@@ -21,8 +22,9 @@ BrecciaRuntime --project MyGame --connect 192.168.1.20:7777
 ```
 
 Scripts start sessions too (`Network.Host`, `Network.Connect`, `Network.Disconnect`), and the editor's Play can host or
-join over UDP (the toolbar's Network button), so the editor and runtimes play together. `Game.IsHeadless()` tells a
-script it runs on a dedicated server (or under the `breccia` CLI), where a game usually spawns no player for the host. `--host 0` lets the system pick a
+join over UDP (the toolbar's Network button), so the editor and runtimes play together. `Game.IsHeadless()` says the
+game runs with no window (`--headless`, or the `breccia` CLI); with `Network.IsHost()` it tells a dedicated server,
+where a game usually spawns no player for the host. `--host 0` lets the system pick a
 free port; the log says which (`Network: hosting on UDP port N`). Headless runs with a
 network session sleep out the rest of each frame instead of spinning a core. With `--frames`, a client that is not
 connected when the run ends exits with code 8, so a test cannot pass without a session. A windowed client whose connection
