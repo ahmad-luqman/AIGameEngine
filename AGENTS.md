@@ -281,9 +281,21 @@ Other directories: `Docs/` (scripting API, rendering guide, generated command/co
   `NetProtocol::CheckUpdate`/`CheckSpawn`. The handshake checks `NetProtocol::Version`, `ReplicationSchema::GetHash` (every
   field, type and enum option) and the project's Name/Version; every end has a `NetDisconnectReason`. Owner-authority
   entities take their owner's fields (checked on the host; the owner still hears component additions and removals); peers
-  drive dynamic bodies they do not decide kinematically (`PhysicsWorld::SetDrivenExternally`, an override the component
-  never sees, in sorted order). Clients draw runtime UUIDs from a salted stream; scene loads are refused during a session.
-  See `Docs/Networking.md`.
+  drive dynamic bodies and character controllers they do not decide kinematically (`PhysicsWorld::SetDrivenExternally`, an
+  override the component never sees, in sorted order; a driven character follows its transform). Clients draw runtime UUIDs
+  from a salted stream; scene loads are refused during a session. Scripts never run inside the session: `Receive` queues
+  `NetworkEvent`s (connections, script messages, RPCs) that `Scene::OnUpdate` hands to `ScriptEngine::Update`, and Lua's
+  `Network.Host/Connect/Disconnect` apply at the end of the frame (`Scene::RequestNetworkChange`) with transports from the
+  scene's `NetTransportFactory` (UDP by default, the automation session's `SimulatedNetwork` under the CLI). Script messages
+  are their own `Script` messages; RPCs call only methods a script's `Rpcs` table declares, checked against the sender the
+  host stamps; a host releases a client's at `MaxMessagesPerSecond`. A client shows remote transforms `InterpolationDelay`
+  behind the snapshots' host clock (absent fields are held as of the previous snapshot; a local edit stops a track). A
+  `Predicted` character moves on its owning client from recorded `CharacterInput`s (`PhysicsWorld` input recording), which
+  the host applies with `StepCharacter` (credited by its own fixed steps) and the client replays from the host's
+  `CharacterState` in each snapshot. A host records networked bodies' poses per tick for `RaycastAt` (lag compensation,
+  `PhysicsWorld::RaycastWithPoses`, which casts against stored poses rather than moving bodies). `AutomationSession` hosts
+  in-process clients (`net.*`), stepped before the play scene, with game input muted for all but `net.focus`'s peer
+  (`Input::SetGameMuted`, which, unlike focus, blocks nothing). See `Docs/Networking.md`.
 - **Play mode runs a copy.** `Scene::Copy` duplicates the edit scene (same UUIDs) for play/simulate;
   stopping discards it. In the editor the game runs in the Game tab (primary camera at the project's window
   size, letterboxed; the game UI takes the pointer while the Game image is hovered and navigation while the Game

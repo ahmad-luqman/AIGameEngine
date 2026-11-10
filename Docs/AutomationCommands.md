@@ -2216,6 +2216,292 @@ Returns logical retained CPU asset payload bytes, requested GPU buffer bytes, an
 
 </details>
 
+## net
+
+### `net.command`
+
+Runs a command against an in-process client's scene instead of the playing scene, and returns its result: scene.hash, scene.get, scene.info, scene.snapshot, scene.diff, entity.get, entity.list, entity.transform, component.get, component.set, assert.entity_exists, assert.component, lua.exec, input.actions.
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `client` | integer, an in-process client's index (from net.connect) |
+| `command` | string, the command to run |
+| `params` | object, the command's parameters |
+
+<details><summary>Parameter JSON Schema</summary>
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "client": {
+      "description": "integer, an in-process client's index (from net.connect)",
+      "maximum": 16384,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "command": {
+      "description": "string, the command to run",
+      "minLength": 1,
+      "type": "string"
+    },
+    "params": {
+      "description": "object, the command's parameters",
+      "type": "object"
+    }
+  },
+  "required": [
+    "client",
+    "command"
+  ],
+  "type": "object"
+}
+```
+
+</details>
+
+### `net.connect`
+
+Without address: adds an in-process client to the playing scene's in-process host (net.host): a copy of the edit scene, playing as a client, stepped with the host by play.step (at most 16; a client's Game.Quit ends it). Returns {client}, its index for net.status, net.disconnect, net.focus, net.command and scene.hash. With address (host or host:port, the port defaulting to the project's Network.Port): the playing scene joins that UDP host as a client. Returns {address, port}. Follow the connection with net.status (state Connecting, then Connected or Disconnected with a reason).
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `address` | string: a UDP host to join, as host or host:port |
+
+<details><summary>Parameter JSON Schema</summary>
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "address": {
+      "description": "string: a UDP host to join, as host or host:port",
+      "type": "string"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
+</details>
+
+### `net.disconnect`
+
+Ends an in-process client (client), or the playing scene's network session (without client). Peers are told (ClientQuit from a client, ServerShutdown from a host).
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `client` | integer, an in-process client's index (from net.connect) |
+
+<details><summary>Parameter JSON Schema</summary>
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "client": {
+      "description": "integer, an in-process client's index (from net.connect)",
+      "maximum": 16384,
+      "minimum": 1,
+      "type": "integer"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
+</details>
+
+### `net.focus`
+
+Chooses which peer injected input (input.key, input.mouse, input.gamepad) reaches while play.step runs: client 0 is the playing scene, N an in-process client. The others' scripts see no keys, buttons or gamepads. Resets to 0 when play stops or that client ends.
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `client` | integer: 0 for the playing scene, or an in-process client's index |
+
+<details><summary>Parameter JSON Schema</summary>
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "client": {
+      "description": "integer: 0 for the playing scene, or an in-process client's index",
+      "maximum": 16384,
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "client"
+  ],
+  "type": "object"
+}
+```
+
+</details>
+
+### `net.host`
+
+Makes the playing scene the host of a network session. Without udp it listens on the session's in-process network, where net.connect adds clients that play copies of the scene in this process (stepped by play.step, with net.link's latency and loss); with udp, on a real UDP port that BrecciaRuntime --connect, another editor or Lua Network.Connect can join. port 0 picks a free one. Returns {transport, port}.
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `port` | integer in [0, 65535] (default 0: a free port) |
+| `udp` | bool (default false): a real UDP port instead of the in-process network |
+
+<details><summary>Parameter JSON Schema</summary>
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "port": {
+      "anyOf": [
+        {
+          "description": "integer in [0, 65535] (default 0: a free port)",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "integer in [0, 65535] (default 0: a free port)"
+    },
+    "udp": {
+      "anyOf": [
+        {
+          "description": "bool (default false): a real UDP port instead of the in-process network",
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "bool (default false): a real UDP port instead of the in-process network"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
+</details>
+
+### `net.link`
+
+Sets the in-process network's link, both ways, for messages sent from now on: latency (one-way seconds), jitter (extra seconds up to this, per unreliable message, which reorders them), loss (chance in [0, 1] that a message is lost; a lost reliable one is sent again a round trip later) and timeoutSeconds (silence that ends a connection). Fields left out keep their values. Lasts until play stops. Returns the link.
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `jitter` | number of seconds in [0, 10] |
+| `latency` | number of seconds in [0, 10] |
+| `loss` | number in [0, 1] |
+| `timeoutSeconds` | number of seconds in [1, 600] |
+
+<details><summary>Parameter JSON Schema</summary>
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "jitter": {
+      "anyOf": [
+        {
+          "description": "number of seconds in [0, 10]",
+          "maximum": 10.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "number of seconds in [0, 10]"
+    },
+    "latency": {
+      "anyOf": [
+        {
+          "description": "number of seconds in [0, 10]",
+          "maximum": 10.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "number of seconds in [0, 10]"
+    },
+    "loss": {
+      "anyOf": [
+        {
+          "description": "number in [0, 1]",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "number in [0, 1]"
+    },
+    "timeoutSeconds": {
+      "anyOf": [
+        {
+          "description": "number of seconds in [1, 600]",
+          "maximum": 600.0,
+          "minimum": 1.0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "number of seconds in [1, 600]"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
+</details>
+
+### `net.status`
+
+Describes the network session of the playing scene, or of an in-process client: role (Host, Client or null without a session), state (Connecting, Connected, Disconnected), peerId, disconnectReason, port (a host's), time and viewTime (the host clock, and the time a client shows other entities at), remoteEntities (a client's entities from the host), connections ({peer, address, roundTripTime, knownEntities, traffic}), and statistics (traffic, spawns, updates, despawns, rejected values and records, script messages sent, received and dropped, inputs applied, corrections). Without client it also lists the in-process clients ({client, role, state, peerId}), the simulated link and which peer receives injected input (inputPeer).
+
+| Parameter | Type / description |
+|-----------|--------------------|
+| `client` | integer, an in-process client's index (from net.connect) |
+
+<details><summary>Parameter JSON Schema</summary>
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "client": {
+      "description": "integer, an in-process client's index (from net.connect)",
+      "maximum": 16384,
+      "minimum": 1,
+      "type": "integer"
+    }
+  },
+  "required": [],
+  "type": "object"
+}
+```
+
+</details>
+
 ## play
 
 ### `play.start`
@@ -3026,7 +3312,7 @@ Changes project settings and saves the project file.
 | `inputActions` | object {Actions: [{Name, Type: "Button" | "Axis", Bindings: [{Key | MouseButton | GamepadButton | GamepadAxis: name, Scale?, DeadZone?, Gamepad?}]}]}, replaces every input action and saves Input.binput (written only when the actions change); applies from the next play |
 | `minRenderScale` | number in [0.25, 2], lowest scale dynamic resolution uses; it must be below renderScale, or dynamic resolution is inactive (a warning) |
 | `name` | string of at most 256 bytes |
-| `network` | object {Port: 1-65535, MaxClients: 1-1024, TickRate: 1-240 snapshots per second, MaxBytesPerSecond: 1024-104857600 per connection and direction, TimeoutSeconds: 1-600}, replaces the network session settings (keys left out take their defaults); applies to the next session |
+| `network` | object {Port: 1-65535, MaxClients: 1-1024, TickRate: 1-240 snapshots per second, MaxBytesPerSecond: 1024-104857600 per connection and direction, TimeoutSeconds: 1-600, InterpolationDelay: 0-1 seconds a client shows remote entities behind the newest snapshot (0: as they arrive), MaxMessagesPerSecond: 1-10000 script messages and RPCs per connection and direction}, replaces the network session settings (keys left out take their defaults); applies to the next session |
 | `physicsLayers` | object {Names: ["Default", ...], IgnoredPairs: [[a, b], ...]}, replaces all layers; applies from the next play |
 | `randomSeed` | integer in [0, 4294967295], seeds Lua's random numbers, particle emitters and runtime entity UUIDs; applies from the next play |
 | `renderScale` | number in [0.25, 2], fraction of the window resolution the scene renders at (the highest scale with dynamic resolution) |
@@ -3196,7 +3482,7 @@ Changes project settings and saves the project file.
       "description": "string of at most 256 bytes"
     },
     "network": {
-      "description": "object {Port: 1-65535, MaxClients: 1-1024, TickRate: 1-240 snapshots per second, MaxBytesPerSecond: 1024-104857600 per connection and direction, TimeoutSeconds: 1-600}, replaces the network session settings (keys left out take their defaults); applies to the next session",
+      "description": "object {Port: 1-65535, MaxClients: 1-1024, TickRate: 1-240 snapshots per second, MaxBytesPerSecond: 1024-104857600 per connection and direction, TimeoutSeconds: 1-600, InterpolationDelay: 0-1 seconds a client shows remote entities behind the newest snapshot (0: as they arrive), MaxMessagesPerSecond: 1-10000 script messages and RPCs per connection and direction}, replaces the network session settings (keys left out take their defaults); applies to the next session",
       "type": "object"
     },
     "physicsLayers": {
@@ -3842,10 +4128,11 @@ Returns the whole open scene as JSON with resolved asset paths (disk files persi
 
 ### `scene.hash`
 
-Hash of the current scene state (the play copy while playing); equal states give equal hashes, whatever the entity UUIDs.
+Hash of the current scene state (the play copy while playing), or of an in-process network client's (client, from net.connect); equal states give equal hashes, whatever the entity UUIDs. Peers agree once the networked entities are at rest: a client shows moving ones InterpolationDelay behind the host.
 
 | Parameter | Type / description |
 |-----------|--------------------|
+| `client` | integer, an in-process network client's index (net.connect) |
 | `expectHash` | string: fail unless the hash equals this one (16 lowercase hex digits) |
 
 <details><summary>Parameter JSON Schema</summary>
@@ -3854,6 +4141,12 @@ Hash of the current scene state (the play copy while playing); equal states give
 {
   "additionalProperties": false,
   "properties": {
+    "client": {
+      "description": "integer, an in-process network client's index (net.connect)",
+      "maximum": 16384,
+      "minimum": 1,
+      "type": "integer"
+    },
     "expectHash": {
       "description": "string: fail unless the hash equals this one (16 lowercase hex digits)",
       "minLength": 1,

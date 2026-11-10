@@ -842,12 +842,107 @@ skipped; non-finite spot directions also warn once until the transforms recover.
 
 ## Networking
 
-A network session is started from the runtime's command line (`--host`, `--connect`; see `Docs/Networking.md`). Scripts
-reach it through the `Networked` component, like any other: `Owner` (a peer ID: 0 is the host, clients are 1, 2, ... in
-the order they join), `Authority` (`"Server"` or `"Owner"`) and `Priority` (above 0, at most 100). A host's script hands an entity
-to a client with `e:SetComponent("Networked", { Owner = 2, Authority = "Owner" })`. Scripts run on every peer, and
-`Scene.Load` fails while a session runs. The `Network` API (connection events, messages and authority queries) is
-Networking II's.
+Multiplayer is client-server: one peer hosts (a listen server, or `BrecciaRuntime --headless --host`) and the others join
+it. The host decides the shared state and sends it to every client (`Docs/Networking.md`). Scripts run on every peer, so
+a script asks the `Network` table which peer it is on and what it may decide.
+
+```lua
+-- A game manager on a non-networked entity: it starts the session and hears who comes and goes.
+function Manager:OnCreate()
+    Network.On("PeerConnected", function(peer) self:SpawnPlayerFor(peer) end)
+    Network.On("PeerDisconnected", function(peer, reason) Log.Info("client " .. peer .. " left: " .. reason) end)
+    Network.On("Chat", function(sender, text) self:Show(sender, text) end)
+    if self.Hosting then Network.Host(7777) else Network.Connect(self.Address, 7777) end
+end
+
+-- A player character: Networked { Owner = <its client>, Authority = "Predicted" }.
+local Player = {}
+Player.Rpcs = { Fire = "Owner" }          -- the methods other peers may call, and who may call them
+
+function Player:OnUpdate(dt)
+    if Network.IsOwner(self.Entity) then     -- the peer whose input moves it
+        local walk = Vec3(Input.GetAction("MoveX"), 0, Input.GetAction("MoveZ"))   -- the project's input actions
+        self.Entity:Move(walk * 5)
+        if Input.IsKeyPressed("Space") then
+            Network.Rpc(self.Entity, "Fire", "Server", self.Entity:GetForward(), Network.GetViewTime())
+        end
+    end
+end
+
+function Player:Fire(sender, direction, time)   -- runs on the host; sender is the client's peer ID
+    local origin = self.Entity.Translation + Vec3(0, 1.5, 0)
+    local hit = Network.Raycast(origin, Vec3(direction[1], direction[2], direction[3]), 100, time, { Ignore = self.Entity })
+    if hit then Network.Send("Clients", "Hit", hit.Entity.ID, hit.Point) end
+end
+```
+
+**Sessions.** `Network.Host(port)` listens (0 picks a free port; the default is the project's `Network.Port`), and
+`Network.Connect(address, port)` joins a host. Both return `true`, or `false` and the reason when the port or address cannot
+be used; the session starts at the end of the frame. `Network.Disconnect()` ends it at the end of the frame (peers are
+told). A client whose session ended may connect again: it rejoins as a new peer. A game started by the runtime uses UDP; in
+the editor's Play too; under the `breccia` CLI and its `net.*` commands the session runs on the automation session's
+in-process network, so a test can add clients with `net.connect`.
+
+**Queries.** Without a session every entity is the peer's own and the role is `nil`.
+
+| Function | Returns |
+|----------|---------|
+| `Network.IsActive()` | whether a session is attached (a client whose connection ended still has one, `Disconnected`) |
+| `Network.GetRole()` | `"Host"`, `"Client"` or `nil` |
+| `Network.IsHost()`, `Network.IsClient()` | the role as booleans |
+| `Network.GetState()` | `"Connecting"`, `"Connected"`, `"Disconnected"` or `nil` (a host is always `Connected`) |
+| `Network.GetDisconnectReason()` | why a client's connection ended (`"ClientQuit"`, `"ServerShutdown"`, `"Timeout"`, `"ServerFull"`, ...), or `nil` |
+| `Network.GetPeerId()` | 0 on the host; a client's ID once accepted (0 before); `nil` without a session |
+| `Network.GetPeers()` | a host's connected clients, in join order; a client's `{ 0 }` once connected |
+| `Network.GetPort()` | the port a host listens on, or `nil` |
+| `Network.GetRoundTripTime(peer?)` | seconds to a peer (a client's host by default), 0 when unknown |
+| `Network.GetTime()` | the session clock: a host's seconds since it started hosting, a client's estimate of the host's |
+| `Network.GetViewTime()` | the host time a client shows the entities it does not decide at (`GetTime` minus `Network.InterpolationDelay`); a host's `GetTime` |
+| `Network.HasAuthority(entity)` | whether this peer decides its replicated fields (the host, unless a connected client owns it with `Owner` authority) |
+| `Network.IsOwner(entity)` | whether its `Networked.Owner` names this peer (on the host: Owner 0, or a client not connected). Move what you own from input |
+| `Network.IsPredicted(entity)` | whether this client predicts it: a character controller it owns with `Predicted` authority |
+
+**Messages.** `Network.Send(target, name, ...)` sends a named message, reliably (it arrives once, in order with the
+session's other reliable messages); `Network.SendUnreliable` may lose it, and suits state the next message repeats. The
+target is `"Server"` (from a client), `"Clients"` (from the host: every client) or a client's peer ID (from the host). A
+client reaches the other clients through the host: the host's handler passes it on. `Network.On(name, fn)` subscribes a
+handler, called as `fn(sender, ...)` with the sender's peer ID (0 for the host) and the values sent, and returns an
+`EventHandle`; handlers belong to the instance that subscribed, as `Events.On`'s do. The values are data, as `Storage`
+keeps them: nil, booleans, numbers, strings and tables; vectors arrive as arrays (`{x, y, z}`) and entities as their IDs
+(`Scene.GetEntityByID`). At most 32 values and 32 KiB per message, and a name of 1 to 64 bytes. Sends return `true`, or
+`false` and the reason when nothing went: no session, no such client, the project's `Network.MaxMessagesPerSecond` spent
+this second, or the connection's bandwidth (`Network.MaxBytesPerSecond`) spent. A host hands a client's messages to its
+scripts at most `MaxMessagesPerSecond` a second (more wait their turn) and disconnects a client that keeps sending faster.
+
+**RPCs.** `Network.Rpc(entity, method, target, ...)` (and `Network.RpcUnreliable`) calls `method` on the entity's script
+on the target peers, as `self:method(sender, ...)`, with the targets of `Send` plus `"Owner"` (from the host: the client that
+owns the entity). The script must list the method in its class's `Rpcs` table, with who may call it: `"Host"` (only the
+host, on clients), `"Owner"` (the host, or the client that owns the entity), or `"Any"` (any peer). Calls a script does not
+declare, or a peer may not make, are dropped and logged once. An RPC that reaches a client before the entity's spawn waits
+for it (up to 2 seconds).
+
+**Connection events.** `Network.On` also delivers `"Connected"` (on a client, with its peer ID), `"Disconnected"` (on a
+client, with the reason), `"PeerConnected"` and `"PeerDisconnected"` (on the host, with the client's peer ID, and the reason
+for a disconnect). Messages cannot use these names. Events and messages run before `OnUpdate`. A client replaces its own
+copies of networked entities with the host's when it is accepted, so subscribe to `"Connected"` from a script on an entity
+that is not networked.
+
+**Lag compensation.** `Network.Raycast(origin, direction, maxDistance, time, options)` is `Physics.Raycast` (closest hit,
+the same options except `All`) on the host as the networked bodies stood at `time`: pass the `Network.GetViewTime()` of the
+client that acted (in its RPC), so a shot hits what that client saw. The host keeps a second of history; older times are
+clamped to it, entities that did not exist then are not hit, and everything that is not networked is where it is now. On a
+client or without a session it is a plain raycast.
+
+**Prediction.** A character controller whose `Networked.Authority` is `"Predicted"` and whose `Owner` is a client moves on
+that client at once from its own `Move` calls (only `IsOwner` should call `Move`), and the host moves it from the inputs the
+client sends, no faster than its own fixed steps. Each snapshot corrects the client from the host's state and replays the
+inputs the host has not seen. The host's own `Move` calls on such a character do nothing while its owner is connected.
+Other peers' characters, and remote dynamic bodies, follow the host instead of simulating.
+
+The `Networked` component is replicated like any other: `Owner` (a peer ID: 0 is the host, clients are 1, 2, ... in the
+order they join), `Authority` (`"Server"`, `"Owner"` or `"Predicted"`) and `Priority` (above 0, at most 100). A host's script
+hands an entity to a client with `e:SetComponent("Networked", { Owner = 2, Authority = "Owner" })`. `Scene.Load` fails
+while a session runs.
 
 ## Screen UI
 

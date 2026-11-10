@@ -34,6 +34,7 @@
 #include <stdexcept>
 #include <cmath>
 #include <functional>
+#include <map>
 #include <limits>
 #include <mutex>
 #include <ranges>
@@ -1014,6 +1015,72 @@ TEST_SUITE("Physics")
 		CHECK_FALSE(physics.Raycast({ 0.0f, 10.0f, 0.0f }, { 0.0f, 1.0f, 0.0f }, 100.0f).has_value());
 		CHECK_FALSE(physics.Raycast({ 0.0f, 10.0f, 0.0f }, { 0.0f, -1.0f, 0.0f }, 5.0f).has_value());
 		CHECK_FALSE(physics.Raycast({ 0.0f, 10.0f, 0.0f }, { 0.0f, -1.0f, 0.0f }, 100.0f, { .IgnoreEntity = ground.GetUUID() }).has_value());
+		scene.OnSimulationStop();
+	}
+
+	TEST_CASE("RaycastWithPoses tests listed bodies at other poses and leaves the rest where they are")
+	{
+		Scene scene;
+		Entity ground = CreateGround(scene);
+		auto addBox = [&scene](const char* name, const glm::vec3& position, RigidBodyType type) {
+			Entity box = scene.CreateEntity(name);
+			box.GetTransform().Translation = position;
+			box.AddComponent<RigidBodyComponent>().Type = type;
+			box.AddComponent<BoxColliderComponent>().HalfExtents = { 0.5f, 0.5f, 0.5f };
+			return box;
+		};
+		Entity mover = addBox("Mover", { 0.0f, 2.0f, 0.0f }, RigidBodyType::Kinematic);
+		Entity other = addBox("Other", { 4.0f, 2.0f, 0.0f }, RigidBodyType::Kinematic);
+		Entity sensor = addBox("Sensor", { 8.0f, 2.0f, 0.0f }, RigidBodyType::Kinematic);
+		sensor.GetComponent<RigidBodyComponent>().IsTrigger = true;
+		scene.OnSimulationStart();
+		PhysicsWorld& physics = *scene.GetPhysicsWorld();
+
+		const std::optional<PhysicsBodyPose> pose = physics.GetBodyPose(mover);
+		REQUIRE(pose);
+		CHECK(pose->Position.x == doctest::Approx(0.0f));
+		CHECK(pose->Position.y == doctest::Approx(2.0f));
+		CHECK_FALSE(physics.GetBodyPose(scene.CreateEntity("NoBody")));
+
+		const glm::vec3 down(0.0f, -1.0f, 0.0f);
+		// Rewound to x = 4 the mover is hit there, and no longer at x = 0, where the ground is hit instead.
+		std::map<UUID, std::optional<PhysicsBodyPose>> poses{ { mover.GetUUID(), PhysicsBodyPose{ { 4.0f, 5.0f, 0.0f }, glm::quat(1, 0, 0, 0) } } };
+		std::optional<RaycastHit> hit = physics.RaycastWithPoses({ 4.0f, 10.0f, 0.0f }, down, 20.0f, poses);
+		REQUIRE(hit);
+		CHECK(hit->EntityID == mover.GetUUID());
+		CHECK(hit->Distance == doctest::Approx(4.5f).epsilon(0.01));
+		CHECK(hit->Normal.y == doctest::Approx(1.0f).epsilon(0.01));
+		hit = physics.RaycastWithPoses({ 0.0f, 10.0f, 0.0f }, down, 20.0f, poses);
+		REQUIRE(hit);
+		CHECK(hit->EntityID == ground.GetUUID());
+		// A body the rewind says was not there is not hit; one not listed stays where it is.
+		poses[other.GetUUID()] = std::nullopt;
+		hit = physics.RaycastWithPoses({ 4.0f, 10.0f, 0.0f }, down, 20.0f, poses);
+		REQUIRE(hit);
+		CHECK(hit->EntityID == mover.GetUUID());
+		poses.erase(mover.GetUUID());
+		hit = physics.RaycastWithPoses({ 4.0f, 10.0f, 0.0f }, down, 20.0f, poses);
+		REQUIRE(hit);
+		CHECK(hit->EntityID == ground.GetUUID());
+		// Filters apply to posed bodies too: triggers, the ignored entity and layers.
+		std::map<UUID, std::optional<PhysicsBodyPose>> sensorPose{ { sensor.GetUUID(), PhysicsBodyPose{ { 0.0f, 5.0f, 0.0f }, glm::quat(1, 0, 0, 0) } } };
+		hit = physics.RaycastWithPoses({ 0.0f, 10.0f, 0.0f }, down, 20.0f, sensorPose);
+		REQUIRE(hit);
+		CHECK(hit->EntityID == mover.GetUUID());
+		hit = physics.RaycastWithPoses({ 0.0f, 10.0f, 0.0f }, down, 20.0f, sensorPose, { .IncludeTriggers = true });
+		REQUIRE(hit);
+		CHECK(hit->EntityID == sensor.GetUUID());
+		hit = physics.RaycastWithPoses({ 0.0f, 10.0f, 0.0f }, down, 20.0f, sensorPose, { .IgnoreEntity = sensor.GetUUID(), .IncludeTriggers = true });
+		REQUIRE(hit);
+		CHECK(hit->EntityID == mover.GetUUID());
+		hit = physics.RaycastWithPoses({ 0.0f, 10.0f, 0.0f }, down, 20.0f, sensorPose, { .LayerMask = 0, .IncludeTriggers = true });
+		CHECK_FALSE(hit);
+		// A pose that is not finite, or a zero rotation, is skipped rather than hit.
+		std::map<UUID, std::optional<PhysicsBodyPose>> broken{ { mover.GetUUID(), PhysicsBodyPose{ { NAN, 5.0f, 0.0f }, glm::quat(1, 0, 0, 0) } }, { other.GetUUID(), PhysicsBodyPose{ { 0.0f, 6.0f, 0.0f }, glm::quat(0, 0, 0, 0) } } };
+		hit = physics.RaycastWithPoses({ 0.0f, 10.0f, 0.0f }, down, 20.0f, broken);
+		REQUIRE(hit);
+		CHECK(hit->EntityID == ground.GetUUID());
+		CHECK_FALSE(physics.RaycastWithPoses({ 0.0f, 10.0f, 0.0f }, { 0.0f, 0.0f, 0.0f }, 20.0f, poses));
 		scene.OnSimulationStop();
 	}
 

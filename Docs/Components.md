@@ -176,7 +176,7 @@ Fields: `Prefab` (string), `Members` (object), `Baseline` (object)
 
 ## Networked
 
-Fields: `Owner` (integer), `Authority` (enum: Server, Owner), `Priority` (number)
+Fields: `Owner` (integer), `Authority` (enum: Server, Owner, Predicted), `Priority` (number)
 
 ## List element types
 

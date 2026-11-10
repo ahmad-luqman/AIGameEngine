@@ -532,6 +532,50 @@ TEST_SUITE("Core")
 		CHECK_FALSE(GameInput::IsMouseButtonPressed(static_cast<MouseCode>(200)));
 	}
 
+	TEST_CASE("A muted game reads no input, and reads it all again unmuted, without blocking what is held")
+	{
+		BrecciaTest::ScopedGameInput restore;
+		Input::SetKeyState(KeyCode::W, true);
+		Input::SetMouseButtonState(MouseCode::Left, true);
+		Input::SetMousePosition({ 1.0f, 1.0f });
+		Input::SetGamepadConnected(0, true, "Pad");
+		Input::SetGamepadButtonState(0, GamepadButton::A, true);
+		Input::SetGamepadAxis(0, GamepadAxis::LeftX, 0.75f);
+		Input::AddTextCodepoint('a');
+		Input::EndFrame();
+		Input::SetMousePosition({ 4.0f, 5.0f });
+		Input::AddMouseScroll({ 0.0f, 2.0f });
+		Input::AddTextCodepoint('b');
+		Input::SetKeyState(KeyCode::E, true);
+		Input::SetGameMuted(true);
+		CHECK(Input::IsGameMuted());
+		CHECK_FALSE(GameInput::IsKeyDown(KeyCode::W));
+		CHECK_FALSE(GameInput::IsKeyDown(KeyCode::W, InputFrame::Previous));
+		CHECK_FALSE(GameInput::IsKeyPressed(KeyCode::E));
+		CHECK_FALSE(GameInput::IsKeyReleased(KeyCode::W));
+		CHECK_FALSE(GameInput::IsMouseButtonDown(MouseCode::Left));
+		CHECK_FALSE(GameInput::IsMouseButtonPressed(MouseCode::Left));
+		CHECK_FALSE(GameInput::IsMouseButtonReleased(MouseCode::Left));
+		CHECK(GameInput::GetMouseDelta() == glm::vec2(0.0f));
+		CHECK(GameInput::GetMouseScroll() == glm::vec2(0.0f));
+		CHECK_FALSE(GameInput::IsGamepadButtonDown(0, GamepadButton::A));
+		CHECK_FALSE(GameInput::IsGamepadButtonPressed(0, GamepadButton::A));
+		CHECK_FALSE(GameInput::IsGamepadButtonReleased(0, GamepadButton::A));
+		CHECK(GameInput::GetGamepadAxis(0, GamepadAxis::LeftX) == 0.0f);
+		CHECK(GameInput::GetTextInput().empty());
+		// The host still sees everything.
+		CHECK(Input::IsKeyDown(KeyCode::W));
+		// Unmuted in the same frame: as if it had never been muted (unlike a change of focus, nothing is blocked).
+		Input::SetGameMuted(false);
+		CHECK(GameInput::IsKeyDown(KeyCode::W));
+		CHECK(GameInput::IsKeyPressed(KeyCode::E));
+		CHECK(GameInput::IsMouseButtonDown(MouseCode::Left));
+		CHECK(GameInput::GetMouseDelta() == glm::vec2(3.0f, 4.0f));
+		CHECK(GameInput::IsGamepadButtonDown(0, GamepadButton::A));
+		CHECK(GameInput::GetGamepadAxis(0, GamepadAxis::LeftX) == doctest::Approx(0.75f));
+		CHECK(GameInput::GetTextInput() == "b");
+	}
+
 	TEST_CASE("Losing game focus releases the keyboard for the game; what is held when it comes back stays released")
 	{
 		BrecciaTest::ScopedGameInput restore;
